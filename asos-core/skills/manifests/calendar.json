@@ -1,0 +1,87 @@
+{
+    "skill_id": "calendar_google",
+    "version": "1.0.0",
+    "author": "theora-core",
+    "brand": {
+        "name": "Calendar",
+        "primary_color": "#4285F4",
+        "secondary_color": "#EA4335",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Manage Google Calendar: view upcoming events, create events, check availability, and get daily schedule.",
+    "trigger_phrases": [
+        "what's on my calendar",
+        "my schedule today",
+        "upcoming meetings",
+        "create an event",
+        "schedule a meeting",
+        "am I free at",
+        "what's next",
+        "my agenda",
+        "cancel meeting",
+        "when is my next meeting"
+    ],
+    "categories": ["productivity", "calendar", "scheduling"],
+    "auth": {
+        "type": "oauth2",
+        "authorize_url": "https://accounts.google.com/o/oauth2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "scopes": ["https://www.googleapis.com/auth/calendar.readonly", "https://www.googleapis.com/auth/calendar.events"]
+    },
+    "endpoints": [
+        {
+            "id": "upcoming_events",
+            "method": "GET",
+            "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            "description": "Get upcoming events from the user's primary calendar. Returns event title, time, location, and attendees.",
+            "params": [
+                {"name": "timeMin", "type": "string", "required": false, "description": "Start time in RFC3339 format (defaults to now)"},
+                {"name": "timeMax", "type": "string", "required": false, "description": "End time in RFC3339 format"},
+                {"name": "maxResults", "type": "number", "required": false, "default": "10", "description": "Number of events"},
+                {"name": "singleEvents", "type": "boolean", "required": false, "default": "true", "description": "Expand recurring events"},
+                {"name": "orderBy", "type": "string", "required": false, "default": "startTime", "description": "Sort order", "enum": ["startTime", "updated"]}
+            ],
+            "returns_description": "Array of {summary, start, end, location, attendees, hangoutLink, description}",
+            "ui_hint": "list"
+        },
+        {
+            "id": "create_event",
+            "method": "POST",
+            "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            "description": "Create a new calendar event. Specify title, time, location, and optional attendees.",
+            "params": [
+                {"name": "summary", "type": "string", "required": true, "description": "Event title"},
+                {"name": "start", "type": "object", "required": true, "description": "Start time object: {dateTime: 'ISO8601', timeZone: 'America/Los_Angeles'}"},
+                {"name": "end", "type": "object", "required": true, "description": "End time object: {dateTime: 'ISO8601', timeZone: 'America/Los_Angeles'}"},
+                {"name": "location", "type": "string", "required": false, "description": "Event location"},
+                {"name": "description", "type": "string", "required": false, "description": "Event description"}
+            ],
+            "returns_description": "{id, summary, htmlLink, start, end, status}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "delete_event",
+            "method": "DELETE",
+            "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events/{eventId}",
+            "description": "Delete/cancel a calendar event by its event ID.",
+            "params": [
+                {"name": "eventId", "type": "string", "required": true, "description": "The calendar event ID to delete"}
+            ],
+            "returns_description": "204 No Content on success",
+            "ui_hint": null
+        }
+    ],
+    "flows": [],
+    "crons": [
+        {
+            "id": "morning_briefing",
+            "schedule": "0 7 * * *",
+            "endpoint_id": "upcoming_events"
+        }
+    ],
+    "triggers": [],
+    "permissions": ["calendar"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 500
+}

@@ -1,0 +1,35 @@
+# Virtual Environments
+.venv/
+venv/
+env/
+.env
+
+# Python Built-ins
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Node
+node_modules/
+dist/
+build/
+.npm
+
+# Databases
+*.sqlite3
+*.db
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Theora
+memory_store.json

@@ -1,0 +1,61 @@
+{
+    "skill_id": "web_search",
+    "version": "1.0.0",
+    "author": "theora-core",
+    "brand": {
+        "name": "Web Search",
+        "primary_color": "#E74C3C",
+        "secondary_color": "#2C3E50",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Search the web using DuckDuckGo or SerpAPI. Get instant answers, search results, and Wikipedia summaries.",
+    "trigger_phrases": [
+        "search for",
+        "google",
+        "look up",
+        "what is",
+        "who is",
+        "find information about",
+        "search the web",
+        "how does",
+        "define",
+        "wikipedia"
+    ],
+    "categories": ["search", "knowledge", "utility"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "instant_answer",
+            "method": "GET",
+            "url": "https://api.duckduckgo.com/",
+            "description": "Get an instant answer from DuckDuckGo. Returns definitions, summaries, and quick facts.",
+            "params": [
+                {"name": "q", "type": "string", "required": true, "description": "Search query"},
+                {"name": "format", "type": "string", "required": false, "default": "json", "description": "Response format"},
+                {"name": "no_redirect", "type": "string", "required": false, "default": "1", "description": "Don't redirect"}
+            ],
+            "returns_description": "{Abstract, AbstractText, AbstractURL, Image, Heading, RelatedTopics}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "web_search",
+            "method": "GET",
+            "url": "https://html.duckduckgo.com/html/",
+            "description": "Search the web and get a list of results with titles, URLs, and snippets.",
+            "params": [
+                {"name": "q", "type": "string", "required": true, "description": "Search query"}
+            ],
+            "returns_description": "Array of {title, url, snippet}",
+            "ui_hint": "list"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": [],
+    "requires_daemon": false,
+    "max_calls_per_hour": 500
+}
