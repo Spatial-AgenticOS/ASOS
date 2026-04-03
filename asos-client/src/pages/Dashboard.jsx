@@ -5,7 +5,7 @@ import {
   Wifi, WifiOff, Zap, Eye, Shield, BookOpen, Clock, TrendingUp,
 } from 'lucide-react';
 
-const API = 'http://localhost:9090';
+import { API_BASE as API } from '../config';
 
 export default function Dashboard() {
   const navigate = useNavigate();

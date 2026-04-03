@@ -7,9 +7,11 @@ The LLM NEVER sees API keys or OAuth tokens.
 """
 
 from __future__ import annotations
+import asyncio
 import os
 import json
 import logging
+import uuid
 from typing import Optional
 import httpx
 
@@ -31,11 +33,11 @@ class SkillExecutor:
     6. LLM NEVER sees the raw API key
     """
 
-    def __init__(self):
+    def __init__(self, daemons: dict = None):
         self.client = httpx.AsyncClient(timeout=15.0)
-        # Simple vault: env vars keyed by skill_id
-        # e.g. THEORA_KEY_weather_current = "abc123"
+        self._daemons = daemons or {}
         self._vault: dict[str, str] = {}
+        self._pending_results: dict[str, asyncio.Future] = {}
 
     def load_vault_from_env(self):
         """Load API keys from environment variables."""
@@ -89,7 +91,11 @@ class SkillExecutor:
                 logger.error(f"Python Skill error: {e}", exc_info=True)
                 return {"success": False, "status_code": 500, "data": None, "error": str(e)}
 
-        # 2. Fallback to standard HTTP generic JSON runner
+        # 2. WS_EXECUTE — route to a connected daemon via WebSocket
+        if endpoint.method == "WS_EXECUTE":
+            return await self._execute_via_daemon(tool_name, endpoint, args, skill)
+
+        # 3. Fallback to standard HTTP generic JSON runner
         url = endpoint.url
         method = endpoint.method.upper()
         headers = {}
@@ -142,6 +148,75 @@ class SkillExecutor:
         except Exception as e:
             logger.error(f"Error calling {url}: {e}")
             return {"success": False, "status_code": 0, "data": None, "error": str(e)}
+
+    async def _execute_via_daemon(
+        self, tool_name: str, endpoint: SkillEndpoint, args: dict, skill: SkillManifest,
+    ) -> dict:
+        """Route a WS_EXECUTE skill call to the appropriate connected daemon."""
+        target_type = skill.daemon_node_type or "robot"
+
+        target_daemon = None
+        target_ws = None
+        for node_id, ws in self._daemons.items():
+            if target_type in node_id or target_type == "any":
+                target_daemon = node_id
+                target_ws = ws
+                break
+
+        if not target_daemon:
+            for node_id, ws in self._daemons.items():
+                target_daemon = node_id
+                target_ws = ws
+                break
+
+        if not target_ws:
+            return {
+                "success": False, "status_code": 503, "data": None,
+                "error": f"No connected daemon of type '{target_type}' to execute {tool_name}",
+            }
+
+        request_id = str(uuid.uuid4())
+        execute_msg = {
+            "hop": "brain",
+            "type": "execute",
+            "msg_id": request_id,
+            "payload": {
+                "executor": endpoint.id,
+                "args": args,
+                "skill_id": skill.skill_id,
+            },
+        }
+
+        future = asyncio.get_event_loop().create_future()
+        self._pending_results[request_id] = future
+
+        try:
+            await target_ws.send_json(execute_msg)
+            logger.info(f"WS_EXECUTE → {target_daemon}: {endpoint.id} (req={request_id})")
+
+            result = await asyncio.wait_for(future, timeout=15.0)
+            return {
+                "success": result.get("status") == "success",
+                "status_code": 200 if result.get("status") == "success" else 500,
+                "data": self._sanitize_response(result.get("stdout") or result.get("data")),
+                "error": result.get("error"),
+            }
+
+        except asyncio.TimeoutError:
+            self._pending_results.pop(request_id, None)
+            return {
+                "success": False, "status_code": 504, "data": None,
+                "error": f"Daemon {target_daemon} timed out executing {endpoint.id}",
+            }
+        except Exception as e:
+            self._pending_results.pop(request_id, None)
+            return {"success": False, "status_code": 500, "data": None, "error": str(e)}
+
+    def resolve_daemon_result(self, request_id: str, result: dict):
+        """Called when a daemon sends back an execute_result."""
+        future = self._pending_results.pop(request_id, None)
+        if future and not future.done():
+            future.set_result(result)
 
     def _sanitize_response(self, data, max_depth: int = 5, max_str_len: int = 2000) -> any:
         """

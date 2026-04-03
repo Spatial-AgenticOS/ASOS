@@ -4,7 +4,7 @@ import {
   Check, AlertCircle, Loader2, Save, RefreshCw, Trash2, Plus,
 } from 'lucide-react';
 
-const API = 'http://localhost:9090';
+import { API_BASE as API } from '../config';
 
 export default function Settings() {
   const [config, setConfig] = useState(null);

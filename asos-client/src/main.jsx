@@ -6,13 +6,14 @@ import SetupWizard from './pages/SetupWizard';
 import Settings from './pages/Settings';
 import Dashboard from './pages/Dashboard';
 import AppShell from './components/AppShell';
+import { API_BASE } from './config';
 import './index.css';
 
 function Root() {
   const [setupComplete, setSetupComplete] = React.useState(null);
 
   React.useEffect(() => {
-    fetch('http://localhost:9090/api/setup/status')
+    fetch(`${API_BASE}/api/setup/status`)
       .then(r => r.json())
       .then(data => setSetupComplete(data.setup_complete))
       .catch(() => setSetupComplete(false));

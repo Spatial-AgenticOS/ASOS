@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { SduiRenderer } from './components/SduiRenderer';
 import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap } from 'lucide-react';
+import { WS_URL } from './config';
 
 export default function App() {
   const [messages, setMessages] = useState([]);
@@ -38,7 +39,7 @@ export default function App() {
   }, []);
 
   const connect = () => {
-    const ws = new WebSocket('ws://localhost:9090/v1/session');
+    const ws = new WebSocket(WS_URL);
 
     ws.onopen = () => setIsConnected(true);
 

@@ -44,7 +44,7 @@ class EndpointParam(BaseModel):
 class SkillEndpoint(BaseModel):
     """A single API endpoint the skill exposes."""
     id: str
-    method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"] = "GET"
+    method: Literal["GET", "POST", "PUT", "DELETE", "PATCH", "WS_EXECUTE"] = "GET"
     url: str
     description: str  # Natural language — this is what the LLM reads
     params: list[EndpointParam] = []

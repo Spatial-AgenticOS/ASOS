@@ -33,3 +33,4 @@ build/
 
 # Theora
 memory_store.json
+client-tmp/

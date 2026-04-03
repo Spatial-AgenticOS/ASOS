@@ -6,7 +6,7 @@ import {
   Wifi, WifiOff, Shield, Zap,
 } from 'lucide-react';
 
-const API = 'http://localhost:9090';
+import { API_BASE as API } from '../config';
 
 const STEPS = [
   { id: 'welcome', label: 'Welcome', icon: Brain },

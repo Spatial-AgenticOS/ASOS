@@ -132,7 +132,7 @@ class ErrorPayload(BaseModel):
 class NodeRegisterPayload(BaseModel):
     """Daemon announces itself to the brain."""
     node_id: str
-    node_type: Literal["desktop", "server", "rpi", "robot", "glasses"]
+    node_type: Literal["desktop", "server", "rpi", "robot", "glasses", "actuator", "sensor"]
     os: str = ""
     capabilities: list[str] = []  # ["applescript", "keyboard", "filesystem", "camera", "gpio"]
 

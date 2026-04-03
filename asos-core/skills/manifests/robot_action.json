@@ -24,10 +24,10 @@
         },
         {
           "name": "speed",
-          "type": "integer",
+          "type": "number",
           "description": "The speed percentage from 0 to 100. >50 triggers safety rails.",
           "required": false,
-          "default": 30
+          "default": "30"
         }
       ],
       "ui_hint": "card"

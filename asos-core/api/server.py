@@ -15,7 +15,7 @@ from collections import deque
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from models.protocol import (
@@ -130,6 +130,8 @@ class BrainState:
         _shared_llm = LLMProvider()
         self.learner = Learner(llm=_shared_llm, memory=self.memory)
         self.scene = SceneAnalyzer(llm=_shared_llm)
+        scene_cooldown = int(os.environ.get("THEORA_SCENE_COOLDOWN", "10"))
+        self.scene.set_cooldown(scene_cooldown)
 
         self.orchestrator = Orchestrator(
             skill_registry=self.skill_registry,
@@ -527,7 +529,7 @@ async def client_session(ws: WebSocket):
 NODE_API_KEY = os.environ.get("NODE_API_KEY", "dev-secret-key")
 
 @app.websocket("/v1/node")
-async def daemon_session(ws: WebSocket, api_key: str = None):
+async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
     if api_key != NODE_API_KEY:
         logger.warning(f"Unauthorized daemon connection attempt rejected")
         await ws.close(code=1008, reason="Unauthorized Edge Node API Key")
@@ -662,9 +664,9 @@ if __name__ == "__main__":
     import uvicorn
     print("""
     ╔══════════════════════════════════════╗
-    ║        THEORA Brain v0.4.0          ║
+    ║        THEORA Brain v0.5.0          ║
     ║   Local-First Agentic Intelligence  ║
-    ║  Self-Learning | Streaming | Scene  ║
+    ║  Setup + Config + System Service    ║
     ╚══════════════════════════════════════╝
     """)
     uvicorn.run(app, host="0.0.0.0", port=9090, log_level="info")
