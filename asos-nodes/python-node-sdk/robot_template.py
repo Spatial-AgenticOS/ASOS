@@ -22,8 +22,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(n
 logger = logging.getLogger("robot_node")
 
 class RobotNode:
-    def __init__(self, brain_url: str):
-        self.brain_ws_url = f"{brain_url}/v1/node"
+    def __init__(self, brain_url: str, api_key: str):
+        self.brain_ws_url = f"{brain_url}/v1/node?api_key={api_key}"
         self.node_id = f"daemon_{socket.gethostname()}-robot-{uuid.uuid4().hex[:4]}"
         self.node_type = "actuator"
         self.ws = None
@@ -147,9 +147,10 @@ class RobotNode:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ASOS Robot Node SDK")
     parser.add_argument("--brain", default="ws://localhost:9090", help="WebSocket URL of ASOS Brain")
+    parser.add_argument("--api-key", default="dev-secret-key", help="Authentication key for Brain connection")
     args = parser.parse_args()
 
-    node = RobotNode(args.brain)
+    node = RobotNode(args.brain, args.api_key)
     try:
         asyncio.run(node.connect())
     except KeyboardInterrupt:

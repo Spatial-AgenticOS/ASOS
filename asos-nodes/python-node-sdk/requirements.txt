@@ -1,0 +1,4 @@
+websockets>=11.0
+bleak>=0.21.1
+opencv-python-headless>=4.9.0
+Pillow>=10.0.0

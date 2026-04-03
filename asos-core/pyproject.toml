@@ -1,7 +1,7 @@
 [project]
 name = "theora-brain"
-version = "0.1.0"
-description = "THEORA OS — Local-first agentic intelligence core"
+version = "0.3.0"
+description = "THEORA OS — Local-first agentic intelligence core with perception fusion"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
@@ -14,16 +14,18 @@ dependencies = [
 [project.optional-dependencies]
 llm = [
     "openai>=1.50.0",
-    "langchain>=0.3.0",
-    "langgraph>=0.2.0",
-]
-memory = [
-    "qdrant-client>=1.11.0",
-    "redis>=5.0.0",
 ]
 local = [
     "llama-cpp-python>=0.3.0",
 ]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

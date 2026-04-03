@@ -3,11 +3,15 @@ THEORA Brain — Core WebSocket Server
 ======================================
 The local-first agentic brain. Runs on the user's machine.
 Clients (phone, web, daemon, glasses) connect via WebSocket.
+
+v0.3.0 — Full perception engine, audio pipeline, 4-tier memory.
 """
 
 import asyncio
 import json
 import logging
+import os
+from collections import deque
 from typing import Optional
 from uuid import uuid4
 
@@ -22,11 +26,18 @@ from models.protocol import (
     SDUIPayload,
     TextResponsePayload,
     DeviceRegisterPayload,
+    AudioChunkPayload,
+    TranscriptPayload,
+    TTSChunkPayload,
+    VisionFramePayload,
+    VisionRequestPayload,
     parse_message,
 )
 from agents.orchestrator import Orchestrator
 from skills.registry import SkillRegistry
 from memory.store import MemoryStore
+from perception.fusion import PerceptionEngine
+from perception.audio_pipeline import AudioPipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("theora.brain")
@@ -39,7 +50,7 @@ logger = logging.getLogger("theora.brain")
 app = FastAPI(
     title="THEORA Brain",
     description="Local-first agentic intelligence core",
-    version="0.1.0",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -51,28 +62,74 @@ app.add_middleware(
 
 
 # ─────────────────────────────────────────────
+# Vision Buffer — Ring buffer of recent frames per node
+# ─────────────────────────────────────────────
+
+VISION_MAX_FRAME_KB = int(os.environ.get("THEORA_VISION_MAX_FRAME_KB", "512"))
+
+class VisionBuffer:
+    """Stores the latest N frames per hardware node in a memory-bounded ring buffer."""
+
+    def __init__(self, max_frames_per_node: int = 3):
+        self._max = max_frames_per_node
+        self.frames: dict[str, deque] = {}
+
+    def push(self, node_id: str, frame: dict):
+        if node_id not in self.frames:
+            self.frames[node_id] = deque(maxlen=self._max)
+        self.frames[node_id].append(frame)
+
+    def latest(self, node_id: str) -> Optional[dict]:
+        buf = self.frames.get(node_id)
+        return buf[-1] if buf else None
+
+    def latest_data_url(self, node_id: str) -> Optional[str]:
+        frame = self.latest(node_id)
+        if not frame or not frame.get("data_b64"):
+            return None
+        encoding = frame.get("encoding", "jpeg")
+        mime = f"image/{encoding}"
+        return f"data:{mime};base64,{frame['data_b64']}"
+
+    def node_ids_with_frames(self) -> list[str]:
+        return [nid for nid, buf in self.frames.items() if buf]
+
+
+# ─────────────────────────────────────────────
 # State
 # ─────────────────────────────────────────────
 
 class BrainState:
     def __init__(self):
-        self.sessions: dict[str, WebSocket] = {}  # session_id → ws
-        self.daemons: dict[str, WebSocket] = {}   # node_id → ws
-        self.devices: dict[str, dict] = {}         # device_id → device info
+        self.sessions: dict[str, WebSocket] = {}
+        self.daemons: dict[str, WebSocket] = {}
+        self.devices: dict[str, dict] = {}
         self.skill_registry = SkillRegistry()
         self.memory = MemoryStore()
+        self.vision_buffer = VisionBuffer()
+        self.perception = PerceptionEngine()
+        self.audio = AudioPipeline()
         self.orchestrator: Optional[Orchestrator] = None
 
+        # Map daemon node_id → list of sessions interested in its data
+        self._daemon_session_bindings: dict[str, set[str]] = {}
+
     async def init(self):
-        """Initialize the brain components."""
         self.skill_registry.load_builtin_skills()
         self.orchestrator = Orchestrator(
             skill_registry=self.skill_registry,
             send_to_client=self.send_to_session,
             daemons=self.daemons,
             memory=self.memory,
+            vision_buffer=self.vision_buffer,
+            perception=self.perception,
         )
-        logger.info(f"Brain initialized with {len(self.skill_registry.skills)} skills, {self.memory.count()} memories")
+        stats = self.memory.stats()
+        logger.info(
+            f"Brain v0.3.0 initialized — {len(self.skill_registry.skills)} skills, "
+            f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
+            f"{stats['episodes']} episodes"
+        )
 
     async def send_to_session(self, session_id: str, msg: TheoraMessage):
         ws = self.sessions.get(session_id)
@@ -83,6 +140,14 @@ class BrainState:
         ws = self.daemons.get(node_id)
         if ws:
             await ws.send_json(msg.model_dump())
+
+    def bind_session_to_daemon(self, session_id: str, node_id: str):
+        if node_id not in self._daemon_session_bindings:
+            self._daemon_session_bindings[node_id] = set()
+        self._daemon_session_bindings[node_id].add(session_id)
+
+    def get_sessions_for_daemon(self, node_id: str) -> set[str]:
+        return self._daemon_session_bindings.get(node_id, set())
 
 
 state = BrainState()
@@ -98,19 +163,22 @@ async def startup():
 
 
 # ─────────────────────────────────────────────
-# Health Check
+# Health & Discovery
 # ─────────────────────────────────────────────
 
 @app.get("/")
 async def root():
+    stats = state.memory.stats()
     return {
         "name": "THEORA Brain",
-        "version": "0.1.0",
+        "version": "0.3.0",
         "status": "running",
         "sessions": len(state.sessions),
-        "daemons": len(state.daemons),
+        "daemons": list(state.daemons.keys()),
         "devices": len(state.devices),
         "skills": len(state.skill_registry.skills),
+        "memory": stats,
+        "audio_available": state.audio.available,
     }
 
 
@@ -129,24 +197,21 @@ async def list_skills():
 
 
 # ─────────────────────────────────────────────
-# Internal Memory API
+# Memory API (all tiers)
 # ─────────────────────────────────────────────
 
 @app.post("/internal/memory/save")
 async def memory_save(body: dict):
-    """Save a note to memory."""
     content = body.get("content", "")
     tags = body.get("tags", [])
     importance = body.get("importance", "normal")
     if not content:
         return {"error": "content is required"}
-    result = state.memory.save(content=content, tags=tags, importance=importance)
-    return result
+    return state.memory.save(content=content, tags=tags, importance=importance)
 
 
 @app.get("/internal/memory/search")
 async def memory_search(query: str = "", limit: int = 10):
-    """Search saved notes."""
     if not query:
         return []
     return state.memory.search(query=query, limit=limit)
@@ -154,15 +219,47 @@ async def memory_search(query: str = "", limit: int = 10):
 
 @app.get("/internal/memory/recent")
 async def memory_recent(limit: int = 10):
-    """List recent notes."""
     return state.memory.list_recent(limit=limit)
 
 
 @app.delete("/internal/memory/{note_id}")
 async def memory_delete(note_id: str):
-    """Delete a note."""
-    deleted = state.memory.delete(note_id)
-    return {"deleted": deleted}
+    return {"deleted": state.memory.delete(note_id)}
+
+
+@app.get("/internal/memory/stats")
+async def memory_stats():
+    return state.memory.stats()
+
+
+@app.post("/internal/knowledge/store")
+async def knowledge_store(body: dict):
+    subject = body.get("subject", "")
+    predicate = body.get("predicate", "")
+    obj = body.get("object", "")
+    if not all([subject, predicate, obj]):
+        return {"error": "subject, predicate, and object are required"}
+    return state.memory.knowledge_store(subject=subject, predicate=predicate, obj=obj)
+
+
+@app.get("/internal/knowledge/query")
+async def knowledge_query(subject: str = "", predicate: str = "", limit: int = 20):
+    return state.memory.knowledge_query(subject=subject, predicate=predicate, limit=limit)
+
+
+@app.get("/internal/knowledge/about/{entity}")
+async def knowledge_about(entity: str, limit: int = 20):
+    return state.memory.knowledge_about(entity, limit=limit)
+
+
+@app.get("/internal/episodes/recent")
+async def episodes_recent(limit: int = 10, session_id: str = ""):
+    return state.memory.episode_recent(limit=limit, session_id=session_id or None)
+
+
+@app.get("/internal/execution-log")
+async def execution_log(skill_id: str = "", limit: int = 20):
+    return state.memory.log_recent(skill_id=skill_id, limit=limit)
 
 
 # ─────────────────────────────────────────────
@@ -176,7 +273,11 @@ async def client_session(ws: WebSocket):
     state.sessions[session_id] = ws
     logger.info(f"Client connected: {session_id}")
 
-    # Send welcome
+    # Bind session to all currently connected daemons
+    for node_id in state.daemons:
+        state.bind_session_to_daemon(session_id, node_id)
+        state.perception.update_connected_nodes(session_id, list(state.daemons.keys()))
+
     await ws.send_json(TheoraMessage(
         session_id=session_id,
         hop="brain",
@@ -193,15 +294,41 @@ async def client_session(ws: WebSocket):
             msg, payload = parse_message(raw)
 
             if msg.type == "text_command" and isinstance(payload, TextCommandPayload):
-                # Process text command through the orchestrator
+                state.memory.working_push(session_id, {"role": "user", "text": payload.text})
                 await state.orchestrator.handle_command(
                     session_id=session_id,
                     text=payload.text,
                     context=payload.context,
                 )
 
+            elif msg.type == "audio_chunk" and isinstance(payload, AudioChunkPayload):
+                transcript = await state.audio.process_audio_chunk(
+                    session_id=session_id,
+                    chunk_b64=payload.data_b64,
+                    chunk_index=payload.chunk_index,
+                    is_final=payload.is_final,
+                    encoding=payload.encoding,
+                    sample_rate=payload.sample_rate,
+                )
+
+                if transcript:
+                    # Send transcript back to client
+                    await ws.send_json(TheoraMessage(
+                        session_id=session_id, hop="brain", type="transcript",
+                        payload=TranscriptPayload(text=transcript, is_partial=False).model_dump(),
+                    ).model_dump())
+
+                    state.memory.working_push(session_id, {"role": "user", "text": transcript, "source": "voice"})
+                    state.perception.update_audio_context(session_id, transcript=transcript)
+
+                    # Process through orchestrator
+                    await state.orchestrator.handle_command(
+                        session_id=session_id,
+                        text=transcript,
+                        context={"source": "voice"},
+                    )
+
             elif msg.type == "ui_event" and isinstance(payload, UIEventPayload):
-                # Handle UI interaction
                 await state.orchestrator.handle_ui_event(
                     session_id=session_id,
                     action_id=payload.action_id,
@@ -214,21 +341,31 @@ async def client_session(ws: WebSocket):
                 logger.info(f"Device registered: {payload.device_id} ({payload.device_type})")
 
             elif msg.type == "biometric":
-                # Store biometric context for the orchestrator
+                bio = raw.get("payload", {})
                 if state.orchestrator:
-                    state.orchestrator.update_biometric(session_id, raw.get("payload", {}))
+                    state.orchestrator.update_biometric(session_id, bio)
+                state.perception.update_sensors(session_id, bio)
 
     except WebSocketDisconnect:
         logger.info(f"Client disconnected: {session_id}")
-        del state.sessions[session_id]
+        state.sessions.pop(session_id, None)
+        state.audio.clear_session(session_id)
+        state.memory.working_clear(session_id)
 
 
 # ─────────────────────────────────────────────
 # Daemon WebSocket (for OpenClaw-style nodes)
 # ─────────────────────────────────────────────
 
+NODE_API_KEY = os.environ.get("NODE_API_KEY", "dev-secret-key")
+
 @app.websocket("/v1/node")
-async def daemon_session(ws: WebSocket):
+async def daemon_session(ws: WebSocket, api_key: str = None):
+    if api_key != NODE_API_KEY:
+        logger.warning(f"Unauthorized daemon connection attempt rejected")
+        await ws.close(code=1008, reason="Unauthorized Edge Node API Key")
+        return
+
     await ws.accept()
     node_id = None
     logger.info("Daemon connecting...")
@@ -241,19 +378,19 @@ async def daemon_session(ws: WebSocket):
             if msg.type == "node_register" and isinstance(payload, NodeRegisterPayload):
                 node_id = payload.node_id
                 state.daemons[node_id] = ws
-                logger.info(f"Daemon registered: {node_id} ({payload.node_type}) — capabilities: {payload.capabilities}")
+                logger.info(f"Daemon registered: {node_id} ({payload.node_type}) — caps: {payload.capabilities}")
 
-                # Acknowledge
+                # Bind to all active sessions and update perception
+                for sid in state.sessions:
+                    state.bind_session_to_daemon(sid, node_id)
+                    state.perception.update_connected_nodes(sid, list(state.daemons.keys()))
+
                 await ws.send_json(TheoraMessage(
-                    hop="brain",
-                    type="text_response",
-                    payload=TextResponsePayload(
-                        text=f"Node '{node_id}' registered successfully."
-                    ).model_dump(),
+                    hop="brain", type="text_response",
+                    payload=TextResponsePayload(text=f"Node '{node_id}' registered successfully.").model_dump(),
                 ).model_dump())
 
             elif msg.type == "execute_result":
-                # Daemon reporting back a command result
                 logger.info(f"Daemon result from {node_id}")
                 if state.orchestrator:
                     await state.orchestrator.handle_daemon_result(
@@ -262,22 +399,48 @@ async def daemon_session(ws: WebSocket):
                         session_id=msg.session_id,
                     )
 
+            elif msg.type == "vision_frame":
+                frame_payload = raw.get("payload", {})
+                frame_b64_len = len(frame_payload.get("data_b64", ""))
+                if frame_b64_len > VISION_MAX_FRAME_KB * 1024:
+                    logger.warning(f"Rejecting oversized frame from {node_id}: {frame_b64_len}B")
+                else:
+                    effective_node = node_id or frame_payload.get("node_id", "unknown")
+                    state.vision_buffer.push(effective_node, frame_payload)
+                    frame_id = frame_payload.get("frame_id", "?")
+                    logger.info(f"Vision frame from {node_id}: {frame_id} ({frame_b64_len}B)")
+
+                    # Update perception for all bound sessions
+                    for sid in state.get_sessions_for_daemon(effective_node):
+                        state.perception.update_vision(sid, state.vision_buffer, effective_node)
+
+                    if state.orchestrator:
+                        state.orchestrator.resolve_pending_frame(msg.msg_id, frame_payload)
+
             elif msg.type == "telemetry":
-                # Hardware node pushing sensor data
                 telemetry_payload = raw.get("payload", {})
                 sensors = telemetry_payload.get("sensors", {})
-                # We log at debug to avoid span, but show HR for demo
-                if "ppg_heart_rate" in sensors:
-                    logger.info(f"Telemetry from {node_id}: {sensors['ppg_heart_rate']} BPM")
-                
-                # Pass live context to orchestrator
+
+                vitals = sensors.get("vitals", {})
+                hr = vitals.get("ppg_heart_rate") or sensors.get("ppg_heart_rate")
+                if hr:
+                    logger.info(f"Telemetry from {node_id}: {hr} BPM")
+
+                # Update orchestrator biometric state
                 if state.orchestrator:
                     state.orchestrator.update_biometric(node_id, sensors)
+
+                # Update perception engine for all bound sessions
+                if node_id:
+                    for sid in state.get_sessions_for_daemon(node_id):
+                        state.perception.update_sensors(sid, sensors)
 
     except WebSocketDisconnect:
         if node_id:
             logger.info(f"Daemon disconnected: {node_id}")
             state.daemons.pop(node_id, None)
+            for sid in state.get_sessions_for_daemon(node_id):
+                state.perception.update_connected_nodes(sid, list(state.daemons.keys()))
 
 
 # ─────────────────────────────────────────────
@@ -288,8 +451,9 @@ if __name__ == "__main__":
     import uvicorn
     print("""
     ╔══════════════════════════════════════╗
-    ║        THEORA Brain v0.1.0          ║
+    ║        THEORA Brain v0.3.0          ║
     ║   Local-First Agentic Intelligence  ║
+    ║   Perception + Memory + Audio       ║
     ╚══════════════════════════════════════╝
     """)
     uvicorn.run(app, host="0.0.0.0", port=9090, log_level="info")

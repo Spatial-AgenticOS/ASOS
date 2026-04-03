@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  asos-brain:
+    build:
+      context: ./asos-core
+      dockerfile: Dockerfile
+    ports:
+      - "9090:9090"
+    env_file:
+      - .env
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - THEORA_LLM_PROVIDER=${THEORA_LLM_PROVIDER:-openai}
+      - THEORA_LLM_MODEL=${THEORA_LLM_MODEL:-gpt-4o-mini}
+      - THEORA_LLM_BASE_URL=${THEORA_LLM_BASE_URL:-}
+      - THEORA_VISION_ENABLED=${THEORA_VISION_ENABLED:-false}
+      - THEORA_VISION_MAX_FRAME_KB=${THEORA_VISION_MAX_FRAME_KB:-512}
+      - THEORA_PROACTIVE=${THEORA_PROACTIVE:-false}
+      - THEORA_STT_PROVIDER=${THEORA_STT_PROVIDER:-openai}
+      - THEORA_TTS_PROVIDER=${THEORA_TTS_PROVIDER:-openai}
+      - THEORA_TTS_VOICE=${THEORA_TTS_VOICE:-nova}
+      - NODE_API_KEY=${NODE_API_KEY:-dev-secret-key}
+    volumes:
+      - theora-memory:/root/.theora
+    restart: unless-stopped
+
+  asos-client:
+    build:
+      context: ./asos-client
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - asos-brain
+    restart: unless-stopped
+
+volumes:
+  theora-memory:
+    driver: local

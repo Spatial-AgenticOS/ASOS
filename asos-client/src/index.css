@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@theme {
+  --color-asos-bg: #0f0f13;
+  --color-asos-card: rgba(255, 255, 255, 0.05);
+  --color-asos-border: rgba(255, 255, 255, 0.1);
+  --color-asos-accent: #6c5ce7;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--color-asos-bg);
+  color: white;
+}

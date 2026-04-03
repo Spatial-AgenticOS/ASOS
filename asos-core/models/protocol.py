@@ -143,6 +143,28 @@ class ExecuteResultPayload(BaseModel):
 
 
 # ─────────────────────────────────────────────
+# Payload Models — Vision Pipeline (Daemon ↔ Brain)
+# ─────────────────────────────────────────────
+
+class VisionFramePayload(BaseModel):
+    """Daemon pushes a captured camera frame to the brain."""
+    node_id: str
+    frame_id: str = Field(default_factory=lambda: str(uuid4()))
+    encoding: Literal["jpeg", "png", "webp"] = "jpeg"
+    resolution: list[int] = Field(default_factory=lambda: [640, 480])  # [width, height]
+    data_b64: str = ""
+    timestamp: float = Field(default_factory=time)
+    metadata: dict = Field(default_factory=dict)  # scene_brightness, faces_detected, etc.
+
+
+class VisionRequestPayload(BaseModel):
+    """Brain requests a frame capture from a daemon's camera."""
+    resolution: str = "640x480"
+    quality: int = 80  # JPEG quality 1-100
+    reason: str = ""
+
+
+# ─────────────────────────────────────────────
 # Payload Models — Device Registration
 # ─────────────────────────────────────────────
 
@@ -180,6 +202,10 @@ MESSAGE_TYPES = {
     "node_register": NodeRegisterPayload,
     "execute": ExecuteCommandPayload,
     "execute_result": ExecuteResultPayload,
+
+    # Vision Pipeline
+    "vision_frame": VisionFramePayload,
+    "vision_request": VisionRequestPayload,
 }
 
 
