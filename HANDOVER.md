@@ -1,137 +1,145 @@
-# Spatial-AgenticOS (ASOS) — Handover Document
+# THEORA — Spatial Agentic OS: Handover Document (v0.4.0)
 
-Welcome to the **ASOS** ecosystem.
+## Architecture Summary
 
-This repository is the core of **THEORA OS** — an enterprise-grade, local-first agentic intelligence system that bridges Large Language Models with physical hardware (Smart Glasses, Robotics, IoT) through a unified multimodal perception engine.
-
----
-
-## What Has Been Accomplished
-
-### Phase 1: Foundation (Complete)
-1. **Monorepo Architecture**: Clean separation into `asos-core` (Brain), `asos-nodes` (Hardware SDK), `asos-client` (React UI).
-2. **WebSocket Protocol**: Bidirectional TheoraMessage envelope supporting 16+ payload types.
-3. **Agentic Orchestrator**: Semantic tool routing (RoutePrompt), LLM-driven skill execution, SDUI generation.
-4. **Safety Hooks**: Pre/Post-tool interception with `_infer_permission_denials`.
-5. **Hardware Daemons**: W300 Smart Glasses bridge via Bleak BLE, Robot template.
-6. **Docker Orchestration**: Full stack deployable via `docker-compose.yml`.
-
-### Phase 2: Vision Pipeline (Complete)
-1. **VisionCapture** class — multi-backend frame grabber (BLE, TCP, local webcam).
-2. **VisionBuffer** — ring buffer of recent frames per hardware node.
-3. **Vision-aware LLM context** — frames injected as OpenAI image_url content blocks.
-4. **Expanded telemetry** — structured sensor channels (vitals, IMU, environment, device).
-5. **TelemetryAnalyzer** — inferred user state (resting/walking/running/stressed).
-
-### Phase 3: Memory Layer (Complete)
-Full 4-tier cognitive memory system aligned with Vision.md:
-1. **Working Memory** — in-RAM per-session context window (deque, 50 entries).
-2. **Episodic Memory** — timestamped events with FTS5 search, session filtering, importance ranking.
-3. **Semantic Memory** — knowledge graph (subject → predicate → object) with upsert and entity queries.
-4. **Execution Log** — every skill invocation recorded with latency, outcome, user feedback.
-5. **Unified Context Builder** — `build_context_for_llm()` pulls from all tiers for LLM injection.
-
-### Phase 4: Audio Pipeline + Perception Fusion (Complete)
-1. **AudioPipeline** — full STT (Whisper API) + TTS (OpenAI) with per-session audio buffers.
-2. **AudioBuffer** — chunk accumulation with simple energy-based VAD for utterance detection.
-3. **PerceptionFrame** — single fused multimodal context object (audio + vision + sensors + gesture).
-4. **PerceptionEngine** — maintains latest frame per session, feeds into orchestrator.
-5. **Client mic capture** — MediaRecorder API streams opus chunks to brain via WebSocket.
-6. **TTS playback** — brain returns mp3 chunks, client plays them in sequence.
-
-### Phase 5: Safety, Proactive Loop, Client Parity (Complete)
-1. **Graduated Safety** — three-tier permission system (AUTO/CONFIRM/DENY) replacing blanket denial.
-2. **Proactive Agent Loop** — context-driven autonomous actions (health alerts, battery warnings).
-3. **Client SDUI Parity** — all GenUI components now rendered: Grid, ScrollView, MetricCard, AsyncImage, ProgressBar, AudioPlayer, MapView, Spacer.
-4. **Core Test Suite** — pytest for protocol, memory (all 4 tiers), perception fusion, safety classification.
-
----
-
-## Architecture
+THEORA is a **local-first, self-learning agentic operating system** that connects hardware daemons (smart glasses, robots, sensors) to a central brain via WebSocket, routes user intent through an LLM with tool calling, executes real API skills, generates dynamic UIs on the fly, and **learns who you are from every interaction**.
 
 ```
-┌─────────────────────────────────────────────┐
-│           THE AGENT (The Shell)              │
-│  Voice + Vision + Sensor Perception          │
-│  Intent Resolution + Skill Routing           │
-│  Generative UI Rendering                     │
-├─────────────────────────────────────────────┤
-│         SKILL RUNTIME                        │
-│  Skill Registry + Executor + Blind Vault     │
-│  9 Skill Manifests + Web Search Impl         │
-├─────────────────────────────────────────────┤
-│         MEMORY LAYER                         │
-│  Working Memory (in-RAM session context)     │
-│  Episodic Memory (past events w/ FTS5)       │
-│  Semantic Memory (knowledge graph triples)   │
-│  Execution Log (skill audit trail)           │
-├─────────────────────────────────────────────┤
-│         PERCEPTION ENGINE                    │
-│  Audio Pipeline (VAD + Whisper STT + TTS)    │
-│  Vision Pipeline (VLM scene understanding)   │
-│  Sensor Fusion (biometrics + IMU + env)      │
-│  PerceptionFrame (unified context object)    │
-├─────────────────────────────────────────────┤
-│         HARDWARE ABSTRACTION LAYER           │
-│  W300 Glasses (BLE/TCP/Webcam fallback)      │
-│  Robot Template (WS_EXECUTE protocol)        │
-│  Desktop Control (AppleScript/Shell)         │
-├─────────────────────────────────────────────┤
-│         DOCKER / DEPLOYMENT                  │
-│  Brain: FastAPI + uvicorn (port 9090)        │
-│  Client: React + Vite + Nginx (port 3000)    │
-│  Memory: SQLite volume mount                 │
-└─────────────────────────────────────────────┘
+┌─────────────┐    ┌──────────────────────────────────┐    ┌──────────────┐
+│  asos-client │◄──►│         asos-core (Brain)         │◄──►│ asos-nodes   │
+│  React + SDUI│    │  FastAPI WS :9090                │    │ w300_daemon   │
+│  Streaming UI│    │  Orchestrator → LLM → Skills     │    │ BLE + Vision  │
+│  Audio I/O   │    │  Perception → Memory → Learning  │    │ IMU Gestures  │
+└─────────────┘    │  Scene Analyzer → Gesture Engine  │    └──────────────┘
+                   └──────────────────────────────────┘
 ```
 
----
+## Completed Phases
+
+### Phase 1-2: Foundation + Vision Pipeline
+- WebSocket protocol with typed message envelope (`TheoraMessage`)
+- Skill manifest system with semantic routing
+- GenUI generator (template → structural rules → LLM)
+- SDUI renderer (14 component types)
+- Vision frame capture from W300 glasses (BLE, TCP, webcam fallback)
+- Structured telemetry pipeline with `TelemetryAnalyzer`
+
+### Phase 3: 4-Tier Cognitive Memory
+- **Working Memory**: In-RAM per-session context (deque)
+- **Episodic Memory**: SQLite + FTS5, timestamped events
+- **Semantic Memory**: Knowledge graph (subject-predicate-object) with upsert
+- **Execution Log**: Every skill call with outcome, latency, feedback
+- **Unified Context Builder**: Aggregates all tiers for LLM injection
+
+### Phase 4: Audio Pipeline + Perception Fusion
+- STT via OpenAI Whisper with energy-based VAD
+- TTS via OpenAI TTS streaming MP3 chunks
+- `PerceptionFrame` — unified multimodal context (audio, vision, sensors, gesture)
+- `PerceptionEngine` — maintains per-session frame from all input streams
+- Multimodal LLM content (text + image_url) when vision is active
+
+### Phase 5: Safety + Proactive + Client Parity
+- **Graduated Safety**: AUTO/CONFIRM/DENY classification for tool execution
+- **Proactive Agent Loop**: Autonomous actions on health alerts, low battery
+- **SDUI Parity**: Client renders all 14 component types from GenUI
+- **Test Suite**: Comprehensive pytest coverage (protocol, memory, perception, safety)
+
+### Phase 6a: Self-Learning Agent (NEW)
+- **Knowledge Extraction**: LLM extracts user facts from conversations → semantic memory
+  - Preferences, relationships, routines, medical info, location
+  - Triggers every N messages via `Learner.on_message()`
+- **Session Summarization**: On disconnect, conversations are summarized → episodic memory
+  - `Orchestrator.on_session_disconnect()` → `Learner.summarize_session()`
+- **Execution-Aware Routing**: Skill success/failure rates from execution log influence routing
+  - `Learner.get_routing_penalties()` → `Orchestrator._apply_routing_penalties()`
+  - Failing skills get demoted or skipped entirely
+- New file: `asos-core/agents/learner.py`
+
+### Phase 6b: Streaming + Live UI (NEW)
+- **Streaming LLM**: Token-by-token output via SSE-style streaming
+  - `LLMProvider.chat_stream()` — yields text_delta, tool_call_delta, done
+  - `Orchestrator.handle_command_stream()` — sends `stream_delta` messages
+- **Client Streaming**: Real-time text rendering with cursor animation
+  - `stream_delta` message type with `stream_id` and `is_final`
+  - Accumulated text converted to SDUI on completion
+- **Protocol**: New `StreamDeltaPayload` message type
+
+### Phase 6c: Gesture + Scene Understanding (NEW)
+- **Gesture Interpreter** (`perception/gesture.py`):
+  - IMU-based: nod, shake, look_up, look_down, tilt_left, tilt_right, double_tap
+  - Sliding window pattern detection with cooldown
+  - Priority ordering (tap > look > nod > shake > tilt)
+- **Daemon Gesture Detection** (`w300_daemon.py`):
+  - `GestureDetector` class integrated into telemetry loop
+  - Sends `gesture` messages to brain on detection
+- **Scene Analyzer** (`perception/scene.py`):
+  - VLM-based frame analysis (GPT-4o vision)
+  - Produces structured output: scene_description, detected_objects, text_in_scene
+  - Rate-limited with configurable cooldown, cached per node
+  - Background analysis triggered on vision frame arrival
+- **Protocol**: New `GesturePayload` message type
+- **Brain Integration**: Gestures trigger `handle_command` with context
+
+## File Map
+
+```
+asos-core/
+├── agents/
+│   ├── orchestrator.py     — Core agentic loop (v0.4.0)
+│   ├── llm_provider.py     — Pluggable LLM with streaming
+│   ├── genui_generator.py  — Data → SDUI conversion
+│   └── learner.py          — Self-learning agent (NEW)
+├── api/
+│   └── server.py           — FastAPI brain server (v0.4.0)
+├── memory/
+│   └── store.py            — 4-tier cognitive memory
+├── models/
+│   ├── protocol.py         — Wire format (17+ message types)
+│   └── skill_manifest.py   — Skill definition schema
+├── perception/
+│   ├── fusion.py           — PerceptionFrame + PerceptionEngine
+│   ├── audio_pipeline.py   — STT/TTS/VAD
+│   ├── gesture.py          — IMU gesture interpreter (NEW)
+│   └── scene.py            — VLM scene analyzer (NEW)
+├── skills/
+│   ├── registry.py         — Skill loading + search
+│   └── executor.py         — API execution with vault
+└── tests/
+    ├── test_protocol.py
+    ├── test_memory.py
+    ├── test_perception.py
+    ├── test_safety.py
+    ├── test_learner.py     — NEW (9 tests)
+    ├── test_gesture.py     — NEW (10 tests)
+    └── test_streaming.py   — NEW (10 tests)
+```
+
+## Test Coverage
+
+**92 tests passing** across 7 test files:
+- Protocol (9), Memory (17), Perception (14), Safety (13)
+- Learner (9), Gesture (10), Streaming (10)
+
+## Environment Variables (v0.4.0)
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | — | LLM API key |
+| `THEORA_LLM_PROVIDER` | `openai` | openai / ollama / groq |
+| `THEORA_LLM_MODEL` | `gpt-4o-mini` | Model name |
+| `THEORA_VISION_ENABLED` | `false` | Enable vision pipeline |
+| `THEORA_PROACTIVE` | `false` | Enable proactive agent |
+| `THEORA_STREAMING` | `false` | Enable streaming LLM |
+| `THEORA_SCENE_COOLDOWN` | `10` | Seconds between VLM analyses |
+| `THEORA_STT_PROVIDER` | `openai` | Speech-to-text provider |
+| `THEORA_TTS_PROVIDER` | `openai` | Text-to-speech provider |
+| `NODE_API_KEY` | `dev-secret-key` | Daemon auth key |
 
 ## What's Next
 
-1. **On-device VLM** — Run a quantized vision-language model locally for real-time scene understanding without cloud latency.
-2. **Skill Marketplace** — Dynamic skill registration via web API, not just JSON files.
-3. **Multi-session Context** — Concurrent task management (track a ride AND monitor a recipe).
-4. **Android Launcher** — THEORA as default home screen (Phase 2 of Vision.md).
-5. **Edge Audio** — On-device Whisper for zero-latency STT on the daemon itself.
-6. **Gesture Interpreter** — Map IMU patterns to gestures (nod=confirm, shake=deny).
-
----
-
-## Quick Start
-
-```bash
-# Copy env
-cp .env.example .env
-# Set your OpenAI key
-echo "OPENAI_API_KEY=sk-..." >> .env
-
-# Start everything
-docker compose up --build
-
-# Brain: http://localhost:9090
-# Client: http://localhost:3000
-```
-
-For development without Docker:
-
-```bash
-# Brain
-cd asos-core && pip install -e . && python api/server.py
-
-# Client
-cd asos-client && npm install && npm run dev
-
-# W300 Daemon (with dev webcam)
-cd asos-nodes/python-node-sdk && pip install -r requirements.txt
-python3 w300_daemon.py --dev-camera --vision-interval 10
-```
-
----
-
-## Tests
-
-```bash
-cd asos-core
-pip install pytest pytest-asyncio
-pytest tests/ -v
-```
+1. **Embedding-based skill routing** — replace keyword matching with vector similarity
+2. **SDUI Confirmation Flow** — CONFIRM-level safety sends UI dialog, awaits tap
+3. **Multi-agent orchestration** — parallel skill execution with result merging
+4. **Memory decay** — time-weighted episodic relevance with forgetting curve
+5. **On-device inference** — local LLM + Whisper for fully offline mode
+6. **Wristband SDK** — extend node SDK for health wristband BLE protocol

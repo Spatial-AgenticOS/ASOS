@@ -317,6 +317,57 @@ class TelemetryAnalyzer:
 # W300 Node — Main Daemon
 # ─────────────────────────────────────────────
 
+class GestureDetector:
+    """
+    Daemon-side gesture detection from IMU data.
+    Sends gesture events to the brain when head gestures are detected.
+    """
+
+    COOLDOWN = 1.5
+    NOD_DELTA = 15.0
+    SHAKE_DELTA = 20.0
+    TAP_THRESHOLD = 18.0
+
+    def __init__(self):
+        self._pitch_history: deque[float] = deque(maxlen=20)
+        self._yaw_history: deque[float] = deque(maxlen=20)
+        self._accel_history: deque[float] = deque(maxlen=10)
+        self._last_gesture_time: dict[str, float] = {}
+
+    def update(self, head_pose: list[float], accel_xyz: list[float]) -> Optional[str]:
+        """Feed IMU sample, return gesture name or None."""
+        if len(head_pose) >= 3:
+            self._pitch_history.append(head_pose[0])
+            self._yaw_history.append(head_pose[2])
+
+        mag = math.sqrt(sum(a * a for a in accel_xyz))
+        self._accel_history.append(mag)
+
+        now = time.time()
+
+        if self._check("double_tap", now) and len(self._accel_history) >= 3:
+            if max(list(self._accel_history)[-3:]) >= self.TAP_THRESHOLD:
+                self._last_gesture_time["double_tap"] = now
+                return "double_tap"
+
+        if self._check("nod", now) and len(self._pitch_history) >= 8:
+            recent = list(self._pitch_history)[-8:]
+            if max(recent) - min(recent) >= self.NOD_DELTA:
+                self._last_gesture_time["nod"] = now
+                return "nod"
+
+        if self._check("shake", now) and len(self._yaw_history) >= 10:
+            recent = list(self._yaw_history)[-10:]
+            if max(recent) - min(recent) >= self.SHAKE_DELTA:
+                self._last_gesture_time["shake"] = now
+                return "shake"
+
+        return None
+
+    def _check(self, gesture: str, now: float) -> bool:
+        return (now - self._last_gesture_time.get(gesture, 0)) >= self.COOLDOWN
+
+
 class W300Node:
     def __init__(self, brain_url: str, api_key: str, dev_camera: bool = False, vision_interval: float = 0):
         self.brain_ws_url = f"{brain_url}/v1/node?api_key={api_key}"
@@ -334,6 +385,7 @@ class W300Node:
 
         # Telemetry state
         self.analyzer = TelemetryAnalyzer()
+        self.gesture_detector = GestureDetector()
         self.hr_buffer: deque[int] = deque(maxlen=5)
         self.current_hr = 0
         self.battery_pct = 100
@@ -681,6 +733,23 @@ class W300Node:
                 }
                 if self.brain_ws:
                     await self.brain_ws.send(json.dumps(telemetry))
+
+                # Gesture detection from IMU data
+                head_pose = imu["head_pose_euler"]
+                gesture = self.gesture_detector.update(head_pose, self.accel_xyz)
+                if gesture and self.brain_ws:
+                    gesture_msg = {
+                        "hop": "daemon",
+                        "type": "gesture",
+                        "payload": {
+                            "gesture": gesture,
+                            "confidence": 0.85,
+                            "source": "imu",
+                            "node_id": self.node_id,
+                        },
+                    }
+                    await self.brain_ws.send(json.dumps(gesture_msg))
+                    logger.info(f"Gesture sent to brain: {gesture}")
 
                 await asyncio.sleep(2.0)
         except websockets.ConnectionClosed:

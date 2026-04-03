@@ -29,15 +29,19 @@ from models.protocol import (
     AudioChunkPayload,
     TranscriptPayload,
     TTSChunkPayload,
+    StreamDeltaPayload,
+    GesturePayload,
     VisionFramePayload,
     VisionRequestPayload,
     parse_message,
 )
 from agents.orchestrator import Orchestrator
+from agents.learner import Learner
 from skills.registry import SkillRegistry
 from memory.store import MemoryStore
 from perception.fusion import PerceptionEngine
 from perception.audio_pipeline import AudioPipeline
+from perception.scene import SceneAnalyzer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("theora.brain")
@@ -49,8 +53,8 @@ logger = logging.getLogger("theora.brain")
 
 app = FastAPI(
     title="THEORA Brain",
-    description="Local-first agentic intelligence core",
-    version="0.3.0",
+    description="Local-first agentic intelligence core — self-learning, streaming, scene-aware",
+    version="0.4.0",
 )
 
 app.add_middleware(
@@ -109,6 +113,8 @@ class BrainState:
         self.vision_buffer = VisionBuffer()
         self.perception = PerceptionEngine()
         self.audio = AudioPipeline()
+        self.scene: Optional[SceneAnalyzer] = None
+        self.learner: Optional[Learner] = None
         self.orchestrator: Optional[Orchestrator] = None
 
         # Map daemon node_id → list of sessions interested in its data
@@ -116,6 +122,12 @@ class BrainState:
 
     async def init(self):
         self.skill_registry.load_builtin_skills()
+
+        from agents.llm_provider import LLMProvider
+        _shared_llm = LLMProvider()
+        self.learner = Learner(llm=_shared_llm, memory=self.memory)
+        self.scene = SceneAnalyzer(llm=_shared_llm)
+
         self.orchestrator = Orchestrator(
             skill_registry=self.skill_registry,
             send_to_client=self.send_to_session,
@@ -123,12 +135,13 @@ class BrainState:
             memory=self.memory,
             vision_buffer=self.vision_buffer,
             perception=self.perception,
+            learner=self.learner,
         )
         stats = self.memory.stats()
         logger.info(
-            f"Brain v0.3.0 initialized — {len(self.skill_registry.skills)} skills, "
+            f"Brain v0.4.0 initialized — {len(self.skill_registry.skills)} skills, "
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
-            f"{stats['episodes']} episodes"
+            f"{stats['episodes']} episodes | Self-learning: ON"
         )
 
     async def send_to_session(self, session_id: str, msg: TheoraMessage):
@@ -171,7 +184,7 @@ async def root():
     stats = state.memory.stats()
     return {
         "name": "THEORA Brain",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "status": "running",
         "sessions": len(state.sessions),
         "daemons": list(state.daemons.keys()),
@@ -295,7 +308,7 @@ async def client_session(ws: WebSocket):
 
             if msg.type == "text_command" and isinstance(payload, TextCommandPayload):
                 state.memory.working_push(session_id, {"role": "user", "text": payload.text})
-                await state.orchestrator.handle_command(
+                await state.orchestrator.handle_command_stream(
                     session_id=session_id,
                     text=payload.text,
                     context=payload.context,
@@ -348,8 +361,15 @@ async def client_session(ws: WebSocket):
 
     except WebSocketDisconnect:
         logger.info(f"Client disconnected: {session_id}")
+        # Trigger self-learning: extract knowledge + summarize session
+        if state.orchestrator:
+            try:
+                await state.orchestrator.on_session_disconnect(session_id)
+            except Exception as e:
+                logger.warning(f"Session summarization failed: {e}")
         state.sessions.pop(session_id, None)
         state.audio.clear_session(session_id)
+        state.perception.clear(session_id)
         state.memory.working_clear(session_id)
 
 
@@ -410,12 +430,31 @@ async def daemon_session(ws: WebSocket, api_key: str = None):
                     frame_id = frame_payload.get("frame_id", "?")
                     logger.info(f"Vision frame from {node_id}: {frame_id} ({frame_b64_len}B)")
 
-                    # Update perception for all bound sessions
                     for sid in state.get_sessions_for_daemon(effective_node):
                         state.perception.update_vision(sid, state.vision_buffer, effective_node)
 
+                    # Scene understanding via VLM (non-blocking)
+                    if state.scene and state.scene.available:
+                        asyncio.ensure_future(
+                            _analyze_scene_background(effective_node, frame_payload)
+                        )
+
                     if state.orchestrator:
                         state.orchestrator.resolve_pending_frame(msg.msg_id, frame_payload)
+
+            elif msg.type == "gesture":
+                gesture_payload = raw.get("payload", {})
+                gesture = gesture_payload.get("gesture", "")
+                if gesture and node_id:
+                    logger.info(f"Gesture from {node_id}: {gesture}")
+                    for sid in state.get_sessions_for_daemon(node_id):
+                        state.perception.update_gesture(sid, gesture)
+                        if state.orchestrator:
+                            await state.orchestrator.handle_command(
+                                session_id=sid,
+                                text=f"[GESTURE] User performed: {gesture}",
+                                context={"source": "gesture", "gesture": gesture, "node": node_id},
+                            )
 
             elif msg.type == "telemetry":
                 telemetry_payload = raw.get("payload", {})
@@ -444,6 +483,31 @@ async def daemon_session(ws: WebSocket, api_key: str = None):
 
 
 # ─────────────────────────────────────────────
+# Background Scene Analysis
+# ─────────────────────────────────────────────
+
+async def _analyze_scene_background(node_id: str, frame_payload: dict):
+    """Run VLM scene analysis on a vision frame and update perception."""
+    try:
+        data_b64 = frame_payload.get("data_b64", "")
+        encoding = frame_payload.get("encoding", "jpeg")
+        if not data_b64:
+            return
+
+        result = await state.scene.analyze_frame(
+            data_b64=data_b64, encoding=encoding, node_id=node_id,
+        )
+        if result:
+            for sid in state.get_sessions_for_daemon(node_id):
+                frame = state.perception.get_frame(sid)
+                frame.scene_description = result.get("scene_description", "")
+                frame.detected_objects = result.get("detected_objects", [])
+                frame.text_in_scene = result.get("text_in_scene", [])
+    except Exception as e:
+        logger.warning(f"Background scene analysis failed: {e}")
+
+
+# ─────────────────────────────────────────────
 # Entry Point
 # ─────────────────────────────────────────────
 
@@ -451,9 +515,9 @@ if __name__ == "__main__":
     import uvicorn
     print("""
     ╔══════════════════════════════════════╗
-    ║        THEORA Brain v0.3.0          ║
+    ║        THEORA Brain v0.4.0          ║
     ║   Local-First Agentic Intelligence  ║
-    ║   Perception + Memory + Audio       ║
+    ║  Self-Learning | Streaming | Scene  ║
     ╚══════════════════════════════════════╝
     """)
     uvicorn.run(app, host="0.0.0.0", port=9090, log_level="info")

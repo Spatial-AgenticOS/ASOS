@@ -1,8 +1,8 @@
 """
-THEORA LLM Provider — Pluggable AI Backend
-============================================
+THEORA LLM Provider — Pluggable AI Backend (v0.4.0)
+=====================================================
 Supports: OpenAI API, Ollama (local), and any OpenAI-compatible endpoint.
-The brain doesn't care which model is running. Swap with one env var.
+Now with streaming support for real-time token delivery.
 """
 
 from __future__ import annotations
@@ -142,6 +142,88 @@ class LLMProvider:
             })
 
         return text, parsed_tools
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        tools: Optional[list[dict]] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> AsyncGenerator[dict, None]:
+        """
+        Stream a chat completion. Yields delta dicts:
+          {"type": "text_delta", "content": "..."}
+          {"type": "tool_call_delta", "tool_call": {...}}
+          {"type": "done"}
+        """
+        body: dict = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+
+        if tools:
+            clean_tools = [{k: v for k, v in t.items() if k != "_theora_meta"} for t in tools]
+            body["tools"] = clean_tools
+            body["tool_choice"] = "auto"
+
+        try:
+            async with self.client.stream("POST", "/chat/completions", json=body) as resp:
+                resp.raise_for_status()
+
+                accumulated_tool_calls: dict[int, dict] = {}
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        # Emit accumulated tool calls
+                        for _, tc in sorted(accumulated_tool_calls.items()):
+                            try:
+                                tc["args"] = json.loads(tc.get("arguments", "{}"))
+                            except json.JSONDecodeError:
+                                tc["args"] = {}
+                            yield {"type": "tool_call_delta", "tool_call": tc}
+                        yield {"type": "done"}
+                        return
+
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+
+                    # Text content
+                    if delta.get("content"):
+                        yield {"type": "text_delta", "content": delta["content"]}
+
+                    # Tool calls (streamed in fragments)
+                    for tc_delta in delta.get("tool_calls", []):
+                        idx = tc_delta.get("index", 0)
+                        if idx not in accumulated_tool_calls:
+                            accumulated_tool_calls[idx] = {
+                                "id": tc_delta.get("id", ""),
+                                "name": "",
+                                "arguments": "",
+                            }
+                        entry = accumulated_tool_calls[idx]
+                        func = tc_delta.get("function", {})
+                        if func.get("name"):
+                            entry["name"] = func["name"]
+                        if func.get("arguments"):
+                            entry["arguments"] += func["arguments"]
+                        if tc_delta.get("id"):
+                            entry["id"] = tc_delta["id"]
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"LLM stream error: {e.response.status_code}")
+            yield {"type": "error", "content": str(e)}
+        except Exception as e:
+            logger.error(f"LLM stream failed: {e}")
+            yield {"type": "error", "content": str(e)}
 
     async def close(self):
         await self.client.aclose()

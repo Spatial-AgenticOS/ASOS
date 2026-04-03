@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { SduiRenderer } from './components/SduiRenderer';
-import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff } from 'lucide-react';
+import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap } from 'lucide-react';
 
 export default function App() {
   const [messages, setMessages] = useState([]);
@@ -10,11 +10,14 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [memoryStats, setMemoryStats] = useState(null);
+  const [streamingText, setStreamingText] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioContextRef = useRef(null);
   const chunkIndexRef = useRef(0);
+  const streamBufferRef = useRef('');
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -52,6 +55,20 @@ export default function App() {
           setMessages(prev => [...prev, { role: 'assistant', type: 'sdui', payload: msg.payload.root }]);
         } else if (msg.type === 'text_response') {
           setMessages(prev => [...prev, { role: 'assistant', type: 'text', content: msg.payload.text }]);
+        } else if (msg.type === 'stream_delta') {
+          if (msg.payload.is_final) {
+            const finalText = streamBufferRef.current;
+            if (finalText) {
+              setMessages(prev => [...prev, { role: 'assistant', type: 'text', content: finalText }]);
+            }
+            streamBufferRef.current = '';
+            setStreamingText('');
+            setIsStreaming(false);
+          } else {
+            streamBufferRef.current += msg.payload.delta;
+            setStreamingText(streamBufferRef.current);
+            setIsStreaming(true);
+          }
         } else if (msg.type === 'transcript') {
           setTranscript(msg.payload.text);
           if (!msg.payload.is_partial) {
@@ -241,6 +258,18 @@ export default function App() {
             </div>
           </div>
         ))}
+        {isStreaming && streamingText && (
+          <div className="flex justify-start">
+            <div className="max-w-[90%]">
+              <div className="flex items-center gap-2 mb-1 opacity-60">
+                <Zap size={12} className="text-asos-accent animate-pulse" />
+                <span className="text-xs">streaming...</span>
+              </div>
+              <span className="leading-relaxed">{streamingText}</span>
+              <span className="inline-block w-2 h-4 bg-asos-accent animate-pulse ml-0.5" />
+            </div>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 

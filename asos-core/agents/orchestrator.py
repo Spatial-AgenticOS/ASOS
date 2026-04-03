@@ -1,17 +1,15 @@
 """
-THEORA Orchestrator — The Agentic Brain (v0.3.0)
+THEORA Orchestrator — The Agentic Brain (v0.4.0)
 ==================================================
 The core OS loop. Receives fused multimodal perception →
 matches skills → calls LLM with tools → executes → generates UI →
 logs execution → updates memory → responds with voice + visuals.
 
-New in v0.3:
-  - PerceptionFrame-driven context (replaces raw biometric dict)
-  - 4-tier memory injection (working, episodic, semantic, execution log)
-  - Graduated safety permissions (auto/confirm/deny)
-  - Proactive agent loop (acts without user prompt on context changes)
-  - Execution logging for every skill call
-  - TTS response pipeline
+v0.4.0:
+  - Self-learning agent (knowledge extraction, session summarization)
+  - Execution-log-aware skill routing with penalty scores
+  - Streaming LLM responses (token-by-token text + SDUI patches)
+  - Gesture-aware context injection
 """
 
 from __future__ import annotations
@@ -45,6 +43,7 @@ if TYPE_CHECKING:
     from api.server import VisionBuffer
     from memory.store import MemoryStore
     from perception.audio_pipeline import AudioPipeline
+    from agents.learner import Learner
 
 logger = logging.getLogger("theora.orchestrator")
 
@@ -72,6 +71,7 @@ class Orchestrator:
         memory: "MemoryStore" = None,
         vision_buffer: "VisionBuffer" = None,
         perception: PerceptionEngine = None,
+        learner: "Learner" = None,
     ):
         self.skills = skill_registry
         self.send = send_to_client
@@ -79,6 +79,7 @@ class Orchestrator:
         self.memory = memory
         self.vision_buffer = vision_buffer
         self.perception = perception or PerceptionEngine()
+        self.learner = learner
 
         # Components
         self.llm = LLMProvider()
@@ -100,6 +101,9 @@ class Orchestrator:
         self._proactive_enabled = os.environ.get("THEORA_PROACTIVE", "").lower() in ("true", "1", "yes")
         self._last_proactive_check: dict[str, float] = {}
         self._proactive_cooldown = 60.0  # min seconds between proactive triggers per session
+
+        # Streaming config
+        self._streaming_enabled = os.environ.get("THEORA_STREAMING", "").lower() in ("true", "1", "yes")
 
         self.executor.load_vault_from_env()
 
@@ -234,6 +238,116 @@ class Orchestrator:
 
         self.conversation_history[session_id] = history[-20:]
 
+        # Self-learning: notify learner of new messages
+        if self.learner:
+            asyncio.ensure_future(self.learner.on_message(session_id, "user", text))
+
+    async def handle_command_stream(self, session_id: str, text: str, context: Optional[dict] = None):
+        """
+        Streaming variant of handle_command. Sends text deltas in real-time
+        so the client gets token-by-token output.
+        Falls back to non-streaming if LLM doesn't support it.
+        """
+        if not self._streaming_enabled or not self.llm.available:
+            await self.handle_command(session_id, text, context)
+            return
+
+        if self.memory:
+            self.memory.episode_save(
+                session_id=session_id, event_type="user_command",
+                summary=text[:200], detail=json.dumps(context or {}),
+            )
+
+        relevant_skills = await self._route_prompt(text)
+        tools = self.skills.get_tools_for_skills(relevant_skills)
+
+        perception_frame = self.perception.get_frame(session_id)
+        system_prompt = self._build_system_prompt(perception_frame, relevant_skills, session_id)
+
+        if session_id not in self.conversation_history:
+            self.conversation_history[session_id] = []
+
+        user_content = perception_frame.to_llm_user_content(text)
+        self.conversation_history[session_id].append({"role": "user", "content": user_content})
+        history = self._compact_context(self.conversation_history[session_id].copy())
+        messages = [{"role": "system", "content": system_prompt}, *history]
+
+        from models.protocol import StreamDeltaPayload
+
+        stream_id = str(uuid4())[:8]
+        accumulated_text = ""
+        tool_calls_received = []
+
+        try:
+            async for delta in self.llm.chat_stream(messages=messages, tools=tools if tools else None):
+                if delta["type"] == "text_delta":
+                    accumulated_text += delta["content"]
+                    await self.send(session_id, TheoraMessage(
+                        session_id=session_id, hop="brain", type="stream_delta",
+                        payload=StreamDeltaPayload(
+                            delta=delta["content"], stream_id=stream_id, is_final=False,
+                        ).model_dump(),
+                    ))
+                elif delta["type"] == "tool_call_delta":
+                    tool_calls_received.append(delta["tool_call"])
+                elif delta["type"] == "done":
+                    if accumulated_text:
+                        await self.send(session_id, TheoraMessage(
+                            session_id=session_id, hop="brain", type="stream_delta",
+                            payload=StreamDeltaPayload(
+                                delta="", stream_id=stream_id, is_final=True,
+                            ).model_dump(),
+                        ))
+                elif delta["type"] == "error":
+                    await self._send_text(session_id, f"Stream error: {delta.get('content', 'unknown')}")
+                    return
+        except Exception as e:
+            logger.error(f"Streaming failed, falling back: {e}")
+            await self.handle_command(session_id, text, context)
+            return
+
+        # Execute any tool calls from the stream
+        if tool_calls_received:
+            for tc in tool_calls_received:
+                t_start = time.time()
+                result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
+                latency_ms = (time.time() - t_start) * 1000
+                if self.memory:
+                    parts = tc["name"].split("__", 1)
+                    skill_id = parts[0] if len(parts) == 2 else tc["name"]
+                    endpoint_id = parts[1] if len(parts) == 2 else ""
+                    self.memory.log_execution(
+                        session_id=session_id, skill_id=skill_id,
+                        endpoint_id=endpoint_id, args=tc.get("args", {}),
+                        result_status="success" if result_data.get("success") or result_data.get("status") == "command_sent_to_hardware_daemon" else "failure",
+                        result_summary=json.dumps(result_data)[:300],
+                        latency_ms=latency_ms,
+                    )
+
+        if accumulated_text:
+            history.append({"role": "assistant", "content": accumulated_text})
+            if self.memory:
+                self.memory.working_push(session_id, {"role": "assistant", "text": accumulated_text[:300]})
+
+            try:
+                cleaned = accumulated_text.strip()
+                if cleaned.startswith("```json"):
+                    cleaned = cleaned[7:-3].strip()
+                elif cleaned.startswith("```"):
+                    cleaned = cleaned[3:-3].strip()
+                sdui = json.loads(cleaned)
+                if "type" in sdui:
+                    await self.send(session_id, TheoraMessage(
+                        session_id=session_id, hop="brain", type="sdui",
+                        payload=SDUIPayload(root=sdui).model_dump(),
+                    ))
+            except json.JSONDecodeError:
+                pass
+
+        self.conversation_history[session_id] = history[-20:]
+        if self.learner:
+            asyncio.ensure_future(self.learner.on_message(session_id, "user", text))
+
     # ─────────────────────────────────────────────
     # Proactive Agent Loop
     # ─────────────────────────────────────────────
@@ -288,6 +402,14 @@ class Orchestrator:
             context={"source": "proactive", "alerts": alerts},
         )
 
+    async def on_session_disconnect(self, session_id: str):
+        """Called when a client disconnects. Summarize and learn."""
+        if self.learner:
+            await self.learner.extract_knowledge(session_id)
+            await self.learner.summarize_session(session_id)
+        self.conversation_history.pop(session_id, None)
+        self._last_proactive_check.pop(session_id, None)
+
     # ─────────────────────────────────────────────
     # Skill Routing
     # ─────────────────────────────────────────────
@@ -297,7 +419,8 @@ class Orchestrator:
             return []
 
         if not self.llm.available or len(self.skills.skills) <= 5:
-            return self.skills.find_skills_for_query(text, top_k=5)
+            results = self.skills.find_skills_for_query(text, top_k=5)
+            return self._apply_routing_penalties(results)
 
         prompt = "You are a Semantic Tool Router. Select up to 5 relevant tool IDs for the user's query.\n"
         prompt += "Available Tools:\n"
@@ -321,10 +444,34 @@ class Orchestrator:
             for sid in skill_ids:
                 if isinstance(sid, str) and sid in self.skills.skills:
                     relevant.append(self.skills.skills[sid])
-            return relevant[:5] if relevant else self.skills.find_skills_for_query(text, top_k=5)
+            results = relevant[:5] if relevant else self.skills.find_skills_for_query(text, top_k=5)
+            return self._apply_routing_penalties(results)
         except Exception as e:
             logger.warning(f"RoutePrompt failed, falling back to heuristic: {e}")
-            return self.skills.find_skills_for_query(text, top_k=5)
+            results = self.skills.find_skills_for_query(text, top_k=5)
+            return self._apply_routing_penalties(results)
+
+    def _apply_routing_penalties(self, skills: list[SkillManifest]) -> list[SkillManifest]:
+        """
+        Re-rank skills based on execution log reliability.
+        Skills with poor track records get demoted.
+        """
+        if not self.learner or not skills:
+            return skills
+
+        penalties = self.learner.get_routing_penalties()
+        if not penalties:
+            return skills
+
+        penalized = []
+        for skill in skills:
+            penalty = penalties.get(skill.skill_id, 1.0)
+            if penalty < 0.2:
+                logger.info(f"Routing penalty: skipping {skill.skill_id} (penalty={penalty})")
+                continue
+            penalized.append(skill)
+
+        return penalized if penalized else skills[:1]
 
     # ─────────────────────────────────────────────
     # Context Management

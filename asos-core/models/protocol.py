@@ -104,6 +104,20 @@ class TextResponsePayload(BaseModel):
     tool_calls: Optional[list[dict]] = None
 
 
+class StreamDeltaPayload(BaseModel):
+    """Streaming text token from brain to client (real-time LLM output)."""
+    delta: str
+    stream_id: str = ""
+    is_final: bool = False
+
+
+class GesturePayload(BaseModel):
+    """Gesture detected by a hardware daemon (glasses IMU, camera, etc.)."""
+    gesture: str  # "nod", "shake", "look_up", "look_down", "double_tap"
+    confidence: float = 1.0
+    source: str = "imu"  # "imu", "camera", "touch"
+
+
 class ErrorPayload(BaseModel):
     """Something went wrong."""
     code: str
@@ -196,6 +210,8 @@ MESSAGE_TYPES = {
     "sdui_patch": SDUIPatchPayload,
     "tts_chunk": TTSChunkPayload,
     "text_response": TextResponsePayload,
+    "stream_delta": StreamDeltaPayload,
+    "gesture": GesturePayload,
     "error": ErrorPayload,
 
     # Brain ↔ Daemon

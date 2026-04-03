@@ -1,7 +1,7 @@
 [project]
 name = "theora-brain"
-version = "0.3.0"
-description = "THEORA OS — Local-first agentic intelligence core with perception fusion"
+version = "0.4.0"
+description = "THEORA OS — Self-learning, streaming, scene-aware agentic intelligence"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
