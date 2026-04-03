@@ -132,8 +132,9 @@ class ErrorPayload(BaseModel):
 class NodeRegisterPayload(BaseModel):
     """Daemon announces itself to the brain."""
     node_id: str
-    node_type: Literal["desktop", "server", "rpi", "robot", "glasses", "actuator", "sensor"]
+    node_type: Literal["desktop", "server", "rpi", "robot", "glasses", "phone", "actuator", "sensor"]
     os: str = ""
+    platform: str = ""  # "ios", "android", "linux", "macos"
     capabilities: list[str] = []  # ["applescript", "keyboard", "filesystem", "camera", "gpio"]
 
 
@@ -193,6 +194,47 @@ class DeviceRegisterPayload(BaseModel):
 
 
 # ─────────────────────────────────────────────
+# Payload Models — Phone Bridge (iOS/Android → Brain)
+# ─────────────────────────────────────────────
+
+class SensorTelemetryPayload(BaseModel):
+    """Single sensor reading from THEORA glasses via phone bridge."""
+    node_id: str
+    sensor: str  # "heart_rate", "spo2", "temperature", "uv", "steps"
+    data: dict  # Sensor-specific values
+    timestamp: str = ""
+    source: str = "theora_glasses"
+
+
+class SensorBatchPayload(BaseModel):
+    """Multiple sensor readings in one message."""
+    node_id: str
+    readings: dict  # {"heart_rate": {...}, "spo2": {...}, ...}
+    timestamp: str = ""
+    source: str = "theora_glasses"
+
+
+class GlassesStatusPayload(BaseModel):
+    """Phone reports glasses connection status."""
+    node_id: str
+    glasses_connected: bool = False
+    battery_level: int = -1
+    glasses_model: str = "THEORA"
+
+
+class SkillApprovalPayload(BaseModel):
+    """User approved/rejected a proposed skill."""
+    skill_id: str
+    approved: bool = False
+
+
+class ConfirmationResponsePayload(BaseModel):
+    """User responded to a permission confirmation."""
+    action: str
+    approved: bool = False
+
+
+# ─────────────────────────────────────────────
 # Message Type Registry — Maps type strings to payload models
 # ─────────────────────────────────────────────
 
@@ -214,7 +256,8 @@ MESSAGE_TYPES = {
     "gesture": GesturePayload,
     "error": ErrorPayload,
 
-    # Brain ↔ Daemon
+    # Brain ↔ Daemon / Phone Bridge
+    "register": NodeRegisterPayload,
     "node_register": NodeRegisterPayload,
     "execute": ExecuteCommandPayload,
     "execute_result": ExecuteResultPayload,
@@ -222,6 +265,13 @@ MESSAGE_TYPES = {
     # Vision Pipeline
     "vision_frame": VisionFramePayload,
     "vision_request": VisionRequestPayload,
+
+    # Phone Bridge
+    "sensor_telemetry": SensorTelemetryPayload,
+    "sensor_batch": SensorBatchPayload,
+    "glasses_status": GlassesStatusPayload,
+    "skill_approval": SkillApprovalPayload,
+    "confirmation_response": ConfirmationResponsePayload,
 }
 
 

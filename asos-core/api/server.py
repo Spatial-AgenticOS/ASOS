@@ -12,6 +12,7 @@ import json
 import logging
 import os
 from collections import deque
+from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
@@ -37,12 +38,14 @@ from models.protocol import (
 )
 from agents.orchestrator import Orchestrator
 from agents.learner import Learner
+from agents.skill_generator import SkillGenerator
 from skills.registry import SkillRegistry
 from memory.store import MemoryStore
 from perception.fusion import PerceptionEngine
 from perception.audio_pipeline import AudioPipeline
 from perception.scene import SceneAnalyzer
 from config.loader import ConfigLoader
+from security.vault import BlindVault, PermissionTier, ExecutionSandbox
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("theora.brain")
@@ -118,6 +121,9 @@ class BrainState:
         self.audio = AudioPipeline()
         self.scene: Optional[SceneAnalyzer] = None
         self.learner: Optional[Learner] = None
+        self.skill_gen: Optional[SkillGenerator] = None
+        self.vault: Optional[BlindVault] = None
+        self.sandbox: Optional[ExecutionSandbox] = None
         self.orchestrator: Optional[Orchestrator] = None
 
         # Map daemon node_id → list of sessions interested in its data
@@ -132,6 +138,16 @@ class BrainState:
         self.scene = SceneAnalyzer(llm=_shared_llm)
         scene_cooldown = int(os.environ.get("THEORA_SCENE_COOLDOWN", "10"))
         self.scene.set_cooldown(scene_cooldown)
+
+        self.skill_gen = SkillGenerator(
+            llm=_shared_llm,
+            skill_registry=self.skill_registry,
+        )
+
+        self.vault = BlindVault()
+        self.sandbox = ExecutionSandbox(
+            max_tier=os.environ.get("THEORA_MAX_TIER", "active")
+        )
 
         self.orchestrator = Orchestrator(
             skill_registry=self.skill_registry,
@@ -312,6 +328,123 @@ async def complete_setup(body: dict):
     return {"ok": True, "setup_complete": True}
 
 
+# ─────────────────────────────────────────────
+# Skill Generation API (Self-Evolving Agent)
+# ─────────────────────────────────────────────
+
+@app.post("/api/skills/generate")
+async def generate_skill(body: dict):
+    """Generate a new skill from a capability description."""
+    capability = body.get("capability", "")
+    service = body.get("service", "")
+    if not capability:
+        return {"error": "capability is required"}
+    if not state.skill_gen:
+        return {"error": "Skill generator not initialized"}
+    manifest = await state.skill_gen.generate_skill(capability, service)
+    if manifest:
+        return {"ok": True, "manifest": manifest, "needs_approval": True}
+    return {"ok": False, "error": "Failed to generate skill"}
+
+
+@app.post("/api/skills/approve")
+async def approve_skill(body: dict):
+    """Approve a pending generated skill — registers it live."""
+    skill_id = body.get("skill_id", "")
+    if not skill_id:
+        return {"error": "skill_id is required"}
+    success = await state.skill_gen.approve_skill(skill_id)
+    return {"ok": success, "skill_id": skill_id, "registered": success}
+
+
+@app.post("/api/skills/reject")
+async def reject_skill(body: dict):
+    """Reject a pending generated skill."""
+    skill_id = body.get("skill_id", "")
+    state.skill_gen.reject_skill(skill_id)
+    return {"ok": True, "skill_id": skill_id}
+
+
+@app.get("/api/skills/pending")
+async def pending_skills():
+    """Get all skills waiting for user approval."""
+    if not state.skill_gen:
+        return {"pending": []}
+    return {"pending": state.skill_gen.get_pending_skills()}
+
+
+# ─────────────────────────────────────────────
+# Security API
+# ─────────────────────────────────────────────
+
+@app.get("/api/security/vault")
+async def vault_summary():
+    """Key names + fingerprints — never raw values."""
+    if not state.vault:
+        return {"keys": {}}
+    return {"keys": state.vault.to_safe_summary()}
+
+
+@app.post("/api/security/vault/store")
+async def vault_store(body: dict):
+    """Store a credential in the blind vault."""
+    name = body.get("key_name", "")
+    value = body.get("value", "")
+    if not name or not value:
+        return {"error": "key_name and value are required"}
+    state.vault.store(name, value, stored_by="api")
+    return {"ok": True, "key_name": name, "fingerprint": state.vault.fingerprint(name)}
+
+
+@app.delete("/api/security/vault/{key_name}")
+async def vault_remove(key_name: str):
+    removed = state.vault.remove(key_name, removed_by="api")
+    return {"ok": removed}
+
+
+@app.get("/api/security/permissions")
+async def get_permissions():
+    """Current permission tier and sandbox status."""
+    return {
+        "max_tier": state.sandbox.max_tier if state.sandbox else "active",
+        "tiers": PermissionTier.TIER_ORDER,
+        "tier_descriptions": {
+            "passive": "Read-only, no side effects (weather, search)",
+            "active": "Can send data (messaging, calendar)",
+            "privileged": "Can modify system state (file access)",
+            "dangerous": "Destructive operations (delete, financial)",
+        },
+    }
+
+
+@app.post("/api/security/permissions/update")
+async def update_permissions(body: dict):
+    new_tier = body.get("max_tier", "active")
+    if new_tier not in PermissionTier.TIER_ORDER:
+        return {"error": f"Invalid tier: {new_tier}"}
+    if state.sandbox:
+        state.sandbox.max_tier = new_tier
+    return {"ok": True, "max_tier": new_tier}
+
+
+@app.get("/api/security/audit")
+async def get_audit_log():
+    """Get recent security audit entries."""
+    audit_path = Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "audit.log"
+    if not audit_path.exists():
+        return {"entries": []}
+    entries = []
+    with open(audit_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    return {"entries": entries[-100:]}
+
+
 @app.get("/api/nodes")
 async def list_nodes():
     """List all connected hardware nodes."""
@@ -463,6 +596,22 @@ async def client_session(ws: WebSocket):
                     context=payload.context,
                 )
 
+                # Background: detect if user needs a skill that doesn't exist
+                if state.skill_gen:
+                    history = state.memory.working_get(session_id) or []
+                    need = await state.skill_gen.detect_unmet_need(history)
+                    if need:
+                        manifest = await state.skill_gen.generate_skill(
+                            capability=need.get("capability", ""),
+                            service=need.get("service", ""),
+                        )
+                        if manifest:
+                            await ws.send_json(TheoraMessage(
+                                session_id=session_id, hop="brain",
+                                type="skill_proposal",
+                                payload={"manifest": manifest, "reason": need.get("capability", "")},
+                            ).model_dump())
+
             elif msg.type == "audio_chunk" and isinstance(payload, AudioChunkPayload):
                 transcript = await state.audio.process_audio_chunk(
                     session_id=session_id,
@@ -544,10 +693,10 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
             raw = await ws.receive_json()
             msg, payload = parse_message(raw)
 
-            if msg.type == "node_register" and isinstance(payload, NodeRegisterPayload):
+            if msg.type in ("node_register", "register") and isinstance(payload, NodeRegisterPayload):
                 node_id = payload.node_id
                 state.daemons[node_id] = ws
-                logger.info(f"Daemon registered: {node_id} ({payload.node_type}) — caps: {payload.capabilities}")
+                logger.info(f"Node registered: {node_id} ({payload.node_type}/{payload.platform}) — caps: {payload.capabilities}")
 
                 # Bind to all active sessions and update perception
                 for sid in state.sessions:
@@ -614,14 +763,59 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 if hr:
                     logger.info(f"Telemetry from {node_id}: {hr} BPM")
 
-                # Update orchestrator biometric state
                 if state.orchestrator:
                     state.orchestrator.update_biometric(node_id, sensors)
 
-                # Update perception engine for all bound sessions
                 if node_id:
                     for sid in state.get_sessions_for_daemon(node_id):
                         state.perception.update_sensors(sid, sensors)
+
+            # ── Phone Bridge: individual sensor reading ──
+            elif msg.type == "sensor_telemetry":
+                payload_dict = raw.get("payload", {})
+                sensor_name = payload_dict.get("sensor", "")
+                sensor_data = payload_dict.get("data", {})
+                source = payload_dict.get("source", "unknown")
+                logger.info(f"Sensor [{sensor_name}] from {node_id} ({source}): {sensor_data}")
+
+                sensors_map = {sensor_name: sensor_data}
+                if state.orchestrator:
+                    state.orchestrator.update_biometric(node_id, sensors_map)
+                if node_id:
+                    for sid in state.get_sessions_for_daemon(node_id):
+                        state.perception.update_sensors(sid, sensors_map)
+
+            # ── Phone Bridge: batch sensor readings ──
+            elif msg.type == "sensor_batch":
+                payload_dict = raw.get("payload", {})
+                readings = payload_dict.get("readings", {})
+                logger.info(f"Sensor batch from {node_id}: {list(readings.keys())}")
+                if state.orchestrator:
+                    state.orchestrator.update_biometric(node_id, readings)
+                if node_id:
+                    for sid in state.get_sessions_for_daemon(node_id):
+                        state.perception.update_sensors(sid, readings)
+
+            # ── Phone Bridge: glasses connection status ──
+            elif msg.type == "glasses_status":
+                payload_dict = raw.get("payload", {})
+                connected = payload_dict.get("glasses_connected", False)
+                battery = payload_dict.get("battery_level", -1)
+                model = payload_dict.get("glasses_model", "THEORA")
+                logger.info(f"Glasses ({model}) {'connected' if connected else 'disconnected'} via {node_id}, battery={battery}%")
+
+            # ── Phone Bridge: skill approval ──
+            elif msg.type == "skill_approval":
+                payload_dict = raw.get("payload", {})
+                skill_id = payload_dict.get("skill_id", "")
+                approved = payload_dict.get("approved", False)
+                if state.skill_gen and skill_id:
+                    if approved:
+                        await state.skill_gen.approve_skill(skill_id)
+                        logger.info(f"Skill approved via phone: {skill_id}")
+                    else:
+                        state.skill_gen.reject_skill(skill_id)
+                        logger.info(f"Skill rejected via phone: {skill_id}")
 
     except WebSocketDisconnect:
         if node_id:

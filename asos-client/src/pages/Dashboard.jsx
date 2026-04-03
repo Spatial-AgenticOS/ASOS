@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Brain, Cpu, Activity, Database, MessageSquare, Puzzle,
   Wifi, WifiOff, Zap, Eye, Shield, BookOpen, Clock, TrendingUp,
+  Sparkles, Lock, CheckCircle, XCircle, AlertTriangle,
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
@@ -11,12 +12,32 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [info, setInfo] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [pendingSkills, setPendingSkills] = useState([]);
+  const [vaultKeys, setVaultKeys] = useState({});
+  const [permissions, setPermissions] = useState(null);
 
   const refresh = () => {
     fetch(`${API}/api/system/info`)
       .then(r => r.json())
       .then(data => { setInfo(data); setLoading(false); })
       .catch(() => setLoading(false));
+    fetch(`${API}/api/skills/pending`).then(r => r.json()).then(d => setPendingSkills(d.pending || [])).catch(() => {});
+    fetch(`${API}/api/security/vault`).then(r => r.json()).then(d => setVaultKeys(d.keys || {})).catch(() => {});
+    fetch(`${API}/api/security/permissions`).then(r => r.json()).then(d => setPermissions(d)).catch(() => {});
+  };
+
+  const approveSkill = (skillId) => {
+    fetch(`${API}/api/skills/approve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skill_id: skillId }),
+    }).then(() => refresh());
+  };
+
+  const rejectSkill = (skillId) => {
+    fetch(`${API}/api/skills/reject`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skill_id: skillId }),
+    }).then(() => refresh());
   };
 
   useEffect(() => {
@@ -150,6 +171,79 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {/* Pending Skill Proposals */}
+        {pendingSkills.length > 0 && (
+          <div className="bg-asos-card border border-yellow-500/30 rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <Sparkles size={18} className="text-yellow-400" />
+              <h2 className="font-semibold">Agent Proposed New Skills</h2>
+              <span className="ml-auto text-xs bg-yellow-500 bg-opacity-20 text-yellow-400 px-2 py-1 rounded-full">
+                {pendingSkills.length} pending
+              </span>
+            </div>
+            <div className="space-y-3">
+              {pendingSkills.map(skill => (
+                <div key={skill.skill_id} className="bg-black bg-opacity-30 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <span className="font-medium">{skill.brand?.name || skill.skill_id}</span>
+                      <span className="text-xs text-gray-500 ml-2">{skill.endpoints?.length || 0} endpoints</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => approveSkill(skill.skill_id)}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-green-500 bg-opacity-20 text-green-400 rounded-lg text-xs hover:bg-opacity-30 transition"
+                      >
+                        <CheckCircle size={14} /> Approve
+                      </button>
+                      <button
+                        onClick={() => rejectSkill(skill.skill_id)}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500 bg-opacity-20 text-red-400 rounded-lg text-xs hover:bg-opacity-30 transition"
+                      >
+                        <XCircle size={14} /> Reject
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-400">{skill.description}</p>
+                  {skill.auth?.type && skill.auth.type !== 'none' && (
+                    <p className="text-xs text-yellow-400 mt-1">Requires {skill.auth.type} authentication</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Security Status */}
+        <div className="bg-asos-card border border-asos-border rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Shield size={18} className="text-asos-accent" />
+            <h2 className="font-semibold">Security</h2>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="bg-black bg-opacity-30 rounded-lg p-4">
+              <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Permission Tier</div>
+              <div className="text-lg font-bold capitalize">{permissions?.max_tier || 'active'}</div>
+              <p className="text-xs text-gray-500 mt-1">{permissions?.tier_descriptions?.[permissions?.max_tier] || ''}</p>
+            </div>
+            <div className="bg-black bg-opacity-30 rounded-lg p-4">
+              <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Blind Vault</div>
+              <div className="text-lg font-bold">{Object.keys(vaultKeys).length} keys</div>
+              <p className="text-xs text-gray-500 mt-1">LLM never sees raw credentials</p>
+            </div>
+            <div className="bg-black bg-opacity-30 rounded-lg p-4">
+              <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Vault Keys</div>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {Object.keys(vaultKeys).length > 0 ? Object.keys(vaultKeys).map(k => (
+                  <span key={k} className="text-xs bg-green-500 bg-opacity-10 text-green-400 px-2 py-0.5 rounded">{k}</span>
+                )) : (
+                  <span className="text-xs text-gray-500">No keys stored</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Connected Nodes */}
         {info.nodes && info.nodes.length > 0 && (

@@ -41,6 +41,8 @@ class SkillRegistry:
         self._tool_cache[manifest.skill_id] = self._manifest_to_tools(manifest)
         logger.info(f"Registered skill: {manifest.brand.name} ({manifest.skill_id})")
 
+    register_skill = register  # Alias for the skill generator
+
     def load_from_file(self, path: str | Path):
         """Load a skill manifest from a JSON file."""
         with open(path) as f:
