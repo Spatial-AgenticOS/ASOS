@@ -25,6 +25,7 @@ services:
       - NODE_API_KEY=${NODE_API_KEY:-dev-secret-key}
     volumes:
       - theora-memory:/root/.theora
+      - theora-config:/root/.config/theora
     restart: unless-stopped
 
   asos-client:
@@ -39,4 +40,6 @@ services:
 
 volumes:
   theora-memory:
+    driver: local
+  theora-config:
     driver: local

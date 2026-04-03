@@ -42,6 +42,7 @@ from memory.store import MemoryStore
 from perception.fusion import PerceptionEngine
 from perception.audio_pipeline import AudioPipeline
 from perception.scene import SceneAnalyzer
+from config.loader import ConfigLoader
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("theora.brain")
@@ -105,6 +106,8 @@ class VisionBuffer:
 
 class BrainState:
     def __init__(self):
+        self.config = ConfigLoader()
+        self.config.discover()
         self.sessions: dict[str, WebSocket] = {}
         self.daemons: dict[str, WebSocket] = {}
         self.devices: dict[str, dict] = {}
@@ -191,6 +194,150 @@ async def root():
         "devices": len(state.devices),
         "skills": len(state.skill_registry.skills),
         "memory": stats,
+        "audio_available": state.audio.available,
+    }
+
+
+# ─────────────────────────────────────────────
+# Setup & Configuration API
+# ─────────────────────────────────────────────
+
+@app.get("/api/setup/status")
+async def setup_status():
+    """Check if initial setup has been completed."""
+    return {
+        "setup_complete": state.config.setup_complete,
+        "settings": state.config.to_client_safe_dict(),
+    }
+
+
+@app.get("/api/config")
+async def get_config():
+    """Get current configuration (safe for client, no secrets)."""
+    return state.config.to_client_safe_dict()
+
+
+@app.post("/api/config/update")
+async def update_config(body: dict):
+    """Update a setting. Body: {section, key, value}"""
+    section = body.get("section", "")
+    key = body.get("key", "")
+    value = body.get("value")
+    if not section or not key:
+        return {"error": "section and key are required"}
+    state.config.update_settings(section, key, value)
+    return {"ok": True, "section": section, "key": key, "value": value}
+
+
+@app.post("/api/config/credentials")
+async def save_credentials(body: dict):
+    """Save API credentials. Body: {OPENAI_API_KEY: "...", skill_keys: {...}}"""
+    creds = {}
+    for key in ("OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY"):
+        if key in body:
+            creds[key] = body[key]
+            os.environ[key] = body[key]
+    if "skill_keys" in body:
+        creds["skill_keys"] = body["skill_keys"]
+        for skill_id, api_key in body["skill_keys"].items():
+            os.environ[f"THEORA_KEY_{skill_id}"] = api_key
+    state.config.save_credentials(creds)
+    return {"ok": True, "keys_saved": list(creds.keys())}
+
+
+@app.post("/api/config/validate-key")
+async def validate_key(body: dict):
+    """Validate an LLM API key by making a test request."""
+    provider = body.get("provider", "openai")
+    api_key = body.get("api_key", "")
+    if not api_key:
+        return {"valid": False, "error": "No API key provided"}
+
+    import httpx
+    try:
+        if provider == "openai":
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    return {"valid": True, "provider": "openai", "models": len(resp.json().get("data", []))}
+                return {"valid": False, "error": f"API returned {resp.status_code}"}
+        elif provider == "groq":
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=10.0,
+                )
+                return {"valid": resp.status_code == 200, "provider": "groq"}
+        elif provider == "ollama":
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    body.get("base_url", "http://localhost:11434") + "/api/tags",
+                    timeout=5.0,
+                )
+                if resp.status_code == 200:
+                    models = resp.json().get("models", [])
+                    return {"valid": True, "provider": "ollama", "models": len(models)}
+                return {"valid": False, "error": "Ollama not reachable"}
+        return {"valid": False, "error": f"Unknown provider: {provider}"}
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+
+@app.post("/api/setup/complete")
+async def complete_setup(body: dict):
+    """Mark setup as complete and apply settings."""
+    settings = body.get("settings", {})
+    credentials = body.get("credentials", {})
+
+    if settings:
+        state.config.save_user_settings(settings)
+    if credentials:
+        for key in ("OPENAI_API_KEY", "GROQ_API_KEY"):
+            if credentials.get(key):
+                os.environ[key] = credentials[key]
+        state.config.save_credentials(credentials)
+
+    state.config.mark_setup_complete()
+
+    # Re-discover config with new values
+    state.config.discover()
+
+    return {"ok": True, "setup_complete": True}
+
+
+@app.get("/api/nodes")
+async def list_nodes():
+    """List all connected hardware nodes."""
+    nodes = []
+    for node_id, ws in state.daemons.items():
+        nodes.append({
+            "node_id": node_id,
+            "connected": True,
+            "sessions": list(state.get_sessions_for_daemon(node_id)),
+        })
+    return {"nodes": nodes, "count": len(nodes)}
+
+
+@app.get("/api/system/info")
+async def system_info():
+    """Full system info for the dashboard."""
+    stats = state.memory.stats()
+    return {
+        "version": "0.4.0",
+        "config": state.config.to_client_safe_dict(),
+        "memory": stats,
+        "sessions": len(state.sessions),
+        "nodes": list(state.daemons.keys()),
+        "devices": len(state.devices),
+        "skills": [
+            {"skill_id": s.skill_id, "name": s.brand.name, "endpoints": len(s.endpoints)}
+            for s in state.skill_registry.skills.values()
+        ],
         "audio_available": state.audio.available,
     }
 
