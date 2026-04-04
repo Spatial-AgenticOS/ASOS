@@ -42,7 +42,7 @@ class AudioPipeline:
     TTS: Converts text responses to mp3 audio chunks streamed back to client.
     """
 
-    def __init__(self):
+    def __init__(self, wake_word_detector=None):
         self._api_key = os.getenv("OPENAI_API_KEY", "")
         self._stt_provider = os.getenv("THEORA_STT_PROVIDER", STT_PROVIDER_OPENAI)
         self._tts_provider = os.getenv("THEORA_TTS_PROVIDER", TTS_PROVIDER_OPENAI)
@@ -60,6 +60,9 @@ class AudioPipeline:
 
         # Per-session audio buffers for chunk accumulation
         self._buffers: dict[str, AudioBuffer] = {}
+
+        # Wake word gating
+        self._wake_word = wake_word_detector
 
         self.available = bool(self._api_key)
         if self.available:
@@ -174,8 +177,34 @@ class AudioPipeline:
             logger.error(f"TTS synthesis failed: {e}")
             return None
 
+    async def process_audio_with_wake_word(
+        self,
+        session_id: str,
+        chunk_b64: str,
+        chunk_index: int,
+        is_final: bool,
+        encoding: str = "opus",
+        sample_rate: int = 16000,
+    ) -> Optional[str]:
+        """
+        Wake-word-gated variant of process_audio_chunk.
+        Audio only flows to STT after the wake word is detected.
+        """
+        if not self._wake_word or not self._wake_word.enabled:
+            return await self.process_audio_chunk(session_id, chunk_b64, chunk_index, is_final, encoding, sample_rate)
+
+        pcm_bytes = base64.b64decode(chunk_b64)
+        should_process = await self._wake_word.process_frame(session_id, pcm_bytes)
+
+        if should_process:
+            return await self.process_audio_chunk(session_id, chunk_b64, chunk_index, is_final, encoding, sample_rate)
+
+        return None
+
     def clear_session(self, session_id: str):
         self._buffers.pop(session_id, None)
+        if self._wake_word:
+            self._wake_word.cleanup_session(session_id)
 
     async def close(self):
         await self._client.aclose()

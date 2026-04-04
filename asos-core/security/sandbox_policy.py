@@ -138,6 +138,24 @@ class SandboxPolicy:
                 "allow_file_write": False,
                 "allow_network_requests": True,
             },
+
+            "wasm": {
+                "enabled": True,
+                "memory_limit_mb": 64,
+                "timeout_seconds": 5,
+                "fuel_limit": 1_000_000,
+                "allowed_host_functions": [
+                    "theora_log",
+                    "theora_get_param",
+                    "theora_set_result",
+                    "theora_http_get",
+                    "theora_http_post",
+                ],
+                "allowed_domains": [
+                    "api.openai.com",
+                    "api.tavily.com",
+                ],
+            },
         }
 
     @classmethod

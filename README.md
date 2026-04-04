@@ -30,22 +30,28 @@ No cloud dependency. No vendor lock-in. Your data stays on your machine.
  ┌──────────────────┐           ┌─────────────────────────────────┐    ┌──────────────────┐
  │ THEORA Glasses ◄─┤  ←BLE→   │                                 │    │ Robot Daemon     │
  │ (W300 Sensors)   │           │   ┌─────────────────────────┐   │    │ GPIO / Serial    │
- │                  │  ←WS→     │   │  Orchestrator (LLM)     │   │◄──►│ Camera / Sensors │
- │ ASOSBrainClient  │──────────►│   │  ├── Skill Executor     │   │    └──────────────────┘
- │ SensorBridge     │           │   │  ├── Skill Generator    │   │
- │ Camera Bridge    │           │   │  ├── 4-Tier Memory      │   │    ┌──────────────────┐
- └──────────────────┘           │   │  ├── Perception Fusion  │   │    │ Desktop Daemon   │
-                                │   │  ├── Scene Analyzer     │   │◄──►│ AppleScript      │
- ┌──────────────────┐           │   │  └── Self-Learner       │   │    │ Keyboard / Shell │
- │ React Client     │           │   └─────────────────────────┘   │    └──────────────────┘
- │ /setup  Wizard   │  ←WS→    │                                 │
- │ /       Dashboard│──────────►│   ┌─────────────────────────┐   │    ┌──────────────────┐
- │ /chat   HUD      │           │   │  Security Layer         │   │    │ Sensor Hub       │
- │ /settings Config │           │   │  ├── Blind Vault        │   │◄──►│ Weather Station  │
- └──────────────────┘           │   │  ├── Permission Tiers   │   │    │ Air Quality      │
-                                │   │  ├── Execution Sandbox  │   │    └──────────────────┘
-                                │   │  └── Audit Trail        │   │
-                                │   └─────────────────────────┘   │
+ │                  │  ←WS→     │   │  Multi-Agent Router     │   │◄──►│ Camera / Sensors │
+ │ BrainClient      │──────────►│   │  ├── Health Worker      │   │    └──────────────────┘
+ │ SensorBridge     │           │   │  ├── Home Worker        │   │
+ │ WakeWordDetector │           │   │  ├── Research Worker    │   │    ┌──────────────────┐
+ │ AudioManager     │           │   │  ├── Creative Worker    │   │    │ Desktop Daemon   │
+ └──────────────────┘           │   │  ├── Skill Executor     │   │◄──►│ AppleScript      │
+                                │   │  ├── Skill Generator    │   │    │ Keyboard / Shell │
+ ┌──────────────────┐           │   │  ├── 4-Tier Memory      │   │    └──────────────────┘
+ │ React Client     │           │   │  │   └── Federated Sync │   │
+ │ /setup  Wizard   │  ←WS→    │   │  ├── Perception Fusion  │   │    ┌──────────────────┐
+ │ /       Dashboard│──────────►│   │  ├── Wake Word + Voice  │   │    │ Sensor Hub       │
+ │ /chat   HUD      │           │   │  ├── Local LLM (MLX)   │   │◄──►│ Weather Station  │
+ │ /settings Config │           │   │  └── Self-Learner       │   │    │ Air Quality      │
+ └──────────────────┘           │   └─────────────────────────┘   │    └──────────────────┘
+                                │                                 │
+ ┌──────────────────┐           │   ┌─────────────────────────┐   │    ┌──────────────────┐
+ │ App Integrations │           │   │  Security Layer         │   │    │ Marketplace      │
+ │ Spotify OAuth2   │  ←HTTP→   │   │  ├── Blind Vault        │   │    │ Community Skills │
+ │ Home Assistant   │──────────►│   │  ├── WASM Sandbox       │   │◄──►│ WASM Plugins     │
+ │ Notion OAuth2    │           │   │  ├── Permission Tiers   │   │    │ Install/Publish  │
+ │ MCP Servers      │           │   │  └── Audit Trail        │   │    └──────────────────┘
+ └──────────────────┘           │   └─────────────────────────┘   │
                                 │                                 │
                                 │   Config: Layered + XDG         │
                                 │   System: systemd / launchd     │
@@ -56,19 +62,27 @@ No cloud dependency. No vendor lock-in. Your data stays on your machine.
 ## Core Capabilities
 
 ### Intelligence
-- **LLM Orchestration** — OpenAI, Ollama, or any OpenAI-compatible provider
+- **Multi-Agent Collaboration** — Router-worker architecture dispatches to specialist agents (Health, Home, Research, Creative) with parallel fan-out for complex queries
+- **On-Device LLM** — MLX (Apple Silicon) and llama.cpp (Linux/x86) inference, zero cloud dependency. Hybrid mode: local for routing, cloud for reasoning
+- **LLM Orchestration** — OpenAI, Ollama, Groq, or any OpenAI-compatible provider
 - **Streaming Responses** — Real-time token streaming to all clients
 - **Context-Aware Reasoning** — Fuses sensor data + memory + perception into every LLM call
 - **Proactive Mode** — Agent acts on context changes without being asked
 
+### Voice & Audio
+- **Real-Time Voice** — OpenAI Realtime API proxy with tool interception. Brain intercepts function calls, executes them, returns results — phone never talks to OpenAI directly
+- **Wake Word** — "Hey THEORA" detection using openwakeword ML model. States: LISTENING → ACTIVATED → TIMEOUT with 500ms pre-roll capture
+- **Dual-Path Audio** — Phone/glasses use Realtime API (low latency), web/channels use Whisper+TTS pipeline
+
 ### Self-Evolving Skills
 - **Live Skill Generation** — Agent detects unmet needs and proposes new skill manifests
+- **Skill Marketplace** — Search, install, update, and uninstall community skills. Security validation prevents malicious code
 - **User Approval Flow** — Approve/reject/edit proposed skills before registration
 - **Hot Registration** — Skills activate immediately, no restart needed
-- **Persistent Storage** — Generated skills saved to `~/.theora/skills/`
-- **Developer SDK** — Write custom skills as JSON manifests with any API
+- **WASM Plugin Sandboxing** — Run untrusted skills in wasmtime with memory/CPU limits and audited host functions
+- **Developer SDK** — Write skills in Python, JSON manifests, or Rust/Go/C compiled to WASM
 
-### Memory (4 Tiers)
+### Memory (4 Tiers + Federated Sync)
 | Tier | What | Persistence |
 |---|---|---|
 | **Working** | Current conversation context | Session |
@@ -76,17 +90,28 @@ No cloud dependency. No vendor lock-in. Your data stays on your machine.
 | **Episodes** | Significant interactions | Permanent |
 | **Knowledge** | Subject-predicate-object triples | Graph |
 
+- **Federated Memory** — CRDT-based P2P sync across devices via mDNS. Hybrid Logical Clocks for causal ordering. No cloud — all sync on local network
+- **Manual Sync** — Export/import memory bundles for offline transfer (USB, AirDrop)
+
 ### Perception Fusion
-- **Vision** — Camera frames analyzed by VLM (scene understanding, object detection, text OCR)
+- **Vision** — Event-driven VLM analysis (GPT-4o, Gemini, Ollama) triggered by change detection, not fixed cooldowns
 - **Audio** — Speech-to-text, speaker identification, ambient sound analysis
 - **Biometrics** — Heart rate, SpO2, temperature, UV exposure, step count
 - **Gestures** — Nod, shake, double-tap, look-up/down from glasses IMU
 - **Location** — GPS coordinates, altitude, speed
 - **Environment** — Ambient light, noise level
 
+### App Integrations
+- **Spotify** — OAuth2 PKCE, playback control, search, playlists
+- **Home Assistant** — Entity discovery, service calls, automation triggers
+- **Notion** — Page search/create/update, database queries
+- **Webhook Receiver** — HMAC-verified incoming events from any app
+- **MCP Ecosystem** — Connect GitHub, Slack, filesystem, browser MCP servers
+
 ### Security
 - **Blind Vault** — Credentials stored with `chmod 600`, LLM never sees raw keys
 - **Permission Tiers** — Passive (read-only) → Active (send data) → Privileged (modify system) → Dangerous (destructive)
+- **WASM Sandboxing** — Memory/CPU/network limits for untrusted skill code. Host function ABI is the only bridge
 - **Execution Sandbox** — Rate limiting, domain blocking, tier enforcement
 - **Audit Trail** — Every credential access and privileged action logged to `~/.theora/audit.log`
 - **Node Authentication** — `NODE_API_KEY` required for all WebSocket daemon connections
@@ -104,7 +129,8 @@ Devices self-describe via declarative manifests. The agent doesn't need device-s
 | Node Type | Connection | Capabilities |
 |---|---|---|
 | **THEORA Glasses** | BLE → iPhone → WS → Brain | HR, SpO2, Temp, UV, Steps, Camera, Display, Speaker |
-| **iPhone** | WebSocket | BLE bridge, camera, microphone, GPS, gyro |
+| **iPhone** | WebSocket | BLE bridge, camera, microphone, GPS, gyro, wake word |
+| **Android** | WebSocket | Health Connect, camera, microphone, GPS, wake word |
 | **Desktop** | WebSocket | AppleScript, keyboard, shell, filesystem |
 | **Robot** | WebSocket | Movement, GPIO, serial, camera |
 | **Sensor Hub** | WebSocket | Any I2C/SPI/GPIO sensor |

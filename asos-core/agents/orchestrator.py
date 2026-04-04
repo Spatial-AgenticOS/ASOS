@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from memory.store import MemoryStore
     from perception.audio_pipeline import AudioPipeline
     from agents.learner import Learner
+    from agents.multi_agent import MultiAgentOrchestrator
 
 logger = logging.getLogger("theora.orchestrator")
 
@@ -94,6 +95,10 @@ class Orchestrator:
         self._daemon_session_map: dict[str, str] = {}
         self._pending_confirmations: dict[str, dict] = {}
 
+        # Multi-agent
+        self._multi_agent_enabled = os.environ.get("THEORA_MULTI_AGENT", "true").lower() in ("true", "1", "yes")
+        self._multi_agent: Optional["MultiAgentOrchestrator"] = None
+
         # Vision config
         self._vision_enabled = os.environ.get("THEORA_VISION_ENABLED", "").lower() in ("true", "1", "yes")
 
@@ -110,10 +115,29 @@ class Orchestrator:
     def set_llm(self, llm: LLMProvider):
         """Set the shared LLM provider — avoids duplicate connections."""
         self.llm = llm
+        if self._multi_agent_enabled:
+            self._init_multi_agent()
 
     def set_vault(self, vault):
         """Wire the BlindVault into the skill executor for secure key injection."""
         self.executor.set_blind_vault(vault)
+
+    def _init_multi_agent(self):
+        """Lazy-init the multi-agent orchestrator once LLM is available."""
+        try:
+            from agents.multi_agent import MultiAgentOrchestrator
+            self._multi_agent = MultiAgentOrchestrator(
+                llm=self.llm,
+                skill_registry=self.skills,
+                skill_executor=self.executor,
+                memory=self.memory,
+                perception=self.perception,
+                send_to_client=self.send,
+            )
+            logger.info("Multi-agent orchestrator initialized with workers: %s", list(self._multi_agent._workers.keys()))
+        except Exception as e:
+            logger.warning(f"Multi-agent init failed, falling back to single-agent: {e}")
+            self._multi_agent_enabled = False
 
     # ─────────────────────────────────────────────
     # Core Command Handler
@@ -134,6 +158,22 @@ class Orchestrator:
                 summary=text[:200],
                 detail=json.dumps(context or {}),
             )
+
+        # Multi-agent path: route through specialist workers
+        if self._multi_agent_enabled and self._multi_agent and self.llm and self.llm.available:
+            source = (context or {}).get("source", "")
+            if source != "proactive":
+                try:
+                    response_text = await self._multi_agent.run(session_id, text, context)
+                    if response_text:
+                        await self._try_send_sdui(session_id, response_text)
+                        if self.memory:
+                            self.memory.working_push(session_id, {"role": "assistant", "text": response_text[:300]})
+                        if self.learner:
+                            asyncio.ensure_future(self.learner.on_message(session_id, "user", text))
+                        return
+                except Exception as e:
+                    logger.warning(f"Multi-agent failed, falling back to single-agent: {e}")
 
         # Step 1: Semantic Tool Routing
         relevant_skills = await self._route_prompt(text)

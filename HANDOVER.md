@@ -1,15 +1,25 @@
-# THEORA — Engineering Handover (v0.6.0)
+# THEORA — Engineering Handover (v0.9.0)
 
-> Universal Agentic Operating System — Self-Evolving, Hardware-Aware, Security-First
+> Universal Agentic Operating System — Self-Evolving, Hardware-Aware, Security-First, Multi-Agent
 
-## Status: Production-Ready Core
+## Status: Production-Ready Core + Advanced Features
 
-All core systems are implemented, tested, and functional:
-- **134+ passing tests** across unit and integration suites
+All core systems and advanced features are implemented, tested, and functional:
+- **174+ passing tests** across unit and integration suites
+- **Multi-agent collaboration** — router-worker architecture with 4 specialist agents
+- **Voice wake word** — "Hey THEORA" with openwakeword integration
+- **On-device LLM** — MLX (Apple Silicon) + llama.cpp (cross-platform) inference
+- **Skill marketplace** — install/uninstall/search community skills
+- **Android bridge SDK** — Kotlin mirroring the iOS architecture
+- **Federated memory** — CRDT-based P2P sync via mDNS with HLC timestamps
+- **WASM plugin sandboxing** — wasmtime-based secure execution of untrusted skills
+- **Real-time voice** — OpenAI Realtime API proxy with tool interception
+- **Continuous vision** — event-driven VLM with change detection
+- **Deep app integrations** — OAuth2/PKCE for Spotify, Home Assistant, Notion
 - **Self-generating skills** with user approval flow
 - **Blind Vault** security with permission tiers and audit trail
 - **iOS Bridge** for THEORA glasses → phone → Brain pipeline
-- **4-tier memory** with persistent storage
+- **4-tier memory** with persistent storage and cross-device sync
 - **Multimodal perception** fusion (vision + audio + biometrics + gestures)
 - **Layered config** system with XDG compliance
 - **System integration** (systemd/launchd/Docker)
@@ -30,17 +40,33 @@ Every action above "passive" requires explicit user approval.
 | Component | Location | Purpose |
 |---|---|---|
 | Brain API | `asos-core/api/server.py` | FastAPI + WebSocket hub, routes everything |
+| Multi-Agent | `asos-core/agents/multi_agent.py` | Router-worker architecture, parallel dispatch |
+| Workers | `asos-core/agents/workers/*.py` | Health, Home, Research, Creative specialists |
 | Orchestrator | `asos-core/agents/orchestrator.py` | LLM reasoning, skill routing, streaming |
+| Local Inference | `asos-core/agents/local_inference.py` | MLX + llama.cpp on-device LLM |
 | Skill Generator | `asos-core/agents/skill_generator.py` | Detects unmet needs, proposes new skills |
 | Learner | `asos-core/agents/learner.py` | Self-improvement from interaction patterns |
 | Memory Store | `asos-core/memory/store.py` | 4-tier: working → notes → episodes → knowledge |
+| Federated Sync | `asos-core/memory/sync.py` | CRDT-based P2P memory replication |
+| HLC | `asos-core/memory/hlc.py` | Hybrid Logical Clocks for causal ordering |
 | Perception | `asos-core/perception/fusion.py` | Multimodal sensor fusion |
+| Wake Word | `asos-core/perception/wake_word.py` | "Hey THEORA" detection with openwakeword |
 | Scene Analyzer | `asos-core/perception/scene.py` | VLM-powered vision understanding |
-| Audio Pipeline | `asos-core/perception/audio_pipeline.py` | STT + speaker ID + ambient analysis |
-| Skill Registry | `asos-core/skills/registry.py` | Load, register, hot-reload skills |
-| Skill Executor | `asos-core/skills/executor.py` | HTTP + WS_EXECUTE skill dispatch |
+| Change Detector | `asos-core/perception/change_detector.py` | Event-driven frame analysis |
+| Audio Pipeline | `asos-core/perception/audio_pipeline.py` | STT + TTS + wake word gating |
+| Voice Router | `asos-core/voice/router.py` | Dual-path: Realtime API vs Whisper+TTS |
+| Realtime Proxy | `asos-core/voice/realtime_proxy.py` | OpenAI Realtime API with tool interception |
+| Skill Registry | `asos-core/skills/registry.py` | Load, register, hot-reload + marketplace |
+| Skill Executor | `asos-core/skills/executor.py` | HTTP + WS_EXECUTE + WASM skill dispatch |
+| Marketplace | `asos-core/skills/marketplace.py` | Search, install, manage community skills |
+| Skill Package | `asos-core/skills/package.py` | Package validation and security checks |
 | Blind Vault | `asos-core/security/vault.py` | Credential isolation, audit trail |
-| Sandbox | `asos-core/security/vault.py` | Permission tiers, rate limits |
+| WASM Sandbox | `asos-core/security/wasm_sandbox.py` | wasmtime-based sandboxed skill execution |
+| WASM Host | `asos-core/security/wasm_host.py` | Host function ABI for WASM skills |
+| Sandbox Policy | `asos-core/security/sandbox_policy.py` | Declarative YAML policies for HW + SW + WASM |
+| OAuth Manager | `asos-core/integrations/oauth_manager.py` | OAuth2/PKCE for app integrations |
+| Integrations | `asos-core/integrations/*.py` | Spotify, Home Assistant, Notion |
+| Webhook Receiver | `asos-core/integrations/webhook_receiver.py` | Incoming event handler with HMAC verification |
 | Config Loader | `asos-core/config/loader.py` | Layered settings, XDG, credential management |
 | Protocol | `asos-core/models/protocol.py` | Wire format — every node speaks this |
 
@@ -63,6 +89,7 @@ Every action above "passive" requires explicit user approval.
 | Robot Template | `asos-nodes/python-node-sdk/robot_template.py` | WS + WS_EXECUTE |
 | iOS Bridge | `asos-nodes/ios-bridge/ASOSBrainClient.swift` | WS to Brain |
 | Sensor Bridge | `asos-nodes/ios-bridge/TheoraSensorBridge.swift` | JWBle SDK → WS |
+| Android Bridge | `asos-nodes/android-bridge/` | WS to Brain (Kotlin) |
 
 ## Key Design Decisions
 
@@ -156,6 +183,8 @@ python -m pytest tests/ -v
 2. **Real glasses testing** — Connect actual THEORA (W300) hardware, validate sensor data flow
 3. **Robot integration** — Wire `robot_template.py` to real hardware (serial/ROS)
 4. **CI/CD** — GitHub Actions, pytest-cov, coverage badge
-5. **Skill marketplace** — Community-shared skill manifests
-6. **Voice wake word** — "Hey THEORA" trigger
-7. **On-device inference** — MLX/llama.cpp for fully offline operation
+5. **Marketplace registry** — Deploy `registry.theora.io` for community skill publishing
+6. **Android app** — Build Android app using the `android-bridge` SDK
+7. **Custom wake word model** — Train a dedicated "Hey THEORA" openwakeword model
+8. **Production memory sync** — End-to-end testing of federated sync across multiple devices
+9. **WASM skill templates** — Starter projects in Rust/Go/AssemblyScript for WASM skill authoring

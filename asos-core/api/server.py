@@ -61,6 +61,7 @@ from integrations.spotify import SpotifyIntegration
 from integrations.home_assistant import HomeAssistantIntegration
 from integrations.notion import NotionIntegration
 from integrations.webhook_receiver import WebhookReceiver, EventBus
+from skills.marketplace import MarketplaceClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("theora.brain")
@@ -153,6 +154,7 @@ class BrainState:
         self.notion: Optional[NotionIntegration] = None
         self.event_bus: Optional[EventBus] = None
         self.webhook_receiver: Optional[WebhookReceiver] = None
+        self.marketplace: Optional[MarketplaceClient] = None
         self.orchestrator: Optional[Orchestrator] = None
 
         # Map daemon node_id → list of sessions interested in its data
@@ -194,6 +196,7 @@ class BrainState:
         self.notion = NotionIntegration(oauth_manager=self.oauth)
         self.event_bus = EventBus()
         self.webhook_receiver = WebhookReceiver(event_bus=self.event_bus)
+        self.marketplace = MarketplaceClient(skill_registry=self.skill_registry)
 
         from skills.impl import register_instance
         if self.spotify:
@@ -753,6 +756,51 @@ async def list_webhooks():
     }
 
 
+@app.get("/api/marketplace/search")
+async def marketplace_search(q: str = ""):
+    """Search the skill marketplace."""
+    if not state.marketplace:
+        return {"results": []}
+    results = await state.marketplace.search(q)
+    return {"results": results}
+
+
+@app.post("/api/marketplace/install")
+async def marketplace_install(body: dict):
+    """Install a skill from the marketplace."""
+    if not state.marketplace:
+        return {"success": False, "error": "Marketplace not available"}
+    skill_id = body.get("skill_id", "")
+    version = body.get("version", "latest")
+    source_url = body.get("source_url")
+    result = await state.marketplace.install(skill_id, version, source_url)
+    return result
+
+
+@app.get("/api/marketplace/installed")
+async def marketplace_installed():
+    """List all marketplace-installed skills."""
+    if not state.marketplace:
+        return {"skills": []}
+    return {"skills": state.marketplace.list_installed()}
+
+
+@app.delete("/api/marketplace/uninstall/{skill_id}")
+async def marketplace_uninstall(skill_id: str):
+    """Uninstall a marketplace skill."""
+    if not state.marketplace:
+        return {"success": False, "error": "Marketplace not available"}
+    return await state.marketplace.uninstall(skill_id)
+
+
+@app.post("/api/marketplace/update/{skill_id}")
+async def marketplace_update(skill_id: str):
+    """Update a marketplace skill to latest version."""
+    if not state.marketplace:
+        return {"success": False, "error": "Marketplace not available"}
+    return await state.marketplace.update(skill_id)
+
+
 @app.get("/api/nodes")
 async def list_nodes():
     """List all connected hardware nodes."""
@@ -775,7 +823,7 @@ async def system_info():
     channel_stats = state.channel_manager.stats if state.channel_manager else {}
     skill_gen_stats = state.skill_gen.stats if state.skill_gen else {}
     return {
-        "version": "0.8.0",
+        "version": "0.9.0",
         "config": state.config.to_client_safe_dict(),
         "memory": stats,
         "sessions": len(state.sessions),
@@ -814,6 +862,10 @@ async def system_info():
             "notion": state.notion.connected if state.notion else False,
             "webhooks": state.event_bus.stats() if state.event_bus else {},
         },
+        "marketplace": {
+            "installed_skills": len(state.marketplace.list_installed()) if state.marketplace else 0,
+        },
+        "multi_agent": state.orchestrator._multi_agent.stats if state.orchestrator and state.orchestrator._multi_agent else {},
     }
 
 

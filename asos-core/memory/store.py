@@ -52,8 +52,20 @@ class MemoryStore:
         self._working: dict[str, deque[dict]] = {}
         self._working_max = 50  # messages per session
 
+        # Federated sync engine (set externally via set_sync_engine)
+        self._sync_engine = None
+
         self._init_db()
         logger.info(f"Memory store v{_SCHEMA_VERSION} initialized at {self.db_path}")
+
+    def set_sync_engine(self, engine):
+        """Connect the SyncEngine for federated replication."""
+        self._sync_engine = engine
+
+    def _log_sync(self, table: str, op_type: str, row_id: str, data: dict):
+        """Log a write operation to the sync WAL if federated sync is enabled."""
+        if self._sync_engine:
+            self._sync_engine.log_operation(table, op_type, row_id, data)
 
     # ─────────────────────────────────────────────
     # Schema
@@ -239,6 +251,10 @@ class MemoryStore:
         conn.commit()
         conn.close()
         logger.info(f"Episode saved: [{event_type}] {summary[:60]}")
+        self._log_sync("episodes", "insert", eid, {
+            "id": eid, "session_id": session_id, "event_type": event_type,
+            "summary": summary, "detail": detail, "importance": importance, "created_at": now,
+        })
         return {"id": eid, "event_type": event_type, "summary": summary, "created_at": now}
 
     def episode_search(self, query: str, limit: int = 10) -> list[dict]:
@@ -342,6 +358,10 @@ class MemoryStore:
         conn.commit()
         conn.close()
         logger.info(f"Knowledge: ({subject}) --[{predicate}]--> ({obj})")
+        self._log_sync("knowledge", "insert", kid, {
+            "id": kid, "subject": subject, "predicate": predicate, "object": obj,
+            "confidence": confidence, "source": source, "created_at": now,
+        })
         return {"id": kid, "subject": subject, "predicate": predicate, "object": obj}
 
     def knowledge_query(self, subject: str = "", predicate: str = "", limit: int = 20) -> list[dict]:
@@ -555,6 +575,10 @@ class MemoryStore:
         # Also store as semantic knowledge for cross-tier retrieval
         self.knowledge_store(subject="user_note", predicate="says", obj=content[:300], source="notes")
         logger.info(f"Saved note {note_id}: {content[:80]}...")
+        self._log_sync("notes", "insert", note_id, {
+            "id": note_id, "content": content, "tags": json.dumps(tags),
+            "importance": importance, "source": source, "created_at": now,
+        })
         return {"id": note_id, "content": content, "tags": tags, "importance": importance, "created_at": now, "status": "saved"}
 
     def search(self, query: str, limit: int = 10) -> list[dict]:

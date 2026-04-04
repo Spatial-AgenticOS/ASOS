@@ -33,7 +33,31 @@ class SkillRegistry:
         if manifests_dir.exists():
             self.load_from_directory(manifests_dir)
 
+        # Load marketplace-installed skills from ~/.theora/skills/
+        self._load_marketplace_skills()
+
         logger.info(f"Loaded {len(self.skills)} skills total")
+
+    def _load_marketplace_skills(self):
+        """Scan ~/.theora/skills/ for marketplace-installed skill packages."""
+        skills_dir = Path.home() / ".theora" / "skills"
+        if not skills_dir.exists():
+            return
+
+        from skills.package import SkillPackage
+        count = 0
+        for d in sorted(skills_dir.iterdir()):
+            if d.is_dir() and (d / "manifest.json").exists():
+                try:
+                    pkg = SkillPackage(d)
+                    if pkg.load() and pkg.manifest:
+                        self.register(pkg.manifest)
+                        count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to load marketplace skill from {d}: {e}")
+
+        if count:
+            logger.info(f"Loaded {count} marketplace skills from {skills_dir}")
 
     def register(self, manifest: SkillManifest):
         """Register a skill manifest."""

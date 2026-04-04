@@ -30,6 +30,7 @@ class VoiceRouter:
         orchestrator=None,
         memory=None,
         perception=None,
+        wake_word_detector=None,
         send_to_session: Callable[[str, Any], Awaitable[None]] | None = None,
         send_to_node: Callable[[str, dict], Awaitable[None]] | None = None,
     ):
@@ -38,6 +39,7 @@ class VoiceRouter:
         self._orchestrator = orchestrator
         self._memory = memory
         self._perception = perception
+        self._wake_word = wake_word_detector
         self._send_to_session = send_to_session
         self._send_to_node = send_to_node
 
@@ -81,6 +83,14 @@ class VoiceRouter:
         If the node uses realtime, relay to OpenAI.
         Otherwise, accumulate in Whisper pipeline.
         """
+        # Wake word gate for node audio
+        if self._wake_word and self._wake_word.enabled:
+            import base64
+            pcm_bytes = base64.b64decode(audio_b64)
+            should_process = await self._wake_word.process_frame(session_id, pcm_bytes)
+            if not should_process:
+                return
+
         if self.should_use_realtime(node_id):
             rs = self._realtime.get_session(node_id)
             if not rs:

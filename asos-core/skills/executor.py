@@ -36,9 +36,10 @@ class SkillExecutor:
     def __init__(self, daemons: dict = None):
         self.client = httpx.AsyncClient(timeout=15.0)
         self._daemons = daemons or {}
-        self._vault: dict[str, str] = {}  # In-memory cache (from env)
-        self._blind_vault = None  # The real BlindVault (from security module)
+        self._vault: dict[str, str] = {}
+        self._blind_vault = None
         self._pending_results: dict[str, asyncio.Future] = {}
+        self._wasm_sandbox = None
 
     def load_vault_from_env(self):
         """Load API keys from environment variables."""
@@ -55,6 +56,10 @@ class SkillExecutor:
     def set_blind_vault(self, vault):
         """Connect the BlindVault for secure credential retrieval."""
         self._blind_vault = vault
+
+    def set_wasm_sandbox(self, sandbox):
+        """Connect the WASM sandbox for skill execution."""
+        self._wasm_sandbox = sandbox
 
     def _get_key(self, skill_id: str) -> Optional[str]:
         """Get API key — checks BlindVault first, then env cache."""
@@ -104,11 +109,16 @@ class SkillExecutor:
                 logger.error(f"Python Skill error: {e}", exc_info=True)
                 return {"success": False, "status_code": 500, "data": None, "error": str(e)}
 
-        # 2. WS_EXECUTE — route to a connected daemon via WebSocket
+        # 2. WASM runtime — execute in sandbox
+        runtime = getattr(skill, 'runtime', None) or getattr(endpoint, 'runtime', None)
+        if runtime == "wasm" and self._wasm_sandbox and self._wasm_sandbox.available:
+            return await self._execute_via_wasm(tool_name, endpoint, args, skill)
+
+        # 3. WS_EXECUTE — route to a connected daemon via WebSocket
         if endpoint.method == "WS_EXECUTE":
             return await self._execute_via_daemon(tool_name, endpoint, args, skill)
 
-        # 3. Fallback to standard HTTP generic JSON runner
+        # 4. Fallback to standard HTTP generic JSON runner
         url = endpoint.url
         method = endpoint.method.upper()
         headers = {}
@@ -161,6 +171,29 @@ class SkillExecutor:
         except Exception as e:
             logger.error(f"Error calling {url}: {e}")
             return {"success": False, "status_code": 0, "data": None, "error": str(e)}
+
+    async def _execute_via_wasm(
+        self, tool_name: str, endpoint: SkillEndpoint, args: dict, skill: SkillManifest,
+    ) -> dict:
+        """Execute a skill via the WASM sandbox."""
+        from pathlib import Path
+        skills_dir = Path.home() / ".theora" / "skills" / skill.skill_id
+        wasm_files = list(skills_dir.glob("*.wasm"))
+        if not wasm_files:
+            return {"success": False, "status_code": 404, "data": None, "error": f"No .wasm file found for {skill.skill_id}"}
+
+        result = await self._wasm_sandbox.execute(
+            wasm_path=str(wasm_files[0]),
+            params=args,
+            entry_point=endpoint.id,
+        )
+
+        return {
+            "success": result.get("success", False),
+            "status_code": 200 if result.get("success") else 500,
+            "data": self._sanitize_response(result.get("data")),
+            "error": result.get("error"),
+        }
 
     async def _execute_via_daemon(
         self, tool_name: str, endpoint: SkillEndpoint, args: dict, skill: SkillManifest,

@@ -23,6 +23,8 @@ class LLMProvider:
     - OpenAI API (GPT-4o, GPT-4o-mini)
     - Ollama local (llama3, mistral, etc.)
     - Any OpenAI-compatible endpoint (Groq, Together, etc.)
+    - Local on-device inference (MLX on Apple Silicon, llama.cpp elsewhere)
+    - Hybrid mode (local for routing, cloud for reasoning)
     """
 
     def __init__(self):
@@ -31,6 +33,21 @@ class LLMProvider:
         self.api_key = os.getenv("OPENAI_API_KEY", "")
         self.base_url = os.getenv("THEORA_LLM_BASE_URL", "")
         self.available = True
+
+        # Local inference engine (for provider=local or hybrid)
+        self._local_engine = None
+        self._hybrid_cloud_provider = None
+
+        if self.provider in ("local", "hybrid"):
+            self._init_local_engine()
+            if self.provider == "hybrid":
+                self._init_hybrid_cloud()
+            if self._local_engine:
+                logger.info(f"LLM Provider: {self.provider} | Local Model: {self._local_engine.model_id}")
+                return
+            else:
+                logger.warning("Local engine init failed, falling back to cloud")
+                self.provider = "openai"
 
         # Set defaults based on provider
         if self.provider == "ollama":
@@ -47,7 +64,6 @@ class LLMProvider:
         if not self.api_key and self.provider != "ollama":
             logger.warning(f"No API key for provider '{self.provider}'. Trying Ollama fallback...")
             try:
-                # Quick sync check if Ollama is running
                 import urllib.request
                 urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
                 self.provider = "ollama"
@@ -76,6 +92,25 @@ class LLMProvider:
         status = "READY" if self.available else "DIRECT-EXECUTION MODE (no LLM)"
         logger.info(f"LLM Provider: {self.provider} | Model: {self.model} | Status: {status}")
 
+    def _init_local_engine(self):
+        try:
+            from agents.local_inference import create_local_engine
+            self._local_engine = create_local_engine()
+            self.available = True
+        except Exception as e:
+            logger.warning(f"Local LLM engine init failed: {e}")
+            self._local_engine = None
+
+    def _init_hybrid_cloud(self):
+        """In hybrid mode, cloud is used for complex reasoning."""
+        cloud_key = os.getenv("OPENAI_API_KEY", "")
+        if cloud_key:
+            self._hybrid_cloud_provider = httpx.AsyncClient(
+                base_url="https://api.openai.com/v1",
+                headers={"Authorization": f"Bearer {cloud_key}", "Content-Type": "application/json"},
+                timeout=30.0,
+            )
+
     async def chat(
         self,
         messages: list[dict],
@@ -87,6 +122,15 @@ class LLMProvider:
         Send a chat completion request.
         Returns the full response dict.
         """
+        # Local inference path
+        if self._local_engine and self.provider in ("local", "hybrid"):
+            use_local = self.provider == "local" or not self._hybrid_cloud_provider
+            if self.provider == "hybrid" and tools:
+                use_local = False
+
+            if use_local:
+                return await self._chat_local(messages, tools, temperature, max_tokens)
+
         body: dict = {
             "model": self.model,
             "messages": messages,
@@ -143,6 +187,33 @@ class LLMProvider:
 
         return text, parsed_tools
 
+    async def _chat_local(
+        self, messages: list[dict], tools: Optional[list[dict]],
+        temperature: float, max_tokens: int,
+    ) -> dict:
+        """Run inference through the local engine."""
+        try:
+            if not self._local_engine.loaded:
+                await self._local_engine.load_model()
+
+            prompt = self._local_engine.format_chat(messages, tools)
+            text = await self._local_engine.generate(prompt, max_tokens=max_tokens, temperature=temperature)
+
+            clean_text, tool_calls = self._local_engine.parse_tool_calls(text)
+            response_msg: dict = {"role": "assistant", "content": clean_text}
+
+            if tool_calls:
+                response_msg["tool_calls"] = [
+                    {"id": tc["id"], "type": "function",
+                     "function": {"name": tc["name"], "arguments": json.dumps(tc["args"])}}
+                    for tc in tool_calls
+                ]
+
+            return {"choices": [{"message": response_msg, "finish_reason": "stop"}]}
+        except Exception as e:
+            logger.error(f"Local inference failed: {e}")
+            return {"error": str(e), "choices": []}
+
     async def chat_stream(
         self,
         messages: list[dict],
@@ -156,6 +227,23 @@ class LLMProvider:
           {"type": "tool_call_delta", "tool_call": {...}}
           {"type": "done"}
         """
+        # Local streaming path
+        if self._local_engine and self.provider in ("local", "hybrid"):
+            use_local = self.provider == "local" or not self._hybrid_cloud_provider
+            if self.provider == "hybrid" and tools:
+                use_local = False
+            if use_local:
+                try:
+                    if not self._local_engine.loaded:
+                        await self._local_engine.load_model()
+                    prompt = self._local_engine.format_chat(messages, tools)
+                    async for token in self._local_engine.generate_stream(prompt, max_tokens=max_tokens, temperature=temperature):
+                        yield {"type": "text_delta", "content": token}
+                    yield {"type": "done"}
+                except Exception as e:
+                    yield {"type": "error", "content": str(e)}
+                return
+
         body: dict = {
             "model": self.model,
             "messages": messages,
