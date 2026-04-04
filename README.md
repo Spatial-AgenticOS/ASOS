@@ -8,18 +8,20 @@ No cloud dependency. No vendor lock-in. Your data stays on your machine.
 
 ## What Makes THEORA Different
 
-| Feature | OpenClaw / Others | THEORA |
-|---|---|---|
-| **Scope** | Computer use only | Any device, any sensor, any actuator |
-| **Skills** | Static tool definitions | Self-generating — agent proposes new skills, user approves |
-| **Memory** | Session-only | 4-tier persistent memory (working → notes → episodes → knowledge graph) |
-| **Security** | Keys in prompts | Blind Vault — LLM never sees credentials, full audit trail |
-| **Hardware** | None | Smart glasses, phones, robots, IoT — all first-class nodes |
-| **Perception** | Screen only | Fused: vision + audio + biometrics + location + gestures |
-| **UI** | Fixed | Server-Driven UI — agent generates interfaces on the fly |
-| **Learning** | None | Agent learns from every interaction, improves over time |
-| **Permissions** | All or nothing | 4-tier graduated model (passive → active → privileged → dangerous) |
-| **Architecture** | Monolith | Distributed — Brain + N edge nodes via WebSocket |
+| Feature | OpenClaw | NemoClaw (NVIDIA) | **THEORA** |
+|---|---|---|---|
+| **Scope** | Computer + browser use | Sandboxed computer use | **Any device, any sensor, any actuator** |
+| **Skills** | Static tools + SKILL.md | Inherited from OpenClaw | **Self-generating — agent creates its own tools** |
+| **Memory** | Session workspace | Session workspace | **4-tier persistent (working → notes → episodes → knowledge graph)** |
+| **Security** | Gateway auth | Landlock/seccomp sandbox | **Blind Vault + declarative YAML policies for hardware + software** |
+| **Hardware** | None | GPU deployment targets | **Smart glasses, phones, robots, IoT — all first-class HUP nodes** |
+| **MCP** | Client only (mcporter) | None | **Server AND Client — THEORA IS an MCP server** |
+| **Perception** | Screen/browser only | Screen only | **Fused: vision + audio + biometrics + location + gestures** |
+| **UI** | WebChat / channels | CLI | **SDUI — agent generates interfaces + Setup Wizard + Dashboard** |
+| **Learning** | None | None | **Self-learning agent improves from every interaction** |
+| **Permissions** | Gateway token | YAML network policies | **4-tier graduated model + hardware-aware sandbox policies** |
+| **Channels** | Telegram, Discord, Slack | Telegram, Discord, Slack | **All of those + hardware channels (glasses, robot, sensors)** |
+| **Architecture** | Gateway monolith | Container sandbox | **Distributed Brain + N edge nodes via authenticated WebSocket** |
 
 ## Architecture
 
@@ -89,14 +91,71 @@ No cloud dependency. No vendor lock-in. Your data stays on your machine.
 - **Audit Trail** — Every credential access and privileged action logged to `~/.theora/audit.log`
 - **Node Authentication** — `NODE_API_KEY` required for all WebSocket daemon connections
 
-### Hardware Nodes
+### Hardware Use Protocol (HUP)
+
+Like "computer use" made screens controllable, **HUP makes any hardware controllable**:
+
+```
+Agent → HUP Action → Sandbox Policy Check → Permission Tier → Device Adapter → Physical Hardware → Result
+```
+
+Devices self-describe via declarative manifests. The agent doesn't need device-specific code — it reads the manifest and figures out how to use the device.
+
 | Node Type | Connection | Capabilities |
 |---|---|---|
-| **THEORA Glasses** | BLE → iPhone → WS → Brain | HR, SpO2, Temp, UV, Steps, Camera |
+| **THEORA Glasses** | BLE → iPhone → WS → Brain | HR, SpO2, Temp, UV, Steps, Camera, Display, Speaker |
 | **iPhone** | WebSocket | BLE bridge, camera, microphone, GPS, gyro |
 | **Desktop** | WebSocket | AppleScript, keyboard, shell, filesystem |
 | **Robot** | WebSocket | Movement, GPIO, serial, camera |
 | **Sensor Hub** | WebSocket | Any I2C/SPI/GPIO sensor |
+| **Any Device** | WebSocket/BLE/MQTT/HTTP | Whatever capabilities it declares |
+
+### MCP Integration (Server + Client)
+
+**THEORA is an MCP server** — any MCP client can control your hardware:
+
+```bash
+# In Claude Desktop config:
+{ "mcpServers": { "theora": { "command": "python", "args": ["-m", "mcp.server"] } } }
+```
+
+Now Claude can read your heart rate, control your robot, query your memory.
+
+**THEORA is also an MCP client** — connect external MCP servers:
+
+```json
+// ~/.theora/mcp_servers.json
+{ "servers": [{ "name": "github", "transport": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] }] }
+```
+
+### Sandbox Policies (NemoClaw-style, extended for hardware)
+
+Declarative YAML policies govern everything — network, filesystem, sensors, actuators, cameras, movement:
+
+```yaml
+hardware:
+  sensors:
+    allowed: [heart_rate, spo2, temperature]
+    max_read_rate_per_second:
+      heart_rate: 1
+  actuators:
+    requires_confirmation: [motor, servo, relay]
+  movement:
+    max_speed_pct: 50
+    emergency_stop_enabled: true
+```
+
+### Channels
+
+Messaging bridges (like OpenClaw) — but with hardware data flowing through them:
+
+| Channel | Status | Capabilities |
+|---|---|---|
+| Telegram | Ready | Text, buttons, skill approval |
+| Discord | Ready | Text, embeds |
+| Slack | Ready | Text, blocks, buttons |
+| WebChat | Built-in | Full SDUI + streaming |
+| iOS | Bridge SDK | Full hardware + sensor data |
 
 ### Client UI
 - **Setup Wizard** — 6-step guided onboarding (LLM provider, API keys, features, skills)
@@ -222,15 +281,18 @@ The phone becomes a full edge node: BLE bridge to glasses, camera/mic provider, 
 ```
 ASOS/
 ├── asos-core/                 # The Brain
-│   ├── api/server.py          # FastAPI + WebSocket server
+│   ├── api/server.py          # FastAPI + WebSocket hub
 │   ├── agents/                # Orchestrator, Learner, Skill Generator
 │   ├── memory/                # 4-tier memory store
 │   ├── perception/            # Multimodal fusion engine
-│   ├── security/              # Blind Vault, Permission Tiers, Sandbox
+│   ├── security/              # Blind Vault, Tiers, Sandbox Policies
+│   ├── hardware/              # HUP — Hardware Use Protocol
+│   ├── mcp/                   # MCP Server + Client
+│   ├── channels/              # Telegram, Discord, Slack bridges
 │   ├── skills/                # Registry, Executor, JSON manifests
 │   ├── config/                # Layered configuration system
 │   ├── models/                # Protocol definitions
-│   └── tests/                 # 134+ tests
+│   └── tests/                 # 174+ tests
 ├── asos-client/               # React + Vite + Tailwind
 │   └── src/
 │       ├── pages/             # SetupWizard, Dashboard, Settings

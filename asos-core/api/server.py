@@ -1,10 +1,12 @@
 """
-THEORA Brain — Core WebSocket Server
-======================================
+THEORA Brain — Universal Agentic OS Core
+==========================================
 The local-first agentic brain. Runs on the user's machine.
-Clients (phone, web, daemon, glasses) connect via WebSocket.
+Clients (phone, web, daemon, glasses, robots) connect via WebSocket.
+MCP clients (Claude, Cursor) connect via JSON-RPC.
+Channels (Telegram, Discord, Slack) bridge messaging platforms.
 
-v0.3.0 — Full perception engine, audio pipeline, 4-tier memory.
+v0.7.0 — HUP, MCP server/client, sandbox policies, channels.
 """
 
 import asyncio
@@ -46,6 +48,11 @@ from perception.audio_pipeline import AudioPipeline
 from perception.scene import SceneAnalyzer
 from config.loader import ConfigLoader
 from security.vault import BlindVault, PermissionTier, ExecutionSandbox
+from security.sandbox_policy import SandboxPolicy
+from hardware.protocol import DeviceRegistry, DeviceManifest, HUPAction, HUPActionType, THEORA_GLASSES_MANIFEST
+from mcp.server import TheoraMCPServer
+from mcp.client import MCPClientManager
+from channels.base import ChannelManager, ChannelMessage, ChannelResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("theora.brain")
@@ -124,6 +131,11 @@ class BrainState:
         self.skill_gen: Optional[SkillGenerator] = None
         self.vault: Optional[BlindVault] = None
         self.sandbox: Optional[ExecutionSandbox] = None
+        self.policy: Optional[SandboxPolicy] = None
+        self.device_registry: Optional[DeviceRegistry] = None
+        self.mcp_server: Optional[TheoraMCPServer] = None
+        self.mcp_client: Optional[MCPClientManager] = None
+        self.channel_manager: Optional[ChannelManager] = None
         self.orchestrator: Optional[Orchestrator] = None
 
         # Map daemon node_id → list of sessions interested in its data
@@ -148,6 +160,16 @@ class BrainState:
         self.sandbox = ExecutionSandbox(
             max_tier=os.environ.get("THEORA_MAX_TIER", "active")
         )
+
+        self.policy = SandboxPolicy.load_default()
+        self.device_registry = DeviceRegistry()
+        self.mcp_server = TheoraMCPServer(
+            device_registry=self.device_registry,
+            memory=self.memory,
+            perception=self.perception,
+        )
+        self.mcp_client = MCPClientManager()
+        self.channel_manager = ChannelManager()
 
         self.orchestrator = Orchestrator(
             skill_registry=self.skill_registry,
@@ -445,6 +467,134 @@ async def get_audit_log():
     return {"entries": entries[-100:]}
 
 
+# ─────────────────────────────────────────────
+# Hardware Use Protocol (HUP) API
+# ─────────────────────────────────────────────
+
+@app.get("/api/hardware/devices")
+async def list_hardware_devices():
+    """List all registered hardware devices."""
+    if not state.device_registry:
+        return {"devices": []}
+    devices = state.device_registry.list_devices()
+    return {"devices": [d.model_dump() for d in devices]}
+
+
+@app.get("/api/hardware/device/{device_id}")
+async def get_hardware_device(device_id: str):
+    if not state.device_registry:
+        return {"error": "No device registry"}
+    device = state.device_registry.get_device(device_id)
+    if not device:
+        return {"error": f"Device not found: {device_id}"}
+    return device.model_dump()
+
+
+@app.post("/api/hardware/execute")
+async def execute_hardware_action(body: dict):
+    """Execute a HUP action on a device."""
+    if not state.device_registry:
+        return {"error": "No device registry"}
+    action = HUPAction(
+        device_id=body.get("device_id", ""),
+        capability_id=body.get("capability_id", ""),
+        action_type=HUPActionType(body.get("action_type", "execute")),
+        parameters=body.get("parameters", {}),
+        timeout_ms=body.get("timeout_ms", 5000),
+    )
+
+    if state.policy and not state.policy.can_read_sensor(action.capability_id.replace("read_", "")):
+        return {"error": "Blocked by sandbox policy"}
+
+    result = await state.device_registry.execute_action(action)
+    return result.model_dump()
+
+
+@app.get("/api/hardware/context")
+async def hardware_llm_context():
+    """Get hardware context string for LLM."""
+    if not state.device_registry:
+        return {"context": "No hardware devices connected."}
+    return {"context": state.device_registry.to_llm_context()}
+
+
+@app.get("/api/hardware/stats")
+async def hardware_stats():
+    if not state.device_registry:
+        return {}
+    return state.device_registry.stats
+
+
+# ─────────────────────────────────────────────
+# MCP API (JSON-RPC endpoint + management)
+# ─────────────────────────────────────────────
+
+@app.post("/mcp")
+async def mcp_jsonrpc(body: dict):
+    """MCP JSON-RPC endpoint for external MCP clients."""
+    if not state.mcp_server:
+        return {"jsonrpc": "2.0", "error": {"code": -32603, "message": "MCP server not initialized"}, "id": body.get("id")}
+    return await state.mcp_server.handle_jsonrpc(body)
+
+
+@app.get("/api/mcp/status")
+async def mcp_status():
+    """MCP server and client status."""
+    server_tools = len(state.mcp_server.handle_tools_list()["tools"]) if state.mcp_server else 0
+    client_stats = state.mcp_client.stats if state.mcp_client else {}
+    return {
+        "server": {"tools_exposed": server_tools},
+        "client": client_stats,
+    }
+
+
+@app.get("/api/mcp/tools")
+async def mcp_external_tools():
+    """List all tools from connected external MCP servers."""
+    if not state.mcp_client:
+        return {"tools": []}
+    return {"tools": state.mcp_client.all_tools()}
+
+
+# ─────────────────────────────────────────────
+# Sandbox Policy API
+# ─────────────────────────────────────────────
+
+@app.get("/api/policy")
+async def get_policy():
+    if not state.policy:
+        return {}
+    return state.policy.to_dict()
+
+
+@app.post("/api/policy/update")
+async def update_policy(body: dict):
+    state.policy = SandboxPolicy(body)
+    state.policy.save()
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────
+# Channel API
+# ─────────────────────────────────────────────
+
+@app.get("/api/channels")
+async def list_channels():
+    if not state.channel_manager:
+        return {"channels": []}
+    return state.channel_manager.stats
+
+
+@app.post("/api/channels/start")
+async def start_channel(body: dict):
+    channel_type = body.get("type", "")
+    config = body.get("config", {})
+    if not state.channel_manager:
+        return {"error": "Channel manager not initialized"}
+    await state.channel_manager.start_channel(channel_type, config)
+    return {"ok": True, "channel": channel_type}
+
+
 @app.get("/api/nodes")
 async def list_nodes():
     """List all connected hardware nodes."""
@@ -462,8 +612,12 @@ async def list_nodes():
 async def system_info():
     """Full system info for the dashboard."""
     stats = state.memory.stats()
+    hw_stats = state.device_registry.stats if state.device_registry else {}
+    mcp_client_stats = state.mcp_client.stats if state.mcp_client else {}
+    channel_stats = state.channel_manager.stats if state.channel_manager else {}
+    skill_gen_stats = state.skill_gen.stats if state.skill_gen else {}
     return {
-        "version": "0.4.0",
+        "version": "0.7.0",
         "config": state.config.to_client_safe_dict(),
         "memory": stats,
         "sessions": len(state.sessions),
@@ -474,6 +628,18 @@ async def system_info():
             for s in state.skill_registry.skills.values()
         ],
         "audio_available": state.audio.available,
+        "hardware": hw_stats,
+        "mcp": {
+            "server_active": state.mcp_server is not None,
+            "client": mcp_client_stats,
+        },
+        "channels": channel_stats,
+        "skill_generator": skill_gen_stats,
+        "security": {
+            "vault_keys": len(state.vault.list_keys()) if state.vault else 0,
+            "max_tier": state.sandbox.max_tier if state.sandbox else "active",
+            "policy": state.policy._data.get("name", "default") if state.policy else "none",
+        },
     }
 
 
