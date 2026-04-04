@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import time
+from pathlib import Path
 from typing import Optional, Callable, Awaitable, TYPE_CHECKING
 from uuid import uuid4
 
@@ -255,31 +256,10 @@ class Orchestrator:
                         "content": json.dumps(result_data, default=str)[:2000]
                     })
             elif text_content:
-                # Record assistant response in working memory
                 if self.memory:
                     self.memory.working_push(session_id, {"role": "assistant", "text": text_content[:300]})
 
-                # Try to parse as SDUI JSON
-                try:
-                    cleaned_text = text_content.strip()
-                    if cleaned_text.startswith("```json"):
-                        cleaned_text = cleaned_text[7:-3].strip()
-                    elif cleaned_text.startswith("```\n"):
-                        cleaned_text = cleaned_text[4:-3].strip()
-                    elif cleaned_text.startswith("```"):
-                        cleaned_text = cleaned_text[3:-3].strip()
-
-                    sdui = json.loads(cleaned_text)
-                    if "type" in sdui:
-                        await self.send(session_id, TheoraMessage(
-                            session_id=session_id, hop="brain", type="sdui",
-                            payload=SDUIPayload(root=sdui).model_dump(),
-                        ))
-                    else:
-                        await self._send_text(session_id, text_content)
-                except json.JSONDecodeError:
-                    await self._send_text(session_id, text_content)
-
+                await self._send_text(session_id, text_content)
                 break
             else:
                 break
@@ -415,13 +395,11 @@ class Orchestrator:
                 history.append({"role": "assistant", "content": final_text})
                 if self.memory:
                     self.memory.working_push(session_id, {"role": "assistant", "text": final_text[:300]})
-                self._try_send_sdui(session_id, final_text)
 
         elif accumulated_text:
             history.append({"role": "assistant", "content": accumulated_text})
             if self.memory:
                 self.memory.working_push(session_id, {"role": "assistant", "text": accumulated_text[:300]})
-            await self._try_send_sdui(session_id, accumulated_text)
         else:
             await self._send_text(session_id, "I processed your request but have no text response.")
 
@@ -1211,28 +1189,18 @@ class Orchestrator:
     # ─────────────────────────────────────────────
 
     def _build_system_prompt(self, frame: PerceptionFrame, skills: list[SkillManifest], session_id: str = "") -> str:
-        prompt = (
-            "You are THEORA, an advanced Agentic Operating System.\n"
-            "You control hardware nodes, execute API tools, and communicate via a dynamic Server-Driven UI (SDUI).\n"
-            "When responding to the user, you MUST encapsulate your response as a valid SDUI JSON payload.\n"
-            "If you decide to use a tool, make the tool call instead. But when giving your final answer to the user, output ONLY valid JSON representing the UI.\n\n"
-            "## SDUI Component Reference\n"
-            "- VStack: { \"type\": \"VStack\", \"children\": [...], \"spacing\": 10 }\n"
-            "- HStack: { \"type\": \"HStack\", \"children\": [...], \"spacing\": 10 }\n"
-            "- Text: { \"type\": \"Text\", \"value\": \"String\", \"style\": \"headline|body|subtitle|caption\", \"color\": \"#hex\" }\n"
-            "- Card: { \"type\": \"Card\", \"children\": [...], \"corner_radius\": 12, \"padding\": 16 }\n"
-            "- Icon: { \"type\": \"Icon\", \"name\": \"sparkles\", \"size\": 24, \"color\": \"#hex\" }\n"
-            "- Badge: { \"type\": \"Badge\", \"label\": \"info\", \"color\": \"#55efc4\" }\n"
-            "- Divider: { \"type\": \"Divider\" }\n"
-            "- Image: { \"type\": \"Image\", \"url\": \"http://...\", \"corner_radius\": 8 }\n"
-            "- Button: { \"type\": \"Button\", \"label\": \"Click\", \"action_id\": \"action_ref\", \"style\": \"primary|secondary\" }\n"
-            "- MetricCard: { \"type\": \"MetricCard\", \"label\": \"Heart Rate\", \"value\": \"72\", \"unit\": \"BPM\", \"color\": \"#e17055\", \"icon\": \"heart\" }\n"
-            "- ProgressBar: { \"type\": \"ProgressBar\", \"value\": 0.7, \"label\": \"70%\", \"color\": \"#6c5ce7\" }\n"
-            "- Grid: { \"type\": \"Grid\", \"columns\": 2, \"children\": [...] }\n\n"
-            "## Constraints\n"
-            "1. NO Markdown code block wrapping. Output raw parsable JSON.\n"
-            "2. Make the UI beautiful using Cards, Icons, MetricCards, and clear Text hierarchy.\n"
-            "3. Action-oriented — do not explain what you are going to do.\n"
+        # Load custom identity if available
+        identity = self._load_identity()
+
+        prompt = identity + "\n\n"
+
+        prompt += (
+            "## How to respond\n"
+            "- Respond in natural, conversational language. Be concise and helpful.\n"
+            "- When the user asks a question, answer directly. No JSON, no UI markup.\n"
+            "- Use tools when you need external data (weather, web search, device control, etc.).\n"
+            "- After a tool call, summarize the result in plain language.\n"
+            "- Be proactive — if you notice something relevant in sensor data or context, mention it.\n"
         )
 
         # Perception Context
@@ -1253,6 +1221,48 @@ class Orchestrator:
 
         # Connected nodes
         if frame.connected_nodes:
-            prompt += f"\nHardware nodes: {frame.connected_nodes}\n"
+            prompt += f"\nConnected devices: {frame.connected_nodes}\n"
 
         return prompt
+
+    def _load_identity(self) -> str:
+        """Load agent identity from ~/.theora/identity.yaml or use defaults."""
+        identity_paths = [
+            Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "identity.yaml",
+            Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "identity.yml",
+        ]
+
+        for p in identity_paths:
+            if p.exists():
+                try:
+                    import yaml
+                    with open(p) as f:
+                        data = yaml.safe_load(f) or {}
+                    name = data.get("name", "THEORA")
+                    tagline = data.get("tagline", "")
+                    personality = data.get("personality", "")
+                    rules = data.get("rules", [])
+                    greeting_style = data.get("greeting_style", "")
+
+                    parts = [f"You are {name}."]
+                    if tagline:
+                        parts.append(tagline)
+                    if personality:
+                        parts.append(f"\n## Personality\n{personality}")
+                    if rules:
+                        parts.append("\n## Rules\n" + "\n".join(f"- {r}" for r in rules))
+                    if greeting_style:
+                        parts.append(f"\n## Communication Style\n{greeting_style}")
+
+                    return "\n".join(parts)
+                except Exception as e:
+                    logger.warning(f"Failed to load identity: {e}")
+
+        return (
+            "You are THEORA, a personal AI operating system.\n"
+            "You run locally on the user's devices — phone, laptop, wearables, smart home.\n"
+            "You can see through connected cameras, hear through microphones, read health sensors, "
+            "and control smart home devices.\n"
+            "You are helpful, direct, and privacy-first. Everything stays on-device unless the user says otherwise.\n"
+            "You learn the user's preferences over time and get better at anticipating their needs."
+        )

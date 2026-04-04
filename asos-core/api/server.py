@@ -322,6 +322,56 @@ async def get_config():
     return state.config.to_client_safe_dict()
 
 
+@app.get("/api/identity")
+async def get_identity():
+    """Get the agent identity configuration."""
+    identity_path = Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "identity.yaml"
+    if identity_path.exists():
+        try:
+            import yaml
+            with open(identity_path) as f:
+                return yaml.safe_load(f) or {}
+        except Exception:
+            pass
+    return {"name": "THEORA", "personality": "", "rules": [], "greeting_style": "", "voice": {"tts_voice": "nova"}}
+
+
+@app.post("/api/identity")
+async def update_identity(body: dict):
+    """Update the agent identity configuration."""
+    identity_path = Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "identity.yaml"
+    try:
+        import yaml
+        with open(identity_path, "w") as f:
+            yaml.dump(body, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        return {"ok": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/devices")
+async def list_devices():
+    """List all connected hardware nodes / daemons."""
+    nodes = []
+    for node_id, info in state.daemons.items():
+        ws = info if not isinstance(info, dict) else None
+        nodes.append({
+            "node_id": node_id,
+            "connected": True,
+            "type": state.devices.get(node_id, {}).get("device_type", "unknown"),
+            "capabilities": state.devices.get(node_id, {}).get("capabilities", []),
+        })
+    for dev_id, dev_info in state.devices.items():
+        if dev_id not in [n["node_id"] for n in nodes]:
+            nodes.append({
+                "node_id": dev_id,
+                "connected": dev_id in state.daemons,
+                "type": dev_info.get("device_type", "unknown"),
+                "capabilities": dev_info.get("capabilities", []),
+            })
+    return {"devices": nodes, "total": len(nodes)}
+
+
 @app.post("/api/config/update")
 async def update_config(body: dict):
     """Update a setting. Body: {section, key, value}"""
