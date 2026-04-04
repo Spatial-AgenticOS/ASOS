@@ -1242,7 +1242,7 @@ class Orchestrator:
 
         # Memory Context
         if self.memory and session_id:
-            memory_context = self.memory.build_context_for_llm(session_id, limit=8)
+            memory_context = self.memory.build_context_for_llm(session_id, max_tokens_budget=800)
             if memory_context:
                 prompt += f"\n## Memory\n{memory_context}\n"
 

@@ -405,7 +405,7 @@ class RealtimeProxy:
                 parts.append(f"\n[Current Environment]\n{ctx}")
 
         if self._memory:
-            mem_ctx = self._memory.build_context_for_llm(session_id, max_tokens=500)
+            mem_ctx = self._memory.build_context_for_llm(session_id, max_tokens_budget=500)
             if mem_ctx:
                 parts.append(f"\n[Memory Context]\n{mem_ctx}")
 

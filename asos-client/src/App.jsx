@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { SduiRenderer } from './components/SduiRenderer';
-import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap } from 'lucide-react';
+import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings } from 'lucide-react';
 import { WS_URL } from './config';
 
 export default function App() {
@@ -10,15 +11,16 @@ export default function App() {
   const [hr, setHr] = useState(72);
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
-  const [memoryStats, setMemoryStats] = useState(null);
   const [streamingText, setStreamingText] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
   const mediaRecorderRef = useRef(null);
-  const audioContextRef = useRef(null);
   const chunkIndexRef = useRef(0);
   const streamBufferRef = useRef('');
+  const greetingReceivedRef = useRef(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -29,7 +31,7 @@ export default function App() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, isThinking]);
 
   useEffect(() => {
     connect();
@@ -41,7 +43,10 @@ export default function App() {
   const connect = () => {
     const ws = new WebSocket(WS_URL);
 
-    ws.onopen = () => setIsConnected(true);
+    ws.onopen = () => {
+      setIsConnected(true);
+      greetingReceivedRef.current = false;
+    };
 
     ws.onclose = () => {
       setIsConnected(false);
@@ -53,10 +58,21 @@ export default function App() {
         const msg = JSON.parse(event.data);
 
         if (msg.type === 'sdui') {
+          setIsThinking(false);
           setMessages(prev => [...prev, { role: 'assistant', type: 'sdui', payload: msg.payload.root }]);
         } else if (msg.type === 'text_response') {
-          setMessages(prev => [...prev, { role: 'assistant', type: 'text', content: msg.payload.text }]);
+          setIsThinking(false);
+          const text = msg.payload?.text || '';
+          if (text === 'THEORA Brain connected. How can I help?') {
+            if (!greetingReceivedRef.current) {
+              greetingReceivedRef.current = true;
+              setMessages(prev => [...prev, { role: 'assistant', type: 'text', content: text }]);
+            }
+            return;
+          }
+          setMessages(prev => [...prev, { role: 'assistant', type: 'text', content: text }]);
         } else if (msg.type === 'stream_delta') {
+          setIsThinking(false);
           if (msg.payload.is_final) {
             const finalText = streamBufferRef.current;
             if (finalText) {
@@ -109,6 +125,7 @@ export default function App() {
     if (!inputText.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     setMessages(prev => [...prev, { role: 'user', type: 'text', content: inputText }]);
+    setIsThinking(true);
 
     const cmd = {
       hop: "client",
@@ -208,7 +225,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen max-w-full lg:max-w-md mx-auto bg-black bg-opacity-80 backdrop-blur-xl relative overflow-hidden">
+    <div className="flex flex-col h-full max-w-full lg:max-w-md mx-auto bg-black bg-opacity-80 backdrop-blur-xl relative overflow-hidden">
       {/* Top Bar */}
       <div className="absolute top-0 left-0 right-0 h-16 bg-asos-card border-b border-asos-border z-10 flex items-center justify-between px-4 backdrop-blur-md">
         <div className="flex items-center gap-2">
@@ -227,6 +244,9 @@ export default function App() {
             <Activity size={16} className="animate-pulse" />
             <span className="font-mono text-sm">{hr}</span>
           </div>
+          <button onClick={() => navigate('/settings')} className="p-1 text-gray-400 hover:text-white transition">
+            <Settings size={16} />
+          </button>
         </div>
       </div>
 
@@ -268,6 +288,18 @@ export default function App() {
               </div>
               <span className="leading-relaxed">{streamingText}</span>
               <span className="inline-block w-2 h-4 bg-asos-accent animate-pulse ml-0.5" />
+            </div>
+          </div>
+        )}
+        {isThinking && !isStreaming && (
+          <div className="flex justify-start">
+            <div className="flex items-center gap-2 px-4 py-2 bg-asos-card rounded-2xl rounded-tl-sm border border-asos-border">
+              <div className="flex gap-1">
+                <span className="w-2 h-2 rounded-full bg-asos-accent animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-2 h-2 rounded-full bg-asos-accent animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-2 h-2 rounded-full bg-asos-accent animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+              <span className="text-xs opacity-50">thinking...</span>
             </div>
           </div>
         )}

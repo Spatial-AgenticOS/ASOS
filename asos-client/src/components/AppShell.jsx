@@ -10,12 +10,12 @@ const navItems = [
 
 export default function AppShell() {
   return (
-    <div className="flex h-screen bg-black text-white">
-      {/* Sidebar */}
-      <nav className="w-16 lg:w-56 flex-shrink-0 bg-asos-card border-r border-asos-border flex flex-col">
+    <div className="flex flex-col lg:flex-row h-screen bg-black text-white">
+      {/* Desktop Sidebar */}
+      <nav className="hidden lg:flex w-56 flex-shrink-0 bg-asos-card border-r border-asos-border flex-col">
         <div className="flex items-center gap-2 px-4 py-5 border-b border-asos-border">
           <Brain size={22} className="text-asos-accent flex-shrink-0" />
-          <span className="hidden lg:block font-bold tracking-wider text-sm">THEORA</span>
+          <span className="font-bold tracking-wider text-sm">THEORA</span>
         </div>
 
         <div className="flex-1 py-4 space-y-1 px-2">
@@ -33,7 +33,7 @@ export default function AppShell() {
               }
             >
               <Icon size={18} className="flex-shrink-0" />
-              <span className="hidden lg:block">{label}</span>
+              <span>{label}</span>
             </NavLink>
           ))}
         </div>
@@ -41,7 +41,7 @@ export default function AppShell() {
         <div className="px-3 py-4 border-t border-asos-border">
           <div className="flex items-center gap-2 text-xs opacity-40">
             <Cpu size={12} />
-            <span className="hidden lg:block">v0.4.0</span>
+            <span>v0.9.0</span>
           </div>
         </div>
       </nav>
@@ -50,6 +50,27 @@ export default function AppShell() {
       <main className="flex-1 overflow-hidden">
         <Outlet />
       </main>
+
+      {/* Mobile Bottom Tab Bar */}
+      <nav className="lg:hidden flex-shrink-0 bg-asos-card border-t border-asos-border flex items-center justify-around px-2 py-2 safe-area-bottom">
+        {navItems.map(({ to, icon: Icon, label }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={to === '/'}
+            className={({ isActive }) =>
+              `flex flex-col items-center gap-1 px-4 py-1.5 rounded-lg transition-all ${
+                isActive
+                  ? 'text-asos-accent'
+                  : 'text-gray-500'
+              }`
+            }
+          >
+            <Icon size={20} />
+            <span className="text-[10px] font-medium">{label}</span>
+          </NavLink>
+        ))}
+      </nav>
     </div>
   );
 }

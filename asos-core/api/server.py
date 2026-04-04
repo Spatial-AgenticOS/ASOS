@@ -978,74 +978,85 @@ async def client_session(ws: WebSocket):
         while True:
             raw = await ws.receive_json()
             raw["session_id"] = session_id
-            msg, payload = parse_message(raw)
 
-            if msg.type == "text_command" and isinstance(payload, TextCommandPayload):
-                state.memory.working_push(session_id, {"role": "user", "text": payload.text})
-                await state.orchestrator.handle_command_stream(
-                    session_id=session_id,
-                    text=payload.text,
-                    context=payload.context,
-                )
+            try:
+                msg, payload = parse_message(raw)
 
-                # Background: detect if user needs a skill that doesn't exist
-                if state.skill_gen:
-                    history = state.memory.working_get(session_id) or []
-                    need = await state.skill_gen.detect_unmet_need(history)
-                    if need:
-                        manifest = await state.skill_gen.generate_skill(
-                            capability=need.get("capability", ""),
-                            service=need.get("service", ""),
-                        )
-                        if manifest:
-                            await ws.send_json(TheoraMessage(
-                                session_id=session_id, hop="brain",
-                                type="skill_proposal",
-                                payload={"manifest": manifest, "reason": need.get("capability", "")},
-                            ).model_dump())
-
-            elif msg.type == "audio_chunk" and isinstance(payload, AudioChunkPayload):
-                if state.voice_router:
-                    await state.voice_router.handle_audio_from_client(
+                if msg.type == "text_command" and isinstance(payload, TextCommandPayload):
+                    state.memory.working_push(session_id, {"role": "user", "text": payload.text})
+                    await state.orchestrator.handle_command_stream(
                         session_id=session_id,
-                        audio_b64=payload.data_b64,
-                        chunk_index=payload.chunk_index,
-                        is_final=payload.is_final,
-                        encoding=payload.encoding,
-                        sample_rate=payload.sample_rate,
+                        text=payload.text,
+                        context=payload.context,
                     )
 
-            elif msg.type == "ui_event" and isinstance(payload, UIEventPayload):
-                await state.orchestrator.handle_ui_event(
-                    session_id=session_id,
-                    action_id=payload.action_id,
-                    event=payload.event,
-                    value=payload.value,
-                )
+                    if state.skill_gen:
+                        history = state.memory.working_get(session_id) or []
+                        need = await state.skill_gen.detect_unmet_need(history)
+                        if need:
+                            manifest = await state.skill_gen.generate_skill(
+                                capability=need.get("capability", ""),
+                                service=need.get("service", ""),
+                            )
+                            if manifest:
+                                await ws.send_json(TheoraMessage(
+                                    session_id=session_id, hop="brain",
+                                    type="skill_proposal",
+                                    payload={"manifest": manifest, "reason": need.get("capability", "")},
+                                ).model_dump())
 
-            elif msg.type == "device_register" and isinstance(payload, DeviceRegisterPayload):
-                state.devices[payload.device_id] = payload.model_dump()
-                logger.info(f"Device registered: {payload.device_id} ({payload.device_type})")
+                elif msg.type == "audio_chunk" and isinstance(payload, AudioChunkPayload):
+                    if state.voice_router:
+                        await state.voice_router.handle_audio_from_client(
+                            session_id=session_id,
+                            audio_b64=payload.data_b64,
+                            chunk_index=payload.chunk_index,
+                            is_final=payload.is_final,
+                            encoding=payload.encoding,
+                            sample_rate=payload.sample_rate,
+                        )
 
-            elif msg.type == "vision_query":
-                payload_dict = raw.get("payload", {})
-                query_text = payload_dict.get("query", "What do you see?")
-                target_node = payload_dict.get("node_id", "")
-                if not target_node:
-                    nodes = state.vision_buffer.node_ids_with_frames()
-                    target_node = nodes[0] if nodes else "default"
-                state.change_detector.force_trigger(target_node, "user_request")
-                latest = state.vision_buffer.latest(target_node)
-                if latest and state.scene and state.scene.available:
-                    asyncio.ensure_future(
-                        _analyze_scene_background(target_node, latest, mode="query", query=query_text)
+                elif msg.type == "ui_event" and isinstance(payload, UIEventPayload):
+                    await state.orchestrator.handle_ui_event(
+                        session_id=session_id,
+                        action_id=payload.action_id,
+                        event=payload.event,
+                        value=payload.value,
                     )
 
-            elif msg.type == "biometric":
-                bio = raw.get("payload", {})
-                if state.orchestrator:
-                    state.orchestrator.update_biometric(session_id, bio)
-                state.perception.update_sensors(session_id, bio)
+                elif msg.type == "device_register" and isinstance(payload, DeviceRegisterPayload):
+                    state.devices[payload.device_id] = payload.model_dump()
+                    logger.info(f"Device registered: {payload.device_id} ({payload.device_type})")
+
+                elif msg.type == "vision_query":
+                    payload_dict = raw.get("payload", {})
+                    query_text = payload_dict.get("query", "What do you see?")
+                    target_node = payload_dict.get("node_id", "")
+                    if not target_node:
+                        nodes = state.vision_buffer.node_ids_with_frames()
+                        target_node = nodes[0] if nodes else "default"
+                    state.change_detector.force_trigger(target_node, "user_request")
+                    latest = state.vision_buffer.latest(target_node)
+                    if latest and state.scene and state.scene.available:
+                        asyncio.ensure_future(
+                            _analyze_scene_background(target_node, latest, mode="query", query=query_text)
+                        )
+
+                elif msg.type == "biometric":
+                    bio = raw.get("payload", {})
+                    if state.orchestrator:
+                        state.orchestrator.update_biometric(session_id, bio)
+                    state.perception.update_sensors(session_id, bio)
+
+            except Exception as msg_err:
+                logger.error(f"Error processing message from {session_id[:8]}: {msg_err}", exc_info=True)
+                try:
+                    await ws.send_json(TheoraMessage(
+                        session_id=session_id, hop="brain", type="text_response",
+                        payload=TextResponsePayload(text=f"Sorry, something went wrong: {msg_err}").model_dump(),
+                    ).model_dump())
+                except Exception:
+                    pass
 
     except WebSocketDisconnect:
         logger.info(f"Client disconnected: {session_id}")
