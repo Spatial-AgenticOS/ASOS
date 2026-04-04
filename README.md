@@ -344,15 +344,25 @@ ASOS/
 | `THEORA_SCENE_COOLDOWN` | Seconds between VLM analyses | `10` |
 | `THEORA_KEY_*` | Skill-specific API keys | — |
 
+## Completed (v0.9)
+
+- [x] Multi-agent collaboration (router-worker architecture with 4 specialist agents)
+- [x] Skill marketplace (search, install, validate, uninstall community skills)
+- [x] Android bridge SDK (Kotlin — WebSocket, Health Connect, audio, wake word)
+- [x] Voice wake word ("Hey THEORA" via openwakeword)
+- [x] On-device LLM inference (MLX on Apple Silicon, llama.cpp cross-platform)
+- [x] Federated memory (CRDT sync via mDNS, Hybrid Logical Clocks)
+- [x] Plugin sandboxing via WebAssembly (wasmtime, host function ABI)
+
 ## Roadmap
 
-- [ ] Multi-agent collaboration (agents that talk to each other)
-- [ ] Skill marketplace (share/install community skills)
-- [ ] Android bridge SDK
-- [ ] Voice wake word ("Hey THEORA")
-- [ ] On-device LLM inference (MLX/llama.cpp)
-- [ ] Federated memory (sync across devices without cloud)
-- [ ] Plugin sandboxing via WebAssembly
+- [ ] Deploy `registry.theora.io` for community skill publishing
+- [ ] Build production Android app using the bridge SDK
+- [ ] Train dedicated "Hey THEORA" openwakeword model
+- [ ] End-to-end federated sync testing across Mac + iPhone + Android
+- [ ] WASM skill starter templates (Rust, Go, AssemblyScript)
+- [ ] CI/CD pipeline — GitHub Actions, pytest-cov, coverage badge
+- [ ] Desktop GUI app (Tauri/Electron) for non-developer users
 
 ## Contact
 
