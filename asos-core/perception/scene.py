@@ -1,23 +1,26 @@
 """
-THEORA Scene Understanding — Vision-Language Model Pipeline
-=============================================================
-Analyzes camera frames via a VLM (GPT-4o, LLaVA, etc.) to produce
-structured scene descriptions that feed into the PerceptionFrame.
+THEORA Scene Understanding — Multi-Provider VLM Pipeline
+==========================================================
+Analyzes camera frames via a VLM to produce structured scene
+descriptions that feed into the PerceptionFrame.
 
-Output:
-  {
-    "scene_description": "User is at a coffee shop, laptop open on table",
-    "detected_objects": ["laptop", "coffee cup", "menu board"],
-    "text_in_scene": ["WiFi: CafeNet", "Today's Special: Latte $4.50"],
-    "people_count": 3,
-    "ambient": "indoor_crowded"
-  }
+Supports multiple VLM providers:
+  - openai   (GPT-4o, default)
+  - gemini   (Gemini 2.0 Flash — fast/cheap)
+  - ollama   (LLaVA, Moondream — local/private)
+
+Multiple analysis modes:
+  - General scene analysis
+  - Object tracking (what changed since last frame)
+  - Text extraction (OCR mode)
+  - Multi-frame reasoning (motion/activity)
 """
 
 from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import time
 from typing import Optional, TYPE_CHECKING
 
@@ -25,6 +28,10 @@ if TYPE_CHECKING:
     from agents.llm_provider import LLMProvider
 
 logger = logging.getLogger("theora.scene")
+
+# ─────────────────────────────────────────────
+# Prompts
+# ─────────────────────────────────────────────
 
 SCENE_ANALYSIS_PROMPT = """You are the vision system of a wearable AI operating system (smart glasses).
 Analyze this camera frame and return a JSON object with these fields:
@@ -36,21 +43,90 @@ Analyze this camera frame and return a JSON object with these fields:
 
 Return ONLY valid JSON. No markdown, no explanation."""
 
+OBJECT_TRACKING_PROMPT = """You are the vision system of a wearable AI. Compare this frame to the previous context.
+Previous scene: {previous_description}
+
+Analyze the CURRENT frame and return a JSON object:
+- "scene_description": what the scene looks like now
+- "changes": array of changes from the previous scene (e.g. "person left", "new object on table")
+- "detected_objects": array of up to 10 objects visible now
+- "text_in_scene": array of readable text
+- "motion_detected": true/false if significant movement occurred
+- "activity": what the user appears to be doing
+
+Return ONLY valid JSON."""
+
+TEXT_EXTRACTION_PROMPT = """You are an OCR system built into smart glasses.
+Extract ALL readable text from this image. Return a JSON object:
+- "text_blocks": array of objects, each with "text" (the content) and "location" (top/center/bottom/left/right)
+- "primary_content": the most important text visible (e.g. a sign, document title, screen content)
+- "language": detected language of the text
+
+Return ONLY valid JSON."""
+
+MULTI_FRAME_PROMPT = """You are analyzing a sequence of {count} camera frames from smart glasses.
+The frames are ordered chronologically. Describe what happened across these frames:
+- "activity_summary": one sentence describing what the user did across these frames
+- "motion_direction": where things moved (left, right, approaching, receding, stationary)
+- "scene_transition": did the scene change significantly? (same_scene, minor_change, new_location)
+- "key_events": array of notable events observed across frames
+
+Return ONLY valid JSON."""
+
 
 class SceneAnalyzer:
     """
-    Periodically analyzes vision frames through a VLM to produce
-    structured scene understanding for the PerceptionFrame.
+    Analyzes vision frames through a VLM with support for multiple
+    providers, analysis modes, and multi-frame reasoning.
     """
 
     def __init__(self, llm: "LLMProvider" = None):
         self._llm = llm
-        self._last_analysis: dict[str, float] = {}  # node_id → timestamp
-        self._cooldown = 10.0  # seconds between analyses per node
-        self._cache: dict[str, dict] = {}  # node_id → last analysis result
+        self._vlm_provider = os.getenv("THEORA_VLM_PROVIDER", "")
+        self._vlm_model = os.getenv("THEORA_VLM_MODEL", "")
+        self._vlm_base_url = os.getenv("THEORA_VLM_BASE_URL", "")
+        self._vlm_api_key = os.getenv("THEORA_VLM_API_KEY", "")
+
+        self._vlm_client = None
+        self._init_vlm_client()
+
+        self._last_analysis: dict[str, float] = {}
+        self._cooldown = 10.0
+        self._cache: dict[str, dict] = {}
+        self._history: dict[str, list[dict]] = {}
+        self._max_history = 5
+
+    def _init_vlm_client(self):
+        """Initialize a dedicated VLM client if a separate provider is configured."""
+        if not self._vlm_provider:
+            return
+
+        import httpx
+
+        if self._vlm_provider == "gemini":
+            api_key = self._vlm_api_key or os.getenv("GEMINI_API_KEY", "")
+            if api_key:
+                self._vlm_client = {
+                    "type": "gemini",
+                    "api_key": api_key,
+                    "model": self._vlm_model or "gemini-2.0-flash",
+                    "http": httpx.AsyncClient(timeout=30.0),
+                }
+                logger.info(f"VLM: Gemini ({self._vlm_client['model']})")
+        elif self._vlm_provider == "ollama":
+            base = self._vlm_base_url or "http://localhost:11434"
+            self._vlm_client = {
+                "type": "ollama",
+                "base_url": base,
+                "model": self._vlm_model or "llava",
+                "http": httpx.AsyncClient(base_url=f"{base}/v1", timeout=60.0),
+            }
+            logger.info(f"VLM: Ollama ({self._vlm_client['model']})")
 
     @property
     def available(self) -> bool:
+        if self._vlm_client:
+            return True
         return self._llm is not None and self._llm.available
 
     async def analyze_frame(
@@ -59,10 +135,17 @@ class SceneAnalyzer:
         encoding: str = "jpeg",
         node_id: str = "default",
         force: bool = False,
+        mode: str = "general",
+        query: str = "",
     ) -> Optional[dict]:
         """
-        Analyze a base64-encoded frame via VLM.
-        Returns structured scene dict or None if skipped/failed.
+        Analyze a frame via VLM.
+
+        Modes:
+          general  — full scene analysis (default)
+          tracking — what changed since last frame
+          ocr      — extract all text
+          query    — answer a specific question about the frame
         """
         if not self.available:
             return None
@@ -74,47 +157,218 @@ class SceneAnalyzer:
 
         self._last_analysis[node_id] = now
 
-        mime = f"image/{encoding}"
-        data_url = f"data:{mime};base64,{data_b64}"
-
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": SCENE_ANALYSIS_PROMPT},
-                    {"type": "image_url", "image_url": {"url": data_url, "detail": "low"}},
-                ],
-            }
-        ]
+        prompt = self._select_prompt(mode, node_id, query)
+        messages = self._build_vision_messages(prompt, data_b64, encoding)
 
         try:
-            response = await self._llm.chat(
-                messages=messages,
-                tools=None,
-                temperature=0.1,
-                max_tokens=400,
-            )
-            text_content, _ = self._llm.extract_response(response)
-            if not text_content:
+            result_text = await self._call_vlm(messages)
+            if not result_text:
                 return None
 
-            cleaned = text_content.strip()
-            if cleaned.startswith("```json"):
-                cleaned = cleaned[7:-3].strip()
-            elif cleaned.startswith("```"):
-                cleaned = cleaned[3:-3].strip()
-
-            result = json.loads(cleaned)
-            self._cache[node_id] = result
-            logger.info(f"Scene analysis [{node_id}]: {result.get('scene_description', '?')[:60]}")
+            result = self._parse_json(result_text)
+            if result:
+                self._cache[node_id] = result
+                self._push_history(node_id, result)
+                desc = result.get("scene_description", result.get("primary_content", "?"))
+                logger.info(f"Scene [{mode}] [{node_id}]: {str(desc)[:60]}")
             return result
 
-        except json.JSONDecodeError:
-            logger.debug("VLM returned non-JSON scene description")
-            return None
         except Exception as e:
             logger.warning(f"Scene analysis failed: {e}")
             return None
+
+    async def analyze_with_history(
+        self,
+        frames: list[dict],
+        node_id: str = "default",
+    ) -> Optional[dict]:
+        """
+        Multi-frame reasoning — analyze a sequence of frames together.
+        Each frame dict should have 'data_b64' and optionally 'encoding'.
+        """
+        if not self.available or not frames:
+            return None
+
+        content_parts = [
+            {"type": "text", "text": MULTI_FRAME_PROMPT.format(count=len(frames))},
+        ]
+        for i, frame in enumerate(frames[:5]):
+            b64 = frame.get("data_b64", "")
+            enc = frame.get("encoding", "jpeg")
+            if b64:
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/{enc};base64,{b64}",
+                        "detail": "low",
+                    },
+                })
+
+        messages = [{"role": "user", "content": content_parts}]
+
+        try:
+            result_text = await self._call_vlm(messages)
+            return self._parse_json(result_text) if result_text else None
+        except Exception as e:
+            logger.warning(f"Multi-frame analysis failed: {e}")
+            return None
+
+    def _select_prompt(self, mode: str, node_id: str, query: str) -> str:
+        if mode == "tracking":
+            prev = self._cache.get(node_id, {})
+            prev_desc = prev.get("scene_description", "No previous scene data.")
+            return OBJECT_TRACKING_PROMPT.format(previous_description=prev_desc)
+        elif mode == "ocr":
+            return TEXT_EXTRACTION_PROMPT
+        elif mode == "query" and query:
+            return (
+                f"You are the vision system of smart glasses. "
+                f"Answer this question about what you see: {query}\n"
+                f"Return a JSON object with: \"answer\" (your response), "
+                f"\"confidence\" (0.0-1.0), \"detected_objects\" (relevant objects)."
+            )
+        return SCENE_ANALYSIS_PROMPT
+
+    def _build_vision_messages(
+        self, prompt: str, data_b64: str, encoding: str,
+    ) -> list[dict]:
+        mime = f"image/{encoding}"
+        return [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {
+                    "url": f"data:{mime};base64,{data_b64}",
+                    "detail": "low",
+                }},
+            ],
+        }]
+
+    async def _call_vlm(self, messages: list[dict]) -> Optional[str]:
+        """Route the VLM call to the appropriate provider."""
+        if self._vlm_client:
+            return await self._call_dedicated_vlm(messages)
+        return await self._call_default_llm(messages)
+
+    async def _call_default_llm(self, messages: list[dict]) -> Optional[str]:
+        """Use the shared LLMProvider (OpenAI-compatible) for vision."""
+        response = await self._llm.chat(
+            messages=messages, tools=None, temperature=0.1, max_tokens=500,
+        )
+        text, _ = self._llm.extract_response(response)
+        return text
+
+    async def _call_dedicated_vlm(self, messages: list[dict]) -> Optional[str]:
+        """Use a separate VLM provider (Gemini, Ollama)."""
+        vlm = self._vlm_client
+        vlm_type = vlm["type"]
+
+        if vlm_type == "gemini":
+            return await self._call_gemini(messages)
+        elif vlm_type == "ollama":
+            return await self._call_ollama_vlm(messages)
+        return None
+
+    async def _call_gemini(self, messages: list[dict]) -> Optional[str]:
+        """Call Google Gemini's vision API."""
+        vlm = self._vlm_client
+        api_key = vlm["api_key"]
+        model = vlm["model"]
+        http = vlm["http"]
+
+        parts = []
+        for msg in messages:
+            content = msg.get("content", [])
+            if isinstance(content, str):
+                parts.append({"text": content})
+            elif isinstance(content, list):
+                for block in content:
+                    if block.get("type") == "text":
+                        parts.append({"text": block["text"]})
+                    elif block.get("type") == "image_url":
+                        url = block["image_url"]["url"]
+                        if url.startswith("data:"):
+                            header, b64_data = url.split(",", 1)
+                            mime = header.split(":")[1].split(";")[0]
+                            parts.append({
+                                "inline_data": {
+                                    "mime_type": mime,
+                                    "data": b64_data,
+                                },
+                            })
+
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{model}:generateContent?key={api_key}"
+        )
+        body = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 500},
+        }
+
+        try:
+            resp = await http.post(url, json=body)
+            resp.raise_for_status()
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            if candidates:
+                return candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        except Exception as e:
+            logger.error(f"Gemini VLM call failed: {e}")
+        return None
+
+    async def _call_ollama_vlm(self, messages: list[dict]) -> Optional[str]:
+        """Call Ollama's OpenAI-compatible vision endpoint."""
+        vlm = self._vlm_client
+        http = vlm["http"]
+        model = vlm["model"]
+
+        body = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": 500,
+            "stream": False,
+        }
+
+        try:
+            resp = await http.post("/chat/completions", json=body)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            logger.error(f"Ollama VLM call failed: {e}")
+        return None
+
+    def _parse_json(self, text: str) -> Optional[dict]:
+        if not text:
+            return None
+        cleaned = text.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            logger.debug("VLM returned non-JSON scene description")
+            return None
+
+    def _push_history(self, node_id: str, result: dict):
+        if node_id not in self._history:
+            self._history[node_id] = []
+        self._history[node_id].append({
+            "timestamp": time.time(),
+            **result,
+        })
+        if len(self._history[node_id]) > self._max_history:
+            self._history[node_id] = self._history[node_id][-self._max_history:]
+
+    def get_history(self, node_id: str) -> list[dict]:
+        return self._history.get(node_id, [])
 
     def get_cached(self, node_id: str = "default") -> Optional[dict]:
         return self._cache.get(node_id)

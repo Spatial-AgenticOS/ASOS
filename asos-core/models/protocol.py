@@ -235,6 +235,33 @@ class ConfirmationResponsePayload(BaseModel):
 
 
 # ─────────────────────────────────────────────
+# Payload Models — Voice Pipeline
+# ─────────────────────────────────────────────
+
+class VoiceConfigPayload(BaseModel):
+    """Node declares its voice capabilities on connect."""
+    node_id: str
+    supports_realtime: bool = False
+    mode: Literal["realtime", "whisper", "auto"] = "auto"
+    preferred_model: str = ""
+    sample_rate: int = 24000
+    encoding: str = "pcm16"
+
+class AudioResponsePayload(BaseModel):
+    """Brain sends audio back to a node (realtime TTS or Whisper TTS)."""
+    data_b64: str = ""
+    encoding: str = "pcm16"
+    sample_rate: int = 24000
+    is_final: bool = False
+
+class VisionQueryPayload(BaseModel):
+    """User explicitly asks about what the camera sees."""
+    query: str = "What do you see?"
+    node_id: str = ""
+    force: bool = True
+
+
+# ─────────────────────────────────────────────
 # Message Type Registry — Maps type strings to payload models
 # ─────────────────────────────────────────────
 
@@ -272,6 +299,11 @@ MESSAGE_TYPES = {
     "glasses_status": GlassesStatusPayload,
     "skill_approval": SkillApprovalPayload,
     "confirmation_response": ConfirmationResponsePayload,
+
+    # Voice Pipeline
+    "voice_config": VoiceConfigPayload,
+    "audio_response": AudioResponsePayload,
+    "vision_query": VisionQueryPayload,
 }
 
 

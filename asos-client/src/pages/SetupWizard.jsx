@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   Brain, Key, Puzzle, Cpu, ChevronRight, ChevronLeft,
   Check, AlertCircle, Loader2, Eye, EyeOff, Sparkles,
-  Wifi, WifiOff, Shield, Zap,
+  Wifi, WifiOff, Shield, Zap, Link2, Music, Home, FileText,
+  ExternalLink, Server,
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
@@ -13,6 +14,7 @@ const STEPS = [
   { id: 'llm', label: 'LLM Provider', icon: Sparkles },
   { id: 'keys', label: 'API Keys', icon: Key },
   { id: 'skills', label: 'Skills', icon: Puzzle },
+  { id: 'apps', label: 'Connect Apps', icon: Link2 },
   { id: 'features', label: 'Features', icon: Zap },
   { id: 'finish', label: 'Launch', icon: Check },
 ];
@@ -117,7 +119,7 @@ export default function SetupWizard({ onComplete }) {
         </div>
 
         <div className="mt-auto pt-8 text-xs opacity-30">
-          Spatial Agentic OS v0.4.0
+          THEORA v0.8.0
         </div>
       </div>
 
@@ -301,6 +303,58 @@ export default function SetupWizard({ onComplete }) {
               </div>
             )}
 
+            {/* Step: Connect Apps */}
+            {currentStep.id === 'apps' && (
+              <div className="space-y-6">
+                <h2 className="text-2xl font-bold">Connect Apps</h2>
+                <p className="text-gray-400">
+                  Link your favorite services. OAuth for Spotify & Notion, API token for Home Assistant.
+                </p>
+
+                <div className="space-y-3">
+                  <AppConnectCard
+                    icon={Music}
+                    name="Spotify"
+                    desc="Control music playback, search, queue tracks"
+                    providerId="spotify"
+                    authType="oauth"
+                  />
+                  <AppConnectCard
+                    icon={Home}
+                    name="Home Assistant"
+                    desc="Control lights, sensors, automations"
+                    providerId="home_assistant"
+                    authType="token"
+                    onTokenSave={(token) => {
+                      fetch(`${API}/api/integrations/token`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ provider_id: 'home_assistant', token }),
+                      });
+                    }}
+                  />
+                  <AppConnectCard
+                    icon={FileText}
+                    name="Notion"
+                    desc="Read and write pages, query databases"
+                    providerId="notion"
+                    authType="oauth"
+                  />
+                </div>
+
+                <div className="border-t border-asos-border pt-4">
+                  <h3 className="text-sm font-medium opacity-60 mb-3 flex items-center gap-2">
+                    <Server size={14} /> MCP Servers (Advanced)
+                  </h3>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Connect MCP-compatible tools like GitHub, Slack, databases.
+                    Configure these in Settings after setup.
+                  </p>
+                  <MCPServerList />
+                </div>
+              </div>
+            )}
+
             {/* Step: Features */}
             {currentStep.id === 'features' && (
               <div className="space-y-6">
@@ -400,6 +454,112 @@ export default function SetupWizard({ onComplete }) {
           {step === STEPS.length - 1 && <div />}
         </div>
       </div>
+    </div>
+  );
+}
+
+function AppConnectCard({ icon: Icon, name, desc, providerId, authType, onTokenSave }) {
+  const [connected, setConnected] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
+  const [showToken, setShowToken] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/api/integrations`).then(r => r.json()).then(data => {
+      const key = `${providerId}_connected`;
+      setConnected(data[key] || false);
+    }).catch(() => {});
+  }, [providerId]);
+
+  const handleOAuth = async () => {
+    const resp = await fetch(`${API}/api/oauth/authorize/${providerId}`);
+    const data = await resp.json();
+    if (data.url) window.open(data.url, '_blank');
+  };
+
+  const handleTokenSave = () => {
+    if (tokenInput && onTokenSave) {
+      onTokenSave(tokenInput);
+      setConnected(true);
+      setTokenInput('');
+    }
+  };
+
+  return (
+    <div className={`bg-asos-card border rounded-xl px-5 py-4 transition-all ${
+      connected ? 'border-green-500 border-opacity-40' : 'border-asos-border'
+    }`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+            connected ? 'bg-green-500 bg-opacity-15' : 'bg-white bg-opacity-5'
+          }`}>
+            <Icon size={20} className={connected ? 'text-green-400' : 'text-gray-400'} />
+          </div>
+          <div>
+            <div className="font-medium text-sm">{name}</div>
+            <div className="text-xs text-gray-400">{desc}</div>
+          </div>
+        </div>
+        {connected ? (
+          <span className="text-xs px-2 py-1 rounded-full bg-green-500 bg-opacity-20 text-green-400">Connected</span>
+        ) : authType === 'oauth' ? (
+          <button
+            onClick={handleOAuth}
+            className="flex items-center gap-1 px-3 py-1.5 bg-asos-accent bg-opacity-15 text-asos-accent text-xs rounded-lg hover:bg-opacity-25 transition"
+          >
+            <ExternalLink size={12} /> Connect
+          </button>
+        ) : null}
+      </div>
+      {authType === 'token' && !connected && (
+        <div className="mt-3 flex gap-2">
+          <input
+            type={showToken ? 'text' : 'password'}
+            placeholder="Long-lived access token..."
+            className="flex-1 bg-black border border-asos-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-asos-accent"
+            value={tokenInput}
+            onChange={e => setTokenInput(e.target.value)}
+          />
+          <button
+            onClick={handleTokenSave}
+            disabled={!tokenInput}
+            className="px-3 py-2 bg-asos-accent text-white text-xs rounded hover:bg-opacity-90 disabled:opacity-30"
+          >
+            Save
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MCPServerList() {
+  const [servers, setServers] = useState([]);
+  useEffect(() => {
+    fetch(`${API}/api/mcp/registry`).then(r => r.json()).then(data => {
+      setServers(data.servers || []);
+    }).catch(() => {});
+  }, []);
+
+  if (!servers.length) {
+    return (
+      <div className="text-xs text-gray-500 bg-asos-card border border-asos-border rounded-lg p-4">
+        MCP servers will be available after setup. Common servers: GitHub, Slack, PostgreSQL, Browser.
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {servers.slice(0, 6).map(s => (
+        <div key={s.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs ${
+          s.installed ? 'border-asos-border' : 'border-asos-border opacity-50'
+        }`}>
+          <Server size={12} className={s.installed ? 'text-asos-accent' : 'text-gray-500'} />
+          <span>{s.name}</span>
+          {s.installed && <Check size={10} className="text-green-400 ml-auto" />}
+        </div>
+      ))}
     </div>
   );
 }

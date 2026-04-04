@@ -27,6 +27,9 @@ protocol ASOSBrainDelegate: AnyObject {
     func brainDidReceiveCommand(type: String, payload: [String: Any])
     func brainDidProposeSkill(manifest: [String: Any], reason: String)
     func brainRequestsConfirmation(action: String, tier: String, completion: @escaping (Bool) -> Void)
+    func brainDidReceiveAudio(data: Data, encoding: String, sampleRate: Int, isFinal: Bool)
+    func brainDidRequestStopPlayback()
+    func brainDidReceiveTranscript(text: String, isFinal: Bool)
 }
 
 // MARK: - Connection State
@@ -201,6 +204,23 @@ class ASOSBrainClient: NSObject {
         sendJSON(frame)
     }
     
+    // MARK: - Voice Configuration
+    
+    func sendVoiceConfig(supportsRealtime: Bool = true, mode: String = "realtime") {
+        let config: [String: Any] = [
+            "hop": "node",
+            "type": "voice_config",
+            "payload": [
+                "node_id": nodeId,
+                "supports_realtime": supportsRealtime,
+                "mode": mode,
+                "sample_rate": 24000,
+                "encoding": "pcm16"
+            ]
+        ]
+        sendJSON(config)
+    }
+    
     // MARK: - Audio
     
     func sendAudioChunk(base64: String, chunkIndex: Int, isFinal: Bool = false) {
@@ -213,7 +233,7 @@ class ASOSBrainClient: NSObject {
                 "chunk_index": chunkIndex,
                 "is_final": isFinal,
                 "encoding": "pcm16",
-                "sample_rate": 16000
+                "sample_rate": 24000
             ]
         ]
         sendJSON(audio)
@@ -321,6 +341,7 @@ class ASOSBrainClient: NSObject {
             sessionId = json["session_id"] as? String ?? ""
             reconnectAttempts = 0
             startSensorFlushTimer()
+            sendVoiceConfig(supportsRealtime: true, mode: "realtime")
             DispatchQueue.main.async {
                 self.delegate?.brainDidConnect(sessionId: self.sessionId ?? "")
             }
@@ -354,6 +375,32 @@ class ASOSBrainClient: NSObject {
                     ]
                     self.sendJSON(response)
                 }
+            }
+            
+        case "audio_response":
+            let audioB64 = payload["data_b64"] as? String ?? ""
+            let encoding = payload["encoding"] as? String ?? "pcm16"
+            let sampleRate = payload["sample_rate"] as? Int ?? 24000
+            let isFinal = payload["is_final"] as? Bool ?? false
+            if let audioData = Data(base64Encoded: audioB64) {
+                DispatchQueue.main.async {
+                    self.delegate?.brainDidReceiveAudio(
+                        data: audioData, encoding: encoding,
+                        sampleRate: sampleRate, isFinal: isFinal
+                    )
+                }
+            }
+            
+        case "speech_started":
+            DispatchQueue.main.async {
+                self.delegate?.brainDidRequestStopPlayback()
+            }
+            
+        case "transcript":
+            let text = payload["text"] as? String ?? ""
+            let isPartial = payload["is_partial"] as? Bool ?? false
+            DispatchQueue.main.async {
+                self.delegate?.brainDidReceiveTranscript(text: text, isFinal: !isPartial)
             }
             
         case "execute":

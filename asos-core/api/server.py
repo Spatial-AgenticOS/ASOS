@@ -46,6 +46,7 @@ from memory.store import MemoryStore
 from perception.fusion import PerceptionEngine
 from perception.audio_pipeline import AudioPipeline
 from perception.scene import SceneAnalyzer
+from perception.change_detector import ChangeDetector
 from config.loader import ConfigLoader
 from security.vault import BlindVault, PermissionTier, ExecutionSandbox
 from security.sandbox_policy import SandboxPolicy
@@ -53,6 +54,13 @@ from hardware.protocol import DeviceRegistry, DeviceManifest, HUPAction, HUPActi
 from mcp.server import TheoraMCPServer
 from mcp.client import MCPClientManager
 from channels.base import ChannelManager, ChannelMessage, ChannelResponse
+from voice.realtime_proxy import RealtimeProxy
+from voice.router import VoiceRouter
+from integrations.oauth_manager import OAuthManager
+from integrations.spotify import SpotifyIntegration
+from integrations.home_assistant import HomeAssistantIntegration
+from integrations.notion import NotionIntegration
+from integrations.webhook_receiver import WebhookReceiver, EventBus
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("theora.brain")
@@ -127,6 +135,7 @@ class BrainState:
         self.perception = PerceptionEngine()
         self.audio = AudioPipeline()
         self.scene: Optional[SceneAnalyzer] = None
+        self.change_detector = ChangeDetector()
         self.learner: Optional[Learner] = None
         self.skill_gen: Optional[SkillGenerator] = None
         self.vault: Optional[BlindVault] = None
@@ -136,6 +145,14 @@ class BrainState:
         self.mcp_server: Optional[TheoraMCPServer] = None
         self.mcp_client: Optional[MCPClientManager] = None
         self.channel_manager: Optional[ChannelManager] = None
+        self.voice_router: Optional[VoiceRouter] = None
+        self.realtime_proxy: Optional[RealtimeProxy] = None
+        self.oauth: Optional[OAuthManager] = None
+        self.spotify: Optional[SpotifyIntegration] = None
+        self.home_assistant: Optional[HomeAssistantIntegration] = None
+        self.notion: Optional[NotionIntegration] = None
+        self.event_bus: Optional[EventBus] = None
+        self.webhook_receiver: Optional[WebhookReceiver] = None
         self.orchestrator: Optional[Orchestrator] = None
 
         # Map daemon node_id → list of sessions interested in its data
@@ -171,6 +188,21 @@ class BrainState:
         self.mcp_client = MCPClientManager()
         self.channel_manager = ChannelManager()
 
+        self.oauth = OAuthManager(vault=self.vault)
+        self.spotify = SpotifyIntegration(oauth_manager=self.oauth)
+        self.home_assistant = HomeAssistantIntegration(oauth_manager=self.oauth)
+        self.notion = NotionIntegration(oauth_manager=self.oauth)
+        self.event_bus = EventBus()
+        self.webhook_receiver = WebhookReceiver(event_bus=self.event_bus)
+
+        from skills.impl import register_instance
+        if self.spotify:
+            register_instance("spotify_music", self.spotify)
+        if self.home_assistant:
+            register_instance("smart_home_hue", self.home_assistant)
+        if self.notion:
+            register_instance("notion", self.notion)
+
         self.orchestrator = Orchestrator(
             skill_registry=self.skill_registry,
             send_to_client=self.send_to_session,
@@ -183,6 +215,25 @@ class BrainState:
         self.orchestrator.set_llm(_shared_llm)
         if self.vault:
             self.orchestrator.set_vault(self.vault)
+
+        self.realtime_proxy = RealtimeProxy(
+            skill_registry=self.skill_registry,
+            skill_executor=self.orchestrator.executor if self.orchestrator else None,
+            memory=self.memory,
+            perception=self.perception,
+            send_to_node=self._send_dict_to_node,
+            send_to_session=self.send_to_session,
+        )
+
+        self.voice_router = VoiceRouter(
+            realtime_proxy=self.realtime_proxy,
+            audio_pipeline=self.audio,
+            orchestrator=self.orchestrator,
+            memory=self.memory,
+            perception=self.perception,
+            send_to_session=self.send_to_session,
+            send_to_node=self._send_dict_to_node,
+        )
 
         stats = self.memory.stats()
         logger.info(
@@ -200,6 +251,12 @@ class BrainState:
         ws = self.daemons.get(node_id)
         if ws:
             await ws.send_json(msg.model_dump())
+
+    async def _send_dict_to_node(self, node_id: str, msg_dict: dict):
+        """Send a raw dict message to a daemon node (used by voice pipeline)."""
+        ws = self.daemons.get(node_id)
+        if ws:
+            await ws.send_json(msg_dict)
 
     def bind_session_to_daemon(self, session_id: str, node_id: str):
         if node_id not in self._daemon_session_bindings:
@@ -239,6 +296,7 @@ async def root():
         "skills": len(state.skill_registry.skills),
         "memory": stats,
         "audio_available": state.audio.available,
+        "realtime_available": state.realtime_proxy.available if state.realtime_proxy else False,
     }
 
 
@@ -560,6 +618,14 @@ async def mcp_external_tools():
     return {"tools": state.mcp_client.all_tools()}
 
 
+@app.get("/api/mcp/registry")
+async def mcp_registry():
+    """List all known MCP servers with status."""
+    from mcp.registry import MCPServerRegistry
+    registry = MCPServerRegistry(mcp_client=state.mcp_client)
+    return {"servers": registry.list_known()}
+
+
 # ─────────────────────────────────────────────
 # Sandbox Policy API
 # ─────────────────────────────────────────────
@@ -599,6 +665,94 @@ async def start_channel(body: dict):
     return {"ok": True, "channel": channel_type}
 
 
+# ─────────────────────────────────────────────
+# OAuth & Integrations API
+# ─────────────────────────────────────────────
+
+@app.get("/api/integrations")
+async def list_integrations():
+    """List all available integrations and their connection status."""
+    providers = state.oauth.list_providers() if state.oauth else []
+    return {
+        "providers": providers,
+        "spotify_connected": state.spotify.connected if state.spotify else False,
+        "home_assistant_connected": state.home_assistant.connected if state.home_assistant else False,
+        "notion_connected": state.notion.connected if state.notion else False,
+    }
+
+
+@app.get("/api/oauth/authorize/{provider_id}")
+async def oauth_authorize(provider_id: str):
+    """Start an OAuth2 flow — returns the authorization URL."""
+    if not state.oauth:
+        return {"error": "OAuth manager not initialized"}
+    url = state.oauth.build_authorize_url(provider_id)
+    if not url:
+        return {"error": f"Cannot build authorize URL for {provider_id}"}
+    return {"url": url, "provider": provider_id}
+
+
+@app.get("/api/oauth/callback")
+async def oauth_callback(state_param: str = Query(alias="state", default=""), code: str = ""):
+    """Handle OAuth2 callback from provider."""
+    if not state.oauth:
+        return {"error": "OAuth manager not initialized"}
+    result = await state.oauth.handle_callback(state_param, code)
+    return result
+
+
+@app.post("/api/integrations/token")
+async def store_integration_token(body: dict):
+    """Store a long-lived API token (e.g., Home Assistant)."""
+    provider_id = body.get("provider_id", "")
+    token = body.get("token", "")
+    if not provider_id or not token:
+        return {"error": "provider_id and token are required"}
+    if state.oauth:
+        state.oauth.store_api_token(provider_id, token)
+    return {"ok": True, "provider": provider_id}
+
+
+@app.post("/api/integrations/disconnect/{provider_id}")
+async def disconnect_integration(provider_id: str):
+    """Disconnect an integration by revoking its tokens."""
+    if state.oauth:
+        state.oauth.revoke_token(provider_id)
+    return {"ok": True, "provider": provider_id}
+
+
+# ─────────────────────────────────────────────
+# Webhook API
+# ─────────────────────────────────────────────
+
+@app.post("/api/webhooks/{app_id}")
+async def receive_webhook(app_id: str, request_body: dict = None):
+    """Receive an incoming webhook from an external app."""
+    if not state.webhook_receiver:
+        return {"error": "Webhook receiver not initialized"}
+    from starlette.requests import Request
+    # For JSON webhooks, use the parsed body
+    body_bytes = json.dumps(request_body or {}).encode() if request_body else b"{}"
+    result = await state.webhook_receiver.handle_request(
+        app_id=app_id,
+        body=body_bytes,
+        headers={},
+        content_type="application/json",
+    )
+    return result
+
+
+@app.get("/api/webhooks")
+async def list_webhooks():
+    """List registered webhook configurations."""
+    if not state.webhook_receiver:
+        return {"webhooks": []}
+    return {
+        "webhooks": state.webhook_receiver.list_webhooks(),
+        "events": state.event_bus.recent_events(20) if state.event_bus else [],
+    }
+
+
 @app.get("/api/nodes")
 async def list_nodes():
     """List all connected hardware nodes."""
@@ -621,7 +775,7 @@ async def system_info():
     channel_stats = state.channel_manager.stats if state.channel_manager else {}
     skill_gen_stats = state.skill_gen.stats if state.skill_gen else {}
     return {
-        "version": "0.7.0",
+        "version": "0.8.0",
         "config": state.config.to_client_safe_dict(),
         "memory": stats,
         "sessions": len(state.sessions),
@@ -643,6 +797,22 @@ async def system_info():
             "vault_keys": len(state.vault.list_keys()) if state.vault else 0,
             "max_tier": state.sandbox.max_tier if state.sandbox else "active",
             "policy": state.policy._data.get("name", "default") if state.policy else "none",
+        },
+        "voice": {
+            "audio_available": state.audio.available,
+            "realtime_available": state.realtime_proxy.available if state.realtime_proxy else False,
+            "active_realtime_sessions": len(state.realtime_proxy._sessions) if state.realtime_proxy else 0,
+        },
+        "vision": {
+            "change_detector": state.change_detector.stats() if state.change_detector else {},
+            "scene_available": state.scene.available if state.scene else False,
+        },
+        "integrations": {
+            "oauth": state.oauth.status() if state.oauth else {},
+            "spotify": state.spotify.connected if state.spotify else False,
+            "home_assistant": state.home_assistant.connected if state.home_assistant else False,
+            "notion": state.notion.connected if state.notion else False,
+            "webhooks": state.event_bus.stats() if state.event_bus else {},
         },
     }
 
@@ -783,30 +953,14 @@ async def client_session(ws: WebSocket):
                             ).model_dump())
 
             elif msg.type == "audio_chunk" and isinstance(payload, AudioChunkPayload):
-                transcript = await state.audio.process_audio_chunk(
-                    session_id=session_id,
-                    chunk_b64=payload.data_b64,
-                    chunk_index=payload.chunk_index,
-                    is_final=payload.is_final,
-                    encoding=payload.encoding,
-                    sample_rate=payload.sample_rate,
-                )
-
-                if transcript:
-                    # Send transcript back to client
-                    await ws.send_json(TheoraMessage(
-                        session_id=session_id, hop="brain", type="transcript",
-                        payload=TranscriptPayload(text=transcript, is_partial=False).model_dump(),
-                    ).model_dump())
-
-                    state.memory.working_push(session_id, {"role": "user", "text": transcript, "source": "voice"})
-                    state.perception.update_audio_context(session_id, transcript=transcript)
-
-                    # Process through orchestrator
-                    await state.orchestrator.handle_command(
+                if state.voice_router:
+                    await state.voice_router.handle_audio_from_client(
                         session_id=session_id,
-                        text=transcript,
-                        context={"source": "voice"},
+                        audio_b64=payload.data_b64,
+                        chunk_index=payload.chunk_index,
+                        is_final=payload.is_final,
+                        encoding=payload.encoding,
+                        sample_rate=payload.sample_rate,
                     )
 
             elif msg.type == "ui_event" and isinstance(payload, UIEventPayload):
@@ -820,6 +974,20 @@ async def client_session(ws: WebSocket):
             elif msg.type == "device_register" and isinstance(payload, DeviceRegisterPayload):
                 state.devices[payload.device_id] = payload.model_dump()
                 logger.info(f"Device registered: {payload.device_id} ({payload.device_type})")
+
+            elif msg.type == "vision_query":
+                payload_dict = raw.get("payload", {})
+                query_text = payload_dict.get("query", "What do you see?")
+                target_node = payload_dict.get("node_id", "")
+                if not target_node:
+                    nodes = state.vision_buffer.node_ids_with_frames()
+                    target_node = nodes[0] if nodes else "default"
+                state.change_detector.force_trigger(target_node, "user_request")
+                latest = state.vision_buffer.latest(target_node)
+                if latest and state.scene and state.scene.available:
+                    asyncio.ensure_future(
+                        _analyze_scene_background(target_node, latest, mode="query", query=query_text)
+                    )
 
             elif msg.type == "biometric":
                 bio = raw.get("payload", {})
@@ -895,20 +1063,33 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 else:
                     effective_node = node_id or frame_payload.get("node_id", "unknown")
                     state.vision_buffer.push(effective_node, frame_payload)
-                    frame_id = frame_payload.get("frame_id", "?")
-                    logger.info(f"Vision frame from {node_id}: {frame_id} ({frame_b64_len}B)")
 
                     for sid in state.get_sessions_for_daemon(effective_node):
                         state.perception.update_vision(sid, state.vision_buffer, effective_node)
 
-                    # Scene understanding via VLM (non-blocking)
-                    if state.scene and state.scene.available:
+                    data_b64 = frame_payload.get("data_b64", "")
+                    change_event = state.change_detector.should_analyze(
+                        effective_node, data_b64, frame_payload.get("encoding", "jpeg"),
+                    )
+                    if change_event and state.scene and state.scene.available:
+                        mode = "tracking" if change_event.trigger_reason == "scene_change" else "general"
                         asyncio.ensure_future(
-                            _analyze_scene_background(effective_node, frame_payload)
+                            _analyze_scene_background(effective_node, frame_payload, mode=mode)
                         )
 
                     if state.orchestrator:
                         state.orchestrator.resolve_pending_frame(msg.msg_id, frame_payload)
+
+            elif msg.type == "vision_query":
+                payload_dict = raw.get("payload", {})
+                query_text = payload_dict.get("query", "What do you see?")
+                target_node = payload_dict.get("node_id", "") or node_id or "default"
+                state.change_detector.force_trigger(target_node, "user_request")
+                latest = state.vision_buffer.latest(target_node)
+                if latest and state.scene and state.scene.available:
+                    asyncio.ensure_future(
+                        _analyze_scene_background(target_node, latest, mode="query", query=query_text)
+                    )
 
             elif msg.type == "gesture":
                 gesture_payload = raw.get("payload", {})
@@ -974,6 +1155,34 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 model = payload_dict.get("glasses_model", "THEORA")
                 logger.info(f"Glasses ({model}) {'connected' if connected else 'disconnected'} via {node_id}, battery={battery}%")
 
+            # ── Voice Pipeline: node declares voice capabilities ──
+            elif msg.type == "voice_config":
+                payload_dict = raw.get("payload", {})
+                if state.voice_router and node_id:
+                    state.voice_router.register_voice_config(node_id, payload_dict)
+                    for sid in state.get_sessions_for_daemon(node_id):
+                        state.voice_router.bind_node_to_session(node_id, sid)
+                    supports_rt = payload_dict.get("supports_realtime", False)
+                    logger.info(f"Voice config from {node_id}: realtime={supports_rt}")
+
+            # ── Voice Pipeline: audio from phone/glasses node ──
+            elif msg.type == "audio_chunk" and node_id:
+                payload_dict = raw.get("payload", {})
+                audio_b64 = payload_dict.get("data_b64", "")
+                if state.voice_router and audio_b64:
+                    sessions = state.get_sessions_for_daemon(node_id)
+                    target_sid = next(iter(sessions), None)
+                    if target_sid:
+                        await state.voice_router.handle_audio_from_node(
+                            node_id=node_id,
+                            session_id=target_sid,
+                            audio_b64=audio_b64,
+                            chunk_index=payload_dict.get("chunk_index", 0),
+                            is_final=payload_dict.get("is_final", False),
+                            encoding=payload_dict.get("encoding", "pcm16"),
+                            sample_rate=payload_dict.get("sample_rate", 24000),
+                        )
+
             # ── Phone Bridge: skill approval ──
             elif msg.type == "skill_approval":
                 payload_dict = raw.get("payload", {})
@@ -999,7 +1208,9 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
 # Background Scene Analysis
 # ─────────────────────────────────────────────
 
-async def _analyze_scene_background(node_id: str, frame_payload: dict):
+async def _analyze_scene_background(
+    node_id: str, frame_payload: dict, mode: str = "general", query: str = "",
+):
     """Run VLM scene analysis on a vision frame and update perception."""
     try:
         data_b64 = frame_payload.get("data_b64", "")
@@ -1009,13 +1220,23 @@ async def _analyze_scene_background(node_id: str, frame_payload: dict):
 
         result = await state.scene.analyze_frame(
             data_b64=data_b64, encoding=encoding, node_id=node_id,
+            force=True, mode=mode, query=query,
         )
         if result:
             for sid in state.get_sessions_for_daemon(node_id):
                 frame = state.perception.get_frame(sid)
-                frame.scene_description = result.get("scene_description", "")
+                frame.scene_description = result.get("scene_description", result.get("answer", ""))
                 frame.detected_objects = result.get("detected_objects", [])
                 frame.text_in_scene = result.get("text_in_scene", [])
+
+                if mode == "query" and query:
+                    answer = result.get("answer", result.get("scene_description", ""))
+                    if answer and state.orchestrator:
+                        from models.protocol import TheoraMessage, TextResponsePayload
+                        await state.send_to_session(sid, TheoraMessage(
+                            session_id=sid, hop="brain", type="text_response",
+                            payload=TextResponsePayload(text=f"[Vision] {answer}").model_dump(),
+                        ))
     except Exception as e:
         logger.warning(f"Background scene analysis failed: {e}")
 
@@ -1028,9 +1249,9 @@ if __name__ == "__main__":
     import uvicorn
     print("""
     ╔══════════════════════════════════════╗
-    ║        THEORA Brain v0.5.0          ║
+    ║        THEORA Brain v0.8.0          ║
     ║   Local-First Agentic Intelligence  ║
-    ║  Setup + Config + System Service    ║
+    ║   Voice · Vision · Integrations     ║
     ╚══════════════════════════════════════╝
     """)
     uvicorn.run(app, host="0.0.0.0", port=9090, log_level="info")

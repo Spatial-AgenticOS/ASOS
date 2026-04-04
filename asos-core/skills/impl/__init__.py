@@ -20,6 +20,10 @@ def register_skill(skill_class: Type[BaseSkill]):
     wrapper()
     return skill_class
 
+def register_instance(skill_id: str, instance):
+    """Register a pre-built integration instance as a skill implementation."""
+    SKILL_IMPLEMENTATIONS[skill_id] = instance
+
 def get_implementation(skill_id: str) -> BaseSkill | None:
     """Retrieve the instantiated python logic instance for a skill."""
     return SKILL_IMPLEMENTATIONS.get(skill_id)

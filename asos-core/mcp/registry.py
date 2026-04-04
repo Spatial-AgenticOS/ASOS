@@ -1,0 +1,257 @@
+"""
+THEORA MCP Server Registry — Catalog of Known Servers
+=======================================================
+Pre-configured definitions for popular MCP servers plus
+auto-discovery of locally installed ones.
+
+Users can browse, install, and connect to MCP servers through
+the Setup Wizard or Settings UI.
+"""
+
+from __future__ import annotations
+import json
+import logging
+import os
+import shutil
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger("theora.mcp.registry")
+
+CONFIG_PATH = Path(os.path.expanduser("~/.theora/mcp_servers.json"))
+
+
+KNOWN_SERVERS = {
+    "github": {
+        "id": "github",
+        "name": "GitHub",
+        "description": "Manage repos, issues, PRs, and code search",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": ""},
+        "install_hint": "npm install -g @modelcontextprotocol/server-github",
+        "category": "development",
+    },
+    "filesystem": {
+        "id": "filesystem",
+        "name": "Filesystem",
+        "description": "Read/write files and directories",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users"],
+        "env": {},
+        "install_hint": "npm install -g @modelcontextprotocol/server-filesystem",
+        "category": "system",
+    },
+    "slack": {
+        "id": "slack",
+        "name": "Slack",
+        "description": "Send messages, manage channels, search conversations",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-slack"],
+        "env": {"SLACK_BOT_TOKEN": "", "SLACK_TEAM_ID": ""},
+        "install_hint": "npm install -g @modelcontextprotocol/server-slack",
+        "category": "communication",
+    },
+    "brave-search": {
+        "id": "brave-search",
+        "name": "Brave Search",
+        "description": "Web search via Brave Search API",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+        "env": {"BRAVE_API_KEY": ""},
+        "install_hint": "npm install -g @modelcontextprotocol/server-brave-search",
+        "category": "search",
+    },
+    "memory": {
+        "id": "memory",
+        "name": "Memory",
+        "description": "Persistent memory via knowledge graph",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"],
+        "env": {},
+        "install_hint": "npm install -g @modelcontextprotocol/server-memory",
+        "category": "memory",
+    },
+    "postgres": {
+        "id": "postgres",
+        "name": "PostgreSQL",
+        "description": "Query and manage PostgreSQL databases",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-postgres"],
+        "env": {"POSTGRES_CONNECTION_STRING": ""},
+        "install_hint": "npm install -g @modelcontextprotocol/server-postgres",
+        "category": "database",
+    },
+    "puppeteer": {
+        "id": "puppeteer",
+        "name": "Puppeteer",
+        "description": "Browser automation for web scraping and testing",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+        "env": {},
+        "install_hint": "npm install -g @modelcontextprotocol/server-puppeteer",
+        "category": "browser",
+    },
+    "google-maps": {
+        "id": "google-maps",
+        "name": "Google Maps",
+        "description": "Geocoding, directions, and place search",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-google-maps"],
+        "env": {"GOOGLE_MAPS_API_KEY": ""},
+        "install_hint": "npm install -g @modelcontextprotocol/server-google-maps",
+        "category": "location",
+    },
+    "sequential-thinking": {
+        "id": "sequential-thinking",
+        "name": "Sequential Thinking",
+        "description": "Step-by-step reasoning and problem solving",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        "env": {},
+        "install_hint": "npm install -g @modelcontextprotocol/server-sequential-thinking",
+        "category": "reasoning",
+    },
+}
+
+
+class MCPServerRegistry:
+    """
+    Catalog of known MCP servers with installation status,
+    configuration, and auto-discovery.
+    """
+
+    def __init__(self, mcp_client=None):
+        self._mcp_client = mcp_client
+        self._known = dict(KNOWN_SERVERS)
+        self._user_configs: dict[str, dict] = {}
+        self._load_user_configs()
+
+    def _load_user_configs(self):
+        if CONFIG_PATH.exists():
+            try:
+                self._user_configs = json.loads(CONFIG_PATH.read_text())
+            except Exception as e:
+                logger.warning(f"Failed to load MCP server configs: {e}")
+
+    def _save_user_configs(self):
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(json.dumps(self._user_configs, indent=2))
+
+    def list_known(self) -> list[dict]:
+        """List all known MCP servers with installation and connection status."""
+        result = []
+        for sid, server in self._known.items():
+            installed = self._check_installed(server)
+            connected = self._mcp_client and sid in getattr(self._mcp_client, '_connections', {})
+            configured = sid in self._user_configs
+            has_required_env = self._check_env(server)
+
+            result.append({
+                **server,
+                "installed": installed,
+                "connected": connected,
+                "configured": configured,
+                "ready": installed and has_required_env,
+            })
+        return result
+
+    def list_by_category(self) -> dict[str, list[dict]]:
+        """Group known servers by category."""
+        servers = self.list_known()
+        categories = {}
+        for s in servers:
+            cat = s.get("category", "other")
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append(s)
+        return categories
+
+    def get_server_config(self, server_id: str) -> Optional[dict]:
+        """Get the full config for a server (known defaults + user overrides)."""
+        base = self._known.get(server_id, {}).copy()
+        user = self._user_configs.get(server_id, {})
+        base.update(user)
+        return base if base else None
+
+    def configure_server(self, server_id: str, config: dict):
+        """Save user configuration for a server (env vars, custom args, etc.)."""
+        self._user_configs[server_id] = config
+        self._save_user_configs()
+        logger.info(f"MCP server configured: {server_id}")
+
+    async def connect_server(self, server_id: str) -> dict:
+        """Start and connect to an MCP server."""
+        config = self.get_server_config(server_id)
+        if not config:
+            return {"error": f"Unknown server: {server_id}"}
+
+        if not self._mcp_client:
+            return {"error": "MCP client not available"}
+
+        try:
+            await self._mcp_client.connect(
+                server_id=server_id,
+                command=config.get("command", ""),
+                args=config.get("args", []),
+                env=config.get("env", {}),
+            )
+            return {"ok": True, "server": server_id}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def disconnect_server(self, server_id: str) -> dict:
+        if not self._mcp_client:
+            return {"error": "MCP client not available"}
+        try:
+            await self._mcp_client.disconnect(server_id)
+            return {"ok": True, "server": server_id}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def auto_discover(self) -> list[dict]:
+        """
+        Discover locally installed MCP servers by checking common locations.
+        Checks npx availability and node_modules.
+        """
+        discovered = []
+        npx = shutil.which("npx")
+        if not npx:
+            return discovered
+
+        for sid, server in self._known.items():
+            if self._check_installed(server):
+                discovered.append({"id": sid, "name": server["name"], "installed": True})
+
+        return discovered
+
+    def _check_installed(self, server: dict) -> bool:
+        """Check if the MCP server's command is available."""
+        cmd = server.get("command", "")
+        if cmd == "npx":
+            return shutil.which("npx") is not None
+        return shutil.which(cmd) is not None
+
+    def _check_env(self, server: dict) -> bool:
+        """Check if all required env vars are set."""
+        env_reqs = server.get("env", {})
+        for key, default_val in env_reqs.items():
+            if not default_val and not os.getenv(key):
+                user_env = self._user_configs.get(server.get("id", ""), {}).get("env", {})
+                if not user_env.get(key):
+                    return False
+        return True
+
+    def register_custom(self, server_id: str, config: dict):
+        """Register a custom MCP server not in the known list."""
+        self._known[server_id] = config
+        self._user_configs[server_id] = config
+        self._save_user_configs()
+
+    def stats(self) -> dict:
+        installed = sum(1 for s in self._known.values() if self._check_installed(s))
+        return {
+            "known_servers": len(self._known),
+            "installed": installed,
+            "configured": len(self._user_configs),
+        }
