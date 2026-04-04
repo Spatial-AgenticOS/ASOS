@@ -328,6 +328,18 @@ ASOS/
 - [ ] Federated memory (sync across devices without cloud)
 - [ ] Plugin sandboxing via WebAssembly
 
+## Contact
+
+**Alpay Kasal** — info@theora.io
+
+For commercial licensing, partnerships, enterprise inquiries, or press.
+
 ## License
 
-Apache 2.0 — Build anything.
+Apache 2.0 with attribution requirement — see [NOTICE](NOTICE).
+
+You are free to use, modify, and distribute THEORA. All derivative works must include:
+
+> Built with THEORA (https://github.com/Spatial-AgenticOS/ASOS)
+
+Copyright 2024-2026 THEORA, Inc. Created by Mahmoud Omar and Alpay Kasal.
