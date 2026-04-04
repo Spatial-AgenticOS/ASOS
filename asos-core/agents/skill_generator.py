@@ -141,7 +141,7 @@ class SkillGenerator:
 
         recent = conversation[-6:] if len(conversation) > 6 else conversation
         conv_str = "\n".join(
-            f"{m.get('role', 'user')}: {m.get('content', '')[:200]}"
+            f"{m.get('role', 'user')}: {(m.get('text') or m.get('content') or '')[:200]}"
             for m in recent
         )
 

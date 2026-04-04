@@ -81,9 +81,9 @@ class Orchestrator:
         self.perception = perception or PerceptionEngine()
         self.learner = learner
 
-        # Components
-        self.llm = LLMProvider()
-        self.executor = SkillExecutor()
+        # Components — use shared LLM if provided
+        self.llm = None  # set via set_llm() from BrainState
+        self.executor = SkillExecutor(daemons=daemons)
         self.genui = GenUIGenerator()
 
         # State
@@ -106,6 +106,14 @@ class Orchestrator:
         self._streaming_enabled = os.environ.get("THEORA_STREAMING", "").lower() in ("true", "1", "yes")
 
         self.executor.load_vault_from_env()
+
+    def set_llm(self, llm: LLMProvider):
+        """Set the shared LLM provider — avoids duplicate connections."""
+        self.llm = llm
+
+    def set_vault(self, vault):
+        """Wire the BlindVault into the skill executor for secure key injection."""
+        self.executor.set_blind_vault(vault)
 
     # ─────────────────────────────────────────────
     # Core Command Handler
@@ -306,8 +314,17 @@ class Orchestrator:
             await self.handle_command(session_id, text, context)
             return
 
-        # Execute any tool calls from the stream
+        # Execute tool calls and feed results back to LLM for final answer
         if tool_calls_received:
+            assistant_msg = {"role": "assistant", "tool_calls": [
+                {"id": tc.get("id", str(uuid4())[:8]), "type": "function",
+                 "function": {"name": tc["name"], "arguments": json.dumps(tc.get("args", {}))}}
+                for tc in tool_calls_received
+            ]}
+            if accumulated_text:
+                assistant_msg["content"] = accumulated_text
+            history.append(assistant_msg)
+
             for tc in tool_calls_received:
                 t_start = time.time()
                 result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
@@ -323,26 +340,50 @@ class Orchestrator:
                         result_summary=json.dumps(result_data)[:300],
                         latency_ms=latency_ms,
                     )
+                history.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", str(uuid4())[:8]),
+                    "name": tc["name"],
+                    "content": json.dumps(result_data, default=str)[:2000],
+                })
 
-        if accumulated_text:
+            # Second LLM call: stream the final answer with tool results
+            messages2 = [{"role": "system", "content": system_prompt}, *history]
+            stream_id2 = str(uuid4())[:8]
+            final_text = ""
+            try:
+                async for delta in self.llm.chat_stream(messages=messages2, tools=None):
+                    if delta["type"] == "text_delta":
+                        final_text += delta["content"]
+                        await self.send(session_id, TheoraMessage(
+                            session_id=session_id, hop="brain", type="stream_delta",
+                            payload=StreamDeltaPayload(
+                                delta=delta["content"], stream_id=stream_id2, is_final=False,
+                            ).model_dump(),
+                        ))
+                    elif delta["type"] == "done":
+                        await self.send(session_id, TheoraMessage(
+                            session_id=session_id, hop="brain", type="stream_delta",
+                            payload=StreamDeltaPayload(
+                                delta="", stream_id=stream_id2, is_final=True,
+                            ).model_dump(),
+                        ))
+            except Exception as e:
+                logger.error(f"Post-tool streaming failed: {e}")
+
+            if final_text:
+                history.append({"role": "assistant", "content": final_text})
+                if self.memory:
+                    self.memory.working_push(session_id, {"role": "assistant", "text": final_text[:300]})
+                self._try_send_sdui(session_id, final_text)
+
+        elif accumulated_text:
             history.append({"role": "assistant", "content": accumulated_text})
             if self.memory:
                 self.memory.working_push(session_id, {"role": "assistant", "text": accumulated_text[:300]})
-
-            try:
-                cleaned = accumulated_text.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned[7:-3].strip()
-                elif cleaned.startswith("```"):
-                    cleaned = cleaned[3:-3].strip()
-                sdui = json.loads(cleaned)
-                if "type" in sdui:
-                    await self.send(session_id, TheoraMessage(
-                        session_id=session_id, hop="brain", type="sdui",
-                        payload=SDUIPayload(root=sdui).model_dump(),
-                    ))
-            except json.JSONDecodeError:
-                pass
+            await self._try_send_sdui(session_id, accumulated_text)
+        else:
+            await self._send_text(session_id, "I processed your request but have no text response.")
 
         self.conversation_history[session_id] = history[-20:]
         if self.learner:
@@ -1103,6 +1144,27 @@ class Orchestrator:
             session_id=session_id, hop="brain", type="text_response",
             payload=TextResponsePayload(text=text).model_dump(),
         ))
+
+    async def _try_send_sdui(self, session_id: str, text: str):
+        """Try to parse text as SDUI JSON, fall back to plain text."""
+        try:
+            cleaned = text.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:-3].strip()
+            elif cleaned.startswith("```\n"):
+                cleaned = cleaned[4:-3].strip()
+            elif cleaned.startswith("```"):
+                cleaned = cleaned[3:-3].strip()
+            sdui = json.loads(cleaned)
+            if "type" in sdui:
+                await self.send(session_id, TheoraMessage(
+                    session_id=session_id, hop="brain", type="sdui",
+                    payload=SDUIPayload(root=sdui).model_dump(),
+                ))
+                return
+        except json.JSONDecodeError:
+            pass
+        await self._send_text(session_id, text)
 
     # ─────────────────────────────────────────────
     # System Prompt Builder

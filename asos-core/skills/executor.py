@@ -36,7 +36,8 @@ class SkillExecutor:
     def __init__(self, daemons: dict = None):
         self.client = httpx.AsyncClient(timeout=15.0)
         self._daemons = daemons or {}
-        self._vault: dict[str, str] = {}
+        self._vault: dict[str, str] = {}  # In-memory cache (from env)
+        self._blind_vault = None  # The real BlindVault (from security module)
         self._pending_results: dict[str, asyncio.Future] = {}
 
     def load_vault_from_env(self):
@@ -50,6 +51,18 @@ class SkillExecutor:
     def set_key(self, skill_id: str, key: str):
         """Manually set an API key for a skill."""
         self._vault[skill_id] = key
+
+    def set_blind_vault(self, vault):
+        """Connect the BlindVault for secure credential retrieval."""
+        self._blind_vault = vault
+
+    def _get_key(self, skill_id: str) -> Optional[str]:
+        """Get API key — checks BlindVault first, then env cache."""
+        if self._blind_vault:
+            key = self._blind_vault.retrieve(skill_id, requester="executor")
+            if key:
+                return key
+        return self._vault.get(skill_id)
 
     async def execute(
         self,
@@ -100,8 +113,8 @@ class SkillExecutor:
         method = endpoint.method.upper()
         headers = {}
 
-        # Inject auth from vault
-        api_key = self._vault.get(skill.skill_id)
+        # Inject auth from vault (BlindVault → env cache fallback)
+        api_key = self._get_key(skill.skill_id)
         if skill.auth.type == "api_key" and api_key:
             header_name = skill.auth.api_key_header or "Authorization"
             headers[header_name] = api_key

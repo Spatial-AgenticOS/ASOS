@@ -180,11 +180,15 @@ class BrainState:
             perception=self.perception,
             learner=self.learner,
         )
+        self.orchestrator.set_llm(_shared_llm)
+        if self.vault:
+            self.orchestrator.set_vault(self.vault)
+
         stats = self.memory.stats()
         logger.info(
-            f"Brain v0.4.0 initialized — {len(self.skill_registry.skills)} skills, "
+            f"Brain v0.7.0 initialized — {len(self.skill_registry.skills)} skills, "
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
-            f"{stats['episodes']} episodes | Self-learning: ON"
+            f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
         )
 
     async def send_to_session(self, session_id: str, msg: TheoraMessage):
