@@ -176,7 +176,9 @@ export const SduiRenderer = ({ node, onAction }) => {
           className="w-full bg-asos-card border border-asos-border flex items-center justify-center text-sm opacity-50"
           style={{ height: node.height || 200, borderRadius: corner_radius || 12 }}
         >
-          Map: {node.lat && node.lon ? `${node.lat}, ${node.lon}` : 'No coordinates'}
+          Map: {(node.lat || node.center_lat) && (node.lon || node.center_lon)
+            ? `${node.lat || node.center_lat}, ${node.lon || node.center_lon}`
+            : 'No coordinates'}
         </div>
       );
 

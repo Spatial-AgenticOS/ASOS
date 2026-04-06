@@ -33,3 +33,8 @@ try:
     import skills.impl.web_search
 except ImportError:
     pass
+
+try:
+    import skills.impl.computer_use
+except ImportError:
+    pass

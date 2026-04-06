@@ -1,8 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "theora-brain"
+name = "theora"
 version = "1.0.0"
-description = "THEORA OS — Self-learning, streaming, scene-aware agentic intelligence"
+description = "THEORA — Open-source AI agent with computer use, GenUI, voice, hardware control, and persistent memory."
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Mahmoud Omar"},
+    {name = "Alpay Kasal", email = "info@theora.io"},
+]
 requires-python = ">=3.11"
+keywords = ["agent", "ai", "genui", "voice", "hardware", "mcp", "computer-use"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
@@ -10,10 +28,14 @@ dependencies = [
     "websockets>=13.0",
     "httpx>=0.27.0",
     "pyyaml>=6.0",
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]
 llm = [
+    "openai>=1.50.0",
+]
+groq = [
     "openai>=1.50.0",
 ]
 local = [
@@ -35,6 +57,7 @@ all = [
     "zeroconf>=0.131.0",
     "openwakeword>=0.6.0",
     "onnxruntime>=1.16.0",
+    "rich>=13.0.0",
 ]
 dev = [
     "pytest>=8.0.0",
@@ -45,8 +68,17 @@ dev = [
 [project.scripts]
 theora = "cli.main:main"
 
+[project.urls]
+Homepage = "https://github.com/Spatial-AgenticOS/ASOS"
+Issues = "https://github.com/Spatial-AgenticOS/ASOS/issues"
+
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.setuptools.package-data]
+"skills.manifests" = ["*.json"]
+"config" = ["*.yaml", "*.yml"]
+"identity" = ["*.yaml", "*.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -27,13 +27,13 @@ class WebSearchSkill(BaseSkill):
                 "error": "Tavily API key not found. Set THEORA_KEY_web_search or TAVILY_API_KEY env var."
             }
 
-        query = args.get("q")
+        query = args.get("query") or args.get("q") or args.get("search") or args.get("text", "")
         if not query:
             return {
                 "success": False,
                 "status_code": 400,
                 "data": None,
-                "error": "Missing required field: 'q' (search query)"
+                "error": "Missing search query. Provide 'query' or 'q' parameter."
             }
 
         # Tavily endpoint mapping

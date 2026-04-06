@@ -704,6 +704,20 @@ class Orchestrator:
 
         if not result.get("success"):
             logger.warning(f"PostToolUse: Action failed — {result.get('error')}")
+        elif result.get("data"):
+            try:
+                sdui = self.genui.generate(
+                    data=result["data"],
+                    skill_brand=skill.brand.model_dump(),
+                    ui_hint=endpoint.ui_hint,
+                    endpoint_id=endpoint_id,
+                )
+                await self.send(session_id, TheoraMessage(
+                    session_id=session_id, hop="brain", type="sdui",
+                    payload=SDUIPayload(root=sdui).model_dump(),
+                ))
+            except Exception as e:
+                logger.debug(f"GenUI generation skipped for {tool_name}: {e}")
 
         return result
 
@@ -763,13 +777,15 @@ class Orchestrator:
 
         ws = self.daemons[actual_node_id]
         request_id = str(uuid4())[:8]
-        cmd = TheoraMessage(
-            msg_id=request_id, session_id=session_id, hop="brain", type="execute",
-            payload=ExecuteCommandPayload(executor=action, action=args.get("script", args.get("command", "")), args=args).model_dump(),
-        )
+        daemon_msg = {
+            "type": "command",
+            "request_id": request_id,
+            "command": action,
+            "args": args,
+        }
 
         self._daemon_session_map[request_id] = session_id
-        await ws.send_json(cmd.model_dump())
+        await ws.send_json(daemon_msg)
         await self._send_text(session_id, f"Command sent to node '{actual_node_id}'...")
 
     # ─────────────────────────────────────────────
@@ -1127,17 +1143,27 @@ class Orchestrator:
             )
 
     async def handle_daemon_result(self, node_id: str, result: dict, session_id: str = None):
-        status = result.get("status", "unknown")
-        stdout = result.get("stdout", "")
-        stderr = result.get("stderr", "")
-        error = result.get("error", "")
-        logger.info(f"Daemon {node_id} → {status}: {stdout[:200]}")
+        request_id = result.get("request_id", "")
+        success = result.get("success", False)
+        data = result.get("data", {})
+        output = data.get("output", "") if isinstance(data, dict) else str(data)
+        error = data.get("error", "") if isinstance(data, dict) else ""
+        # Fallback to legacy field names
+        if not output:
+            output = result.get("stdout", "")
+        if not error:
+            error = result.get("stderr", result.get("error", ""))
+        status = "success" if success else result.get("status", "error")
+        logger.info(f"Daemon {node_id} → {status}: {str(output)[:200]}")
 
         if not session_id:
-            for req_id, sid in list(self._daemon_session_map.items()):
-                session_id = sid
-                del self._daemon_session_map[req_id]
-                break
+            if request_id and request_id in self._daemon_session_map:
+                session_id = self._daemon_session_map.pop(request_id)
+            else:
+                for req_id, sid in list(self._daemon_session_map.items()):
+                    session_id = sid
+                    del self._daemon_session_map[req_id]
+                    break
 
         if session_id:
             if status == "success":
@@ -1149,7 +1175,7 @@ class Orchestrator:
                             {"type": "Text", "value": "Command Executed", "style": "headline", "color": "#00b894"},
                         ]},
                         {"type": "Divider"},
-                        {"type": "Text", "value": stdout[:500] if stdout else "Done.", "style": "body"},
+                        {"type": "Text", "value": str(output)[:500] if output else "Done.", "style": "body"},
                     ],
                 }
             elif status == "denied":
@@ -1173,7 +1199,7 @@ class Orchestrator:
                             {"type": "Text", "value": "Command Error", "style": "headline", "color": "#fdcb6e"},
                         ]},
                         {"type": "Divider"},
-                        {"type": "Text", "value": stderr or error or stdout or "Unknown error", "style": "body"},
+                        {"type": "Text", "value": error or str(output) or "Unknown error", "style": "body"},
                     ],
                 }
 

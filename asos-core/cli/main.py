@@ -37,8 +37,8 @@ HTTP_BASE = f"http://{BRAIN_HOST}:{BRAIN_PORT}"
 
 BANNER = """
 ╔══════════════════════════════════════╗
-║          T H E O R A  CLI            ║
-║   Local-First Agentic OS  v1.0.0    ║
+║          T H E O R A                 ║
+║   Open AI Agent  v1.0.0             ║
 ╚══════════════════════════════════════╝
   Type a message to chat. Commands:
     /status   — system health
@@ -250,45 +250,87 @@ async def one_shot(text: str):
         sys.exit(1)
 
 
+def cmd_serve(host: str = "0.0.0.0", port: int = 9090):
+    """Start the THEORA Brain server."""
+    try:
+        import uvicorn
+    except ImportError:
+        print("uvicorn not installed. Run: pip install 'theora-os[all]'")
+        sys.exit(1)
+
+    print(f"\n  Starting THEORA Brain on {host}:{port} ...")
+    print(f"  Dashboard: http://localhost:{port}")
+    print(f"  API docs:  http://localhost:{port}/docs\n")
+
+    uvicorn.run("api.server:app", host=host, port=port, reload=False, log_level="info")
+
+
+def cmd_setup():
+    """Launch the guided setup wizard."""
+    try:
+        from cli.setup_wizard import run_setup
+        run_setup()
+    except ImportError:
+        print("Setup wizard not available. Make sure cli/setup_wizard.py exists.")
+        sys.exit(1)
+
+
+def _apply_connection_args(args):
+    global WS_URL, HTTP_BASE
+    host = getattr(args, "host", None) or BRAIN_HOST
+    port = getattr(args, "port", None) or BRAIN_PORT
+    WS_URL = f"ws://{host}:{port}/v1/session"
+    HTTP_BASE = f"http://{host}:{port}"
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="THEORA CLI — Terminal interface for the THEORA Brain",
-        usage="theora [command] [message]",
+        description="THEORA — Open AI agent with computer use, voice, GenUI, and hardware control",
+        usage="theora [command] [options]",
     )
-    parser.add_argument("command", nargs="?", default=None,
-                        help="Built-in command (status, devices, skills, identity) or message to send")
-    parser.add_argument("rest", nargs="*", help=argparse.SUPPRESS)
     parser.add_argument("--host", default=None, help="Brain hostname")
     parser.add_argument("--port", default=None, help="Brain port")
 
-    args = parser.parse_args()
+    sub = parser.add_subparsers(dest="subcommand")
 
-    global WS_URL, HTTP_BASE
-    if args.host:
-        host = args.host
-        port = args.port or BRAIN_PORT
-        WS_URL = f"ws://{host}:{port}/v1/session"
-        HTTP_BASE = f"http://{host}:{port}"
-    elif args.port:
-        port = args.port
-        WS_URL = f"ws://{BRAIN_HOST}:{port}/v1/session"
-        HTTP_BASE = f"http://{BRAIN_HOST}:{port}"
+    # theora serve
+    serve_p = sub.add_parser("serve", help="Start the THEORA Brain server")
+    serve_p.add_argument("--bind", default="0.0.0.0", help="Bind address (default 0.0.0.0)")
+    serve_p.add_argument("--serve-port", default="9090", help="Port (default 9090)")
 
-    if args.command is None:
-        asyncio.run(repl())
-    elif args.command == "status":
+    # theora setup
+    sub.add_parser("setup", help="Guided setup wizard — configure provider, keys, features")
+
+    # theora status / devices / skills / identity
+    sub.add_parser("status", help="Show system health")
+    sub.add_parser("devices", help="List connected hardware")
+    sub.add_parser("skills", help="List loaded skills")
+    sub.add_parser("identity", help="Show agent identity")
+
+    # Parse known args — everything else is treated as a message
+    args, remaining = parser.parse_known_args()
+    _apply_connection_args(args)
+
+    if args.subcommand == "serve":
+        cmd_serve(host=args.bind, port=int(args.serve_port))
+    elif args.subcommand == "setup":
+        cmd_setup()
+    elif args.subcommand == "status":
         cmd_status()
-    elif args.command == "devices":
+    elif args.subcommand == "devices":
         cmd_devices()
-    elif args.command == "skills":
+    elif args.subcommand == "skills":
         cmd_skills()
-    elif args.command == "identity":
+    elif args.subcommand == "identity":
         cmd_identity()
+    elif args.subcommand is None and not remaining:
+        asyncio.run(repl())
     else:
-        full_text = args.command
-        if args.rest:
-            full_text += " " + " ".join(args.rest)
-        asyncio.run(one_shot(full_text))
+        full_text = " ".join([args.subcommand or ""] + remaining).strip()
+        if full_text:
+            asyncio.run(one_shot(full_text))
+        else:
+            asyncio.run(repl())
 
 
 if __name__ == "__main__":

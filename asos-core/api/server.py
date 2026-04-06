@@ -77,7 +77,7 @@ logger = logging.getLogger("theora.brain")
 
 app = FastAPI(
     title="THEORA Brain",
-    description="Local-first agentic intelligence core — self-learning, streaming, scene-aware",
+    description="THEORA — Open AI agent with computer use, GenUI, voice, and hardware control",
     version="1.0.0",
 )
 
@@ -353,8 +353,8 @@ async def health():
     return {"status": "ok", "version": "1.0.0"}
 
 
-@app.get("/")
-async def root():
+@app.get("/api/info")
+async def api_info():
     stats = state.memory.stats()
     return {
         "name": "THEORA Brain",
@@ -1118,6 +1118,25 @@ async def llm_status():
     }
 
 
+@app.post("/api/llm/switch")
+async def llm_switch(body: dict):
+    """Hot-swap the LLM provider at runtime."""
+    if not state.orchestrator or not state.orchestrator.llm:
+        return {"error": "Brain not initialized"}
+    provider = body.get("provider", "")
+    model = body.get("model", "")
+    api_key = body.get("api_key", "")
+    if not provider:
+        return {"error": "provider is required"}
+    await state.orchestrator.llm.switch_provider(provider, model=model, api_key=api_key)
+    return {
+        "success": True,
+        "provider": state.orchestrator.llm.provider,
+        "model": state.orchestrator.llm.model,
+        "available": state.orchestrator.llm.available,
+    }
+
+
 @app.get("/skills")
 async def list_skills():
     return [
@@ -1571,13 +1590,35 @@ async def shutdown_event():
     logger.info("Shutdown complete.")
 
 
+# ─────────────────────────────────────────────
+# Bundled Web UI (served from webui/ if present)
+# ─────────────────────────────────────────────
+
+_webui_dir = Path(__file__).parent.parent / "webui"
+if _webui_dir.is_dir() and (_webui_dir / "index.html").exists():
+    from starlette.staticfiles import StaticFiles
+    from starlette.responses import FileResponse
+
+    if (_webui_dir / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_webui_dir / "assets")), name="webui-assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str = ""):
+        file_path = _webui_dir / full_path
+        if full_path and file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(_webui_dir / "index.html")
+
+    logger.info(f"Web UI bundled from {_webui_dir} — open http://localhost:9090")
+
+
 if __name__ == "__main__":
     import uvicorn
     print("""
     ╔══════════════════════════════════════╗
-    ║        THEORA Brain v1.0.0          ║
-    ║   Local-First Agentic Intelligence  ║
-    ║   Voice · Vision · Integrations     ║
+    ║        THEORA v1.0.0                ║
+    ║   Open AI Agent · Computer Use      ║
+    ║   Voice · GenUI · Hardware          ║
     ╚══════════════════════════════════════╝
     """)
     uvicorn.run(app, host="0.0.0.0", port=9090, log_level="info")

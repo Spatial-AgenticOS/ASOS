@@ -57,6 +57,14 @@ class LLMProvider:
         elif self.provider == "groq":
             self.base_url = "https://api.groq.com/openai/v1"
             self.api_key = os.getenv("GROQ_API_KEY", self.api_key)
+        elif self.provider == "anthropic":
+            self.base_url = "https://api.anthropic.com/v1"
+            self.api_key = os.getenv("ANTHROPIC_API_KEY", self.api_key)
+            self.model = self.model or "claude-sonnet-4-20250514"
+        elif self.provider == "gemini":
+            self.base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+            self.api_key = os.getenv("GEMINI_API_KEY", self.api_key)
+            self.model = self.model or "gemini-2.0-flash"
         else:
             self.base_url = self.base_url or "https://api.openai.com/v1"
 
@@ -78,18 +86,19 @@ class LLMProvider:
                 self.available = False
                 self.api_key = "none"
 
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
-        self.client = httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=headers,
-            timeout=30.0,
-        )
+        self.client = self._build_client()
 
         status = "READY" if self.available else "DIRECT-EXECUTION MODE (no LLM)"
         logger.info(f"LLM Provider: {self.provider} | Model: {self.model} | Status: {status}")
+
+    def _build_client(self) -> httpx.AsyncClient:
+        headers = {"Content-Type": "application/json"}
+        if self.provider == "anthropic":
+            headers["x-api-key"] = self.api_key
+            headers["anthropic-version"] = "2023-06-01"
+        elif self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return httpx.AsyncClient(base_url=self.base_url, headers=headers, timeout=60.0)
 
     @staticmethod
     def _detect_ollama() -> Optional[str]:
@@ -149,6 +158,9 @@ class LLMProvider:
             if use_local:
                 return await self._chat_local(messages, tools, temperature, max_tokens)
 
+        if self.provider == "anthropic":
+            return await self._chat_anthropic(messages, tools, temperature, max_tokens)
+
         body: dict = {
             "model": self.model,
             "messages": messages,
@@ -157,7 +169,6 @@ class LLMProvider:
         }
 
         if tools:
-            # Strip our internal _theora_meta from tool definitions
             clean_tools = []
             for tool in tools:
                 clean = {k: v for k, v in tool.items() if k != "_theora_meta"}
@@ -204,6 +215,73 @@ class LLMProvider:
             })
 
         return text, parsed_tools
+
+    async def _chat_anthropic(
+        self, messages: list[dict], tools: Optional[list[dict]],
+        temperature: float, max_tokens: int,
+    ) -> dict:
+        """Anthropic Messages API → normalized to OpenAI format."""
+        system_text = ""
+        conv_messages = []
+        for m in messages:
+            if m["role"] == "system":
+                system_text += m.get("content", "") + "\n"
+            else:
+                conv_messages.append({"role": m["role"], "content": m.get("content", "")})
+
+        body: dict = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": conv_messages,
+        }
+        if system_text.strip():
+            body["system"] = system_text.strip()
+
+        if tools:
+            anthropic_tools = []
+            for t in tools:
+                if t.get("type") == "function":
+                    fn = t["function"]
+                    anthropic_tools.append({
+                        "name": fn["name"],
+                        "description": fn.get("description", ""),
+                        "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+                    })
+            if anthropic_tools:
+                body["tools"] = anthropic_tools
+
+        try:
+            resp = await self.client.post("/messages", json=body)
+            resp.raise_for_status()
+            data = resp.json()
+
+            text_parts = []
+            tool_calls = []
+            for block in data.get("content", []):
+                if block.get("type") == "text":
+                    text_parts.append(block["text"])
+                elif block.get("type") == "tool_use":
+                    tool_calls.append({
+                        "id": block["id"],
+                        "type": "function",
+                        "function": {
+                            "name": block["name"],
+                            "arguments": json.dumps(block.get("input", {})),
+                        },
+                    })
+
+            msg: dict = {"role": "assistant", "content": "\n".join(text_parts)}
+            if tool_calls:
+                msg["tool_calls"] = tool_calls
+
+            return {"choices": [{"message": msg, "finish_reason": data.get("stop_reason", "end_turn")}]}
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Anthropic API error: {e.response.status_code} — {e.response.text[:500]}")
+            return {"error": str(e), "choices": []}
+        except Exception as e:
+            logger.error(f"Anthropic call failed: {e}")
+            return {"error": str(e), "choices": []}
 
     async def _chat_local(
         self, messages: list[dict], tools: Optional[list[dict]],
@@ -330,6 +408,52 @@ class LLMProvider:
         except Exception as e:
             logger.error(f"LLM stream failed: {e}")
             yield {"type": "error", "content": str(e)}
+
+    async def switch_provider(self, provider: str, model: str = "", api_key: str = ""):
+        """Hot-swap the LLM provider at runtime."""
+        await self.client.aclose()
+
+        self.provider = provider
+        if model:
+            self.model = model
+
+        PROVIDER_DEFAULTS = {
+            "ollama": ("http://localhost:11434/v1", "OLLAMA_DUMMY", "llama3.1"),
+            "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "llama-3.1-70b-versatile"),
+            "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"),
+            "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "claude-sonnet-4-20250514"),
+            "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", "gemini-2.0-flash"),
+        }
+
+        if provider == "ollama":
+            self.base_url = "http://localhost:11434/v1"
+            self.api_key = "ollama"
+            if not model:
+                detected = self._detect_ollama()
+                self.model = detected or "llama3.1"
+        elif provider == "local":
+            self._init_local_engine()
+            if self._local_engine:
+                self.available = True
+                logger.info(f"Switched to local inference: {self._local_engine.model_id}")
+                return
+            else:
+                logger.warning("Local engine unavailable")
+                self.available = False
+                return
+        elif provider in PROVIDER_DEFAULTS:
+            base, env_key, default_model = PROVIDER_DEFAULTS[provider]
+            self.base_url = base
+            self.api_key = api_key or os.getenv(env_key, "")
+            if not model:
+                self.model = default_model
+        else:
+            self.base_url = os.getenv("THEORA_LLM_BASE_URL", "https://api.openai.com/v1")
+            self.api_key = api_key
+
+        self.client = self._build_client()
+        self.available = bool(self.api_key)
+        logger.info(f"Switched LLM to {provider}/{self.model} (available={self.available})")
 
     async def close(self):
         await self.client.aclose()
