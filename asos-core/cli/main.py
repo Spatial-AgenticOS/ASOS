@@ -255,7 +255,7 @@ def cmd_serve(host: str = "0.0.0.0", port: int = 9090):
     try:
         import uvicorn
     except ImportError:
-        print("uvicorn not installed. Run: pip install 'theora-os[all]'")
+        print("uvicorn not installed. Run: pip install 'theora[all]'")
         sys.exit(1)
 
     print(f"\n  Starting THEORA Brain on {host}:{port} ...")

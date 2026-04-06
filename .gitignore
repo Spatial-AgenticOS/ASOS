@@ -31,7 +31,17 @@ build/
 *.swp
 *.swo
 
+# Testing / Coverage
+.pytest_cache/
+htmlcov/
+coverage.xml
+.coverage
+
+# Packaging
+*.egg-info/
+*.egg
+
 # Theora
 memory_store.json
 client-tmp/
-theora.egg-info/
+poetry.lock

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "theora"
 version = "1.0.0"
 description = "THEORA — Open-source AI agent with computer use, GenUI, voice, hardware control, and persistent memory."
-readme = "README.md"
+readme = "../README.md"
 license = {text = "Apache-2.0"}
 authors = [
     {name = "Mahmoud Omar"},
@@ -78,7 +78,6 @@ where = ["."]
 [tool.setuptools.package-data]
 "skills.manifests" = ["*.json"]
 "config" = ["*.yaml", "*.yml"]
-"identity" = ["*.yaml", "*.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,10 +1,10 @@
-# THEORA — Engineering Handover (v0.9.0)
+# THEORA — Engineering Handover (v1.0.0)
 
-> Universal Agentic Operating System — Self-Evolving, Hardware-Aware, Security-First, Multi-Agent
+> Open-source AI agent — computer use, voice, GenUI, memory, hardware control
 
-## Status: Production-Ready Core + Advanced Features
+## Status: Beta — Core Working, Advanced Features In Progress
 
-All core systems and advanced features are implemented, tested, and functional:
+Core systems are implemented and tested. Advanced features have code but vary in completeness:
 - **174+ passing tests** across unit and integration suites
 - **Multi-agent collaboration** — router-worker architecture with 4 specialist agents
 - **Voice wake word** — "Hey THEORA" with openwakeword integration
