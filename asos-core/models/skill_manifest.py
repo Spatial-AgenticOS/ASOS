@@ -149,7 +149,7 @@ WEATHER_SKILL = SkillManifest(
         "how hot is it",
     ],
     categories=["weather", "utility"],
-    auth=AuthConfig(type="api_key", api_key_header="X-API-Key"),
+    auth=AuthConfig(type="api_key", api_key_header="appid"),
     endpoints=[
         SkillEndpoint(
             id="current_weather",
@@ -157,9 +157,8 @@ WEATHER_SKILL = SkillManifest(
             url="https://api.openweathermap.org/data/2.5/weather",
             description="Get current weather for a location. Returns temperature, conditions, humidity, wind.",
             params=[
-                EndpointParam(name="lat", type="number", description="Latitude"),
-                EndpointParam(name="lon", type="number", description="Longitude"),
-                EndpointParam(name="units", type="string", default="imperial", description="Temperature units"),
+                EndpointParam(name="q", type="string", description="City name (e.g. 'London' or 'Cairo,EG')"),
+                EndpointParam(name="units", type="string", default="metric", description="Temperature units: metric, imperial, or standard"),
             ],
             returns_description="temp, feels_like, humidity, weather_description, wind_speed, icon_code",
             ui_hint="metric",
@@ -170,8 +169,8 @@ WEATHER_SKILL = SkillManifest(
             url="https://api.openweathermap.org/data/2.5/forecast",
             description="Get 5-day forecast. Returns temperature and conditions for each day.",
             params=[
-                EndpointParam(name="lat", type="number", description="Latitude"),
-                EndpointParam(name="lon", type="number", description="Longitude"),
+                EndpointParam(name="q", type="string", description="City name (e.g. 'London' or 'Cairo,EG')"),
+                EndpointParam(name="units", type="string", default="metric", description="Temperature units"),
             ],
             returns_description="Array of daily forecasts with temp_high, temp_low, conditions",
             ui_hint="list",

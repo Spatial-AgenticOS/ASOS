@@ -1,6 +1,6 @@
 [project]
 name = "theora-brain"
-version = "0.4.0"
+version = "1.0.0"
 description = "THEORA OS — Self-learning, streaming, scene-aware agentic intelligence"
 requires-python = ">=3.11"
 dependencies = [
@@ -19,10 +19,24 @@ llm = [
 local = [
     "llama-cpp-python>=0.3.0",
 ]
+wasm = [
+    "wasmtime>=22.0.0",
+]
+sync = [
+    "zeroconf>=0.131.0",
+]
+all = [
+    "openai>=1.50.0",
+    "wasmtime>=22.0.0",
+    "zeroconf>=0.131.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
 ]
+
+[project.scripts]
+theora = "cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -1,5 +1,5 @@
 """
-THEORA LLM Provider — Pluggable AI Backend (v0.4.0)
+THEORA LLM Provider — Pluggable AI Backend
 =====================================================
 Supports: OpenAI API, Ollama (local), and any OpenAI-compatible endpoint.
 Now with streaming support for real-time token delivery.

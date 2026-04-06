@@ -17,11 +17,12 @@ services:
       - THEORA_VISION_ENABLED=${THEORA_VISION_ENABLED:-false}
       - THEORA_VISION_MAX_FRAME_KB=${THEORA_VISION_MAX_FRAME_KB:-512}
       - THEORA_PROACTIVE=${THEORA_PROACTIVE:-false}
-      - THEORA_STREAMING=${THEORA_STREAMING:-false}
+      - THEORA_STREAMING=${THEORA_STREAMING:-true}
       - THEORA_SCENE_COOLDOWN=${THEORA_SCENE_COOLDOWN:-10}
       - THEORA_STT_PROVIDER=${THEORA_STT_PROVIDER:-openai}
       - THEORA_TTS_PROVIDER=${THEORA_TTS_PROVIDER:-openai}
       - THEORA_TTS_VOICE=${THEORA_TTS_VOICE:-nova}
+      - THEORA_WAKE_WORD=${THEORA_WAKE_WORD:-true}
       - NODE_API_KEY=${NODE_API_KEY:-dev-secret-key}
     volumes:
       - theora-memory:/root/.theora
@@ -32,6 +33,9 @@ services:
     build:
       context: ./asos-client
       dockerfile: Dockerfile
+      args:
+        - VITE_BRAIN_HOST=${VITE_BRAIN_HOST:-localhost}
+        - VITE_BRAIN_PORT=9090
     ports:
       - "3000:80"
     depends_on:

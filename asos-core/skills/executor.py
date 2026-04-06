@@ -124,10 +124,15 @@ class SkillExecutor:
         headers = {}
 
         # Inject auth from vault (BlindVault → env cache fallback)
+        auth_query_params = {}
         api_key = self._get_key(skill.skill_id)
         if skill.auth.type == "api_key" and api_key:
             header_name = skill.auth.api_key_header or "Authorization"
-            headers[header_name] = api_key
+            # Some APIs (e.g. OpenWeather) use query params instead of headers
+            if header_name.islower() and "-" not in header_name:
+                auth_query_params[header_name] = api_key
+            else:
+                headers[header_name] = api_key
         elif skill.auth.type == "bearer" and api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
@@ -139,8 +144,8 @@ class SkillExecutor:
 
         try:
             if method == "GET":
-                # For GET, put args as query params (exclude those already in URL)
                 query_params = {k: v for k, v in args.items() if f"{{{k}}}" not in endpoint.url}
+                query_params.update(auth_query_params)
                 resp = await self.client.get(url, params=query_params, headers=headers)
             elif method in ("POST", "PUT", "PATCH"):
                 resp = await self.client.request(method, url, json=args, headers=headers)

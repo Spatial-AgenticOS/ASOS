@@ -41,7 +41,7 @@ export default function AppShell() {
         <div className="px-3 py-4 border-t border-asos-border">
           <div className="flex items-center gap-2 text-xs opacity-40">
             <Cpu size={12} />
-            <span>v0.9.0</span>
+            <span>v1.0.0</span>
           </div>
         </div>
       </nav>

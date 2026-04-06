@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  brain-tests:
+    name: Brain — pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: asos-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[all,dev]"
+
+      - name: Run tests
+        run: pytest tests/ -x -v --tb=short
+
+  client-build:
+    name: Client — vite build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: asos-client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: asos-client/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+  syntax-check:
+    name: Brain — syntax check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: asos-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax
+        run: python -m py_compile api/server.py agents/orchestrator.py agents/llm_provider.py

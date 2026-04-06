@@ -9,7 +9,7 @@
         "logo_url": "",
         "icon_set": "sf_symbols"
     },
-    "description": "Search the web using DuckDuckGo or SerpAPI. Get instant answers, search results, and Wikipedia summaries.",
+    "description": "Search the web using Tavily AI search. Get comprehensive results with AI-powered summaries.",
     "trigger_phrases": [
         "search for",
         "google",
@@ -24,31 +24,19 @@
     ],
     "categories": ["search", "knowledge", "utility"],
     "auth": {
-        "type": "none"
+        "type": "api_key",
+        "api_key_header": "X-API-Key"
     },
     "endpoints": [
         {
-            "id": "instant_answer",
-            "method": "GET",
-            "url": "https://api.duckduckgo.com/",
-            "description": "Get an instant answer from DuckDuckGo. Returns definitions, summaries, and quick facts.",
-            "params": [
-                {"name": "q", "type": "string", "required": true, "description": "Search query"},
-                {"name": "format", "type": "string", "required": false, "default": "json", "description": "Response format"},
-                {"name": "no_redirect", "type": "string", "required": false, "default": "1", "description": "Don't redirect"}
-            ],
-            "returns_description": "{Abstract, AbstractText, AbstractURL, Image, Heading, RelatedTopics}",
-            "ui_hint": "detail_card"
-        },
-        {
             "id": "web_search",
-            "method": "GET",
-            "url": "https://html.duckduckgo.com/html/",
-            "description": "Search the web and get a list of results with titles, URLs, and snippets.",
+            "method": "POST",
+            "url": "https://api.tavily.com/search",
+            "description": "Search the web and get AI-summarized results with sources. Backed by Python implementation — this manifest is for documentation; actual execution uses skills/impl/web_search.py.",
             "params": [
-                {"name": "q", "type": "string", "required": true, "description": "Search query"}
+                {"name": "query", "type": "string", "required": true, "description": "Search query"}
             ],
-            "returns_description": "Array of {title, url, snippet}",
+            "returns_description": "AI-generated answer plus array of {title, url, content} results",
             "ui_hint": "list"
         }
     ],

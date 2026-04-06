@@ -76,7 +76,7 @@ class MCPServerConnection:
             init_result = await self._send_request("initialize", {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "theora", "version": "0.7.0"},
+                "clientInfo": {"name": "theora", "version": "1.0.0"},
             })
 
             if init_result and "error" not in init_result:

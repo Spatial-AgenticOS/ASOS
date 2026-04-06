@@ -119,7 +119,7 @@ export default function SetupWizard({ onComplete }) {
         </div>
 
         <div className="mt-auto pt-8 text-xs opacity-30">
-          THEORA v0.9.0
+          THEORA v1.0.0
         </div>
       </div>
 

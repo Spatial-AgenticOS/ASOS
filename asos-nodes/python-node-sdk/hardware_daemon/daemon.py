@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import argparse
+import os
 import socket
 import time
 import uuid
@@ -27,8 +28,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(n
 logger = logging.getLogger("hardware_daemon")
 
 class HardwareDaemon:
-    def __init__(self, brain_url: str, node_type: str = "glasses"):
-        self.brain_ws_url = f"{brain_url}/v1/node"
+    def __init__(self, brain_url: str, node_type: str = "glasses", api_key: str = "dev-secret-key"):
+        self.api_key = api_key
+        self.brain_ws_url = f"{brain_url}/v1/node?api_key={self.api_key}"
         self.node_id = f"{socket.gethostname()}-{node_type}-{uuid.uuid4().hex[:4]}"
         self.node_type = node_type
         self.ws = None
@@ -38,7 +40,7 @@ class HardwareDaemon:
         """Connect to the THEORA Brain."""
         while self.running:
             try:
-                logger.info(f"Connecting to THEORA Brain at {self.brain_ws_url}...")
+                logger.info(f"Connecting to THEORA Brain at {self.brain_ws_url.split('?')[0]}...")
                 async with websockets.connect(self.brain_ws_url) as ws:
                     self.ws = ws
                     logger.info("Connected successfully! Registering hardware node...")
@@ -177,9 +179,11 @@ def main():
     parser = argparse.ArgumentParser(description="THEORA Hardware Daemon")
     parser.add_argument("--brain", default="ws://localhost:9090", help="WebSocket URL of THEORA Brain")
     parser.add_argument("--type", default="glasses", help="Type of hardware node")
+    parser.add_argument("--api-key", default=os.environ.get("NODE_API_KEY", "dev-secret-key"),
+                        help="API key for Brain authentication (or set NODE_API_KEY env var)")
     args = parser.parse_args()
 
-    daemon = HardwareDaemon(brain_url=args.brain, node_type=args.type)
+    daemon = HardwareDaemon(brain_url=args.brain, node_type=args.type, api_key=args.api_key)
     
     try:
         asyncio.run(daemon.connect())

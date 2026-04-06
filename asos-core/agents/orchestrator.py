@@ -87,6 +87,7 @@ class Orchestrator:
         self.llm = None  # set via set_llm() from BrainState
         self.executor = SkillExecutor(daemons=daemons)
         self.genui = GenUIGenerator()
+        self._mcp_client = None
 
         # State
         self.biometric_state: dict[str, dict] = {}
@@ -122,6 +123,10 @@ class Orchestrator:
     def set_vault(self, vault):
         """Wire the BlindVault into the skill executor for secure key injection."""
         self.executor.set_blind_vault(vault)
+
+    def set_mcp_client(self, mcp_client):
+        """Wire the MCP client so its tools are available to the LLM."""
+        self._mcp_client = mcp_client
 
     def _init_multi_agent(self):
         """Lazy-init the multi-agent orchestrator once LLM is available."""
@@ -179,6 +184,12 @@ class Orchestrator:
         # Step 1: Semantic Tool Routing
         relevant_skills = await self._route_prompt(text)
         tools = self.skills.get_tools_for_skills(relevant_skills)
+
+        # Merge MCP tools so the LLM can call external MCP servers
+        if self._mcp_client:
+            mcp_tools = self._mcp_client.to_llm_tool_definitions()
+            if mcp_tools:
+                tools = (tools or []) + mcp_tools
 
         if relevant_skills:
             logger.info(f"  Matched: {[s.brand.name for s in relevant_skills]}")
@@ -288,6 +299,11 @@ class Orchestrator:
 
         relevant_skills = await self._route_prompt(text)
         tools = self.skills.get_tools_for_skills(relevant_skills)
+
+        if self._mcp_client:
+            mcp_tools = self._mcp_client.to_llm_tool_definitions()
+            if mcp_tools:
+                tools = (tools or []) + mcp_tools
 
         perception_frame = self.perception.get_frame(session_id)
         system_prompt = self._build_system_prompt(perception_frame, relevant_skills, session_id)
@@ -646,6 +662,15 @@ class Orchestrator:
         tool_name = tool_call["name"]
         args = tool_call["args"]
         logger.info(f"  LLM Tool call: {tool_name}({json.dumps(args)[:200]})")
+
+        # Route MCP tool calls through the MCP client
+        if tool_name.startswith("mcp_") and self._mcp_client:
+            await self._send_text(session_id, f"MCP tool: {tool_name}...")
+            result = await self._mcp_client.call_tool(tool_name, args)
+            content = result.get("content", [])
+            if content and isinstance(content, list):
+                return {"data": "\n".join(c.get("text", str(c)) for c in content)}
+            return result
 
         parts = tool_name.split("__", 1)
         if len(parts) != 2:
@@ -1061,17 +1086,21 @@ class Orchestrator:
 
     def _extract_args_from_text(self, text: str, endpoint) -> dict:
         args = {}
+        stop_words = {"the", "in", "at", "for", "what", "is", "whats", "what's",
+                       "weather", "how", "get", "show", "me", "my", "of", "a", "an",
+                       "please", "can", "you", "tell", "about", "find", "search"}
+        content_words = [w for w in text.split() if w.lower() not in stop_words]
+        subject = " ".join(content_words) if content_words else text
+
         for param in endpoint.params:
             if param.default:
                 args[param.name] = param.default
-            if param.name == "q" or param.name == "query":
+            if param.name in ("q", "query", "text", "search", "message"):
                 args[param.name] = text
-            elif param.name in ("city", "location"):
-                words = text.split()
-                for w in reversed(words):
-                    if w.lower() not in {"the", "in", "at", "for", "what", "is", "whats", "what's", "weather", "how"}:
-                        args[param.name] = w
-                        break
+            elif param.name in ("city", "location", "place", "address"):
+                args[param.name] = subject or text
+            elif param.name == "lat" and "lon" in [p.name for p in endpoint.params]:
+                pass  # skip — needs geocoding which direct mode can't do
         return args
 
     # ─────────────────────────────────────────────

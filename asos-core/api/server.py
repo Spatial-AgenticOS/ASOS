@@ -6,13 +6,14 @@ Clients (phone, web, daemon, glasses, robots) connect via WebSocket.
 MCP clients (Claude, Cursor) connect via JSON-RPC.
 Channels (Telegram, Discord, Slack) bridge messaging platforms.
 
-v0.7.0 — HUP, MCP server/client, sandbox policies, channels.
+v1.0.0 — HUP, MCP server/client, sandbox policies, channels, federated sync.
 """
 
 import asyncio
 import json
 import logging
 import os
+import time
 from collections import deque
 from pathlib import Path
 from typing import Optional
@@ -52,10 +53,13 @@ from security.vault import BlindVault, PermissionTier, ExecutionSandbox
 from security.sandbox_policy import SandboxPolicy
 from hardware.protocol import DeviceRegistry, DeviceManifest, HUPAction, HUPActionType, THEORA_GLASSES_MANIFEST
 from mcp.server import TheoraMCPServer
-from mcp.client import MCPClientManager
+from mcp.client import MCPClientManager, MCPServerConnection
 from channels.base import ChannelManager, ChannelMessage, ChannelResponse
 from voice.realtime_proxy import RealtimeProxy
 from voice.router import VoiceRouter
+from memory.sync import SyncEngine
+from security.wasm_sandbox import WASMSandbox
+from perception.wake_word import WakeWordDetector, WakeWordConfig
 from integrations.oauth_manager import OAuthManager
 from integrations.spotify import SpotifyIntegration
 from integrations.home_assistant import HomeAssistantIntegration
@@ -74,7 +78,7 @@ logger = logging.getLogger("theora.brain")
 app = FastAPI(
     title="THEORA Brain",
     description="Local-first agentic intelligence core — self-learning, streaming, scene-aware",
-    version="0.4.0",
+    version="1.0.0",
 )
 
 app.add_middleware(
@@ -155,7 +159,11 @@ class BrainState:
         self.event_bus: Optional[EventBus] = None
         self.webhook_receiver: Optional[WebhookReceiver] = None
         self.marketplace: Optional[MarketplaceClient] = None
+        self.sync_engine: Optional[SyncEngine] = None
+        self.wasm_sandbox: Optional[WASMSandbox] = None
+        self.wake_word: Optional[WakeWordDetector] = None
         self.orchestrator: Optional[Orchestrator] = None
+        self.activity_log: deque = deque(maxlen=100)
 
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
@@ -188,6 +196,10 @@ class BrainState:
             perception=self.perception,
         )
         self.mcp_client = MCPClientManager()
+        try:
+            await self.mcp_client.load_and_connect()
+        except Exception as e:
+            logger.warning(f"MCP client auto-connect failed: {e}")
         self.channel_manager = ChannelManager()
 
         self.oauth = OAuthManager(vault=self.vault)
@@ -197,6 +209,21 @@ class BrainState:
         self.event_bus = EventBus()
         self.webhook_receiver = WebhookReceiver(event_bus=self.event_bus)
         self.marketplace = MarketplaceClient(skill_registry=self.skill_registry)
+
+        # Federated sync engine
+        import socket
+        sync_node_id = f"{socket.gethostname()}-{os.getpid()}"
+        self.sync_engine = SyncEngine(node_id=sync_node_id, memory_store=self.memory)
+        self.memory.set_sync_engine(self.sync_engine)
+        await self.sync_engine.start_discovery()
+
+        # WASM sandbox for untrusted skill execution
+        self.wasm_sandbox = WASMSandbox()
+
+        # Wake word detector
+        self.wake_word = WakeWordDetector(WakeWordConfig(
+            enabled=os.getenv("THEORA_WAKE_WORD", "true").lower() in ("true", "1", "yes"),
+        ))
 
         from skills.impl import register_instance
         if self.spotify:
@@ -218,6 +245,10 @@ class BrainState:
         self.orchestrator.set_llm(_shared_llm)
         if self.vault:
             self.orchestrator.set_vault(self.vault)
+        if self.wasm_sandbox:
+            self.orchestrator.executor.set_wasm_sandbox(self.wasm_sandbox)
+        if self.mcp_client:
+            self.orchestrator.set_mcp_client(self.mcp_client)
 
         self.realtime_proxy = RealtimeProxy(
             skill_registry=self.skill_registry,
@@ -234,13 +265,14 @@ class BrainState:
             orchestrator=self.orchestrator,
             memory=self.memory,
             perception=self.perception,
+            wake_word_detector=self.wake_word,
             send_to_session=self.send_to_session,
             send_to_node=self._send_dict_to_node,
         )
 
         stats = self.memory.stats()
         logger.info(
-            f"Brain v0.7.0 initialized — {len(self.skill_registry.skills)} skills, "
+            f"Brain v1.0.0 initialized — {len(self.skill_registry.skills)} skills, "
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
             f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
         )
@@ -291,7 +323,7 @@ async def root():
     stats = state.memory.stats()
     return {
         "name": "THEORA Brain",
-        "version": "0.4.0",
+        "version": "1.0.0",
         "status": "running",
         "sessions": len(state.sessions),
         "daemons": list(state.daemons.keys()),
@@ -679,6 +711,21 @@ async def mcp_registry():
     return {"servers": registry.list_known()}
 
 
+@app.post("/api/mcp/connect")
+async def mcp_connect(body: dict):
+    """Connect to a new MCP server at runtime."""
+    if not state.mcp_client:
+        return {"error": "MCP client not initialized"}
+    name = body.get("name", "unnamed")
+    conn = MCPServerConnection(name, body)
+    success = await conn.connect()
+    if success:
+        state.mcp_client._servers[name] = conn
+        _log_activity("mcp_connected", f"MCP server '{name}' connected ({len(conn.tools)} tools)")
+        return {"success": True, "tools": len(conn.tools)}
+    return {"success": False, "error": f"Failed to connect to MCP server '{name}'"}
+
+
 # ─────────────────────────────────────────────
 # Sandbox Policy API
 # ─────────────────────────────────────────────
@@ -873,7 +920,7 @@ async def system_info():
     channel_stats = state.channel_manager.stats if state.channel_manager else {}
     skill_gen_stats = state.skill_gen.stats if state.skill_gen else {}
     return {
-        "version": "0.9.0",
+        "version": "1.0.0",
         "config": state.config.to_client_safe_dict(),
         "memory": stats,
         "sessions": len(state.sessions),
@@ -916,6 +963,123 @@ async def system_info():
             "installed_skills": len(state.marketplace.list_installed()) if state.marketplace else 0,
         },
         "multi_agent": state.orchestrator._multi_agent.stats if state.orchestrator and state.orchestrator._multi_agent else {},
+    }
+
+
+def _log_activity(action: str, detail: str = ""):
+    """Log an activity to the brain's activity feed."""
+    state.activity_log.append({
+        "action": action,
+        "detail": detail,
+        "timestamp": time.time(),
+    })
+
+
+@app.get("/api/dashboard")
+async def dashboard_data():
+    """Aggregated data for the live dashboard — weather, devices, health, activity."""
+    stats = state.memory.stats()
+    devices_list = []
+    latest_health = {}
+
+    for node_id in state.daemons:
+        dev = state.devices.get(node_id, {})
+        devices_list.append({
+            "node_id": node_id,
+            "type": dev.get("device_type", dev.get("node_type", "unknown")),
+            "connected": True,
+        })
+
+    for sid in state.sessions:
+        frame = state.perception.get_frame(sid)
+        if frame:
+            if frame.heart_rate:
+                latest_health["heart_rate"] = frame.heart_rate
+            if frame.spo2_pct:
+                latest_health["spo2"] = frame.spo2_pct
+            if frame.skin_temperature_c:
+                latest_health["temperature"] = frame.skin_temperature_c
+
+    return {
+        "devices": devices_list,
+        "device_count": len(state.daemons),
+        "session_count": len(state.sessions),
+        "health": latest_health,
+        "memory": stats,
+        "skills_count": len(state.skill_registry.skills),
+        "llm_available": state.orchestrator is not None,
+        "audio_available": state.audio.available,
+        "sync": state.sync_engine.stats if state.sync_engine else {},
+        "wasm_available": state.wasm_sandbox.available if state.wasm_sandbox else False,
+        "wake_word_enabled": state.wake_word.enabled if state.wake_word else False,
+    }
+
+
+@app.get("/api/activity")
+async def get_activity():
+    """Recent brain activity log."""
+    return {"entries": list(state.activity_log)}
+
+
+@app.websocket("/sync")
+async def sync_peer_endpoint(ws: WebSocket):
+    """Peer-to-peer sync endpoint for federated memory."""
+    await ws.accept()
+    logger.info("Sync peer connected")
+
+    try:
+        while True:
+            raw = await ws.receive_json()
+            msg_type = raw.get("type")
+
+            if msg_type == "sync_request":
+                peer_id = raw.get("node_id", "unknown")
+                remote_vc = raw.get("vector_clock", {})
+                await ws.send_json({
+                    "type": "sync_response",
+                    "node_id": state.sync_engine.node_id if state.sync_engine else "",
+                    "vector_clock": state.sync_engine.get_vector_clock() if state.sync_engine else {},
+                })
+
+                incoming = await ws.receive_json()
+                if incoming.get("type") == "sync_data" and state.sync_engine:
+                    applied = state.sync_engine.apply_remote_changes(incoming.get("changes", []))
+                    my_changes = state.sync_engine._wal.get_changes_since(
+                        remote_vc.get(state.sync_engine.node_id, "0:0:"),
+                        exclude_node=peer_id,
+                    ) if hasattr(state.sync_engine, '_wal') else []
+                    await ws.send_json({
+                        "type": "sync_data",
+                        "changes": [op.to_dict() for op in my_changes] if my_changes else [],
+                    })
+                    _log_activity("sync", f"Synced with {peer_id}: received {applied} ops")
+                break
+
+    except WebSocketDisconnect:
+        logger.info("Sync peer disconnected")
+    except Exception as e:
+        logger.warning(f"Sync peer error: {e}")
+
+
+@app.get("/api/sync/status")
+async def sync_status():
+    if not state.sync_engine:
+        return {"enabled": False}
+    return {"enabled": True, **state.sync_engine.stats}
+
+
+@app.get("/api/llm/status")
+async def llm_status():
+    """LLM availability status for the client UI."""
+    if not state.orchestrator:
+        return {"available": False, "provider": "none", "reason": "Brain not initialized"}
+    llm = state.orchestrator.llm
+    if not llm:
+        return {"available": False, "provider": "none", "reason": "No LLM configured"}
+    return {
+        "available": getattr(llm, "available", False),
+        "provider": getattr(llm, "provider", "unknown"),
+        "model": getattr(llm, "model", "unknown"),
     }
 
 
@@ -1148,6 +1312,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 node_id = payload.node_id
                 state.daemons[node_id] = ws
                 logger.info(f"Node registered: {node_id} ({payload.node_type}/{payload.platform}) — caps: {payload.capabilities}")
+                _log_activity("device_connected", f"{node_id} ({payload.node_type})")
 
                 # Bind to all active sessions and update perception
                 for sid in state.sessions:
@@ -1362,7 +1527,7 @@ if __name__ == "__main__":
     import uvicorn
     print("""
     ╔══════════════════════════════════════╗
-    ║        THEORA Brain v0.8.0          ║
+    ║        THEORA Brain v1.0.0          ║
     ║   Local-First Agentic Intelligence  ║
     ║   Voice · Vision · Integrations     ║
     ╚══════════════════════════════════════╝

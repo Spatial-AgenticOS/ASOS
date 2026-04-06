@@ -248,10 +248,12 @@ export default function Settings() {
               )}
             </Section>
 
+            <PhoneBridgeSection />
+
             <Section title="How to Connect Devices" icon={Wifi}>
               <div className="space-y-3 text-sm">
                 {[
-                  { icon: Smartphone, name: 'Phone (iOS/Android)', desc: 'Run the THEORA bridge app. It connects via WebSocket to your Brain server and streams audio, health data, and sensors.' },
+                  { icon: Smartphone, name: 'Phone (iOS/Android)', desc: 'Run the THEORA bridge app or use the Web Bluetooth scanner above to connect BLE devices directly from your phone browser.' },
                   { icon: Glasses, name: 'Smart Glasses', desc: 'Any BLE-capable glasses can connect through the phone bridge or a direct daemon. The glasses stream camera frames and mic audio.' },
                   { icon: Watch, name: 'Wristband / Watch', desc: 'Health sensors (HR, SpO2, temp) connect via BLE through a phone bridge or dedicated USB dongle daemon.' },
                   { icon: Bot, name: 'Robot / Custom Hardware', desc: 'Any device running Python or Kotlin can use the node SDK. Connect to ws://BRAIN_IP:9090/v1/node with your API key.' },
@@ -428,6 +430,92 @@ export default function Settings() {
         )}
       </div>
     </div>
+  );
+}
+
+function PhoneBridgeSection() {
+  const [scanning, setScanning] = useState(false);
+  const [bleDevices, setBleDevices] = useState([]);
+  const [error, setError] = useState('');
+  const [connected, setConnected] = useState(null);
+  const btAvailable = typeof navigator !== 'undefined' && !!navigator.bluetooth;
+
+  const startScan = async () => {
+    if (!btAvailable) {
+      setError('Web Bluetooth is not supported on this browser. Use Chrome on Android or a Chromium-based browser.');
+      return;
+    }
+    setScanning(true);
+    setError('');
+    try {
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: ['heart_rate', 'battery_service', 'generic_access'],
+      });
+      setBleDevices(prev => {
+        if (prev.find(d => d.id === device.id)) return prev;
+        return [...prev, { id: device.id, name: device.name || 'Unknown Device' }];
+      });
+      setConnected(device.id);
+    } catch (e) {
+      if (e.name !== 'NotFoundError') {
+        setError(e.message);
+      }
+    }
+    setScanning(false);
+  };
+
+  return (
+    <Section title="Phone Bridge (Web Bluetooth)" icon={Smartphone}>
+      <p className="text-xs text-gray-500 mb-4">
+        Use your phone's browser as a bridge. Scan for nearby BLE devices and forward their data to the Brain.
+      </p>
+
+      <button
+        onClick={startScan}
+        disabled={scanning}
+        className="flex items-center gap-2 px-4 py-2.5 bg-asos-accent text-white rounded-lg text-sm font-medium hover:bg-opacity-90 transition disabled:opacity-50 w-full justify-center"
+      >
+        {scanning ? (
+          <><Loader2 size={14} className="animate-spin" /> Scanning...</>
+        ) : (
+          <><Bluetooth size={14} /> Scan for BLE Devices</>
+        )}
+      </button>
+
+      {error && (
+        <div className="mt-3 text-xs text-red-400 bg-red-500 bg-opacity-10 rounded-lg px-3 py-2">
+          {error}
+        </div>
+      )}
+
+      {!btAvailable && (
+        <div className="mt-3 text-xs text-yellow-400 bg-yellow-500 bg-opacity-10 rounded-lg px-3 py-2">
+          Web Bluetooth requires Chrome/Edge on Android or a Chromium-based desktop browser with the flag enabled.
+        </div>
+      )}
+
+      {bleDevices.length > 0 && (
+        <div className="mt-4 space-y-2">
+          <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Discovered Devices</div>
+          {bleDevices.map(dev => (
+            <div key={dev.id}
+              className={`flex items-center gap-3 rounded-lg px-4 py-3 border ${
+                connected === dev.id ? 'bg-green-500 bg-opacity-5 border-green-500 border-opacity-30' : 'bg-black bg-opacity-30 border-asos-border'
+              }`}>
+              <Bluetooth size={14} className={connected === dev.id ? 'text-green-400' : 'text-gray-500'} />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">{dev.name}</div>
+                <div className="text-[10px] text-gray-500 font-mono">{dev.id}</div>
+              </div>
+              {connected === dev.id && (
+                <span className="text-[10px] text-green-400 bg-green-500 bg-opacity-20 px-2 py-0.5 rounded-full">Paired</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
   );
 }
 

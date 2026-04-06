@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SduiRenderer } from './components/SduiRenderer';
-import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings } from 'lucide-react';
-import { WS_URL } from './config';
+import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle } from 'lucide-react';
+import { WS_URL, API_BASE } from './config';
 
 export default function App() {
   const [messages, setMessages] = useState([]);
@@ -14,6 +14,7 @@ export default function App() {
   const [streamingText, setStreamingText] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  const [llmStatus, setLlmStatus] = useState(null);
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -35,6 +36,7 @@ export default function App() {
 
   useEffect(() => {
     connect();
+    fetch(`${API_BASE}/api/llm/status`).then(r => r.json()).then(setLlmStatus).catch(() => {});
     return () => {
       if (wsRef.current) wsRef.current.close();
     };
@@ -254,6 +256,16 @@ export default function App() {
       {transcript && (
         <div className="absolute top-16 left-0 right-0 z-10 px-4 py-2 bg-asos-accent bg-opacity-20 backdrop-blur-sm border-b border-asos-accent border-opacity-30">
           <span className="text-sm italic opacity-80">{transcript}</span>
+        </div>
+      )}
+
+      {/* No-LLM Banner */}
+      {llmStatus && !llmStatus.available && (
+        <div className="absolute top-16 left-0 right-0 z-[5] px-4 py-2 bg-yellow-500 bg-opacity-15 border-b border-yellow-500 border-opacity-30 flex items-center gap-2">
+          <AlertTriangle size={14} className="text-yellow-400 flex-shrink-0" />
+          <span className="text-xs text-yellow-300">
+            No LLM connected. Set <code className="bg-black bg-opacity-30 px-1 rounded text-[10px]">OPENAI_API_KEY</code> or start Ollama for full conversation.
+          </span>
         </div>
       )}
 
