@@ -27,7 +27,7 @@ from skills.package import (
 
 logger = logging.getLogger("theora.marketplace")
 
-DEFAULT_REGISTRY_URL = os.getenv("THEORA_MARKETPLACE_URL", "https://registry.theora.io/api/v1")
+DEFAULT_REGISTRY_URL = os.getenv("THEORA_MARKETPLACE_URL", "http://localhost:8080/api/v1")
 
 GITHUB_INDEX_URL = os.getenv(
     "THEORA_MARKETPLACE_GITHUB",

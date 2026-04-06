@@ -8,10 +8,11 @@ import androidx.appcompat.app.AppCompatActivity
 import io.theora.bridge.TheoraBrainClient
 import io.theora.bridge.TheoraBrainDelegate
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.JsonObject
 
 class MainActivity : AppCompatActivity(), TheoraBrainDelegate {
 
-    private lateinit var client: TheoraBrainClient
+    private var client: TheoraBrainClient? = null
     private lateinit var logView: TextView
     private lateinit var inputField: EditText
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -26,53 +27,56 @@ class MainActivity : AppCompatActivity(), TheoraBrainDelegate {
         val sendBtn = findViewById<Button>(R.id.sendBtn)
 
         connectBtn.setOnClickListener {
-            val host = "10.0.2.2"  // Android emulator → host machine
+            val host = "10.0.2.2"
             val port = 9090
             val apiKey = "dev-secret-key"
-            client = TheoraBrainClient(host, port, apiKey)
-            client.delegate = this
+            client = TheoraBrainClient(host, port, apiKey, delegate = this)
             scope.launch(Dispatchers.IO) {
-                client.connect()
+                client?.connect()
             }
             log("Connecting to THEORA Brain at $host:$port...")
         }
 
         sendBtn.setOnClickListener {
             val text = inputField.text.toString().trim()
-            if (text.isNotEmpty() && ::client.isInitialized) {
-                scope.launch(Dispatchers.IO) { client.sendTextCommand(text) }
+            if (text.isNotEmpty() && client != null) {
+                scope.launch(Dispatchers.IO) { client?.sendTextCommand(text) }
                 log("You: $text")
                 inputField.text.clear()
             }
         }
     }
 
-    override fun onConnected() {
+    override fun brainDidConnect() {
         runOnUiThread { log("Connected to THEORA Brain") }
     }
 
-    override fun onDisconnected() {
-        runOnUiThread { log("Disconnected") }
+    override fun brainDidDisconnect(reason: String) {
+        runOnUiThread { log("Disconnected: $reason") }
     }
 
-    override fun onTextResponse(text: String) {
+    override fun brainDidReceiveText(text: String) {
         runOnUiThread { log("THEORA: $text") }
     }
 
-    override fun onSduiResponse(json: String) {
-        runOnUiThread { log("SDUI: ${json.take(100)}...") }
+    override fun brainDidReceiveSDUI(json: JsonObject) {
+        runOnUiThread { log("SDUI: ${json.toString().take(100)}...") }
     }
 
-    override fun onAudioResponse(base64Audio: String) {
-        runOnUiThread { log("Audio received (${base64Audio.length} chars)") }
+    override fun brainDidReceiveAudio(data: ByteArray, encoding: String, sampleRate: Int) {
+        runOnUiThread { log("Audio received (${data.size} bytes, $encoding)") }
     }
 
-    override fun onTranscript(text: String) {
-        runOnUiThread { log("Transcript: $text") }
+    override fun brainDidRequestStopPlayback() {
+        runOnUiThread { log("Stop playback requested") }
     }
 
-    override fun onExecuteCommand(command: String, args: Map<String, Any>) {
-        runOnUiThread { log("Execute: $command") }
+    override fun brainDidReceiveTranscript(text: String, isPartial: Boolean) {
+        runOnUiThread { log("Transcript: $text${if (isPartial) " ..." else ""}") }
+    }
+
+    override fun brainDidReceiveExecute(executor: String, action: String, args: JsonObject) {
+        runOnUiThread { log("Execute: $executor/$action") }
     }
 
     private fun log(msg: String) {
@@ -80,6 +84,7 @@ class MainActivity : AppCompatActivity(), TheoraBrainDelegate {
     }
 
     override fun onDestroy() {
+        client?.destroy()
         scope.cancel()
         super.onDestroy()
     }

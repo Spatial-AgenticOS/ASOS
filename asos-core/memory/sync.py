@@ -276,6 +276,31 @@ class SyncEngine:
     def get_vector_clock(self) -> dict:
         return self._vector_clock.to_dict()
 
+    @staticmethod
+    def _get_lan_ip() -> str:
+        """Get the real LAN IP address, not loopback."""
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.1)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith("127."):
+                return ip
+        except Exception:
+            pass
+        hostname = socket.gethostname()
+        try:
+            addrs = socket.getaddrinfo(hostname, None, socket.AF_INET)
+            for addr in addrs:
+                ip = addr[4][0]
+                if not ip.startswith("127."):
+                    return ip
+        except Exception:
+            pass
+        return "127.0.0.1"
+
     async def start_discovery(self):
         """Start mDNS service advertisement and peer discovery."""
         try:
@@ -284,8 +309,7 @@ class SyncEngine:
 
             self._zeroconf = Zeroconf()
 
-            hostname = socket.gethostname()
-            ip = socket.gethostbyname(hostname)
+            ip = self._get_lan_ip()
 
             self._service_info = ServiceInfo(
                 SERVICE_TYPE,
@@ -354,29 +378,28 @@ class SyncEngine:
             uri = f"ws://{addr}:{port}/sync"
 
             async with websockets.connect(uri) as ws:
-                # Exchange vector clocks
                 await ws.send(json.dumps({
                     "type": "sync_request",
                     "node_id": self.node_id,
                     "vector_clock": self.get_vector_clock(),
+                    "passphrase": SYNC_PASSPHRASE,
                 }))
 
                 resp = json.loads(await ws.recv())
+
+                if resp.get("type") == "sync_error":
+                    return {"success": False, "error": resp.get("message", "rejected")}
+
                 remote_vc = resp.get("vector_clock", {})
 
-                # Determine what the peer is missing
-                my_latest = self._vector_clock.clocks.get(self.node_id, "0:0:")
                 peer_has = remote_vc.get(self.node_id, "0:0:")
-
                 changes_for_peer = self._wal.get_changes_since(peer_has, exclude_node=peer_id)
 
-                if changes_for_peer:
-                    await ws.send(json.dumps({
-                        "type": "sync_data",
-                        "changes": [op.to_dict() for op in changes_for_peer],
-                    }))
+                await ws.send(json.dumps({
+                    "type": "sync_data",
+                    "changes": [op.to_dict() for op in changes_for_peer],
+                }))
 
-                # Receive what we're missing
                 remote_changes_msg = json.loads(await ws.recv())
                 remote_changes = remote_changes_msg.get("changes", [])
                 applied = self.apply_remote_changes(remote_changes)

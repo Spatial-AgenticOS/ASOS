@@ -3,10 +3,10 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "theora"
+name = "theora-asos"
 version = "1.0.0"
 description = "THEORA — Open-source AI agent with computer use, GenUI, voice, hardware control, and persistent memory."
-readme = "../README.md"
+readme = "README.md"
 license = {text = "Apache-2.0"}
 authors = [
     {name = "Mahmoud Omar"},

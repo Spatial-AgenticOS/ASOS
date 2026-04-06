@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SduiRenderer } from './components/SduiRenderer';
-import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle, Phone } from 'lucide-react';
+import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle, Phone, Camera, CameraOff } from 'lucide-react';
 import { WS_URL, API_BASE } from './config';
 import { RealtimeVoiceEngine } from './lib/voiceRealtime';
+import { VisionCapture } from './lib/visionCapture';
 
 export default function App() {
   const [messages, setMessages] = useState([]);
@@ -17,10 +18,12 @@ export default function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [llmStatus, setLlmStatus] = useState(null);
+  const [cameraOn, setCameraOn] = useState(false);
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const voiceEngineRef = useRef(null);
+  const visionRef = useRef(null);
   const chunkIndexRef = useRef(0);
   const streamBufferRef = useRef('');
   const greetingReceivedRef = useRef(false);
@@ -181,6 +184,25 @@ export default function App() {
     setVoiceMode('off');
   };
 
+  const toggleCamera = async () => {
+    if (cameraOn) {
+      if (visionRef.current) { visionRef.current.stop(); visionRef.current = null; }
+      setCameraOn(false);
+      setMessages(prev => [...prev, { role: 'system', type: 'text', content: 'Camera stopped.' }]);
+    } else {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      try {
+        const vc = new VisionCapture(wsRef.current, 1);
+        visionRef.current = vc;
+        await vc.start();
+        setCameraOn(true);
+        setMessages(prev => [...prev, { role: 'system', type: 'text', content: 'Camera active — agent can now see through your webcam.' }]);
+      } catch (err) {
+        setMessages(prev => [...prev, { role: 'system', type: 'text', content: `Camera error: ${err.message}` }]);
+      }
+    }
+  };
+
   const handleUIAction = (action_id) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     setMessages(prev => [...prev, { role: 'user', type: 'action', content: `Clicked: ${action_id}` }]);
@@ -288,6 +310,18 @@ export default function App() {
       {/* Bottom Bar */}
       <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black via-black/90 to-transparent">
         <form onSubmit={handleSend} className="relative flex items-center w-full gap-2">
+          <button
+            type="button"
+            onClick={toggleCamera}
+            title={cameraOn ? "Stop camera" : "Start camera (vision)"}
+            className={`p-3 rounded-full transition-all active:scale-95 ${
+              cameraOn
+                ? 'bg-blue-500 text-white shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+                : 'bg-asos-card border border-asos-border text-gray-400 hover:text-white hover:border-blue-400'
+            }`}
+          >
+            {cameraOn ? <CameraOff size={16} /> : <Camera size={16} />}
+          </button>
           <button
             type="button"
             onClick={toggleRecording}

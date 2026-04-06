@@ -75,14 +75,17 @@ REPO_ROOT=""
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../asos-core/pyproject.toml" ]; then
     REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
     echo -e "  ${DIM}Installing from local repo: $REPO_ROOT${NC}"
-    $PIP install -e "$REPO_ROOT/asos-core[llm]" --quiet 2>&1 | tail -1 || true
+    $PIP install -e "$REPO_ROOT/asos-core[llm]" --quiet 2>&1 | tail -5 || true
 else
-    echo -e "  ${DIM}Installing from GitHub...${NC}"
-    $PIP install "theora[llm] @ git+https://github.com/Spatial-AgenticOS/ASOS.git#subdirectory=asos-core" --quiet 2>&1 | tail -1 || {
-        echo -e "${YELLOW}pip install from git failed. Trying clone method...${NC}"
-        TMPDIR=$(mktemp -d)
-        git clone --depth 1 https://github.com/Spatial-AgenticOS/ASOS.git "$TMPDIR/ASOS"
-        $PIP install -e "$TMPDIR/ASOS/asos-core[llm]" --quiet
+    echo -e "  ${DIM}Installing from PyPI...${NC}"
+    $PIP install "theora-asos[llm]" --quiet 2>&1 | tail -1 || {
+        echo -e "${YELLOW}PyPI install failed. Trying GitHub...${NC}"
+        $PIP install "theora-asos[llm] @ git+https://github.com/Spatial-AgenticOS/ASOS.git#subdirectory=asos-core" --quiet 2>&1 | tail -1 || {
+            echo -e "${YELLOW}pip from git failed. Trying clone method...${NC}"
+            TMPDIR=$(mktemp -d)
+            git clone --depth 1 https://github.com/Spatial-AgenticOS/ASOS.git "$TMPDIR/ASOS"
+            $PIP install -e "$TMPDIR/ASOS/asos-core[llm]" --quiet
+        }
     }
 fi
 

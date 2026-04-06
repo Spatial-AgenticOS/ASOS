@@ -71,6 +71,19 @@ def root():
     return {"name": "THEORA Skill Registry", "version": "1.0.0"}
 
 
+@app.get("/api/v1/skills/search")
+def search_skills_v1(
+    q: Optional[str] = Query(None, description="Search query"),
+    category: Optional[str] = Query(None),
+    sort: str = Query("downloads", regex="^(downloads|published_at|name)$"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """Search skills (v1 API used by marketplace client)."""
+    results = _query_skills(q, category, sort, limit, offset)
+    return {"results": results}
+
+
 @app.get("/api/skills", response_model=list[SkillInfo])
 def list_skills(
     q: Optional[str] = Query(None, description="Search query"),
@@ -80,6 +93,10 @@ def list_skills(
     offset: int = Query(0, ge=0),
 ):
     """Search and browse published skills."""
+    return _query_skills(q, category, sort, limit, offset)
+
+
+def _query_skills(q, category, sort, limit, offset):
     db = get_db()
     query = "SELECT * FROM skills"
     params = []
@@ -111,9 +128,29 @@ def list_skills(
     ]
 
 
+@app.get("/api/v1/skills/{skill_id}")
+def get_skill_v1(skill_id: str):
+    """Get full manifest (v1 API)."""
+    return _get_skill_impl(skill_id)
+
+
+@app.get("/api/v1/skills/{skill_id}/download")
+def download_skill_v1(skill_id: str, version: str = Query("latest")):
+    """Download a skill manifest as JSON (v1 API used by marketplace client)."""
+    from starlette.responses import Response
+    data = _get_skill_impl(skill_id)
+    manifest_bytes = json.dumps(data["manifest"], indent=2).encode()
+    return Response(content=manifest_bytes, media_type="application/json",
+                    headers={"Content-Disposition": f"attachment; filename={skill_id}.json"})
+
+
 @app.get("/api/skills/{skill_id}")
 def get_skill(skill_id: str):
     """Get full manifest for a skill."""
+    return _get_skill_impl(skill_id)
+
+
+def _get_skill_impl(skill_id: str):
     db = get_db()
     row = db.execute("SELECT * FROM skills WHERE skill_id = ?", (skill_id,)).fetchone()
     if not row:
@@ -130,9 +167,19 @@ def get_skill(skill_id: str):
     }
 
 
+@app.post("/api/v1/skills")
+def publish_skill_v1(req: PublishRequest):
+    """Publish a skill (v1 API)."""
+    return _publish_skill_impl(req)
+
+
 @app.post("/api/skills")
 def publish_skill(req: PublishRequest):
     """Publish or update a skill."""
+    return _publish_skill_impl(req)
+
+
+def _publish_skill_impl(req: PublishRequest):
     manifest = req.manifest
     skill_id = manifest.get("skill_id")
     if not skill_id:

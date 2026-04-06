@@ -1097,6 +1097,13 @@ async def sync_peer_endpoint(ws: WebSocket):
             if msg_type == "sync_request":
                 peer_id = raw.get("node_id", "unknown")
                 remote_vc = raw.get("vector_clock", {})
+
+                expected_pass = os.getenv("THEORA_SYNC_PASSPHRASE", "")
+                remote_pass = raw.get("passphrase", "")
+                if expected_pass and remote_pass != expected_pass:
+                    await ws.send_json({"type": "sync_error", "message": "Invalid passphrase"})
+                    break
+
                 await ws.send_json({
                     "type": "sync_response",
                     "node_id": state.sync_engine.node_id if state.sync_engine else "",
@@ -1104,17 +1111,21 @@ async def sync_peer_endpoint(ws: WebSocket):
                 })
 
                 incoming = await ws.receive_json()
+                applied = 0
                 if incoming.get("type") == "sync_data" and state.sync_engine:
                     applied = state.sync_engine.apply_remote_changes(incoming.get("changes", []))
+
+                my_changes = []
+                if state.sync_engine and hasattr(state.sync_engine, '_wal'):
                     my_changes = state.sync_engine._wal.get_changes_since(
                         remote_vc.get(state.sync_engine.node_id, "0:0:"),
                         exclude_node=peer_id,
-                    ) if hasattr(state.sync_engine, '_wal') else []
-                    await ws.send_json({
-                        "type": "sync_data",
-                        "changes": [op.to_dict() for op in my_changes] if my_changes else [],
-                    })
-                    _log_activity("sync", f"Synced with {peer_id}: received {applied} ops")
+                    )
+                await ws.send_json({
+                    "type": "sync_data",
+                    "changes": [op.to_dict() for op in my_changes] if my_changes else [],
+                })
+                _log_activity("sync", f"Synced with {peer_id}: received {applied} ops")
                 break
 
     except WebSocketDisconnect:
@@ -1128,6 +1139,23 @@ async def sync_status():
     if not state.sync_engine:
         return {"enabled": False}
     return {"enabled": True, **state.sync_engine.stats}
+
+
+@app.get("/api/sync/export")
+async def sync_export():
+    """Export memory bundle for manual federated sync."""
+    if not state.sync_engine:
+        return {"error": "Sync engine not running"}
+    return state.sync_engine.export_to_bundle()
+
+
+@app.post("/api/sync/import")
+async def sync_import(body: dict):
+    """Import a memory bundle from another node."""
+    if not state.sync_engine:
+        return {"error": "Sync engine not running"}
+    applied = state.sync_engine.import_from_bundle(body)
+    return {"applied": applied}
 
 
 @app.get("/api/llm/status")
@@ -1364,6 +1392,27 @@ async def client_session(ws: WebSocket):
                         asyncio.ensure_future(
                             _analyze_scene_background(target_node, latest, mode="query", query=query_text)
                         )
+
+                elif msg.type == "vision_frame":
+                    frame_payload = raw.get("payload", {})
+                    frame_b64_len = len(frame_payload.get("data_b64", ""))
+                    if frame_b64_len > VISION_MAX_FRAME_KB * 1024:
+                        logger.warning(f"Rejecting oversized frame from webclient {session_id[:8]}: {frame_b64_len}B")
+                    else:
+                        virtual_node = f"webclient_{session_id[:8]}"
+                        state.vision_buffer.push(virtual_node, frame_payload)
+                        state.perception.update_vision(session_id, state.vision_buffer, virtual_node)
+                        state.bind_session_to_daemon(session_id, virtual_node)
+
+                        data_b64 = frame_payload.get("data_b64", "")
+                        change_event = state.change_detector.should_analyze(
+                            virtual_node, data_b64, frame_payload.get("encoding", "jpeg"),
+                        )
+                        if change_event and state.scene and state.scene.available:
+                            mode = "tracking" if change_event.trigger_reason == "scene_change" else "general"
+                            asyncio.ensure_future(
+                                _analyze_scene_background(virtual_node, frame_payload, mode=mode)
+                            )
 
                 elif msg.type == "biometric":
                     bio = raw.get("payload", {})

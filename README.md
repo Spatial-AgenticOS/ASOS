@@ -62,7 +62,15 @@ This checks Python 3.11+, installs THEORA via pip, and launches a **guided setup
 5. Enabling tools (computer use, web search, vision, hardware)
 6. Setting security preferences
 
-**Manual install:**
+**Via PyPI:**
+
+```bash
+pip install theora-asos[llm]
+theora setup      # guided configuration
+theora serve      # start the server
+```
+
+**From source:**
 
 ```bash
 git clone https://github.com/Spatial-AgenticOS/ASOS.git
@@ -378,9 +386,19 @@ ASOS/
 │   ├── python-node-sdk/        # Python daemon reference
 │   ├── ios-bridge/             # iOS bridge (Swift)
 │   └── android-bridge/         # Android bridge (Kotlin)
+├── registry/                   # Skill marketplace server
+│   ├── server.py               # FastAPI registry
+│   ├── seed.py                 # Seed example skills
+│   └── Dockerfile
+├── desktop/                    # Tauri desktop app
+│   ├── src-tauri/              # Rust + Tauri config
+│   └── src/                    # React wrapper
 ├── scripts/
 │   ├── install.sh              # curl installer
+│   ├── test_sync.sh            # Two-node sync test
 │   └── demo.py                 # Feature demo script
+├── .github/workflows/
+│   └── publish.yml             # PyPI publish on v* tags
 └── docker-compose.yml
 ```
 
@@ -430,21 +448,31 @@ All config lives in `~/.theora/`:
 | `/v1/session` | WS | Client WebSocket (chat, voice, UI events) |
 | `/v1/node` | WS | Hardware daemon WebSocket |
 | `/mcp` | POST | MCP JSON-RPC endpoint |
+| `/api/marketplace/search` | GET | Search skill marketplace |
+| `/api/marketplace/install` | POST | Install a marketplace skill |
+| `/api/sync/status` | GET | Federated sync status |
+| `/api/sync/export` | GET | Export memory bundle |
+| `/api/sync/import` | POST | Import memory bundle |
 | `/docs` | GET | Interactive API documentation (Swagger) |
 
 ---
 
+## What's New in v1.0
+
+- **PyPI package** — `pip install theora-asos[llm]` (GitHub Actions publishes on `v*` tags)
+- **Vision end-to-end** — browser webcam → VLM scene analysis, camera toggle in web UI
+- **Wake word** — `theora wake-test` CLI command for testing, `openwakeword` ML model support
+- **Android app** — fixed compilation, Gradle wrapper, buildable AAR + APK
+- **Desktop GUI** — Tauri 2 app with system tray, Brain server auto-detect
+- **Skill marketplace** — aligned API routes, seeded 5 example skills, `theora marketplace` CLI, Docker service
+- **Federated sync** — fixed deadlock, LAN IP resolution, passphrase auth, `scripts/test_sync.sh`
+
 ## What's Not Done Yet
 
-Transparency matters:
-
-- **PyPI publishing** — install from GitHub for now
-- **Vision** — VLM integration code exists, needs camera/screen capture wired end-to-end
-- **Wake word** — "Hey THEORA" code works with energy fallback; full model needs `openwakeword`
-- **Android app** — SDK code exists, not yet a standalone buildable app
-- **Desktop GUI** — Tauri scaffold exists, not built
-- **Skill marketplace** — registry code exists, server not deployed
-- **Federated sync** — CRDT code exists, not tested across real devices
+- **Custom wake word model** — "Hey THEORA" needs a trained `openwakeword` model; defaults to `hey_jarvis`
+- **PyPI account setup** — package is ready to publish; needs PyPI token and a `v*` tag
+- **Desktop pre-built binaries** — Tauri builds require Rust toolchain; no CI binary yet
+- **Marketplace deployment** — registry runs locally via Docker; no public hosted version yet
 
 ---
 
@@ -455,7 +483,7 @@ Transparency matters:
 git clone https://github.com/Spatial-AgenticOS/ASOS.git
 cd ASOS/asos-core
 pip install -e ".[llm,dev]"
-pytest                    # run tests (187 passing)
+pytest                    # run tests
 theora setup              # configure locally
 theora serve              # start developing
 ```

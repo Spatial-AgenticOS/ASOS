@@ -255,7 +255,7 @@ def cmd_serve(host: str = "0.0.0.0", port: int = 9090):
     try:
         import uvicorn
     except ImportError:
-        print("uvicorn not installed. Run: pip install 'theora[all]'")
+        print("uvicorn not installed. Run: pip install 'theora-asos[all]'")
         sys.exit(1)
 
     print(f"\n  Starting THEORA Brain on {host}:{port} ...")
@@ -273,6 +273,172 @@ def cmd_setup():
     except ImportError:
         print("Setup wizard not available. Make sure cli/setup_wizard.py exists.")
         sys.exit(1)
+
+
+def cmd_wake_test():
+    """Test wake word detection from the microphone for 10 seconds."""
+    print("\n  Wake Word Test")
+    print("  " + "=" * 40)
+
+    try:
+        import openwakeword
+    except ImportError:
+        print("  openwakeword not installed.")
+        print("  Install: pip install 'theora-asos[wake]'")
+        print("  (Downloads ~50 MB model on first use)")
+        sys.exit(1)
+
+    from perception.wake_word import WakeWordDetector, WakeWordConfig
+    detector = WakeWordDetector(WakeWordConfig(enabled=True))
+    ml_mode = "ML (openwakeword)" if detector._oww_model else "Energy-based fallback"
+    print(f"  Mode:   {ml_mode}")
+    print(f"  Phrase: {detector._config.phrase}")
+    model_name = os.environ.get("THEORA_WAKE_MODEL", "hey_jarvis_v0.1")
+    print(f"  Model:  {model_name}")
+    print(f"\n  Listening for 10 seconds... Say the wake phrase!\n")
+
+    try:
+        import pyaudio
+    except ImportError:
+        print("  pyaudio not installed — needed for mic access.")
+        print("  Install: pip install pyaudio")
+        sys.exit(1)
+
+    import struct, time
+
+    pa = pyaudio.PyAudio()
+    stream = pa.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1280)
+    start = time.time()
+    detections = 0
+
+    try:
+        while time.time() - start < 10:
+            pcm = stream.read(1280, exception_on_overflow=False)
+            result = asyncio.get_event_loop().run_until_complete(
+                detector.process_frame("test", pcm)
+            ) if asyncio.get_event_loop().is_running() else asyncio.run(
+                detector.process_frame("test", pcm)
+            )
+            if result and detector.get_state("test").value == "activated":
+                detections += 1
+                elapsed = time.time() - start
+                print(f"  [{elapsed:.1f}s] WAKE WORD DETECTED! (#{detections})")
+                detector.force_deactivate("test")
+            remaining = 10 - (time.time() - start)
+            if int(remaining) % 3 == 0 and remaining > 0:
+                pass
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stream.stop_stream()
+        stream.close()
+        pa.terminate()
+
+    print(f"\n  Done. Detections: {detections}")
+    if detections == 0 and not detector._oww_model:
+        print("  Tip: Install openwakeword for better detection: pip install openwakeword onnxruntime")
+
+
+def cmd_marketplace(action: str, query: str):
+    """Marketplace CLI commands."""
+    if action == "search":
+        q = query or "all"
+        data = _http_get(f"/api/marketplace/search?q={q}")
+        results = data.get("results", [])
+        if not results:
+            print("  No skills found.")
+            return
+        for s in results:
+            print(f"  {s.get('name', s.get('skill_id', '?'))} — {s.get('description', '')[:60]}")
+    elif action == "install":
+        if not query:
+            print("  Usage: theora marketplace install <skill_id>")
+            return
+        import urllib.request
+        req = urllib.request.Request(
+            f"{HTTP_BASE}/api/marketplace/install",
+            data=json.dumps({"skill_id": query}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read())
+                if result.get("success"):
+                    print(f"  Installed: {query}")
+                else:
+                    print(f"  Failed: {result.get('error', 'unknown')}")
+        except Exception as e:
+            print(f"  Error: {e}")
+    elif action == "list":
+        data = _http_get("/api/marketplace/installed")
+        skills = data.get("skills", [])
+        if not skills:
+            print("  No marketplace skills installed.")
+            return
+        for s in skills:
+            print(f"  {s.get('name', s.get('skill_id', '?'))} v{s.get('version', '?')}")
+
+
+def cmd_sync(action: str, file_path: str):
+    """Federated sync CLI commands."""
+    if action == "status":
+        data = _http_get("/api/sync/status")
+        if "error" in data:
+            print(f"  Error: {data['error']}")
+            return
+        print(f"  Enabled:     {data.get('enabled', False)}")
+        print(f"  Running:     {data.get('running', False)}")
+        print(f"  Node ID:     {data.get('node_id', '?')}")
+        print(f"  Peers:       {data.get('peer_count', 0)}")
+        vc = data.get("vector_clock", {})
+        if vc:
+            print(f"  Clock:       {json.dumps(vc, indent=2)}")
+    elif action == "peers":
+        data = _http_get("/api/sync/status")
+        peers = data.get("peers", [])
+        if not peers:
+            print("  No peers discovered.")
+        else:
+            for p in peers:
+                print(f"  - {p}")
+    elif action == "export":
+        out = file_path or "theora_memory_export.json"
+        data = _http_get("/api/sync/status")
+        if data.get("enabled"):
+            print(f"  Exporting memory bundle to {out}...")
+            import urllib.request
+            req = urllib.request.Request(f"{HTTP_BASE}/api/sync/export")
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    bundle = resp.read()
+                    with open(out, "wb") as f:
+                        f.write(bundle)
+                    print(f"  Exported to {out}")
+            except Exception as e:
+                print(f"  Export failed: {e}")
+        else:
+            print("  Sync engine not running.")
+    elif action == "import":
+        if not file_path:
+            print("  Usage: theora sync import <file.json>")
+            return
+        print(f"  Importing from {file_path}...")
+        try:
+            with open(file_path) as f:
+                bundle = json.load(f)
+            import urllib.request
+            req = urllib.request.Request(
+                f"{HTTP_BASE}/api/sync/import",
+                data=json.dumps(bundle).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read())
+                print(f"  Imported {result.get('applied', 0)} operations")
+        except Exception as e:
+            print(f"  Import failed: {e}")
 
 
 def _apply_connection_args(args):
@@ -307,6 +473,19 @@ def main():
     sub.add_parser("skills", help="List loaded skills")
     sub.add_parser("identity", help="Show agent identity")
 
+    # theora wake-test
+    sub.add_parser("wake-test", help="Test wake word detection from your microphone")
+
+    # theora marketplace
+    mp = sub.add_parser("marketplace", help="Skill marketplace commands")
+    mp.add_argument("action", nargs="?", default="search", choices=["search", "install", "list"], help="Action")
+    mp.add_argument("query", nargs="?", default="", help="Search query or skill ID")
+
+    # theora sync
+    sp = sub.add_parser("sync", help="Federated memory sync commands")
+    sp.add_argument("action", nargs="?", default="status", choices=["status", "peers", "export", "import"], help="Action")
+    sp.add_argument("file", nargs="?", default="", help="File path for export/import")
+
     # Parse known args — everything else is treated as a message
     args, remaining = parser.parse_known_args()
     _apply_connection_args(args)
@@ -323,6 +502,12 @@ def main():
         cmd_skills()
     elif args.subcommand == "identity":
         cmd_identity()
+    elif args.subcommand == "wake-test":
+        cmd_wake_test()
+    elif args.subcommand == "marketplace":
+        cmd_marketplace(args.action, args.query)
+    elif args.subcommand == "sync":
+        cmd_sync(args.action, getattr(args, "file", ""))
     elif args.subcommand is None and not remaining:
         asyncio.run(repl())
     else:

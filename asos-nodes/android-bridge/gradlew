@@ -1,0 +1,52 @@
+#!/bin/sh
+# Gradle wrapper script — downloads Gradle if needed
+# See: https://docs.gradle.org/current/userguide/gradle_wrapper.html
+
+APP_NAME="Gradle"
+APP_BASE_NAME=$(basename "$0")
+DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+
+PRG="$0"
+while [ -h "$PRG" ] ; do
+    ls=$(ls -ld "$PRG")
+    link=$(expr "$ls" : '.*-> \(.*\)$')
+    if expr "$link" : '/.*' > /dev/null; then
+        PRG="$link"
+    else
+        PRG=$(dirname "$PRG")"/$link"
+    fi
+done
+SAVED="$(pwd)"
+cd "$(dirname "$PRG")/" >/dev/null
+APP_HOME="$(pwd -P)"
+cd "$SAVED" >/dev/null
+
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+JAVACMD="java"
+if [ -n "$JAVA_HOME" ] ; then
+    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
+        JAVACMD="$JAVA_HOME/jre/sh/java"
+    else
+        JAVACMD="$JAVA_HOME/bin/java"
+    fi
+fi
+
+# Download wrapper jar if missing
+WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+if [ ! -f "$WRAPPER_JAR" ]; then
+    echo "Downloading Gradle wrapper JAR..."
+    WRAPPER_URL="https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar"
+    if command -v curl > /dev/null 2>&1; then
+        curl -sSL -o "$WRAPPER_JAR" "$WRAPPER_URL"
+    elif command -v wget > /dev/null 2>&1; then
+        wget -q -O "$WRAPPER_JAR" "$WRAPPER_URL"
+    else
+        echo "ERROR: Cannot download gradle-wrapper.jar — install curl or wget"
+        exit 1
+    fi
+fi
+
+exec "$JAVACMD" $DEFAULT_JVM_OPTS \
+    -classpath "$CLASSPATH" \
+    org.gradle.wrapper.GradleWrapperMain "$@"
