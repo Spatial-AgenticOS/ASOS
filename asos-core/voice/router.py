@@ -16,10 +16,10 @@ logger = logging.getLogger("theora.voice.router")
 
 class VoiceRouter:
     """
-    Central audio routing layer.  Each connected node can declare its
-    voice capabilities via a `voice_config` message.  The router uses
-    that declaration (plus fallback heuristics) to choose between the
-    OpenAI Realtime path and the classic Whisper+TTS path.
+    Central audio routing layer.  Both web clients and daemon nodes can
+    declare voice capabilities via a `voice_config` message.  The router
+    uses that declaration to choose between the OpenAI Realtime path and
+    the classic Whisper+TTS path.
     """
 
     def __init__(
@@ -45,11 +45,17 @@ class VoiceRouter:
 
         self._node_voice_config: dict[str, dict] = {}
         self._node_session_map: dict[str, str] = {}
+        self._session_voice_mode: dict[str, str] = {}
 
     def register_voice_config(self, node_id: str, config: dict):
         """Store a node's voice capabilities.  Called when a `voice_config` message arrives."""
         self._node_voice_config[node_id] = config
         logger.info(f"Voice config for {node_id}: {config}")
+
+    def set_session_voice_mode(self, session_id: str, mode: str):
+        """Set the voice mode for a web client session (realtime | whisper | disabled)."""
+        self._session_voice_mode[session_id] = mode
+        logger.info(f"Session {session_id[:8]} voice mode: {mode}")
 
     def bind_node_to_session(self, node_id: str, session_id: str):
         self._node_session_map[node_id] = session_id
@@ -67,6 +73,12 @@ class VoiceRouter:
             return True
 
         return False
+
+    def session_uses_realtime(self, session_id: str) -> bool:
+        """Check if a web client session should use the Realtime path."""
+        if not self._realtime or not self._realtime.available:
+            return False
+        return self._session_voice_mode.get(session_id) == "realtime"
 
     async def handle_audio_from_node(
         self,
@@ -114,12 +126,23 @@ class VoiceRouter:
         audio_b64: str,
         chunk_index: int = 0,
         is_final: bool = False,
-        encoding: str = "opus",
-        sample_rate: int = 16000,
+        encoding: str = "pcm16",
+        sample_rate: int = 24000,
     ):
         """
-        Route audio from the web client → always Whisper+TTS path.
+        Route audio from the web client.
+        If session is in realtime mode → OpenAI Realtime API (bi-directional voice + tools).
+        Otherwise → classic Whisper STT + Orchestrator + TTS.
         """
+        if self.session_uses_realtime(session_id):
+            client_node = f"webclient_{session_id[:8]}"
+            rs = self._realtime.get_session(client_node)
+            if not rs:
+                rs = await self._realtime.start_session(session_id, client_node)
+            if rs and rs.connected:
+                await rs.send_audio(audio_b64)
+            return
+
         await self._handle_whisper_path(
             session_id=session_id,
             audio_b64=audio_b64,
@@ -212,6 +235,29 @@ class VoiceRouter:
                 text=text,
                 context={"source": "node_text", "node_id": node_id},
             )
+
+    async def handle_text_from_client_voice(self, session_id: str, text: str):
+        """Route a text message into an active realtime voice session (typed while voice is on)."""
+        if self.session_uses_realtime(session_id):
+            client_node = f"webclient_{session_id[:8]}"
+            rs = self._realtime.get_session(client_node) if self._realtime else None
+            if rs and rs.connected:
+                await rs.send_text(text)
+                return
+        if self._orchestrator:
+            await self._orchestrator.handle_command_stream(
+                session_id=session_id, text=text, context={"source": "voice_text"},
+            )
+
+    async def stop_session_voice(self, session_id: str):
+        """Stop realtime voice for a web client session."""
+        client_node = f"webclient_{session_id[:8]}"
+        if self._realtime:
+            sid_for_node = self._realtime._node_to_session.get(client_node)
+            if sid_for_node:
+                await self._realtime.stop_session(sid_for_node)
+        self._session_voice_mode.pop(session_id, None)
+        logger.info(f"Voice stopped for session {session_id[:8]}")
 
     async def shutdown(self):
         if self._realtime:

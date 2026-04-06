@@ -417,21 +417,27 @@ class RealtimeProxy:
         return []
 
     async def _handle_audio_delta(self, session_id: str, audio_b64: str, is_done: bool):
-        """Forward audio from OpenAI back to the phone node."""
+        """Forward audio from OpenAI back to the connected client (web or daemon node)."""
         rs = self._sessions.get(session_id)
         if not rs:
             return
-        if self._send_to_node:
-            msg = {
-                "type": "audio_response",
-                "payload": {
-                    "data_b64": audio_b64,
-                    "encoding": AUDIO_FORMAT,
-                    "sample_rate": SAMPLE_RATE,
-                    "is_final": is_done,
-                },
-            }
-            await self._send_to_node(rs.node_id, msg)
+
+        payload = {
+            "data_b64": audio_b64,
+            "encoding": AUDIO_FORMAT,
+            "sample_rate": SAMPLE_RATE,
+            "is_final": is_done,
+        }
+
+        if rs.node_id.startswith("webclient_") and self._send_to_session:
+            from models.protocol import TheoraMessage
+            msg = TheoraMessage(
+                session_id=session_id, hop="brain", type="audio_response",
+                payload=payload,
+            )
+            await self._send_to_session(session_id, msg)
+        elif self._send_to_node:
+            await self._send_to_node(rs.node_id, {"type": "audio_response", "payload": payload})
 
     async def _handle_transcript(self, session_id: str, text: str, is_final: bool):
         """Store transcripts in memory and forward to client sessions."""

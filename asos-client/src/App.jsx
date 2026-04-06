@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SduiRenderer } from './components/SduiRenderer';
-import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle } from 'lucide-react';
+import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle, Phone } from 'lucide-react';
 import { WS_URL, API_BASE } from './config';
+import { RealtimeVoiceEngine } from './lib/voiceRealtime';
 
 export default function App() {
   const [messages, setMessages] = useState([]);
@@ -10,6 +11,7 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [hr, setHr] = useState(72);
   const [isRecording, setIsRecording] = useState(false);
+  const [voiceMode, setVoiceMode] = useState('off');
   const [transcript, setTranscript] = useState('');
   const [streamingText, setStreamingText] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -18,6 +20,7 @@ export default function App() {
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
   const mediaRecorderRef = useRef(null);
+  const voiceEngineRef = useRef(null);
   const chunkIndexRef = useRef(0);
   const streamBufferRef = useRef('');
   const greetingReceivedRef = useRef(false);
@@ -96,6 +99,12 @@ export default function App() {
           }
         } else if (msg.type === 'tts_chunk') {
           playTTSChunk(msg.payload);
+        } else if (msg.type === 'audio_response') {
+          if (voiceEngineRef.current?.active) {
+            voiceEngineRef.current.handleAudioResponse(msg.payload);
+          }
+        } else if (msg.type === 'voice_config_ack') {
+          console.log("Voice config acknowledged:", msg.payload);
         }
       } catch (e) {
         console.error("Message error:", e);
@@ -148,70 +157,28 @@ export default function App() {
   };
 
   const startRecording = async () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-          ? 'audio/webm;codecs=opus'
-          : 'audio/webm',
-      });
-
-      chunkIndexRef.current = 0;
-      mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = async (event) => {
-        if (event.data.size > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64 = reader.result.split(',')[1];
-            const audioMsg = {
-              hop: "client",
-              type: "audio_chunk",
-              payload: {
-                encoding: "webm",
-                sample_rate: 16000,
-                channels: 1,
-                chunk_index: chunkIndexRef.current++,
-                is_final: false,
-                data_b64: base64,
-              }
-            };
-            wsRef.current.send(JSON.stringify(audioMsg));
-          };
-          reader.readAsDataURL(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
-            hop: "client",
-            type: "audio_chunk",
-            payload: {
-              encoding: "webm",
-              sample_rate: 16000,
-              channels: 1,
-              chunk_index: chunkIndexRef.current,
-              is_final: true,
-              data_b64: "",
-            }
-          }));
-        }
-      };
-
-      mediaRecorder.start(1000);
+      const engine = new RealtimeVoiceEngine(wsRef.current);
+      voiceEngineRef.current = engine;
+      await engine.start();
       setIsRecording(true);
+      setVoiceMode('realtime');
+      setMessages(prev => [...prev, { role: 'system', type: 'text', content: 'Voice conversation started. Speak naturally — your agent can hear you and use tools.' }]);
     } catch (err) {
-      console.error("Mic access denied:", err);
+      console.error("Voice start failed:", err);
+      setMessages(prev => [...prev, { role: 'system', type: 'text', content: `Mic access denied: ${err.message}` }]);
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+    if (voiceEngineRef.current) {
+      voiceEngineRef.current.stop();
+      voiceEngineRef.current = null;
     }
     setIsRecording(false);
+    setVoiceMode('off');
   };
 
   const handleUIAction = (action_id) => {
@@ -237,9 +204,9 @@ export default function App() {
         </div>
         <div className="flex items-center gap-3">
           {isRecording && (
-            <span className="text-red-400 text-xs animate-pulse flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-red-500" />
-              REC
+            <span className="text-green-400 text-xs animate-pulse flex items-center gap-1">
+              <Phone size={12} />
+              LIVE
             </span>
           )}
           <div className="flex items-center gap-1.5 text-red-400">
@@ -324,10 +291,11 @@ export default function App() {
           <button
             type="button"
             onClick={toggleRecording}
+            title={isRecording ? "Stop voice conversation" : "Start voice conversation (realtime)"}
             className={`p-3 rounded-full transition-all active:scale-95 ${
               isRecording
-                ? 'bg-red-500 text-white animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.5)]'
-                : 'bg-asos-card border border-asos-border text-gray-400 hover:text-white'
+                ? 'bg-green-500 text-white shadow-[0_0_20px_rgba(34,197,94,0.5)] ring-2 ring-green-400 ring-opacity-50'
+                : 'bg-asos-card border border-asos-border text-gray-400 hover:text-white hover:border-asos-accent'
             }`}
           >
             {isRecording ? <MicOff size={18} /> : <Mic size={18} />}

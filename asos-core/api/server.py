@@ -158,6 +158,7 @@ class VisionBuffer:
 
 class BrainState:
     def __init__(self):
+        self._load_stored_credentials()
         self.config = ConfigLoader()
         self.config.discover()
         self.sessions: dict[str, WebSocket] = {}
@@ -305,6 +306,32 @@ class BrainState:
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
             f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
         )
+
+    @staticmethod
+    def _load_stored_credentials():
+        """Load API keys from ~/.theora/credentials.json into environment if not already set."""
+        creds_path = Path(os.environ.get("THEORA_HOME", Path.home() / ".theora")) / "credentials.json"
+        if not creds_path.exists():
+            return
+        try:
+            import json as _json
+            creds = _json.loads(creds_path.read_text())
+            env_keys = [
+                "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+                "GROQ_API_KEY", "TAVILY_API_KEY",
+            ]
+            loaded = []
+            for key in env_keys:
+                if creds.get(key) and not os.environ.get(key):
+                    os.environ[key] = creds[key]
+                    loaded.append(key)
+            if creds.get("web_search") and not os.environ.get("TAVILY_API_KEY"):
+                os.environ["TAVILY_API_KEY"] = creds["web_search"]
+                loaded.append("TAVILY_API_KEY")
+            if loaded:
+                logger.info(f"Loaded credentials from {creds_path}: {', '.join(loaded)}")
+        except Exception as e:
+            logger.warning(f"Failed to load credentials: {e}")
 
     async def send_to_session(self, session_id: str, msg: TheoraMessage):
         ws = self.sessions.get(session_id)
@@ -1137,6 +1164,21 @@ async def llm_switch(body: dict):
     }
 
 
+@app.get("/api/voice/status")
+async def voice_status():
+    """Voice subsystem status."""
+    realtime_available = state.realtime_proxy.available if state.realtime_proxy else False
+    audio_available = state.audio.available if state.audio else False
+    active_sessions = len(state.realtime_proxy._sessions) if state.realtime_proxy else 0
+    return {
+        "realtime_available": realtime_available,
+        "audio_available": audio_available,
+        "active_realtime_sessions": active_sessions,
+        "wake_word_enabled": bool(state.wake_word and state.wake_word.enabled),
+        "tts_voice": os.getenv("THEORA_TTS_VOICE", "nova"),
+    }
+
+
 @app.get("/skills")
 async def list_skills():
     return [
@@ -1273,6 +1315,19 @@ async def client_session(ws: WebSocket):
                                     payload={"manifest": manifest, "reason": need.get("capability", "")},
                                 ).model_dump())
 
+                elif msg.type == "voice_config":
+                    vcfg = raw.get("payload", {})
+                    mode = vcfg.get("mode", "realtime")
+                    if state.voice_router:
+                        state.voice_router.set_session_voice_mode(session_id, mode)
+                        if mode == "disabled":
+                            await state.voice_router.stop_session_voice(session_id)
+                    await ws.send_json(TheoraMessage(
+                        session_id=session_id, hop="brain", type="voice_config_ack",
+                        payload={"mode": mode, "status": "ok"},
+                    ).model_dump())
+                    logger.info(f"Web client voice mode: {mode}")
+
                 elif msg.type == "audio_chunk" and isinstance(payload, AudioChunkPayload):
                     if state.voice_router:
                         await state.voice_router.handle_audio_from_client(
@@ -1280,8 +1335,8 @@ async def client_session(ws: WebSocket):
                             audio_b64=payload.data_b64,
                             chunk_index=payload.chunk_index,
                             is_final=payload.is_final,
-                            encoding=payload.encoding,
-                            sample_rate=payload.sample_rate,
+                            encoding=payload.encoding or "pcm16",
+                            sample_rate=payload.sample_rate or 24000,
                         )
 
                 elif msg.type == "ui_event" and isinstance(payload, UIEventPayload):
