@@ -33,7 +33,7 @@ from memory.hlc import HybridLogicalClock, HLCTimestamp
 
 logger = logging.getLogger("theora.memory.sync")
 
-SYNC_PORT = int(os.getenv("THEORA_SYNC_PORT", "9091"))
+SYNC_PORT = int(os.getenv("THEORA_SYNC_PORT", os.getenv("THEORA_PORT", "9090")))
 SYNC_PASSPHRASE = os.getenv("THEORA_SYNC_PASSPHRASE", "")
 SERVICE_TYPE = "_theora._tcp.local."
 
@@ -294,7 +294,7 @@ class SyncEngine:
                 port=SYNC_PORT,
                 properties={
                     b"node_id": self.node_id.encode(),
-                    b"version": b"0.9.0",
+                    b"version": b"1.0.0",
                 },
             )
 

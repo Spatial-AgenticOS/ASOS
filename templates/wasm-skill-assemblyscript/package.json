@@ -1,0 +1,11 @@
+{
+  "name": "theora-skill-example-as",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "asc assembly/index.ts --target release --outFile build/skill.wasm --optimize",
+    "build:debug": "asc assembly/index.ts --target debug --outFile build/skill.wasm"
+  },
+  "devDependencies": {
+    "assemblyscript": "^0.27.0"
+  }
+}

@@ -1,0 +1,25 @@
+{
+    "skill_id": "my_wasm_skill",
+    "version": "0.1.0",
+    "author": "your-name",
+    "runtime": "wasm",
+    "brand": {
+        "name": "My WASM Skill",
+        "primary_color": "#E67E22"
+    },
+    "description": "A sample WASM skill that runs sandboxed inside THEORA.",
+    "trigger_phrases": ["run my wasm skill", "execute wasm"],
+    "categories": ["utility"],
+    "auth": { "type": "none" },
+    "endpoints": [
+        {
+            "id": "execute",
+            "method": "WS_EXECUTE",
+            "url": "wasm://theora_skill_example.wasm",
+            "description": "Execute the WASM skill",
+            "params": [
+                { "name": "input", "type": "string", "required": true, "description": "Input data" }
+            ]
+        }
+    ]
+}

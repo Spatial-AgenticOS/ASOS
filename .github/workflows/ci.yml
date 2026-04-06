@@ -24,8 +24,15 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[all,dev]"
 
-      - name: Run tests
-        run: pytest tests/ -x -v --tb=short
+      - name: Run tests with coverage
+        run: pytest tests/ -x -v --tb=short --cov=. --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./asos-core/coverage.xml
+          fail_ci_if_error: false
 
   client-build:
     name: Client — vite build

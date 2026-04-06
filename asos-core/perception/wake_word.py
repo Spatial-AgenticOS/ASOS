@@ -81,13 +81,24 @@ class WakeWordDetector:
         try:
             import openwakeword
             from openwakeword.model import Model as OWWModel
+
+            model_name = os.getenv("THEORA_WAKE_MODEL", "hey_jarvis_v0.1")
+
+            try:
+                openwakeword.utils.download_models([model_name])
+            except Exception:
+                pass
+
             self._oww_model = OWWModel(
-                wakeword_models=["hey_jarvis_v0.1"],
+                wakeword_models=[model_name],
                 inference_framework="onnx",
             )
-            logger.info("openwakeword loaded — using ML-based wake word detection")
+            logger.info(f"openwakeword loaded (model={model_name}) — ML-based wake word detection active")
         except ImportError:
-            logger.info("openwakeword not installed — using energy-based fallback")
+            logger.info(
+                "openwakeword not installed — using energy-based fallback. "
+                "Install with: pip install openwakeword onnxruntime"
+            )
         except Exception as e:
             logger.warning(f"openwakeword init failed: {e} — using energy-based fallback")
 

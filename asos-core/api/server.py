@@ -81,12 +81,41 @@ app = FastAPI(
     version="1.0.0",
 )
 
+CORS_ORIGINS = os.getenv("THEORA_CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ─────────────────────────────────────────────
+# Rate Limiting Middleware
+# ─────────────────────────────────────────────
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+import collections
+
+_rate_limit_store: dict[str, collections.deque] = {}
+RATE_LIMIT_RPM = int(os.getenv("THEORA_RATE_LIMIT_RPM", "120"))
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        window = _rate_limit_store.setdefault(client_ip, collections.deque())
+        while window and window[0] < now - 60:
+            window.popleft()
+        if len(window) >= RATE_LIMIT_RPM:
+            return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+        window.append(now)
+        return await call_next(request)
+
+
+app.add_middleware(RateLimitMiddleware)
 
 
 # ─────────────────────────────────────────────
@@ -317,6 +346,12 @@ async def startup():
 # ─────────────────────────────────────────────
 # Health & Discovery
 # ─────────────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    """Health check endpoint for Docker HEALTHCHECK and load balancers."""
+    return {"status": "ok", "version": "1.0.0"}
+
 
 @app.get("/")
 async def root():
@@ -1522,6 +1557,19 @@ async def _analyze_scene_background(
 # ─────────────────────────────────────────────
 # Entry Point
 # ─────────────────────────────────────────────
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Graceful shutdown: close LLM clients, MCP connections, sync engine."""
+    logger.info("THEORA Brain shutting down gracefully...")
+    if state.orchestrator and state.orchestrator.llm:
+        await state.orchestrator.llm.close()
+    if state.mcp_client:
+        await state.mcp_client.disconnect_all()
+    if state.sync_engine:
+        await state.sync_engine.stop_discovery()
+    logger.info("Shutdown complete.")
+
 
 if __name__ == "__main__":
     import uvicorn

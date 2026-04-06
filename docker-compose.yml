@@ -28,6 +28,12 @@ services:
       - theora-memory:/root/.theora
       - theora-config:/root/.config/theora
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   asos-client:
     build:
@@ -39,7 +45,8 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - asos-brain
+      asos-brain:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

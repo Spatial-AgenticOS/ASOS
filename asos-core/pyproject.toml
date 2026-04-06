@@ -25,14 +25,21 @@ wasm = [
 sync = [
     "zeroconf>=0.131.0",
 ]
+wake = [
+    "openwakeword>=0.6.0",
+    "onnxruntime>=1.16.0",
+]
 all = [
     "openai>=1.50.0",
     "wasmtime>=22.0.0",
     "zeroconf>=0.131.0",
+    "openwakeword>=0.6.0",
+    "onnxruntime>=1.16.0",
 ]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
 ]
 
 [project.scripts]

@@ -63,17 +63,16 @@ class LLMProvider:
         # Check if API key is available — if not, try Ollama fallback
         if not self.api_key and self.provider != "ollama":
             logger.warning(f"No API key for provider '{self.provider}'. Trying Ollama fallback...")
-            try:
-                import urllib.request
-                urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
+            ollama_model = self._detect_ollama()
+            if ollama_model:
                 self.provider = "ollama"
                 self.base_url = "http://localhost:11434/v1"
-                self.model = "llama3"
+                self.model = ollama_model
                 self.api_key = "ollama"
-                logger.info("Ollama detected — using local model as fallback")
-            except Exception:
+                logger.info(f"Ollama detected — using model '{ollama_model}'")
+            else:
                 logger.warning(
-                    "No LLM available. Set OPENAI_API_KEY or run Ollama. "
+                    "No LLM available. Set OPENAI_API_KEY or run Ollama (`ollama serve`). "
                     "Brain will operate in direct-execution mode (no reasoning, skill matching only)."
                 )
                 self.available = False
@@ -91,6 +90,25 @@ class LLMProvider:
 
         status = "READY" if self.available else "DIRECT-EXECUTION MODE (no LLM)"
         logger.info(f"LLM Provider: {self.provider} | Model: {self.model} | Status: {status}")
+
+    @staticmethod
+    def _detect_ollama() -> Optional[str]:
+        """Probe Ollama for running models. Returns best model name or None."""
+        preferred = ["llama3.1", "llama3", "mistral", "gemma2", "phi3", "qwen2"]
+        try:
+            import urllib.request
+            resp = urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3)
+            data = json.loads(resp.read())
+            models = [m.get("name", "").split(":")[0] for m in data.get("models", [])]
+            if not models:
+                logger.info("Ollama running but no models pulled. Try: ollama pull llama3.1")
+                return None
+            for pref in preferred:
+                if pref in models:
+                    return pref
+            return models[0]
+        except Exception:
+            return None
 
     def _init_local_engine(self):
         try:
