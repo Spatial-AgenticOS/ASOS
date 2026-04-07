@@ -50,6 +50,10 @@ class IdentityWorkspace:
         if not tools_path.exists():
             tools_path.write_text(DEFAULT_TOOLS_MD)
 
+        user_path = self._home / "USER.md"
+        if not user_path.exists():
+            user_path.write_text(DEFAULT_USER_MD)
+
     def load_identity(self) -> dict:
         """Load the structured IDENTITY.yaml."""
         path = self._home / "IDENTITY.yaml"
@@ -108,6 +112,25 @@ class IdentityWorkspace:
         """Append an insight to the memory file."""
         current = self.read_memory()
         self.write_memory(current.rstrip() + "\n\n" + addition)
+
+    def read_user(self) -> str:
+        """Read the USER.md — information about the user."""
+        path = self._home / "USER.md"
+        return path.read_text() if path.exists() else ""
+
+    def write_user(self, content: str):
+        """Update the user profile (agent self-modification)."""
+        path = self._home / "USER.md"
+        backup = self._home / f"USER.md.bak.{int(time.time())}"
+        if path.exists():
+            backup.write_text(path.read_text())
+        path.write_text(content)
+        logger.info("Agent updated USER.md")
+
+    def append_user(self, addition: str):
+        """Append to the user profile."""
+        current = self.read_user()
+        self.write_user(current.rstrip() + "\n\n" + addition)
 
     def read_tools(self) -> str:
         """Read the tools/environment notes file."""
@@ -172,6 +195,10 @@ class IdentityWorkspace:
         soul = self.read_soul()
         if soul:
             parts.append(f"\n## Personality & Soul\n{soul}")
+
+        user = self.read_user()
+        if user and user.strip() != DEFAULT_USER_MD.strip():
+            parts.append(f"\n## About the User\n{user}")
 
         rules = identity.get("rules", [])
         if rules:
@@ -292,6 +319,19 @@ Long-term curated memory — insights distilled from conversations and observati
 
 ## Important Notes
 (Will be filled during memory maintenance cycles)
+"""
+
+DEFAULT_USER_MD = """# About Me
+
+Tell your agent about yourself here.
+
+Run `theora setup` to fill this in interactively, or edit this file directly.
+
+Things that help your agent be more useful:
+- Your name, location, timezone
+- What you do (job, interests)
+- Health goals or conditions to track
+- Preferences (metric vs imperial, communication style, etc.)
 """
 
 DEFAULT_TOOLS_MD = """# Environment & Tools

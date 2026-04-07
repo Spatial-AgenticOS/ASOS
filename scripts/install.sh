@@ -82,21 +82,31 @@ fi
 # ─── Done ───────────────────────────────────────────────
 
 echo ""
-echo -e "${GREEN}${BOLD}  Done!${NC}"
+echo -e "${GREEN}${BOLD}  Installed!${NC}"
 echo ""
-echo -e "  ${BOLD}Get started:${NC}"
+
+# Auto-run setup wizard if no credentials exist
+THEORA_CREDS="$HOME/.theora/credentials.json"
+if [ ! -f "$THEORA_CREDS" ] || [ ! -s "$THEORA_CREDS" ]; then
+    echo -e "  ${BOLD}Let's set up your agent...${NC}"
+    echo ""
+    if command -v theora &> /dev/null; then
+        theora setup
+    else
+        $PYTHON -m cli.setup_wizard 2>/dev/null || {
+            echo -e "  ${DIM}Setup wizard not available. Run it later: theora setup${NC}"
+        }
+    fi
+    echo ""
+fi
+
+echo -e "  ${BOLD}Start THEORA:${NC}"
+echo "    theora start"
 echo ""
-echo "    1. Set your API key:"
-echo "       export OPENAI_API_KEY=sk-..."
-echo ""
-echo "    2. Start THEORA:"
-echo "       theora start"
-echo ""
-echo -e "  ${BOLD}That's it.${NC} THEORA will start the brain, open the dashboard,"
-echo "  and drop you into an interactive chat."
+echo -e "  ${BOLD}That's it.${NC} One command. Brain starts, dashboard opens, chat begins."
 echo ""
 echo -e "  ${DIM}Other commands:${NC}"
-echo "    theora setup      # Guided setup wizard"
+echo "    theora setup      # Re-run setup wizard"
 echo "    theora doctor     # Check what's working"
 echo "    theora serve      # Headless server mode"
 echo ""

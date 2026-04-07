@@ -265,14 +265,37 @@ def cmd_serve(host: str = "0.0.0.0", port: int = 9090):
     uvicorn.run("api.server:app", host=host, port=port, reload=False, log_level="info")
 
 
+def _is_first_run() -> bool:
+    """Check if this is the first time running THEORA."""
+    theora_home = os.path.expanduser(os.environ.get("THEORA_HOME", "~/.theora"))
+    creds_path = os.path.join(theora_home, "credentials.json")
+    config_path = os.path.join(theora_home, "config.json")
+    has_creds = os.path.exists(creds_path)
+    has_config = os.path.exists(config_path)
+    has_env_key = bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+                       or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GROQ_API_KEY"))
+
+    if has_env_key:
+        return False
+
+    if has_creds:
+        try:
+            creds = json.loads(open(creds_path).read())
+            if any(v for v in creds.values() if v):
+                return False
+        except Exception:
+            pass
+
+    return True
+
+
 def cmd_start(port: int = 9090, no_browser: bool = False):
     """
     One command to rule them all.
     Starts the brain, checks health, opens browser, and drops into chat.
+    If first run, launches setup wizard first.
     """
-    import subprocess
     import time
-    import signal
     import threading
 
     try:
@@ -280,6 +303,13 @@ def cmd_start(port: int = 9090, no_browser: bool = False):
     except ImportError:
         print("  Missing dependencies. Run: pip install 'theora-asos[llm]'")
         sys.exit(1)
+
+    # First run detection — auto-launch setup
+    if _is_first_run():
+        print()
+        print("  First time running THEORA? Let's set you up.\n")
+        cmd_setup()
+        print()
 
     # Check if already running
     try:
@@ -300,19 +330,6 @@ def cmd_start(port: int = 9090, no_browser: bool = False):
   ║   Starting agent on port {port}       ║
   ╚══════════════════════════════════════╝
 """)
-
-    # Check for API keys
-    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
-    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    creds_path = os.path.expanduser("~/.theora/credentials.json")
-    has_creds = os.path.exists(creds_path)
-
-    if not has_openai and not has_anthropic and not has_creds:
-        print("  No API key found. Set one:")
-        print("    export OPENAI_API_KEY=sk-...")
-        print("    export ANTHROPIC_API_KEY=sk-ant-...")
-        print("  Or run: theora setup")
-        print()
 
     # Start server in background thread
     server_ready = threading.Event()

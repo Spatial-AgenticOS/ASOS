@@ -1,15 +1,18 @@
 """
-THEORA Interactive Setup Wizard
-================================
-Step-by-step guided onboarding:
-1. Provider selection + API key validation
-2. Identity creation (name, personality, SOUL.md)
-3. Memory initialization
-4. Hardware pairing / device scan
-5. First conversation test
-6. Channel configuration (optional)
+THEORA Interactive Onboarding
+==============================
+Like `openclaw onboard` — one guided flow that configures everything.
 
-Uses rich library for beautiful terminal UI.
+Steps:
+  1. Welcome + what THEORA is
+  2. LLM provider + API key (validated)
+  3. Model selection
+  4. Tell the agent about YOU (USER.md)
+  5. Agent personality / SOUL.md
+  6. Optional tool keys (search, weather, image gen)
+  7. Summary + how to start
+
+All config is saved to ~/.theora/ — no env vars needed.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import asyncio
 import json
 import os
 import sys
+import textwrap
 from pathlib import Path
 
 try:
@@ -25,408 +29,681 @@ try:
     from rich.table import Table
     from rich.prompt import Prompt, Confirm
     from rich.progress import Progress, SpinnerColumn, TextColumn
-    from rich.markdown import Markdown
-    from rich import print as rprint
+    from rich.text import Text
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
 
 THEORA_HOME = Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora")))
 
-PROVIDER_CONFIGS = {
+PROVIDERS = {
     "openai": {
         "name": "OpenAI",
         "env_key": "OPENAI_API_KEY",
-        "validate_url": "https://api.openai.com/v1/models",
+        "desc": "GPT-4o, realtime voice, DALL-E image gen",
         "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
-        "supports_realtime": True,
+        "default_model": "gpt-4o",
+        "voice": True,
+        "key_hint": "Starts with sk-...",
     },
     "anthropic": {
         "name": "Anthropic",
         "env_key": "ANTHROPIC_API_KEY",
-        "validate_url": "https://api.anthropic.com/v1/models",
-        "models": ["claude-sonnet-4-20250514", "claude-3.5-sonnet-20241022"],
-        "supports_realtime": False,
+        "desc": "Claude Sonnet/Opus, strong reasoning",
+        "models": ["claude-sonnet-4-20250514", "claude-3.5-sonnet-20241022", "claude-3-opus-20240229"],
+        "default_model": "claude-sonnet-4-20250514",
+        "voice": False,
+        "key_hint": "Starts with sk-ant-...",
     },
     "gemini": {
         "name": "Google Gemini",
-        "env_key": "GEMINI_API_KEY",
-        "validate_url": "https://generativelanguage.googleapis.com/v1/models",
-        "models": ["gemini-2.0-flash-exp", "gemini-1.5-pro"],
-        "supports_realtime": True,
+        "env_key": "GOOGLE_API_KEY",
+        "desc": "Gemini 2.0 Flash, realtime voice, multimodal",
+        "models": ["gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"],
+        "default_model": "gemini-2.0-flash-exp",
+        "voice": True,
+        "key_hint": "From Google AI Studio",
+    },
+    "groq": {
+        "name": "Groq",
+        "env_key": "GROQ_API_KEY",
+        "desc": "Ultra-fast inference, Llama/Mixtral models",
+        "models": ["llama-3.1-70b-versatile", "mixtral-8x7b-32768"],
+        "default_model": "llama-3.1-70b-versatile",
+        "voice": False,
+        "key_hint": "From console.groq.com",
     },
     "ollama": {
         "name": "Ollama (Local)",
         "env_key": "",
-        "validate_url": "http://localhost:11434/api/tags",
+        "desc": "Free, private, runs on your machine",
         "models": [],
-        "supports_realtime": False,
+        "default_model": "",
+        "voice": False,
+        "key_hint": "No key needed — just install Ollama",
     },
 }
 
-PERSONALITY_ARCHETYPES = {
-    "professional": "Formal, precise, and efficient. Minimal small talk.",
-    "friendly": "Warm, conversational, and encouraging. Uses natural language.",
-    "minimal": "Extremely concise. Short answers. No filler.",
-    "creative": "Playful, curious, and imaginative. Thinks outside the box.",
-    "custom": "Write your own personality description.",
+TOOL_KEYS = [
+    {
+        "env": "TAVILY_API_KEY",
+        "name": "Tavily",
+        "desc": "Web search (best quality)",
+        "hint": "From tavily.com — free tier available",
+        "optional": True,
+    },
+    {
+        "env": "OPENWEATHER_API_KEY",
+        "name": "OpenWeatherMap",
+        "desc": "Weather data",
+        "hint": "From openweathermap.org — free tier",
+        "optional": True,
+    },
+    {
+        "env": "BRAVE_API_KEY",
+        "name": "Brave Search",
+        "desc": "Web search (alternative)",
+        "hint": "From brave.com/search/api",
+        "optional": True,
+    },
+]
+
+PERSONALITY_PRESETS = {
+    "assistant": {
+        "label": "Personal Assistant",
+        "desc": "Warm, direct, and efficient. Remembers your preferences.",
+        "soul": textwrap.dedent("""\
+            You are a warm, capable personal assistant. You speak naturally, like
+            a trusted colleague who knows the user well. You're direct — no filler,
+            no over-explaining — but never cold. You proactively notice patterns in
+            the user's data and mention things that might be useful. You remember
+            past conversations and learn preferences over time. When you don't know
+            something, you say so honestly.
+        """),
+    },
+    "engineer": {
+        "label": "Technical Partner",
+        "desc": "Precise, analytical, code-first. Minimal small talk.",
+        "soul": textwrap.dedent("""\
+            You are a senior engineer partner. You think in systems, prefer data
+            over opinion, and communicate with precision. When asked a question,
+            you give the answer first, then context. You use technical language
+            naturally but explain when asked. You suggest better approaches when
+            you see them. You don't sugarcoat — if something is wrong, you say it.
+        """),
+    },
+    "coach": {
+        "label": "Wellness Coach",
+        "desc": "Encouraging, health-focused, motivational.",
+        "soul": textwrap.dedent("""\
+            You are a supportive health and wellness coach. You celebrate progress,
+            no matter how small. You interpret health data with context and empathy —
+            not just numbers. You encourage consistency over perfection. You know when
+            to push and when to back off. You make health data approachable and
+            actionable instead of overwhelming.
+        """),
+    },
+    "minimal": {
+        "label": "Minimal",
+        "desc": "Extremely concise. Short answers. Zero filler.",
+        "soul": textwrap.dedent("""\
+            You are extremely concise. One sentence when possible. No greetings,
+            no filler, no "certainly" or "of course". Just the answer. Use bullet
+            points for lists. Numbers without prose. You only elaborate when the
+            user explicitly asks for more detail.
+        """),
+    },
+    "custom": {
+        "label": "Custom",
+        "desc": "Write your own personality from scratch.",
+        "soul": "",
+    },
 }
 
 
 def run_setup():
-    """Entry point for the setup wizard."""
+    """Entry point — called by `theora setup` or the install script."""
     if HAS_RICH:
-        console = Console()
-        wizard = SetupWizard(console)
+        wizard = OnboardWizard(Console())
     else:
-        wizard = SetupWizardBasic()
-    asyncio.get_event_loop().run_until_complete(wizard.run())
+        wizard = OnboardWizardPlain()
+    try:
+        asyncio.run(wizard.run())
+    except (KeyboardInterrupt, EOFError):
+        print("\n  Setup cancelled. Run `theora setup` anytime to continue.\n")
 
 
-class SetupWizard:
-    """Rich terminal UI setup wizard."""
+class OnboardWizard:
+    """Rich-powered interactive onboarding."""
 
     def __init__(self, console: Console):
         self.c = console
-        self.config = {}
+        self.config: dict = {}
+        self.creds: dict = {}
 
     async def run(self):
+        THEORA_HOME.mkdir(parents=True, exist_ok=True)
+        self._load_existing_creds()
+
+        self.c.print()
         self.c.print(Panel.fit(
-            "[bold cyan]THEORA Setup Wizard[/]\n"
-            "[dim]Let's set up your personal AI operating system.[/]",
+            "[bold cyan]Welcome to THEORA[/]\n\n"
+            "[dim]THEORA is an open-source AI operating system that lives on your machine.\n"
+            "It can control your computer, talk to your devices, remember everything,\n"
+            "and generate rich UI — all while keeping your data private.\n\n"
+            "This wizard will set everything up in about 2 minutes.[/]",
             border_style="cyan",
+            padding=(1, 2),
         ))
         self.c.print()
 
-        THEORA_HOME.mkdir(parents=True, exist_ok=True)
-
         await self._step_provider()
-        await self._step_identity()
-        await self._step_memory()
-        await self._step_hardware()
-        await self._step_test()
-        await self._step_channels()
-        await self._step_finish()
+        await self._step_model()
+        await self._step_about_you()
+        await self._step_personality()
+        await self._step_tool_keys()
+        self._save_all()
+        self._step_finish()
+
+    def _load_existing_creds(self):
+        creds_path = THEORA_HOME / "credentials.json"
+        if creds_path.exists():
+            try:
+                self.creds = json.loads(creds_path.read_text())
+            except Exception:
+                self.creds = {}
+
+    # ── Step 1: Provider ────────────────────────────────────
 
     async def _step_provider(self):
-        self.c.print(Panel("[bold]Step 1/6: LLM Provider[/]", style="blue"))
+        self.c.print(Panel(
+            "[bold]Step 1 · LLM Provider[/]\n"
+            "[dim]Which AI model provider do you want to use?[/]",
+            style="blue",
+        ))
 
-        table = Table(show_header=True)
-        table.add_column("Provider", style="cyan")
-        table.add_column("Status")
-        table.add_column("Features")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Provider", style="cyan", width=18)
+        table.add_column("Description", width=45)
+        table.add_column("Voice", width=6)
+        table.add_column("Status", width=16)
 
-        for pid, pinfo in PROVIDER_CONFIGS.items():
-            env_key = pinfo["env_key"]
-            has_key = bool(os.getenv(env_key)) if env_key else False
-            status = "[green]Key found[/]" if has_key else "[yellow]Not configured[/]"
+        provider_keys = list(PROVIDERS.keys())
+        for i, pid in enumerate(provider_keys, 1):
+            p = PROVIDERS[pid]
+            env_key = p["env_key"]
+            has_key = bool(self.creds.get(env_key) or os.getenv(env_key, "")) if env_key else False
+            status = "[green]configured[/]" if has_key else "[dim]not set[/]"
             if pid == "ollama":
-                status = "[dim]Local — no key needed[/]"
-            features = "Voice" if pinfo["supports_realtime"] else "Text only"
-            table.add_row(pinfo["name"], status, features)
+                status = "[dim]local[/]"
+            voice = "[green]yes[/]" if p["voice"] else "[dim]no[/]"
+            table.add_row(str(i), p["name"], p["desc"], voice, status)
 
         self.c.print(table)
+        self.c.print()
 
         choice = Prompt.ask(
             "Choose provider",
-            choices=list(PROVIDER_CONFIGS.keys()),
+            choices=provider_keys,
             default="openai",
         )
 
-        provider = PROVIDER_CONFIGS[choice]
+        provider = PROVIDERS[choice]
         self.config["provider"] = choice
 
         if choice == "ollama":
-            valid = await self._validate_ollama()
-            if not valid:
-                self.c.print("[yellow]Ollama not running. Start it with: ollama serve[/]")
-            else:
-                self.c.print("[green]Ollama is running![/]")
+            await self._check_ollama()
         elif provider["env_key"]:
-            existing = os.getenv(provider["env_key"], "")
+            existing = self.creds.get(provider["env_key"]) or os.getenv(provider["env_key"], "")
             if existing:
-                self.c.print(f"[green]Using existing {provider['env_key']}[/]")
-                api_key = existing
+                masked = existing[:8] + "..." + existing[-4:] if len(existing) > 12 else "***"
+                self.c.print(f"  Existing key found: {masked}")
+                if Confirm.ask("  Use this key?", default=True):
+                    api_key = existing
+                else:
+                    api_key = Prompt.ask(f"  Enter {provider['name']} API key", password=True)
             else:
-                api_key = Prompt.ask(f"Enter your {provider['name']} API key", password=True)
-                os.environ[provider["env_key"]] = api_key
+                self.c.print(f"  [dim]{provider['key_hint']}[/]")
+                api_key = Prompt.ask(f"  Enter {provider['name']} API key", password=True)
 
-            with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
-                task = progress.add_task("Validating API key...", total=None)
-                valid = await self._validate_key(choice, api_key)
-                progress.remove_task(task)
+            if api_key:
+                with Progress(SpinnerColumn(), TextColumn("{task.description}")) as prog:
+                    prog.add_task("Validating key...", total=None)
+                    valid = await self._validate_key(choice, api_key)
 
-            if valid:
-                self.c.print("[green]API key validated successfully![/]")
-                self._save_credential(provider["env_key"], api_key)
+                if valid:
+                    self.c.print("  [green]Key is valid![/]")
+                    self.creds[provider["env_key"]] = api_key
+                    os.environ[provider["env_key"]] = api_key
+                else:
+                    self.c.print("  [yellow]Could not validate key (might still work). Saving anyway.[/]")
+                    self.creds[provider["env_key"]] = api_key
+                    os.environ[provider["env_key"]] = api_key
+
+        self.c.print()
+
+    # ── Step 2: Model ───────────────────────────────────────
+
+    async def _step_model(self):
+        provider_id = self.config.get("provider", "openai")
+        provider = PROVIDERS[provider_id]
+
+        if provider_id == "ollama":
+            models = await self._list_ollama_models()
+            if models:
+                self.c.print(Panel("[bold]Step 2 · Model[/]", style="blue"))
+                for i, m in enumerate(models, 1):
+                    self.c.print(f"  {i}. {m}")
+                model = Prompt.ask("Choose model", default=models[0] if models else "llama3.1")
+                self.config["model"] = model
             else:
-                self.c.print("[red]API key validation failed. You can fix this later.[/]")
-
-        self.c.print()
-
-    async def _step_identity(self):
-        self.c.print(Panel("[bold]Step 2/6: Agent Identity[/]", style="blue"))
-
-        name = Prompt.ask("Name your agent", default="THEORA")
-        self.config["name"] = name
-
-        self.c.print("\nPersonality archetypes:")
-        for key, desc in PERSONALITY_ARCHETYPES.items():
-            self.c.print(f"  [cyan]{key}[/]: {desc}")
-
-        archetype = Prompt.ask(
-            "Choose personality",
-            choices=list(PERSONALITY_ARCHETYPES.keys()),
-            default="friendly",
-        )
-
-        if archetype == "custom":
-            personality = Prompt.ask("Describe the personality")
-        else:
-            personality = PERSONALITY_ARCHETYPES[archetype]
-
-        self.config["personality"] = personality
-
-        try:
-            import yaml
-            identity_path = THEORA_HOME / "IDENTITY.yaml"
-            identity = {
-                "name": name,
-                "tagline": f"Your personal AI assistant — {name}",
-                "personality": personality,
-                "rules": [
-                    "Never share user data without explicit consent",
-                    "Explain before taking impactful actions",
-                    "Be honest about limitations",
-                ],
-                "greeting_style": "Direct and warm.",
-                "voice": {"tts_voice": "nova"},
-            }
-            identity_path.write_text(yaml.dump(identity, default_flow_style=False, allow_unicode=True))
-            self.c.print(f"[green]Identity saved to {identity_path}[/]")
-        except Exception as e:
-            self.c.print(f"[yellow]Could not save identity: {e}[/]")
-
-        soul_path = THEORA_HOME / "SOUL.md"
-        if not soul_path.exists():
-            soul_path.write_text(f"# {name}'s Soul\n\n{personality}\n")
-            self.c.print(f"[green]Soul file created at {soul_path}[/]")
-
-        self.c.print()
-
-    async def _step_memory(self):
-        self.c.print(Panel("[bold]Step 3/6: Memory Initialization[/]", style="blue"))
-
-        memory_path = THEORA_HOME / "memory.db"
-        if memory_path.exists():
-            size_mb = memory_path.stat().st_size / (1024 * 1024)
-            self.c.print(f"Existing memory database found ({size_mb:.1f} MB)")
-            if Confirm.ask("Keep existing memories?", default=True):
-                self.c.print("[green]Keeping existing memory.[/]")
-            else:
-                memory_path.unlink()
-                self.c.print("[yellow]Memory cleared — starting fresh.[/]")
-        else:
-            self.c.print("No existing memory found. A fresh database will be created on first run.")
-
-        memory_md = THEORA_HOME / "MEMORY.md"
-        if not memory_md.exists():
-            memory_md.write_text("# Agent Memory\n\nLong-term curated memory.\n")
-        self.c.print("[green]Memory system ready.[/]")
-        self.c.print()
-
-    async def _step_hardware(self):
-        self.c.print(Panel("[bold]Step 4/6: Hardware Devices[/]", style="blue"))
-        self.c.print("THEORA can connect to phones, wristbands, smart glasses, and more via HUP.")
-        self.c.print()
-
-        self.c.print("Checking for devices...")
-        has_ble = await self._check_ble()
-
-        if has_ble:
-            self.c.print("[green]Bluetooth available.[/]")
-            if Confirm.ask("Scan for BLE devices?", default=False):
-                self.c.print("[dim]BLE scanning would happen here. Connect your phone app for best results.[/]")
-        else:
-            self.c.print("[dim]No Bluetooth adapter detected (normal on servers).[/]")
-
-        self.c.print("\nTo connect your phone:")
-        self.c.print("  1. Install the THEORA app on your iPhone/Android")
-        self.c.print("  2. Open the app and enter your Brain's address")
-        self.c.print(f"  3. Your Brain will be at: ws://YOUR_IP:9090/v1/node")
-        self.c.print()
-
-    async def _step_test(self):
-        self.c.print(Panel("[bold]Step 5/6: First Conversation Test[/]", style="blue"))
-
-        if not Confirm.ask("Run a test conversation?", default=True):
-            self.c.print("[dim]Skipping test.[/]")
+                self.c.print("  [dim]No Ollama models found. Pull one: ollama pull llama3.1[/]")
+                self.config["model"] = "llama3.1"
             self.c.print()
             return
 
-        self.c.print("Testing connection to Brain...")
+        if not provider["models"]:
+            return
 
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(f"http://localhost:9090/health", timeout=5.0)
-                if resp.status_code == 200:
-                    self.c.print("[green]Brain is running![/]")
-                    info = await client.get(f"http://localhost:9090/api/info", timeout=5.0)
-                    data = info.json()
-                    self.c.print(f"  Skills: {data.get('skills', 0)}")
-                    self.c.print(f"  Memory: {data.get('memory', {})}")
-                    self.c.print(f"  Realtime voice: {data.get('realtime_available', False)}")
-                else:
-                    self.c.print("[yellow]Brain returned non-200. Start it with: theora start[/]")
-        except Exception:
-            self.c.print("[yellow]Brain not running. Start it first with: theora start[/]")
-
-        self.c.print()
-
-    async def _step_channels(self):
-        self.c.print(Panel("[bold]Step 6/6: Channels (Optional)[/]", style="blue"))
-        self.c.print("You can connect THEORA to messaging platforms.")
-
-        if Confirm.ask("Configure Telegram bot?", default=False):
-            token = Prompt.ask("Enter Telegram bot token", password=True)
-            self._save_credential("TELEGRAM_BOT_TOKEN", token)
-            self.c.print("[green]Telegram token saved.[/]")
-
-        if Confirm.ask("Configure Discord bot?", default=False):
-            token = Prompt.ask("Enter Discord bot token", password=True)
-            self._save_credential("DISCORD_BOT_TOKEN", token)
-            self.c.print("[green]Discord token saved.[/]")
-
-        self.c.print()
-
-    async def _step_finish(self):
-        self.c.print(Panel.fit(
-            "[bold green]Setup Complete![/]\n\n"
-            "Start your agent:\n"
-            "  [cyan]theora start[/]    — Start the Brain server\n"
-            "  [cyan]theora[/]          — Interactive chat\n"
-            "  [cyan]theora status[/]   — Check system health\n\n"
-            f"Config: {THEORA_HOME}\n"
-            f"Provider: {self.config.get('provider', 'not set')}\n"
-            f"Agent: {self.config.get('name', 'THEORA')}",
-            border_style="green",
+        self.c.print(Panel(
+            "[bold]Step 2 · Model[/]\n"
+            f"[dim]Which {provider['name']} model?[/]",
+            style="blue",
         ))
 
-    async def _validate_key(self, provider: str, api_key: str) -> bool:
-        try:
-            import httpx
-            if provider == "openai":
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(
-                        "https://api.openai.com/v1/models",
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        timeout=10.0,
-                    )
-                    return resp.status_code == 200
-            elif provider == "anthropic":
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(
-                        "https://api.anthropic.com/v1/models",
-                        headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-                        timeout=10.0,
-                    )
-                    return resp.status_code == 200
-            elif provider == "gemini":
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(
-                        f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
-                        timeout=10.0,
-                    )
-                    return resp.status_code == 200
-        except Exception:
-            return False
-        return False
+        for i, m in enumerate(provider["models"], 1):
+            default_marker = " [green](recommended)[/]" if m == provider["default_model"] else ""
+            self.c.print(f"  {i}. {m}{default_marker}")
 
-    async def _validate_ollama(self) -> bool:
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                resp = await client.get("http://localhost:11434/api/tags", timeout=3.0)
-                return resp.status_code == 200
-        except Exception:
-            return False
+        model = Prompt.ask(
+            "Choose model",
+            choices=provider["models"],
+            default=provider["default_model"],
+        )
+        self.config["model"] = model
+        self.c.print()
 
-    async def _check_ble(self) -> bool:
-        try:
-            import subprocess
-            if sys.platform == "darwin":
-                result = subprocess.run(
-                    ["system_profiler", "SPBluetoothDataType"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                return "Bluetooth" in result.stdout
-        except Exception:
-            pass
-        return False
+    # ── Step 3: About YOU ──────────────────────────────────
 
-    def _save_credential(self, key: str, value: str):
-        creds_path = THEORA_HOME / "credentials.json"
-        creds = {}
-        if creds_path.exists():
-            try:
-                creds = json.loads(creds_path.read_text())
-            except Exception:
-                pass
-        creds[key] = value
-        creds_path.write_text(json.dumps(creds, indent=2))
+    async def _step_about_you(self):
+        self.c.print(Panel(
+            "[bold]Step 3 · About You[/]\n"
+            "[dim]Tell your agent about yourself so it can be more helpful.\n"
+            "This is saved locally in ~/.theora/USER.md — only your agent reads it.[/]",
+            style="blue",
+        ))
 
+        user_path = THEORA_HOME / "USER.md"
+        existing = ""
+        if user_path.exists():
+            existing = user_path.read_text().strip()
+            if existing and existing != _DEFAULT_USER_MD.strip():
+                self.c.print(f"  [dim]Existing USER.md found ({len(existing)} chars)[/]")
+                if not Confirm.ask("  Overwrite it?", default=False):
+                    self.c.print("  [green]Keeping existing USER.md[/]\n")
+                    return
 
-class SetupWizardBasic:
-    """Fallback setup wizard when rich is not installed."""
+        name = Prompt.ask("  Your name", default="")
+        location = Prompt.ask("  Where do you live (city/country)", default="")
+        occupation = Prompt.ask("  What do you do (job, student, etc)", default="")
+        interests = Prompt.ask("  Interests / hobbies (comma-separated)", default="")
+        health_goals = Prompt.ask("  Health goals or conditions to track (optional)", default="")
+        anything_else = Prompt.ask("  Anything else your agent should know", default="")
 
-    async def run(self):
-        print("\n" + "=" * 40)
-        print("  THEORA Setup Wizard")
-        print("  (Install 'rich' for a better experience)")
-        print("=" * 40 + "\n")
+        lines = ["# About Me\n"]
+        if name:
+            lines.append(f"My name is {name}.")
+        if location:
+            lines.append(f"I live in {location}.")
+        if occupation:
+            lines.append(f"I work as {occupation}." if "student" not in occupation.lower() else f"I'm a {occupation}.")
+        if interests:
+            lines.append(f"\n## Interests\n{interests}")
+        if health_goals:
+            lines.append(f"\n## Health\n{health_goals}")
+        if anything_else:
+            lines.append(f"\n## Notes\n{anything_else}")
 
-        THEORA_HOME.mkdir(parents=True, exist_ok=True)
+        user_md = "\n".join(lines) + "\n"
+        user_path.write_text(user_md)
+        self.c.print(f"  [green]Saved to {user_path}[/]")
+        self.c.print(f"  [dim]You can edit this file anytime to update your agent's knowledge about you.[/]")
+        self.c.print()
 
-        print("Step 1: LLM Provider")
-        print("  1. OpenAI  2. Anthropic  3. Gemini  4. Ollama (local)")
-        choice = input("Choose (1-4) [1]: ").strip() or "1"
-        providers = {"1": "openai", "2": "anthropic", "3": "gemini", "4": "ollama"}
-        provider = providers.get(choice, "openai")
-        pinfo = PROVIDER_CONFIGS[provider]
+    # ── Step 4: Agent Personality ───────────────────────────
 
-        if pinfo["env_key"] and not os.getenv(pinfo["env_key"]):
-            api_key = input(f"Enter {pinfo['name']} API key: ").strip()
-            if api_key:
-                os.environ[pinfo["env_key"]] = api_key
-                creds_path = THEORA_HOME / "credentials.json"
-                creds = {}
-                if creds_path.exists():
-                    try:
-                        creds = json.loads(creds_path.read_text())
-                    except Exception:
-                        pass
-                creds[pinfo["env_key"]] = api_key
-                creds_path.write_text(json.dumps(creds, indent=2))
-                print("  Key saved.")
+    async def _step_personality(self):
+        self.c.print(Panel(
+            "[bold]Step 4 · Agent Personality[/]\n"
+            "[dim]How should your agent behave? This defines its SOUL.md.[/]",
+            style="blue",
+        ))
 
-        print("\nStep 2: Agent Identity")
-        name = input("Agent name [THEORA]: ").strip() or "THEORA"
-        print("  Personalities: professional, friendly, minimal, creative")
-        archetype = input("Choose [friendly]: ").strip() or "friendly"
-        personality = PERSONALITY_ARCHETYPES.get(archetype, PERSONALITY_ARCHETYPES["friendly"])
+        preset_keys = list(PERSONALITY_PRESETS.keys())
+        for i, key in enumerate(preset_keys, 1):
+            p = PERSONALITY_PRESETS[key]
+            self.c.print(f"  {i}. [cyan]{p['label']}[/] — {p['desc']}")
 
+        choice = Prompt.ask(
+            "Choose personality",
+            choices=preset_keys,
+            default="assistant",
+        )
+
+        preset = PERSONALITY_PRESETS[choice]
+
+        if choice == "custom":
+            self.c.print("  Write your agent's personality (multi-line, press Enter twice to finish):")
+            lines = []
+            while True:
+                line = Prompt.ask("  ", default="")
+                if line == "" and lines and lines[-1] == "":
+                    break
+                lines.append(line)
+            soul_text = "\n".join(lines).strip()
+        else:
+            soul_text = preset["soul"].strip()
+            self.c.print(f"\n  [dim]{soul_text[:120]}...[/]\n")
+
+        agent_name = Prompt.ask("  Agent name", default="THEORA")
+        self.config["agent_name"] = agent_name
+
+        # Write SOUL.md
+        soul_path = THEORA_HOME / "SOUL.md"
+        soul_content = f"# {agent_name}\n\n{soul_text}\n"
+        soul_path.write_text(soul_content)
+        self.c.print(f"  [green]SOUL.md saved[/]")
+
+        # Write IDENTITY.yaml
         try:
             import yaml
-            identity = {
-                "name": name, "personality": personality,
-                "rules": ["Be helpful", "Respect privacy"],
-            }
-            (THEORA_HOME / "IDENTITY.yaml").write_text(
-                yaml.dump(identity, default_flow_style=False)
-            )
-            print(f"  Identity saved to {THEORA_HOME / 'IDENTITY.yaml'}")
+        except ImportError:
+            yaml = None
+
+        identity = {
+            "name": agent_name,
+            "tagline": f"{agent_name} — your personal AI operating system",
+            "personality": soul_text,
+            "rules": [
+                "Never share user data without explicit consent",
+                "Explain before taking impactful actions",
+                "Be honest about limitations",
+                "Keep responses concise unless asked for detail",
+                "Respect privacy — everything runs locally unless explicitly told otherwise",
+            ],
+            "greeting_style": "Brief and contextual. If you have recent data, mention something relevant.",
+            "voice": {"tts_voice": "nova", "speed": 1.0},
+        }
+
+        identity_path = THEORA_HOME / "IDENTITY.yaml"
+        if yaml:
+            identity_path.write_text(yaml.dump(identity, default_flow_style=False, allow_unicode=True, sort_keys=False))
+        else:
+            identity_path.write_text(json.dumps(identity, indent=2))
+        self.c.print(f"  [green]IDENTITY.yaml saved[/]")
+
+        # Write MEMORY.md (seed)
+        memory_path = THEORA_HOME / "MEMORY.md"
+        if not memory_path.exists():
+            memory_path.write_text("# Agent Memory\n\nLong-term curated memory. The agent updates this file as it learns.\n")
+            self.c.print(f"  [green]MEMORY.md created[/]")
+
+        self.c.print()
+
+    # ── Step 5: Tool API Keys ──────────────────────────────
+
+    async def _step_tool_keys(self):
+        self.c.print(Panel(
+            "[bold]Step 5 · Tool API Keys (Optional)[/]\n"
+            "[dim]These unlock extra capabilities. Skip any you don't need — \n"
+            "THEORA works without them (falls back to free alternatives).[/]",
+            style="blue",
+        ))
+
+        for tk in TOOL_KEYS:
+            existing = self.creds.get(tk["env"]) or os.getenv(tk["env"], "")
+            if existing:
+                self.c.print(f"  [green]{tk['name']}[/]: configured")
+                continue
+
+            if Confirm.ask(f"  Add {tk['name']}? ({tk['desc']})", default=False):
+                self.c.print(f"    [dim]{tk['hint']}[/]")
+                key = Prompt.ask(f"    {tk['name']} API key", password=True)
+                if key.strip():
+                    self.creds[tk["env"]] = key.strip()
+                    self.c.print(f"    [green]Saved[/]")
+            else:
+                self.c.print(f"    [dim]Skipped[/]")
+
+        self.c.print()
+
+    # ── Save & Finish ──────────────────────────────────────
+
+    def _save_all(self):
+        """Persist credentials and config to disk."""
+        # Credentials
+        creds_path = THEORA_HOME / "credentials.json"
+        creds_path.write_text(json.dumps(self.creds, indent=2))
+        creds_path.chmod(0o600)
+
+        # Config
+        config_path = THEORA_HOME / "config.json"
+        config_path.write_text(json.dumps(self.config, indent=2))
+
+    def _step_finish(self):
+        provider_name = PROVIDERS.get(self.config.get("provider", ""), {}).get("name", "?")
+        model = self.config.get("model", "default")
+        agent_name = self.config.get("agent_name", "THEORA")
+
+        self.c.print(Panel.fit(
+            f"[bold green]Setup Complete![/]\n\n"
+            f"  Provider:    {provider_name}\n"
+            f"  Model:       {model}\n"
+            f"  Agent:       {agent_name}\n"
+            f"  Config:      {THEORA_HOME}\n\n"
+            f"[bold]Start your agent:[/]\n"
+            f"  [cyan]theora start[/]\n\n"
+            f"[dim]Files you can edit anytime:[/]\n"
+            f"  {THEORA_HOME}/USER.md       — about you\n"
+            f"  {THEORA_HOME}/SOUL.md       — agent personality\n"
+            f"  {THEORA_HOME}/MEMORY.md     — agent's long-term memory\n"
+            f"  {THEORA_HOME}/IDENTITY.yaml — structured identity config",
+            border_style="green",
+            padding=(1, 2),
+        ))
+
+    # ── Helpers ─────────────────────────────────────────────
+
+    async def _validate_key(self, provider: str, key: str) -> bool:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                if provider == "openai":
+                    r = await client.get("https://api.openai.com/v1/models",
+                                         headers={"Authorization": f"Bearer {key}"})
+                    return r.status_code == 200
+                elif provider == "anthropic":
+                    r = await client.get("https://api.anthropic.com/v1/models",
+                                         headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+                    return r.status_code == 200
+                elif provider == "gemini":
+                    r = await client.get(f"https://generativelanguage.googleapis.com/v1/models?key={key}")
+                    return r.status_code == 200
+                elif provider == "groq":
+                    r = await client.get("https://api.groq.com/openai/v1/models",
+                                         headers={"Authorization": f"Bearer {key}"})
+                    return r.status_code == 200
         except Exception:
             pass
+        return False
 
-        print("\nSetup complete! Run 'theora start' to begin.")
+    async def _check_ollama(self):
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get("http://localhost:11434/api/tags")
+                if r.status_code == 200:
+                    models = [m["name"] for m in r.json().get("models", [])]
+                    if models:
+                        self.c.print(f"  [green]Ollama running with {len(models)} model(s)[/]")
+                    else:
+                        self.c.print("  [yellow]Ollama running but no models. Pull one: ollama pull llama3.1[/]")
+                    return
+        except Exception:
+            pass
+        self.c.print("  [yellow]Ollama not running. Start it: ollama serve[/]")
+
+    async def _list_ollama_models(self) -> list[str]:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get("http://localhost:11434/api/tags")
+                if r.status_code == 200:
+                    return [m["name"] for m in r.json().get("models", [])]
+        except Exception:
+            pass
+        return []
+
+
+# ── Plain fallback (no rich) ───────────────────────────────
+
+class OnboardWizardPlain:
+    """Fallback for when rich is not installed."""
+
+    def __init__(self):
+        self.config: dict = {}
+        self.creds: dict = {}
+
+    async def run(self):
+        THEORA_HOME.mkdir(parents=True, exist_ok=True)
+
+        creds_path = THEORA_HOME / "credentials.json"
+        if creds_path.exists():
+            try:
+                self.creds = json.loads(creds_path.read_text())
+            except Exception:
+                self.creds = {}
+
+        print()
+        print("=" * 50)
+        print("  THEORA Setup")
+        print("  (install 'rich' for a better experience: pip install rich)")
+        print("=" * 50)
+        print()
+
+        # Provider
+        print("Step 1: LLM Provider")
+        print("  1. OpenAI     2. Anthropic    3. Gemini")
+        print("  4. Groq       5. Ollama (local)")
+        choice_map = {"1": "openai", "2": "anthropic", "3": "gemini", "4": "groq", "5": "ollama"}
+        choice = input("  Choose (1-5) [1]: ").strip() or "1"
+        provider_id = choice_map.get(choice, "openai")
+        provider = PROVIDERS[provider_id]
+        self.config["provider"] = provider_id
+
+        if provider["env_key"]:
+            existing = self.creds.get(provider["env_key"]) or os.getenv(provider["env_key"], "")
+            if existing:
+                print(f"  Key found: {existing[:8]}...")
+                use = input("  Use this key? (Y/n): ").strip().lower()
+                if use not in ("n", "no"):
+                    api_key = existing
+                else:
+                    api_key = input(f"  Enter {provider['name']} API key: ").strip()
+            else:
+                api_key = input(f"  Enter {provider['name']} API key: ").strip()
+            if api_key:
+                self.creds[provider["env_key"]] = api_key
+                os.environ[provider["env_key"]] = api_key
+        print()
+
+        # Model
+        if provider["models"]:
+            print("Step 2: Model")
+            for i, m in enumerate(provider["models"], 1):
+                default = " (default)" if m == provider["default_model"] else ""
+                print(f"  {i}. {m}{default}")
+            model_input = input(f"  Choose [{provider['default_model']}]: ").strip()
+            self.config["model"] = model_input if model_input in provider["models"] else provider["default_model"]
+        print()
+
+        # About you
+        print("Step 3: About You")
+        print("  Tell your agent about yourself (saved to ~/.theora/USER.md)")
+        name = input("  Your name: ").strip()
+        location = input("  City/Country: ").strip()
+        occupation = input("  Occupation: ").strip()
+        interests = input("  Interests: ").strip()
+
+        lines = ["# About Me\n"]
+        if name:
+            lines.append(f"My name is {name}.")
+        if location:
+            lines.append(f"I live in {location}.")
+        if occupation:
+            lines.append(f"I work as {occupation}.")
+        if interests:
+            lines.append(f"\n## Interests\n{interests}")
+        (THEORA_HOME / "USER.md").write_text("\n".join(lines) + "\n")
+        print("  Saved.")
+        print()
+
+        # Personality
+        print("Step 4: Agent Personality")
+        print("  1. Personal Assistant   2. Technical Partner")
+        print("  3. Wellness Coach       4. Minimal")
+        preset_map = {"1": "assistant", "2": "engineer", "3": "coach", "4": "minimal"}
+        p_choice = input("  Choose (1-4) [1]: ").strip() or "1"
+        preset_id = preset_map.get(p_choice, "assistant")
+        soul = PERSONALITY_PRESETS[preset_id]["soul"]
+
+        agent_name = input("  Agent name [THEORA]: ").strip() or "THEORA"
+        self.config["agent_name"] = agent_name
+
+        (THEORA_HOME / "SOUL.md").write_text(f"# {agent_name}\n\n{soul}\n")
+
+        identity = {"name": agent_name, "personality": soul}
+        try:
+            import yaml
+            (THEORA_HOME / "IDENTITY.yaml").write_text(
+                yaml.dump(identity, default_flow_style=False, sort_keys=False)
+            )
+        except ImportError:
+            (THEORA_HOME / "IDENTITY.yaml").write_text(json.dumps(identity, indent=2))
+        print("  Saved.")
+        print()
+
+        # Tool keys
+        print("Step 5: Extra API Keys (optional, press Enter to skip)")
+        for tk in TOOL_KEYS:
+            existing = self.creds.get(tk["env"]) or os.getenv(tk["env"], "")
+            if existing:
+                print(f"  {tk['name']}: configured")
+                continue
+            key = input(f"  {tk['name']} ({tk['desc']}): ").strip()
+            if key:
+                self.creds[tk["env"]] = key
+        print()
+
+        # Save
+        creds_path = THEORA_HOME / "credentials.json"
+        creds_path.write_text(json.dumps(self.creds, indent=2))
+        try:
+            creds_path.chmod(0o600)
+        except Exception:
+            pass
+        (THEORA_HOME / "config.json").write_text(json.dumps(self.config, indent=2))
+
+        print("=" * 50)
+        print(f"  Setup complete!")
+        print(f"  Agent: {agent_name}")
+        print(f"  Config: {THEORA_HOME}")
+        print()
+        print("  Start your agent:")
+        print("    theora start")
+        print("=" * 50)
+        print()
+
+
+_DEFAULT_USER_MD = "# About Me\n\nTell your agent about yourself here.\n"
