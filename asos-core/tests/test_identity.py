@@ -88,7 +88,7 @@ class TestSyncToolsFromRegistry:
         ep.description = "Does a thing"
 
         sk = MagicMock()
-        sk.id = "fake_skill"
+        sk.skill_id = "fake_skill"
         sk.name = "Fake Skill"
         sk.safety_level = "SAFE"
         sk.description = "Fake description for tests."

@@ -148,13 +148,13 @@ class IdentityWorkspace:
         lines.append("## Available Skills\n")
         for skill in skill_registry.skills.values():
             safety = getattr(skill, "safety_level", "SAFE")
-            lines.append(f"### {getattr(skill, 'name', skill.id)} [{safety}]")
+            lines.append(f"### {getattr(skill, 'name', skill.skill_id)} [{safety}]")
             desc = getattr(skill, "description", "")
             if desc:
                 lines.append(f"{desc}\n")
             for ep in getattr(skill, "endpoints", []):
                 ep_desc = getattr(ep, "description", ep.id)
-                lines.append(f"- `{skill.id}__{ep.id}`: {ep_desc}")
+                lines.append(f"- `{skill.skill_id}__{ep.id}`: {ep_desc}")
             lines.append("")
 
         lines.append("## Platform\n")

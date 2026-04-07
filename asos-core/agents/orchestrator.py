@@ -98,7 +98,7 @@ class Orchestrator:
         self._pending_confirmations: dict[str, dict] = {}
 
         # Multi-agent
-        self._multi_agent_enabled = os.environ.get("THEORA_MULTI_AGENT", "true").lower() in ("true", "1", "yes")
+        self._multi_agent_enabled = os.environ.get("THEORA_MULTI_AGENT", "false").lower() in ("true", "1", "yes")
         self._multi_agent: Optional["MultiAgentOrchestrator"] = None
 
         # Vision config
@@ -668,7 +668,7 @@ class Orchestrator:
 
         # Route MCP tool calls through the MCP client
         if tool_name.startswith("mcp_") and self._mcp_client:
-            await self._send_text(session_id, f"MCP tool: {tool_name}...")
+            logger.info(f"  MCP tool: {tool_name}")
             result = await self._mcp_client.call_tool(tool_name, args)
             content = result.get("content", [])
             if content and isinstance(content, list):
@@ -681,7 +681,7 @@ class Orchestrator:
 
         skill_id, endpoint_id = parts
 
-        await self._send_text(session_id, f"Tool executing: {skill_id}...")
+        logger.info(f"  Tool executing: {skill_id}__{endpoint_id}")
 
         # Safety check
         denial = self._enforce_safety(tool_name, args)
