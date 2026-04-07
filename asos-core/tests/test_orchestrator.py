@@ -1,0 +1,127 @@
+"""
+Unit tests for THEORA orchestrator (`agents.orchestrator`).
+
+Covers initialization, routing, context compaction, system prompt assembly,
+GenUI enrichment for location-like tool results, and conversation history.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from agents.orchestrator import Orchestrator
+from models.protocol import TheoraMessage
+from models.skill_manifest import WEATHER_SKILL
+from perception.fusion import PerceptionFrame
+
+
+@pytest.fixture
+def async_send() -> AsyncMock:
+    """Mock WebSocket / client send coroutine."""
+    return AsyncMock()
+
+
+@pytest.fixture
+def orchestrator(async_send: AsyncMock) -> Orchestrator:
+    """Minimal orchestrator with mocked registry and send hook."""
+    reg = MagicMock()
+    reg.skills = {}
+    reg.find_skills_for_query = MagicMock(return_value=[])
+    reg.get_tools_for_skills = MagicMock(return_value=[])
+    return Orchestrator(
+        skill_registry=reg,
+        send_to_client=async_send,
+        daemons={},
+        memory=None,
+        vision_buffer=None,
+        perception=None,
+        learner=None,
+    )
+
+
+class TestOrchestratorInit:
+    """Constructor wiring."""
+
+    def test_init_has_expected_attributes(self, orchestrator: Orchestrator) -> None:
+        """Core collaborators and mutable state exist after construction."""
+        assert orchestrator.skills is not None
+        assert orchestrator.send is not None
+        assert orchestrator.daemons == {}
+        assert orchestrator.conversation_history == {}
+        assert orchestrator.executor is not None
+        assert orchestrator.genui is not None
+        assert orchestrator.llm is None
+
+
+class TestRoutingAndContext:
+    """Prompt routing and history helpers."""
+
+    @pytest.mark.asyncio
+    async def test_route_prompt_returns_skill_manifests_mock_registry(
+        self, orchestrator: Orchestrator
+    ) -> None:
+        """`_route_prompt` returns manifests from the registry when LLM is off."""
+        orchestrator.skills.skills = {"weather_current": WEATHER_SKILL}
+        orchestrator.skills.find_skills_for_query = MagicMock(return_value=[WEATHER_SKILL])
+        mock_llm = MagicMock()
+        mock_llm.available = False
+        orchestrator.llm = mock_llm
+
+        out = await orchestrator._route_prompt("what is the weather today")
+        assert out == [WEATHER_SKILL]
+        orchestrator.skills.find_skills_for_query.assert_called()
+
+    def test_compact_context_truncates_long_history(self, orchestrator: Orchestrator) -> None:
+        """History longer than 15 messages keeps only the tail."""
+        long_hist = [{"role": "user", "content": f"m{i}"} for i in range(20)]
+        compact = orchestrator._compact_context(long_hist)
+        assert len(compact) == 15
+        assert compact[-1]["content"] == "m19"
+
+    def test_build_system_prompt_includes_identity_and_skills(
+        self, orchestrator: Orchestrator
+    ) -> None:
+        """System prompt contains identity text and skill branding."""
+        frame = PerceptionFrame()
+        with patch.object(orchestrator, "_load_identity", return_value="CUSTOM_IDENTITY_LINE"):
+            text = orchestrator._build_system_prompt(frame, [WEATHER_SKILL], "session-z")
+        assert "CUSTOM_IDENTITY_LINE" in text
+        assert "How to respond" in text
+        assert "Weather" in text or "Relevant skills" in text
+
+
+class TestGenUIAndHistory:
+    """GenUI side effects and conversation list growth."""
+
+    @pytest.mark.asyncio
+    async def test_try_genui_for_result_location_data_mocks_engine(
+        self, orchestrator: Orchestrator
+    ) -> None:
+        """Rich location results trigger GenUI generation when engine succeeds."""
+        orchestrator.skills.skills = {"weather_current": WEATHER_SKILL}
+        tool_call = {"name": "weather_current__current", "id": "tc1"}
+        result_data = {"lat": 40.7, "lon": -74.0, "label": "NYC"}
+
+        mock_engine = MagicMock()
+        mock_engine.generate_for_data = AsyncMock(
+            return_value={"type": "map_view", "props": {"center": [0, 0]}}
+        )
+        with patch("genui.generator.GenUIEngine", return_value=mock_engine):
+            await orchestrator._try_genui_for_result("sess-1", tool_call, result_data)
+
+        mock_engine.generate_for_data.assert_awaited_once()
+        orchestrator.send.assert_awaited()
+        sent = orchestrator.send.call_args[0]
+        assert isinstance(sent[1], TheoraMessage)
+        assert sent[1].type == "sdui"
+
+    def test_conversation_history_grows_on_user_message(self, orchestrator: Orchestrator) -> None:
+        """Pushing a user entry increases per-session history length."""
+        sid = "sess-grow"
+        orchestrator.conversation_history[sid] = []
+        orchestrator.conversation_history[sid].append(
+            {"role": "user", "content": [{"type": "text", "text": "hello"}]}
+        )
+        assert len(orchestrator.conversation_history[sid]) == 1

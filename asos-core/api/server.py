@@ -207,6 +207,9 @@ class BrainState:
         self.genui_engine: Optional[GenUIEngine] = None
         self.service_providers: Optional[ServiceProviderRegistry] = None
         self.browser: Optional[BrowserController] = None
+        self.approval_manager = None
+        self.cron_service = None
+        self.docker_sandbox = None
 
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
@@ -345,6 +348,31 @@ class BrainState:
         self.browser = BrowserController()
         self._register_browser_skill()
 
+        # Security: exec approvals
+        try:
+            from security.exec_approvals import ApprovalManager
+            self.approval_manager = ApprovalManager()
+            logger.info("Exec approval manager initialized")
+        except Exception as e:
+            logger.debug(f"Exec approvals skipped: {e}")
+
+        # Docker sandbox
+        try:
+            from security.docker_sandbox import get_sandbox
+            self.docker_sandbox = get_sandbox()
+            if self.docker_sandbox:
+                logger.info("Docker sandbox available")
+        except Exception:
+            pass
+
+        # Cron scheduler
+        try:
+            from agents.scheduler import CronService
+            self.cron_service = CronService()
+            logger.info("Cron scheduler initialized")
+        except Exception as e:
+            logger.debug(f"Cron scheduler skipped: {e}")
+
         stats = self.memory.stats()
         logger.info(
             f"Brain v1.0.0 initialized — {len(self.skill_registry.skills)} skills, "
@@ -470,6 +498,10 @@ async def startup():
     await state.init()
     if state.memory:
         state.memory.start_background_tasks()
+    if state.cron_service:
+        async def _cron_callback(job):
+            logger.info(f"Cron job fired: {job.description} (type={job.job_type})")
+        state.cron_service.start(_cron_callback)
 
 
 # ─────────────────────────────────────────────
@@ -543,6 +575,148 @@ async def update_identity(body: dict):
         return {"ok": True}
     except Exception as e:
         return {"error": str(e)}
+
+
+def _knowledge_graph_d3(limit: int) -> dict:
+    """Build D3-style {nodes, links} from the entity graph and legacy triples."""
+    memory = state.memory
+    nodes: dict[str, dict] = {}
+    links: list[dict] = []
+
+    kg = getattr(memory, "kg", None)
+    if kg:
+        conn = kg._conn()
+        rows = conn.execute(
+            """
+            SELECT r.id AS rid, r.relation_type,
+                   s.id AS sid, s.name AS sname, s.entity_type AS stype,
+                   t.id AS tid, t.name AS tname, t.entity_type AS ttype
+            FROM relations r
+            JOIN entities s ON r.source_id = s.id
+            JOIN entities t ON r.target_id = t.id
+            ORDER BY r.updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        conn.close()
+        for r in rows:
+            sid, tid = r["sid"], r["tid"]
+            if sid not in nodes:
+                nodes[sid] = {
+                    "id": sid,
+                    "name": r["sname"],
+                    "type": (r["stype"] or "thing"),
+                }
+            if tid not in nodes:
+                nodes[tid] = {
+                    "id": tid,
+                    "name": r["tname"],
+                    "type": (r["ttype"] or "thing"),
+                }
+            links.append(
+                {
+                    "source": sid,
+                    "target": tid,
+                    "relation": r["relation_type"],
+                    "id": r["rid"],
+                }
+            )
+
+    if not links:
+        triples = memory.knowledge_query(limit=limit)
+        seen: dict[str, str] = {}
+        nxt = 0
+
+        def nid(label: str) -> str:
+            nonlocal nxt
+            if label not in seen:
+                seen[label] = f"k_{nxt}"
+                nxt += 1
+            return seen[label]
+
+        for t in triples:
+            subj, obj = t["subject"], t["object"]
+            sid, tid = nid(subj), nid(obj)
+            if sid not in nodes:
+                nodes[sid] = {"id": sid, "name": subj, "type": "legacy"}
+            if tid not in nodes:
+                nodes[tid] = {"id": tid, "name": obj, "type": "legacy"}
+            links.append(
+                {
+                    "source": sid,
+                    "target": tid,
+                    "relation": t["predicate"],
+                    "id": t.get("id", ""),
+                }
+            )
+
+    return {"nodes": list(nodes.values()), "links": links}
+
+
+@app.get("/api/knowledge/graph")
+async def get_knowledge_graph(limit: int = 50):
+    """Return a D3-compatible graph: ``{ nodes, links }``."""
+    try:
+        return _knowledge_graph_d3(limit=max(1, min(limit, 500)))
+    except Exception as e:
+        return {"nodes": [], "links": [], "error": str(e)}
+
+
+@app.get("/api/knowledge/entities")
+async def search_knowledge_entities(q: str = "", limit: int = 20):
+    """Search entities in the knowledge graph (FTS + embeddings when available)."""
+    lim = max(1, min(limit, 100))
+    kg = getattr(state.memory, "kg", None)
+    try:
+        if kg and q.strip():
+            entities = await kg.search_entities(q.strip(), limit=lim)
+            return {"entities": entities, "source": "graph"}
+        if kg and not q.strip():
+            conn = kg._conn()
+            rows = conn.execute(
+                """
+                SELECT id, name, entity_type AS type, mention_count AS mentions
+                FROM entities
+                ORDER BY mention_count DESC, updated_at DESC
+                LIMIT ?
+                """,
+                (lim,),
+            ).fetchall()
+            conn.close()
+            return {
+                "entities": [
+                    {
+                        "id": r["id"],
+                        "name": r["name"],
+                        "type": r["type"],
+                        "mentions": r["mentions"],
+                    }
+                    for r in rows
+                ],
+                "source": "graph",
+            }
+    except Exception as e:
+        return {"entities": [], "error": str(e), "source": "graph"}
+
+    rows = (
+        state.memory.knowledge_search(q.strip(), limit=lim)
+        if q.strip()
+        else state.memory.knowledge_query(limit=lim)
+    )
+    out = []
+    for r in rows:
+        if "subject" in r:
+            out.append(
+                {
+                    "name": r["subject"],
+                    "relation": r.get("predicate"),
+                    "object": r.get("object"),
+                }
+            )
+        else:
+            out.append(r)
+    return {"entities": out, "source": "legacy_triples"}
 
 
 @app.get("/api/devices")
@@ -1015,6 +1189,38 @@ async def list_webhooks():
         "webhooks": state.webhook_receiver.list_webhooks(),
         "events": state.event_bus.recent_events(20) if state.event_bus else [],
     }
+
+
+# WhatsApp Cloud API webhook (verification + inbound messages)
+@app.get("/api/channels/whatsapp/webhook")
+async def whatsapp_webhook_verify(request: Request):
+    """WhatsApp webhook verification (GET challenge)."""
+    params = request.query_params
+    mode = params.get("hub.mode")
+    token = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
+    verify_token = os.environ.get("WHATSAPP_VERIFY_TOKEN", "theora-verify")
+    if mode == "subscribe" and token == verify_token:
+        return Response(content=challenge, media_type="text/plain")
+    return Response(content="Forbidden", status_code=403)
+
+
+@app.post("/api/channels/whatsapp/webhook")
+async def whatsapp_webhook_inbound(request: Request):
+    """Handle inbound WhatsApp messages."""
+    try:
+        body = await request.json()
+        from channels.base import WhatsAppChannel
+        channel_mgr = getattr(state, "channel_manager", None)
+        if channel_mgr:
+            wa = channel_mgr.get_channel("whatsapp")
+            if wa and isinstance(wa, WhatsAppChannel):
+                response = await wa.handle_webhook(body)
+                return {"status": "ok", "response": response}
+        return {"status": "no_handler"}
+    except Exception as e:
+        logger.error(f"WhatsApp webhook error: {e}")
+        return {"status": "error", "detail": str(e)}
 
 
 @app.get("/api/marketplace/search")

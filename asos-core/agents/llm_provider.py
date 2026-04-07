@@ -340,6 +340,12 @@ class LLMProvider:
                     yield {"type": "error", "content": str(e)}
                 return
 
+        # Anthropic native streaming (Messages API with SSE)
+        if self.provider == "anthropic":
+            async for delta in self._chat_stream_anthropic(messages, tools, temperature, max_tokens):
+                yield delta
+            return
+
         body: dict = {
             "model": self.model,
             "messages": messages,
@@ -363,7 +369,6 @@ class LLMProvider:
                         continue
                     data_str = line[6:].strip()
                     if data_str == "[DONE]":
-                        # Emit accumulated tool calls
                         for _, tc in sorted(accumulated_tool_calls.items()):
                             try:
                                 tc["args"] = json.loads(tc.get("arguments", "{}"))
@@ -380,11 +385,9 @@ class LLMProvider:
 
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
 
-                    # Text content
                     if delta.get("content"):
                         yield {"type": "text_delta", "content": delta["content"]}
 
-                    # Tool calls (streamed in fragments)
                     for tc_delta in delta.get("tool_calls", []):
                         idx = tc_delta.get("index", 0)
                         if idx not in accumulated_tool_calls:
@@ -407,6 +410,108 @@ class LLMProvider:
             yield {"type": "error", "content": str(e)}
         except Exception as e:
             logger.error(f"LLM stream failed: {e}")
+            yield {"type": "error", "content": str(e)}
+
+    async def _chat_stream_anthropic(
+        self,
+        messages: list[dict],
+        tools: Optional[list[dict]] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> AsyncGenerator[dict, None]:
+        """Native Anthropic Messages API streaming via SSE."""
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        system_prompt = ""
+        anthropic_messages = []
+        for m in messages:
+            if m["role"] == "system":
+                system_prompt = m["content"] if isinstance(m["content"], str) else str(m["content"])
+            else:
+                anthropic_messages.append({"role": m["role"], "content": m["content"]})
+
+        body: dict = {
+            "model": self.model,
+            "messages": anthropic_messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if system_prompt:
+            body["system"] = system_prompt
+        if tools:
+            body["tools"] = [
+                {
+                    "name": t.get("function", {}).get("name", t.get("name", "")),
+                    "description": t.get("function", {}).get("description", ""),
+                    "input_schema": t.get("function", {}).get("parameters", {}),
+                }
+                for t in tools if t.get("type") == "function" or "function" in t
+            ]
+
+        accumulated_tool_calls: dict[str, dict] = {}
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream(
+                    "POST", "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json=body,
+                ) as resp:
+                    resp.raise_for_status()
+                    current_tool_id = ""
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:].strip()
+                        if not data_str:
+                            continue
+                        try:
+                            event = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        event_type = event.get("type", "")
+
+                        if event_type == "content_block_start":
+                            block = event.get("content_block", {})
+                            if block.get("type") == "tool_use":
+                                current_tool_id = block.get("id", "")
+                                accumulated_tool_calls[current_tool_id] = {
+                                    "id": current_tool_id,
+                                    "name": block.get("name", ""),
+                                    "arguments": "",
+                                }
+
+                        elif event_type == "content_block_delta":
+                            delta = event.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                yield {"type": "text_delta", "content": delta.get("text", "")}
+                            elif delta.get("type") == "input_json_delta":
+                                if current_tool_id in accumulated_tool_calls:
+                                    accumulated_tool_calls[current_tool_id]["arguments"] += delta.get("partial_json", "")
+
+                        elif event_type == "message_delta":
+                            pass
+
+                        elif event_type == "message_stop":
+                            for tc in accumulated_tool_calls.values():
+                                try:
+                                    tc["args"] = json.loads(tc.get("arguments", "{}"))
+                                except json.JSONDecodeError:
+                                    tc["args"] = {}
+                                yield {"type": "tool_call_delta", "tool_call": tc}
+                            yield {"type": "done"}
+                            return
+
+            yield {"type": "done"}
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Anthropic stream error: {e.response.status_code}")
+            yield {"type": "error", "content": str(e)}
+        except Exception as e:
+            logger.error(f"Anthropic stream failed: {e}")
             yield {"type": "error", "content": str(e)}
 
     async def switch_provider(self, provider: str, model: str = "", api_key: str = ""):

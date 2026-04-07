@@ -105,6 +105,65 @@ const RealAudioPlayer = ({ url, label, action_id, onAction }) => {
   );
 };
 
+const GraphView = ({ nodes = [], links = [], height = 280 }) => {
+  const w = 400;
+  const h = height;
+  const cx = w / 2;
+  const cy = h / 2;
+  const r = Math.min(w, h) * 0.36;
+  const n = Math.max(nodes.length, 1);
+  const pos = {};
+  nodes.forEach((node, i) => {
+    const id = node.id ?? node.name ?? `n${i}`;
+    const ang = (2 * Math.PI * i) / n - Math.PI / 2;
+    pos[id] = { x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang), label: node.name ?? id };
+  });
+  const lineKey = (l, i) => `${l.source}-${l.target}-${i}`;
+
+  return (
+    <div className="w-full bg-asos-card border border-asos-border rounded-xl overflow-hidden">
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full" style={{ maxHeight: h }}>
+        {links.map((l, i) => {
+          const a = pos[l.source];
+          const b = pos[l.target];
+          if (!a || !b) return null;
+          return (
+            <line
+              key={lineKey(l, i)}
+              x1={a.x}
+              y1={a.y}
+              x2={b.x}
+              y2={b.y}
+              stroke="rgba(255,255,255,0.25)"
+              strokeWidth={1.5}
+            />
+          );
+        })}
+        {nodes.map((node, i) => {
+          const id = node.id ?? node.name ?? `n${i}`;
+          const p = pos[id];
+          if (!p) return null;
+          return (
+            <g key={id}>
+              <circle cx={p.x} cy={p.y} r={10} fill="#6c5ce7" opacity={0.9} />
+              <text
+                x={p.x}
+                y={p.y + 22}
+                textAnchor="middle"
+                fill="rgba(255,255,255,0.75)"
+                fontSize={10}
+                style={{ pointerEvents: 'none' }}
+              >
+                {(p.label || '').slice(0, 18)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+};
+
 const ChartView = ({ data, chart_type, label, color, height }) => {
   const canvasRef = useRef(null);
 
@@ -357,6 +416,8 @@ export const SduiRenderer = ({ node, onAction }) => {
       );
     case 'MapView':
       return <LeafletMap lat={node.lat || node.center_lat} lon={node.lon || node.center_lon} zoom={node.zoom} markers={node.markers} height={node.height} />;
+    case 'GraphView':
+      return <GraphView nodes={node.nodes} links={node.links} height={node.height} />;
     case 'AudioPlayer':
       return <RealAudioPlayer url={node.url || node.audio_url} label={label} action_id={action_id} onAction={onAction} />;
     case 'Chart':

@@ -6,4 +6,5 @@ from channels.base import (
     TelegramChannel,
     DiscordChannel,
     SlackChannel,
+    WhatsAppChannel,
 )

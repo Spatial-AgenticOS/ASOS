@@ -146,7 +146,7 @@ async def demo_genui():
         "city": "San Francisco",
     }
     brand = {"name": "Weather", "primary_color": "#E74C3C"}
-    sdui = gen.generate(data=weather_data, skill_brand=brand, ui_hint="metric", endpoint_id="current_weather")
+    sdui = gen.generate(data=weather_data, skill_brand=brand, ui_hint="metric", endpoint_id="current")
     ok(f"Generated SDUI for weather data:")
     info(f"    Root type: {sdui.get('type')}")
     info(f"    Children: {len(sdui.get('children', []))} components")

@@ -38,3 +38,13 @@ try:
     import skills.impl.computer_use
 except ImportError:
     pass
+
+try:
+    import skills.impl.image_gen
+except ImportError:
+    pass
+
+try:
+    import skills.impl.weather
+except ImportError:
+    pass

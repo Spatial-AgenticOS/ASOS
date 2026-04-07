@@ -231,7 +231,7 @@ class TestMemoryIntegration:
         memory.episode_save(sid, "user", "Weather query about NYC")
         memory.knowledge_store("user", "lives_in", "NYC")
         memory.log_execution(
-            sid, "weather_current", "current_weather",
+            sid, "weather_current", "current",
             {"lat": 40.7, "lon": -74.0}, "success", "Sunny 75F", 0.5,
         )
 

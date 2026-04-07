@@ -13,8 +13,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict
 
-import httpx
-
+from security.fetch_guard import html_to_markdown, safe_fetch
 from skills.base import BaseSkill
 from skills.impl import register_skill
 
@@ -30,7 +29,6 @@ DANGEROUS_COMMANDS = re.compile(
 class ComputerUseSkill(BaseSkill):
     def __init__(self):
         super().__init__(skill_id="computer_use")
-        self._http = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
 
     async def execute(self, endpoint_id: str, args: Dict[str, Any], vault: Dict[str, str]) -> Dict[str, Any]:
         dispatch = {
@@ -266,15 +264,16 @@ class ComputerUseSkill(BaseSkill):
         if not url:
             return {"success": False, "status_code": 400, "data": None, "error": "No URL provided"}
 
-        resp = await self._http.get(url, headers={"User-Agent": "THEORA/1.0"})
-        if resp.status_code >= 400:
-            return {"success": False, "status_code": resp.status_code, "data": None, "error": f"HTTP {resp.status_code}"}
+        result = await safe_fetch(url, timeout=15.0)
+        if not result["success"]:
+            code = int(result.get("status_code") or 400)
+            err = result.get("error") or "fetch failed"
+            return {"success": False, "status_code": code if code else 400, "data": None, "error": err}
 
-        content_type = resp.headers.get("content-type", "")
-        text = resp.text
-
-        if "html" in content_type:
-            text = self._strip_html(text)
+        text = result["content"]
+        content_type = result.get("content_type", "")
+        if "html" in content_type.lower():
+            text = html_to_markdown(text)
 
         return {
             "success": True,
@@ -282,11 +281,3 @@ class ComputerUseSkill(BaseSkill):
             "data": {"url": url, "content": text[:max_length], "length": len(text)},
             "error": None,
         }
-
-    @staticmethod
-    def _strip_html(html: str) -> str:
-        html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
-        html = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL)
-        html = re.sub(r"<[^>]+>", " ", html)
-        html = re.sub(r"\s+", " ", html).strip()
-        return html

@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "Main window: brain control and events",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default"
+  ]
+}

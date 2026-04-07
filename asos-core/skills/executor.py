@@ -25,7 +25,7 @@ class SkillExecutor:
     Executes tool calls against skill endpoints.
     
     Security model (blind vault):
-    1. LLM outputs: {tool: "weather__current_weather", args: {lat: 37, lon: -122}}
+    1. LLM outputs: {tool: "weather_current__current", args: {q: "London"}}
     2. Executor looks up the skill manifest
     3. Executor pulls auth credentials from local vault (env vars for now)
     4. Executor makes the HTTP request with injected auth headers
