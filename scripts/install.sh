@@ -2,13 +2,9 @@
 #
 # THEORA Installer
 # ================
-# One command: curl -sSL https://raw.githubusercontent.com/Spatial-AgenticOS/ASOS/main/scripts/install.sh | bash
+# curl -sSL https://raw.githubusercontent.com/Spatial-AgenticOS/ASOS/main/scripts/install.sh | bash
 #
-# What this does:
-#   1. Checks Python 3.11+
-#   2. pip installs theora from GitHub (or locally if run from repo)
-#   3. Runs the guided setup wizard
-#   4. Shows you how to start
+# That's it. After this runs, you type: theora start
 #
 set -euo pipefail
 
@@ -41,87 +37,66 @@ for cmd in python3 python; do
 done
 
 if [ -z "$PYTHON" ]; then
-    echo -e "${RED}Error: Python 3.11+ is required but not found.${NC}"
+    echo -e "${RED}  Python 3.11+ is required.${NC}"
     echo ""
-    echo "  Install Python:"
+    echo "  Install it:"
     echo "    macOS:  brew install python@3.12"
-    echo "    Ubuntu: sudo apt install python3.12 python3.12-venv"
+    echo "    Ubuntu: sudo apt install python3.12"
     echo "    Other:  https://python.org/downloads"
     exit 1
 fi
 
-echo -e "  ${GREEN}✓${NC} Python: $($PYTHON --version)"
+echo -e "  ${GREEN}✓${NC} Python $($PYTHON --version 2>&1 | awk '{print $2}')"
 
-# ─── Check pip ──────────────────────────────────────────
-
-PIP="$PYTHON -m pip"
-if ! $PIP --version &> /dev/null; then
-    echo -e "${RED}Error: pip not found.${NC}"
-    echo "  Install: $PYTHON -m ensurepip --upgrade"
-    exit 1
-fi
-
-echo -e "  ${GREEN}✓${NC} pip available"
-
-# ─── Install THEORA ─────────────────────────────────────
+# ─── Install ────────────────────────────────────────────
 
 echo ""
-echo -e "  ${BOLD}Installing THEORA...${NC}"
+echo -e "  Installing THEORA..."
 
-# If running from inside the repo, install locally
+# Detect if we're in the repo
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
 REPO_ROOT=""
 
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../asos-core/pyproject.toml" ]; then
     REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-    echo -e "  ${DIM}Installing from local repo: $REPO_ROOT${NC}"
-    $PIP install -e "$REPO_ROOT/asos-core[llm]" --quiet 2>&1 | tail -5 || true
+    echo -e "  ${DIM}From local repo: $REPO_ROOT${NC}"
+    $PYTHON -m pip install -e "$REPO_ROOT/asos-core[llm]" --quiet 2>&1 | tail -3 || true
 else
-    echo -e "  ${DIM}Installing from PyPI...${NC}"
-    $PIP install "theora-asos[llm]" --quiet 2>&1 | tail -1 || {
-        echo -e "${YELLOW}PyPI install failed. Trying GitHub...${NC}"
-        $PIP install "theora-asos[llm] @ git+https://github.com/Spatial-AgenticOS/ASOS.git#subdirectory=asos-core" --quiet 2>&1 | tail -1 || {
-            echo -e "${YELLOW}pip from git failed. Trying clone method...${NC}"
+    $PYTHON -m pip install "theora-asos[llm]" --quiet 2>&1 | tail -1 || {
+        echo -e "  ${DIM}Trying GitHub install...${NC}"
+        $PYTHON -m pip install "theora-asos[llm] @ git+https://github.com/Spatial-AgenticOS/ASOS.git#subdirectory=asos-core" --quiet 2>&1 | tail -1 || {
             TMPDIR=$(mktemp -d)
-            git clone --depth 1 https://github.com/Spatial-AgenticOS/ASOS.git "$TMPDIR/ASOS"
-            $PIP install -e "$TMPDIR/ASOS/asos-core[llm]" --quiet
+            git clone --depth 1 https://github.com/Spatial-AgenticOS/ASOS.git "$TMPDIR/ASOS" 2>/dev/null
+            $PYTHON -m pip install -e "$TMPDIR/ASOS/asos-core[llm]" --quiet
         }
     }
 fi
 
-# Verify installation
-if ! command -v theora &> /dev/null; then
-    THEORA_CMD="$PYTHON -m cli.main"
-    echo -e "  ${YELLOW}⚠${NC} 'theora' command not in PATH. Using: $THEORA_CMD"
-else
-    THEORA_CMD="theora"
+# Verify
+if command -v theora &> /dev/null; then
     echo -e "  ${GREEN}✓${NC} theora command installed"
+else
+    echo -e "  ${YELLOW}⚠${NC} 'theora' not in PATH (try: $PYTHON -m cli.main)"
 fi
-
-# ─── Run Setup Wizard ──────────────────────────────────
-
-echo ""
-echo -e "  ${BOLD}Running setup wizard...${NC}"
-echo ""
-
-$THEORA_CMD setup || $PYTHON -c "from cli.setup_wizard import run_setup; run_setup()" || {
-    echo -e "  ${YELLOW}⚠${NC} Setup wizard failed. You can run it later: theora setup"
-}
 
 # ─── Done ───────────────────────────────────────────────
 
 echo ""
-echo -e "${GREEN}${BOLD}  Installation complete!${NC}"
+echo -e "${GREEN}${BOLD}  Done!${NC}"
 echo ""
-echo -e "  ${BOLD}Start the agent:${NC}"
-echo "    theora serve          # Start the server (port 9090)"
-echo "    theora                # Interactive chat"
-echo '    theora "what time is it"  # One-shot command'
+echo -e "  ${BOLD}Get started:${NC}"
 echo ""
-echo -e "  ${BOLD}Other commands:${NC}"
-echo "    theora setup          # Re-run setup wizard"
-echo "    theora status         # System health"
-echo "    theora skills         # List available tools"
+echo "    1. Set your API key:"
+echo "       export OPENAI_API_KEY=sk-..."
 echo ""
-echo -e "  ${DIM}Docs: https://github.com/Spatial-AgenticOS/ASOS${NC}"
+echo "    2. Start THEORA:"
+echo "       theora start"
+echo ""
+echo -e "  ${BOLD}That's it.${NC} THEORA will start the brain, open the dashboard,"
+echo "  and drop you into an interactive chat."
+echo ""
+echo -e "  ${DIM}Other commands:${NC}"
+echo "    theora setup      # Guided setup wizard"
+echo "    theora doctor     # Check what's working"
+echo "    theora serve      # Headless server mode"
 echo ""

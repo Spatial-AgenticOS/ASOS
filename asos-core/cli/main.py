@@ -38,7 +38,7 @@ HTTP_BASE = f"http://{BRAIN_HOST}:{BRAIN_PORT}"
 BANNER = """
 ╔══════════════════════════════════════╗
 ║          T H E O R A                 ║
-║   Open AI Agent  v1.0.0             ║
+║   Spatial Agentic OS  v1.0.0        ║
 ╚══════════════════════════════════════╝
   Type a message to chat. Commands:
     /status   — system health
@@ -265,6 +265,183 @@ def cmd_serve(host: str = "0.0.0.0", port: int = 9090):
     uvicorn.run("api.server:app", host=host, port=port, reload=False, log_level="info")
 
 
+def cmd_start(port: int = 9090, no_browser: bool = False):
+    """
+    One command to rule them all.
+    Starts the brain, checks health, opens browser, and drops into chat.
+    """
+    import subprocess
+    import time
+    import signal
+    import threading
+
+    try:
+        import uvicorn
+    except ImportError:
+        print("  Missing dependencies. Run: pip install 'theora-asos[llm]'")
+        sys.exit(1)
+
+    # Check if already running
+    try:
+        if httpx:
+            r = httpx.get(f"http://localhost:{port}/health", timeout=2)
+            if r.status_code == 200:
+                print(f"  THEORA is already running on port {port}")
+                if not no_browser:
+                    _open_browser(port)
+                asyncio.run(repl())
+                return
+    except Exception:
+        pass
+
+    print(f"""
+  ╔══════════════════════════════════════╗
+  ║          T H E O R A                 ║
+  ║   Starting agent on port {port}       ║
+  ╚══════════════════════════════════════╝
+""")
+
+    # Check for API keys
+    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    creds_path = os.path.expanduser("~/.theora/credentials.json")
+    has_creds = os.path.exists(creds_path)
+
+    if not has_openai and not has_anthropic and not has_creds:
+        print("  No API key found. Set one:")
+        print("    export OPENAI_API_KEY=sk-...")
+        print("    export ANTHROPIC_API_KEY=sk-ant-...")
+        print("  Or run: theora setup")
+        print()
+
+    # Start server in background thread
+    server_ready = threading.Event()
+
+    def _run_server():
+        import uvicorn
+        config = uvicorn.Config(
+            "api.server:app", host="0.0.0.0", port=port,
+            log_level="warning", access_log=False,
+        )
+        server = uvicorn.Server(config)
+        server_ready.set()
+        server.run()
+
+    server_thread = threading.Thread(target=_run_server, daemon=True)
+    server_thread.start()
+
+    # Wait for server to be healthy
+    print("  Starting brain...", end="", flush=True)
+    for i in range(30):
+        time.sleep(1)
+        try:
+            if httpx:
+                r = httpx.get(f"http://localhost:{port}/health", timeout=2)
+                if r.status_code == 200:
+                    break
+            else:
+                import urllib.request
+                urllib.request.urlopen(f"http://localhost:{port}/health", timeout=2)
+                break
+        except Exception:
+            print(".", end="", flush=True)
+    else:
+        print("\n  Failed to start. Check logs or run: theora serve --verbose")
+        sys.exit(1)
+
+    # Print status
+    data = _http_get("/api/dashboard")
+    skills_count = data.get("skills_count", "?")
+    llm_ok = "ready" if data.get("llm_available") else "no key"
+    mem = data.get("memory", {})
+    print(f"\n  Brain ready!")
+    print(f"  LLM: {llm_ok} | Skills: {skills_count} | Memory: {mem.get('notes', 0)} notes")
+    print(f"  Dashboard: http://localhost:{port}")
+
+    if not no_browser:
+        _open_browser(port)
+
+    print()
+    # Drop into interactive chat
+    asyncio.run(repl())
+
+
+def _open_browser(port: int):
+    """Open the THEORA dashboard in the default browser."""
+    try:
+        import webbrowser
+        webbrowser.open(f"http://localhost:{port}")
+    except Exception:
+        pass
+
+
+def cmd_doctor():
+    """Run diagnostics and report what's working."""
+    print("\n  THEORA Doctor")
+    print("  " + "=" * 40)
+
+    # Python
+    print(f"  Python:        {sys.version.split()[0]}")
+
+    # Brain connection
+    data = _http_get("/health")
+    if "error" in data:
+        print(f"  Brain:         NOT RUNNING")
+        print(f"                 Start with: theora start")
+    else:
+        print(f"  Brain:         RUNNING (v{data.get('version', '?')})")
+
+    # API keys
+    keys = {
+        "OPENAI_API_KEY": "OpenAI",
+        "ANTHROPIC_API_KEY": "Anthropic",
+        "GOOGLE_API_KEY": "Gemini",
+        "TAVILY_API_KEY": "Tavily Search",
+        "BRAVE_API_KEY": "Brave Search",
+        "OPENWEATHER_API_KEY": "Weather",
+    }
+    print()
+    print("  API Keys:")
+    any_key = False
+    for env, name in keys.items():
+        val = os.environ.get(env, "")
+        if val:
+            masked = val[:8] + "..." + val[-4:] if len(val) > 12 else "***"
+            print(f"    {name:20s} {masked}")
+            any_key = True
+    if not any_key:
+        creds = os.path.expanduser("~/.theora/credentials.json")
+        if os.path.exists(creds):
+            print(f"    (loaded from {creds})")
+        else:
+            print(f"    NONE — run: theora setup")
+
+    # Dependencies
+    print()
+    print("  Optional deps:")
+    for pkg, desc in [
+        ("sentence_transformers", "Local embeddings"),
+        ("wasmtime", "WASM sandbox"),
+        ("duckduckgo_search", "DuckDuckGo search"),
+        ("PIL", "Image processing"),
+        ("sqlite_vec", "Vector search index"),
+    ]:
+        try:
+            __import__(pkg)
+            print(f"    {desc:20s} installed")
+        except ImportError:
+            print(f"    {desc:20s} not installed")
+
+    # Docker
+    import shutil
+    if shutil.which("docker"):
+        print(f"    {'Docker':20s} available")
+    else:
+        print(f"    {'Docker':20s} not installed (sandboxed exec disabled)")
+
+    print()
+
+
 def cmd_setup():
     """Launch the guided setup wizard."""
     try:
@@ -459,13 +636,21 @@ def main():
 
     sub = parser.add_subparsers(dest="subcommand")
 
-    # theora serve
-    serve_p = sub.add_parser("serve", help="Start the THEORA Brain server")
+    # theora start (THE main command)
+    start_p = sub.add_parser("start", help="Start THEORA — brain + dashboard + chat in one command")
+    start_p.add_argument("--serve-port", default="9090", help="Port (default 9090)")
+    start_p.add_argument("--no-browser", action="store_true", help="Don't open browser")
+
+    # theora serve (headless server only)
+    serve_p = sub.add_parser("serve", help="Start the brain server (headless, no chat)")
     serve_p.add_argument("--bind", default="0.0.0.0", help="Bind address (default 0.0.0.0)")
     serve_p.add_argument("--serve-port", default="9090", help="Port (default 9090)")
 
     # theora setup
     sub.add_parser("setup", help="Guided setup wizard — configure provider, keys, features")
+
+    # theora doctor
+    sub.add_parser("doctor", help="Run diagnostics — check deps, keys, brain health")
 
     # theora status / devices / skills / identity
     sub.add_parser("status", help="Show system health")
@@ -490,10 +675,14 @@ def main():
     args, remaining = parser.parse_known_args()
     _apply_connection_args(args)
 
-    if args.subcommand == "serve":
+    if args.subcommand == "start":
+        cmd_start(port=int(args.serve_port), no_browser=args.no_browser)
+    elif args.subcommand == "serve":
         cmd_serve(host=args.bind, port=int(args.serve_port))
     elif args.subcommand == "setup":
         cmd_setup()
+    elif args.subcommand == "doctor":
+        cmd_doctor()
     elif args.subcommand == "status":
         cmd_status()
     elif args.subcommand == "devices":
