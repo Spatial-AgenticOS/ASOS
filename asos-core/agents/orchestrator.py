@@ -383,6 +383,9 @@ class Orchestrator:
                     "content": json.dumps(result_data, default=str)[:2000],
                 })
 
+                # GenUI: generate rich UI for tool results when applicable
+                await self._try_genui_for_result(session_id, tc, result_data)
+
             # Second LLM call: stream the final answer with tool results
             messages2 = [{"role": "system", "content": system_prompt}, *history]
             stream_id2 = str(uuid4())[:8]
@@ -1238,6 +1241,58 @@ class Orchestrator:
         except json.JSONDecodeError:
             pass
         await self._send_text(session_id, text)
+
+    async def _try_genui_for_result(self, session_id: str, tool_call: dict, result_data: dict):
+        """Generate and send SDUI for tool results when the data is rich enough."""
+        try:
+            from genui.generator import GenUIEngine
+        except ImportError:
+            return
+
+        if not isinstance(result_data, dict):
+            return
+
+        # Only generate UI for data-rich results (not simple status messages)
+        has_rich_data = any(k in result_data for k in (
+            "lat", "latitude", "lon", "longitude", "image_url", "image_b64",
+            "results", "chart_data", "data", "items", "markers",
+        ))
+        if not has_rich_data and len(result_data) < 3:
+            return
+
+        # Resolve GenUI engine from state (accessible via self._genui_engine or import)
+        genui = getattr(self, '_genui_engine', None)
+        if not genui:
+            try:
+                genui = GenUIEngine()
+            except Exception:
+                return
+
+        parts = tool_call["name"].split("__", 1)
+        skill_id = parts[0] if len(parts) == 2 else tool_call["name"]
+        endpoint_id = parts[1] if len(parts) == 2 else ""
+        skill = self.skills.skills.get(skill_id)
+        brand = getattr(skill, "brand", None) or {}
+
+        ui_hint = None
+        if any(k in result_data for k in ("lat", "latitude", "longitude")):
+            ui_hint = "map"
+        elif "chart_data" in result_data:
+            ui_hint = "chart"
+
+        try:
+            sdui = await genui.generate_for_data(
+                data=result_data, skill_brand=brand,
+                ui_hint=ui_hint, endpoint_id=endpoint_id,
+            )
+            if sdui and "type" in sdui:
+                from models.protocol import SDUIPayload
+                await self.send(session_id, TheoraMessage(
+                    session_id=session_id, hop="brain", type="sdui",
+                    payload=SDUIPayload(root=sdui).model_dump(),
+                ))
+        except Exception as e:
+            logger.debug(f"GenUI generation for {tool_call['name']} skipped: {e}")
 
     # ─────────────────────────────────────────────
     # System Prompt Builder

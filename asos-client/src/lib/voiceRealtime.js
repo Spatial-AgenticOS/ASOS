@@ -3,11 +3,14 @@
  *
  * Uses AudioWorklet (not deprecated ScriptProcessor) for mic capture.
  * PCM16 at 24kHz, base64 chunks over WebSocket.
+ * Includes energy-based VAD to skip sending silence.
  * Supports live transcription captions and tool-call status display.
  */
 
 const TARGET_SAMPLE_RATE = 24000;
 const WORKLET_NAME = 'pcm-capture-processor';
+const VAD_ENERGY_THRESHOLD = 0.005;
+const VAD_SILENCE_FRAMES = 15; // ~1.5s of silence before stopping send
 
 const WORKLET_CODE = `
 class PCMCaptureProcessor extends AudioWorkletProcessor {
@@ -29,11 +32,17 @@ class PCMCaptureProcessor extends AudioWorkletProcessor {
     while (this._buffer.length >= this._bufferSize) {
       const chunk = this._buffer.splice(0, this._bufferSize);
       const pcm16 = new Int16Array(chunk.length);
+      let energy = 0;
       for (let i = 0; i < chunk.length; i++) {
         const s = Math.max(-1, Math.min(1, chunk[i]));
         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        energy += s * s;
       }
-      this.port.postMessage({ type: 'audio', pcm16: pcm16.buffer }, [pcm16.buffer]);
+      energy = Math.sqrt(energy / chunk.length);
+      this.port.postMessage(
+        { type: 'audio', pcm16: pcm16.buffer, energy },
+        [pcm16.buffer]
+      );
     }
     return true;
   }
@@ -50,26 +59,34 @@ export class RealtimeVoiceEngine {
     this._workletNode = null;
     this._source = null;
     this._playbackCtx = null;
-    this._playbackQueue = [];
     this._isPlaying = false;
     this._active = false;
     this._nextPlayTime = 0;
+    this._silenceCount = 0;
+    this._isSpeaking = false;
+    this._chunkIndex = 0;
+    this._provider = 'openai';
 
     this.onTranscript = callbacks.onTranscript || null;
     this.onToolCall = callbacks.onToolCall || null;
     this.onSpeechStarted = callbacks.onSpeechStarted || null;
     this.onError = callbacks.onError || null;
+    this.onVADChange = callbacks.onVADChange || null;
   }
 
   get active() { return this._active; }
+  get speaking() { return this._isSpeaking; }
 
-  async start() {
+  async start(provider = 'openai') {
     this._active = true;
+    this._provider = provider;
+    this._chunkIndex = 0;
+    this._silenceCount = 0;
 
     this._ws.send(JSON.stringify({
       hop: 'client',
       type: 'voice_config',
-      payload: { mode: 'realtime', supports_realtime: true },
+      payload: { mode: 'realtime', provider, supports_realtime: true },
     }));
 
     this._stream = await navigator.mediaDevices.getUserMedia({
@@ -96,6 +113,25 @@ export class RealtimeVoiceEngine {
     this._workletNode = new AudioWorkletNode(this._audioCtx, WORKLET_NAME);
     this._workletNode.port.onmessage = (e) => {
       if (!this._active || e.data.type !== 'audio') return;
+
+      const energy = e.data.energy || 0;
+
+      // VAD: skip sending pure silence to save bandwidth and API cost
+      if (energy < VAD_ENERGY_THRESHOLD) {
+        this._silenceCount++;
+        if (this._isSpeaking && this._silenceCount > VAD_SILENCE_FRAMES) {
+          this._isSpeaking = false;
+          if (this.onVADChange) this.onVADChange(false);
+        }
+        if (!this._isSpeaking) return;
+      } else {
+        if (!this._isSpeaking) {
+          this._isSpeaking = true;
+          if (this.onVADChange) this.onVADChange(true);
+        }
+        this._silenceCount = 0;
+      }
+
       const b64 = this._arrayBufferToBase64(e.data.pcm16);
       if (this._ws.readyState === WebSocket.OPEN) {
         this._ws.send(JSON.stringify({
@@ -105,7 +141,7 @@ export class RealtimeVoiceEngine {
             encoding: 'pcm16',
             sample_rate: TARGET_SAMPLE_RATE,
             channels: 1,
-            chunk_index: 0,
+            chunk_index: this._chunkIndex++,
             is_final: false,
             data_b64: b64,
           },
@@ -114,7 +150,8 @@ export class RealtimeVoiceEngine {
     };
 
     this._source.connect(this._workletNode);
-    this._workletNode.connect(this._audioCtx.destination);
+    // Don't connect worklet to destination — we don't want to hear our own mic
+    // this._workletNode.connect(this._audioCtx.destination);
 
     this._playbackCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
     this._nextPlayTime = 0;
@@ -122,6 +159,7 @@ export class RealtimeVoiceEngine {
 
   stop() {
     this._active = false;
+    this._isSpeaking = false;
 
     if (this._ws.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify({
@@ -152,7 +190,6 @@ export class RealtimeVoiceEngine {
       this._playbackCtx.close().catch(() => {});
       this._playbackCtx = null;
     }
-    this._playbackQueue = [];
     this._isPlaying = false;
     this._nextPlayTime = 0;
   }
@@ -177,19 +214,19 @@ export class RealtimeVoiceEngine {
       source.start(startTime);
       this._nextPlayTime = startTime + buffer.duration;
     } catch (e) {
-      console.error('Audio playback error:', e);
+      if (this.onError) this.onError('playback', e.message);
     }
   }
 
   handleTranscript(payload) {
     if (this.onTranscript) {
-      this.onTranscript(payload.text, payload.is_partial);
+      this.onTranscript(payload.text, payload.is_partial, payload.role || 'assistant');
     }
   }
 
   handleToolCallStatus(payload) {
     if (this.onToolCall) {
-      this.onToolCall(payload.name, payload.status);
+      this.onToolCall(payload.name, payload.status, payload.result);
     }
   }
 

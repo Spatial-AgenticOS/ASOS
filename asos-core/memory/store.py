@@ -30,6 +30,8 @@ import numpy as np
 
 from memory.embeddings import (
     EmbeddingProvider,
+    VectorIndex,
+    EmbedQueue,
     chunk_text,
     vec_to_blob,
     blob_to_vec,
@@ -40,7 +42,7 @@ from memory.embeddings import (
 
 logger = logging.getLogger("theora.memory")
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 TEXT_WEIGHT = 0.3
 VECTOR_WEIGHT = 0.7
@@ -67,8 +69,18 @@ class MemoryStore:
         self._kg = None
 
         self._init_db()
+
+        self._vec_index = VectorIndex(self.db_path, self._embedder.dimension, "vec_chunks")
+        self._embed_queue = EmbedQueue(self._embedder, self._vec_index)
+
         self._init_knowledge_graph()
-        logger.info(f"Memory store v{_SCHEMA_VERSION} initialized at {self.db_path} (embeddings: {self._embedder._provider})")
+        index_mode = "sqlite-vec (vec0)" if self._vec_index.indexed else "numpy fallback"
+        logger.info(f"Memory store v{_SCHEMA_VERSION} at {self.db_path} | embeddings: {self._embedder.provider_name} | index: {index_mode}")
+
+    def start_background_tasks(self):
+        """Start the embed queue processor. Call after event loop is running."""
+        self._embed_queue.start()
+        logger.info("Embed queue started")
 
     def _init_knowledge_graph(self):
         try:
@@ -290,14 +302,15 @@ class MemoryStore:
         conn.commit()
         conn.close()
 
-        # Embed asynchronously (fire-and-forget for non-blocking save)
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self._embed_episode(eid, summary, detail))
-        except RuntimeError:
-            pass
+        # Queue embedding reliably (retries on failure, updates vec index)
+        text = f"{summary}\n{detail}".strip()
+        chunks = chunk_text(text)
+        for i, chunk in enumerate(chunks):
+            self._embed_queue.enqueue(
+                chunk_id=f"{eid}_c{i}", text=chunk,
+                source_table="episodes", source_id=eid,
+                chunk_index=i, db_path=self.db_path,
+            )
 
         self._log_sync("episodes", "insert", eid, {
             "id": eid, "session_id": session_id, "event_type": event_type,
@@ -305,31 +318,14 @@ class MemoryStore:
         })
         return {"id": eid, "event_type": event_type, "summary": summary, "created_at": now}
 
-    async def _embed_episode(self, episode_id: str, summary: str, detail: str):
-        """Chunk and embed an episode for vector search."""
-        text = f"{summary}\n{detail}".strip()
-        chunks = chunk_text(text)
-        now = time.time()
-        conn = sqlite3.connect(self.db_path)
-        for i, chunk in enumerate(chunks):
-            try:
-                vec = await self._embedder.embed(chunk)
-                cid = f"{episode_id}_c{i}"
-                conn.execute(
-                    """INSERT OR REPLACE INTO memory_chunks
-                       (id, source_table, source_id, chunk_index, text_content, embedding, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (cid, "episodes", episode_id, i, chunk, vec_to_blob(vec), now),
-                )
-            except Exception as e:
-                logger.debug(f"Episode embed failed for chunk {i}: {e}")
-        conn.commit()
-        conn.close()
-
     async def episode_search_hybrid(self, query: str, limit: int = 10) -> list[dict]:
-        """Hybrid search: FTS5 text (0.3) + vector similarity (0.7) with temporal decay."""
+        """
+        Hybrid search: FTS5 text (0.3) + vector similarity (0.7) with temporal decay.
+        Uses sqlite-vec indexed search when available, numpy fallback otherwise.
+        """
         conn = self._conn()
 
+        # Phase 1: FTS5 text search
         fts_results = {}
         try:
             rows = conn.execute(
@@ -347,40 +343,52 @@ class MemoryStore:
         except Exception:
             pass
 
+        # Phase 2: Vector search (indexed or fallback)
         vec_results = {}
         try:
             query_vec = await self._embedder.embed(query)
-            chunks = conn.execute(
-                "SELECT source_id, text_content, embedding FROM memory_chunks WHERE source_table = 'episodes' AND embedding IS NOT NULL"
-            ).fetchall()
-            for c in chunks:
-                evec = blob_to_vec(c["embedding"])
-                sim = cosine_similarity(query_vec, evec)
-                eid = c["source_id"]
-                if sim > 0.25 and (eid not in vec_results or sim > vec_results[eid]["vec_score"]):
-                    vec_results[eid] = {"id": eid, "vec_score": sim}
+
+            if self._vec_index.indexed:
+                # O(log n) indexed search via sqlite-vec
+                hits = self._vec_index.search_cosine(query_vec, limit=limit * 3)
+                for chunk_id, sim in hits:
+                    if sim < 0.25:
+                        continue
+                    eid = chunk_id.rsplit("_c", 1)[0]
+                    if eid not in vec_results or sim > vec_results[eid]["vec_score"]:
+                        vec_results[eid] = {"id": eid, "vec_score": sim}
+            else:
+                # O(n) brute-force fallback
+                chunks = conn.execute(
+                    "SELECT source_id, embedding FROM memory_chunks "
+                    "WHERE source_table = 'episodes' AND embedding IS NOT NULL"
+                ).fetchall()
+                for c in chunks:
+                    evec = blob_to_vec(c["embedding"])
+                    sim = cosine_similarity(query_vec, evec)
+                    eid = c["source_id"]
+                    if sim > 0.25 and (eid not in vec_results or sim > vec_results[eid]["vec_score"]):
+                        vec_results[eid] = {"id": eid, "vec_score": sim}
         except Exception as e:
             logger.debug(f"Vector search failed: {e}")
 
+        # Phase 3: Merge + temporal decay + rank
         all_ids = set(fts_results.keys()) | set(vec_results.keys())
-        if not fts_results:
-            for eid in vec_results:
-                row = conn.execute("SELECT * FROM episodes WHERE id = ?", (eid,)).fetchone()
-                if row:
-                    fts_results[eid] = self._episode_row_to_dict(row)
+        episode_cache = {}
+        if all_ids - set(fts_results.keys()):
+            missing = all_ids - set(fts_results.keys())
+            placeholders = ",".join("?" for _ in missing)
+            rows = conn.execute(
+                f"SELECT * FROM episodes WHERE id IN ({placeholders})", list(missing),
+            ).fetchall()
+            for r in rows:
+                episode_cache[r["id"]] = self._episode_row_to_dict(r)
 
         conn.close()
         now = time.time()
         merged = []
         for eid in all_ids:
-            info = fts_results.get(eid) or {}
-            if not info:
-                c2 = sqlite3.connect(self.db_path)
-                c2.row_factory = sqlite3.Row
-                row = c2.execute("SELECT * FROM episodes WHERE id = ?", (eid,)).fetchone()
-                c2.close()
-                if row:
-                    info = self._episode_row_to_dict(row)
+            info = fts_results.get(eid) or episode_cache.get(eid)
             if not info:
                 continue
 
@@ -843,6 +851,16 @@ class MemoryStore:
         )
         conn.commit()
         conn.close()
+
+        # Embed notes too (not just episodes)
+        chunks = chunk_text(content)
+        for i, chunk in enumerate(chunks):
+            self._embed_queue.enqueue(
+                chunk_id=f"note_{note_id}_c{i}", text=chunk,
+                source_table="notes", source_id=note_id,
+                chunk_index=i, db_path=self.db_path,
+            )
+
         self.knowledge_store(subject="user_note", predicate="says", obj=content[:300], source="notes")
         self._log_sync("notes", "insert", note_id, {
             "id": note_id, "content": content, "tags": json.dumps(tags),
@@ -919,6 +937,9 @@ class MemoryStore:
             "execution_logs": exec_count,
             "active_working_sessions": working_sessions,
             "embedded_chunks": chunk_count,
-            "embedding_provider": self._embedder._provider or "none",
+            "vec_index_count": self._vec_index.count,
+            "vec_index_mode": "sqlite-vec" if self._vec_index.indexed else "numpy_fallback",
+            "embedding_provider": self._embedder.provider_name,
+            "embed_queue_pending": self._embed_queue.pending,
             "knowledge_graph": kg_stats,
         }

@@ -309,9 +309,16 @@ def register_core_methods(registry: MethodRegistry, state):
         timeout = params.get("timeout", 10.0)
         if not node_id or not command:
             raise GatewayError("INVALID_PARAMS", "node_id and command required")
-        ws = state.daemons.get(node_id)
-        if not ws:
+        if not state.daemons.get(node_id):
             raise GatewayError("NOT_FOUND", f"Node not found: {node_id}")
+        # Use HardwareMesh.invoke which waits for the response
+        if state.hardware_mesh:
+            result = await state.hardware_mesh.invoke(node_id, command, cmd_params, timeout)
+            if not result.get("success", True) and "error" in result:
+                raise GatewayError("INTERNAL", result["error"])
+            return result
+        # Fallback: fire-and-forget if mesh not available
+        ws = state.daemons[node_id]
         req_id = str(uuid4())[:8]
         await ws.send_json({
             "type": "command", "request_id": req_id,

@@ -185,16 +185,38 @@ class BrowserController:
         return True
 
     async def navigate(self, url: str) -> dict:
-        """Navigate to a URL."""
+        """Navigate to a URL and wait for load."""
         try:
             if self._page:
-                await self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                resp = await self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                status = resp.status if resp else 0
             else:
+                await self._cdp.send_command("Page.enable")
                 await self._cdp.send_command("Page.navigate", {"url": url})
-                await asyncio.sleep(2)
-            return {"success": True, "url": url}
+                # Wait for Page.loadEventFired or timeout
+                try:
+                    await asyncio.wait_for(
+                        self._cdp.send_command("Page.getNavigationHistory"),
+                        timeout=10.0,
+                    )
+                except asyncio.TimeoutError:
+                    pass
+                status = 200
+            title = await self._get_title()
+            return {"success": True, "url": url, "status": status, "title": title}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    async def _get_title(self) -> str:
+        try:
+            if self._page:
+                return await self._page.title()
+            r = await self._cdp.send_command("Runtime.evaluate", {
+                "expression": "document.title", "returnByValue": True,
+            })
+            return r.get("result", {}).get("value", "")
+        except Exception:
+            return ""
 
     async def screenshot(self, full_page: bool = False) -> dict:
         """Capture a screenshot, resize and compress for VLM."""
@@ -213,15 +235,46 @@ class BrowserController:
             return {"success": False, "error": str(e)}
 
     async def snapshot(self) -> dict:
-        """Get ARIA accessibility tree as structured text."""
+        """Get ARIA accessibility tree as structured text with resolved selectors."""
         try:
+            await self._cdp.send_command("DOM.enable")
+            await self._cdp.send_command("Accessibility.enable")
             result = await self._cdp.send_command("Accessibility.getFullAXTree")
             nodes = result.get("nodes", [])
             self._aria_refs.clear()
             text = self._build_aria_text(nodes)
+            # Resolve backend DOM node IDs to CSS selectors
+            await self._resolve_aria_selectors()
             return {"success": True, "aria_tree": text, "ref_count": len(self._aria_refs)}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    async def _resolve_aria_selectors(self):
+        """Resolve ARIA refs to CSS selectors via DOM.describeNode."""
+        for ref_id, info in list(self._aria_refs.items()):
+            backend_id = info.get("backend_id")
+            if not backend_id or info.get("selector"):
+                continue
+            try:
+                desc = await self._cdp.send_command("DOM.describeNode", {
+                    "backendNodeId": backend_id, "depth": 0,
+                })
+                node = desc.get("node", {})
+                tag = node.get("localName", "")
+                attrs = node.get("attributes", [])
+                attr_dict = dict(zip(attrs[::2], attrs[1::2])) if attrs else {}
+                if attr_dict.get("id"):
+                    info["selector"] = f"#{attr_dict['id']}"
+                elif attr_dict.get("data-testid"):
+                    info["selector"] = f'[data-testid="{attr_dict["data-testid"]}"]'
+                elif tag and attr_dict.get("class"):
+                    first_class = attr_dict["class"].split()[0]
+                    info["selector"] = f"{tag}.{first_class}"
+                elif tag and info.get("name"):
+                    safe_name = info["name"].replace('"', '\\"')[:50]
+                    info["selector"] = f'{tag}:has-text("{safe_name}")'
+            except Exception:
+                pass
 
     async def click(self, ref_or_selector: str) -> dict:
         """Click an element by ARIA ref or CSS selector."""
@@ -300,15 +353,26 @@ class BrowserController:
     async def select(self, ref_or_selector: str, value: str) -> dict:
         """Select an option from a dropdown."""
         try:
+            selector = self._resolve_selector(ref_or_selector)
             if self._page:
-                await self._page.select_option(ref_or_selector, value, timeout=5000)
+                await self._page.select_option(selector, value, timeout=5000)
             else:
+                # Escape user input to prevent injection
+                safe_sel = json.dumps(selector)
+                safe_val = json.dumps(value)
                 await self.evaluate(
-                    f"document.querySelector('{ref_or_selector}').value = '{value}'"
+                    f"(function(){{ var el = document.querySelector({safe_sel}); if(el) el.value = {safe_val}; }})()"
                 )
             return {"success": True, "selected": value}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def _resolve_selector(self, ref_or_selector: str) -> str:
+        """Resolve an ARIA ref (ax0, ax1...) to a CSS selector."""
+        if ref_or_selector.startswith("ax"):
+            info = self._aria_refs.get(ref_or_selector, {})
+            return info.get("selector") or ref_or_selector
+        return ref_or_selector
 
     async def wait(self, ms: int = 1000) -> dict:
         """Wait for a specified duration."""

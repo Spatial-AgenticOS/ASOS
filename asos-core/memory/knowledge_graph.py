@@ -258,10 +258,11 @@ class KnowledgeGraph:
         """Hybrid FTS + embedding search for entities."""
         conn = self._conn()
 
+        # Phase 1: FTS5 text search
         fts_results = {}
         try:
             rows = conn.execute(
-                """SELECT e.id, e.name, e.entity_type, e.mention_count, e.embedding, rank
+                """SELECT e.id, e.name, e.entity_type, e.mention_count, rank
                    FROM entities_fts f JOIN entities e ON f.rowid = e.rowid
                    WHERE entities_fts MATCH ? ORDER BY rank LIMIT ?""",
                 (query, limit * 2),
@@ -269,12 +270,13 @@ class KnowledgeGraph:
             for r in rows:
                 fts_results[r["id"]] = {
                     "id": r["id"], "name": r["name"], "type": r["entity_type"],
-                    "mentions": r["mention_count"], "embedding": r["embedding"],
+                    "mentions": r["mention_count"],
                     "fts_score": 1.0 / (1.0 + abs(r["rank"])),
                 }
         except Exception:
             pass
 
+        # Phase 2: Vector search — scan only entities (usually small set < 10k)
         query_vec = await self._embedder.embed(query)
         all_entities = conn.execute(
             "SELECT id, name, entity_type, mention_count, embedding FROM entities WHERE embedding IS NOT NULL"
@@ -292,6 +294,7 @@ class KnowledgeGraph:
                     "vec_score": sim,
                 }
 
+        # Phase 3: Merge with weights
         merged = {}
         all_ids = set(fts_results.keys()) | set(vec_results.keys())
         for eid in all_ids:
@@ -300,7 +303,6 @@ class KnowledgeGraph:
             info = fts or vec
             score = 0.3 * fts.get("fts_score", 0) + 0.7 * vec.get("vec_score", 0)
             merged[eid] = {**info, "score": score}
-            merged[eid].pop("embedding", None)
             merged[eid].pop("fts_score", None)
             merged[eid].pop("vec_score", None)
 
@@ -431,32 +433,50 @@ class KnowledgeGraph:
         return stored
 
     def _heuristic_extract(self, text: str) -> list[dict]:
-        """Simple pattern-based extraction when LLM is unavailable."""
-        patterns = [
-            (r"(?:my name is|i am|i'm) (\w+)", "user", "is_named"),
-            (r"i (?:live|reside) (?:in|at) (.+?)(?:\.|,|$)", "user", "lives_in"),
-            (r"i (?:work|am employed) (?:at|for) (.+?)(?:\.|,|$)", "user", "works_at"),
-            (r"i (?:like|love|enjoy) (.+?)(?:\.|,|$)", "user", "likes"),
-        ]
+        """
+        Synchronous pattern-based extraction when LLM is unavailable.
+        Stores relations directly in SQLite (no async needed for simple inserts).
+        """
         import re
+        patterns = [
+            (r"(?:my name is|i am|i'm)\s+(\w+)", "user", "is_named", "person"),
+            (r"i (?:live|reside) (?:in|at)\s+(.+?)(?:\.|,|$)", "user", "lives_in", "place"),
+            (r"i (?:work|am employed) (?:at|for)\s+(.+?)(?:\.|,|$)", "user", "works_at", "organization"),
+            (r"i (?:like|love|enjoy)\s+(.+?)(?:\.|,|$)", "user", "likes", "thing"),
+            (r"(?:my (?:wife|husband|partner) is|i'm married to)\s+(\w+)", "user", "partner_is", "person"),
+            (r"i (?:study|studied) (?:at|in)\s+(.+?)(?:\.|,|$)", "user", "studied_at", "organization"),
+        ]
         results = []
-        for pattern, subject, predicate in patterns:
+        now = time.time()
+        conn = self._conn()
+        for pattern, subject, predicate, obj_type in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 obj = match.group(1).strip()
-                if obj:
-                    import asyncio
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            pass
-                        else:
-                            loop.run_until_complete(
-                                self.add_relation(subject, predicate, obj, evidence=text[:200])
-                            )
-                    except Exception:
-                        pass
-                    results.append({"source": subject, "relation": predicate, "target": obj})
+                if not obj or len(obj) < 2:
+                    continue
+                # Direct sync insert for entities and relations
+                for ename, etype in [(subject, "person"), (obj, obj_type)]:
+                    existing = conn.execute(
+                        "SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (ename,)
+                    ).fetchone()
+                    if not existing:
+                        eid = str(uuid4())[:12]
+                        conn.execute(
+                            "INSERT INTO entities (id, name, entity_type, metadata, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?)",
+                            (eid, ename, etype, now, now),
+                        )
+                src = conn.execute("SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (subject,)).fetchone()
+                tgt = conn.execute("SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (obj,)).fetchone()
+                if src and tgt:
+                    rid = str(uuid4())[:12]
+                    conn.execute(
+                        "INSERT INTO relations (id, source_id, relation_type, target_id, confidence, evidence_text, source_origin, created_at, updated_at) VALUES (?, ?, ?, ?, 0.8, ?, 'heuristic', ?, ?)",
+                        (rid, src["id"], predicate, tgt["id"], text[:200], now, now),
+                    )
+                results.append({"source": subject, "relation": predicate, "target": obj})
+        conn.commit()
+        conn.close()
         return results
 
     def stats(self) -> dict:

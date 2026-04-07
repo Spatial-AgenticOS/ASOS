@@ -119,6 +119,42 @@ class IdentityWorkspace:
         path = self._home / "TOOLS.md"
         path.write_text(content)
 
+    def sync_tools_from_registry(self, skill_registry):
+        """Auto-generate TOOLS.md from the actual SkillRegistry."""
+        lines = ["# Environment & Tools\n", "Auto-generated from active skill registry.\n"]
+        lines.append("## Available Skills\n")
+        for skill in skill_registry.skills.values():
+            safety = getattr(skill, "safety_level", "SAFE")
+            lines.append(f"### {getattr(skill, 'name', skill.id)} [{safety}]")
+            desc = getattr(skill, "description", "")
+            if desc:
+                lines.append(f"{desc}\n")
+            for ep in getattr(skill, "endpoints", []):
+                ep_desc = getattr(ep, "description", ep.id)
+                lines.append(f"- `{skill.id}__{ep.id}`: {ep_desc}")
+            lines.append("")
+
+        lines.append("## Platform\n")
+        lines.append("- Runtime: Python (FastAPI)")
+        lines.append("- LLM: OpenAI / Anthropic / Gemini / Ollama")
+        lines.append("- Voice: OpenAI Realtime / Gemini Multimodal Live")
+        lines.append("- Vector Search: sqlite-vec (or numpy fallback)")
+        lines.append("- Browser: CDP + Playwright")
+        lines.append("")
+
+        tools_path = self._home / "TOOLS.md"
+        old = tools_path.read_text() if tools_path.exists() else ""
+        # Preserve any agent-added notes section
+        agent_notes = ""
+        if "## Notes" in old:
+            agent_notes = old[old.index("## Notes"):]
+        if agent_notes:
+            lines.append(agent_notes)
+        else:
+            lines.append("## Notes\n(Agent adds notes about the environment and tool preferences here)\n")
+
+        self.write_tools("\n".join(lines))
+
     def build_system_prompt(self) -> str:
         """
         Build the complete system prompt from all workspace files.
@@ -155,15 +191,18 @@ class IdentityWorkspace:
 
         return "\n".join(parts)
 
-    async def maintenance_cycle(self, memory_store=None, llm=None):
+    async def maintenance_cycle(self, memory_store=None, llm=None, session_id: str = ""):
         """
-        Periodic maintenance: review recent episodes and distill
-        insights into MEMORY.md and the knowledge graph.
+        Periodic maintenance: review recent episodes from this session
+        and distill insights into MEMORY.md and the knowledge graph.
         """
         if not memory_store or not llm or not llm.available:
             return
 
-        recent = memory_store.episode_recent(limit=20)
+        if session_id:
+            recent = memory_store.episode_recent(limit=20, session_id=session_id)
+        else:
+            recent = memory_store.episode_recent(limit=20)
         if not recent:
             return
 

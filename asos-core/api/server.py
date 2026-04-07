@@ -333,15 +333,17 @@ class BrainState:
             daemons=self.daemons,
         )
 
-        # Identity workspace
+        # Identity workspace — sync TOOLS.md from actual skill registry
         self.identity_workspace = IdentityWorkspace()
+        self.identity_workspace.sync_tools_from_registry(self.skill_registry)
 
         # GenUI engine
         self.genui_engine = GenUIEngine(llm=_shared_llm)
         self.service_providers = ServiceProviderRegistry()
 
-        # Browser controller (non-blocking — just creates the object)
+        # Browser controller — register as a skill so the agent can invoke it
         self.browser = BrowserController()
+        self._register_browser_skill()
 
         stats = self.memory.stats()
         logger.info(
@@ -349,6 +351,61 @@ class BrainState:
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
             f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
         )
+
+    def _register_browser_skill(self):
+        """Register browser control as a skill the agent can call via tool use."""
+        try:
+            from skills.impl.browser_use import get_browser_skill_manifest
+            manifest = get_browser_skill_manifest()
+            from skills.registry import Skill, SkillEndpoint
+            skill = Skill(
+                id=manifest["skill_id"],
+                name=manifest["name"],
+                description=manifest["description"],
+                safety_level=manifest.get("safety_level", "WARN"),
+                endpoints=[
+                    SkillEndpoint(
+                        id=ep["id"],
+                        description=ep["description"],
+                        params=ep.get("params", []),
+                    )
+                    for ep in manifest["endpoints"]
+                ],
+                executor=self._execute_browser_action,
+            )
+            self.skill_registry.skills[skill.id] = skill
+            logger.info(f"Browser skill registered: {len(manifest['endpoints'])} endpoints")
+        except Exception as e:
+            logger.debug(f"Browser skill registration skipped: {e}")
+
+    async def _execute_browser_action(self, endpoint_id: str, args: dict) -> dict:
+        """Execute a browser action when called by the agent."""
+        if not self.browser:
+            return {"error": "Browser not available"}
+        if not self.browser.connected:
+            ok = await self.browser.initialize()
+            if not ok:
+                return {"error": "Cannot connect to Chrome. Start it with --remote-debugging-port=9222"}
+        method = getattr(self.browser, endpoint_id, None)
+        if not method:
+            return {"error": f"Unknown browser action: {endpoint_id}"}
+        if endpoint_id == "navigate":
+            return await method(args.get("url", ""))
+        elif endpoint_id == "screenshot":
+            return await method(args.get("full_page", False))
+        elif endpoint_id == "snapshot":
+            return await method()
+        elif endpoint_id == "click":
+            return await method(args.get("ref_or_selector", ""))
+        elif endpoint_id == "type_text":
+            return await method(args.get("ref_or_selector", ""), args.get("text", ""))
+        elif endpoint_id == "evaluate":
+            return await method(args.get("js_code", ""))
+        elif endpoint_id == "scroll":
+            return await method(args.get("direction", "down"), args.get("amount", 500))
+        elif endpoint_id == "get_page_info":
+            return await method()
+        return await method(**args) if args else await method()
 
     @staticmethod
     def _load_stored_credentials():
@@ -411,6 +468,8 @@ state = BrainState()
 @app.on_event("startup")
 async def startup():
     await state.init()
+    if state.memory:
+        state.memory.start_background_tasks()
 
 
 # ─────────────────────────────────────────────
@@ -1550,22 +1609,31 @@ async def client_session(ws: WebSocket):
                         system_prompt = ""
                         if state.identity_workspace:
                             system_prompt = state.identity_workspace.build_system_prompt()
+
+                        async def _gemini_audio_cb(sid, b64, is_done):
+                            try:
+                                await ws.send_json(TheoraMessage(
+                                    session_id=sid, hop="brain", type="audio_delta",
+                                    payload={"data_b64": b64, "encoding": "pcm16", "sample_rate": 24000, "is_final": is_done},
+                                ).model_dump())
+                            except Exception:
+                                pass
+
+                        async def _gemini_transcript_cb(sid, text, is_partial):
+                            try:
+                                await ws.send_json(TheoraMessage(
+                                    session_id=sid, hop="brain", type="transcript",
+                                    payload={"text": text, "role": "assistant", "is_partial": is_partial},
+                                ).model_dump())
+                            except Exception:
+                                pass
+
                         await state.gemini_proxy.start_session(
                             session_id=session_id,
                             node_id="web",
                             system_prompt=system_prompt,
-                            on_audio_delta=lambda b64: asyncio.ensure_future(
-                                ws.send_json(TheoraMessage(
-                                    session_id=session_id, hop="brain", type="audio_delta",
-                                    payload={"data_b64": b64, "encoding": "pcm16", "sample_rate": 24000},
-                                ).model_dump())
-                            ),
-                            on_transcript=lambda text: asyncio.ensure_future(
-                                ws.send_json(TheoraMessage(
-                                    session_id=session_id, hop="brain", type="transcript",
-                                    payload={"text": text, "role": "assistant"},
-                                ).model_dump())
-                            ),
+                            on_audio_delta=_gemini_audio_cb,
+                            on_transcript=_gemini_transcript_cb,
                         )
                     await ws.send_json(TheoraMessage(
                         session_id=session_id, hop="brain", type="voice_config_ack",
@@ -1658,12 +1726,14 @@ async def client_session(ws: WebSocket):
                 await state.orchestrator.on_session_disconnect(session_id)
             except Exception as e:
                 logger.warning(f"Session summarization failed: {e}")
-        # Run identity maintenance cycle (distill memory, update MEMORY.md)
+        # Run identity maintenance cycle scoped to this session
         if state.identity_workspace:
             try:
+                _llm = state.orchestrator.llm if state.orchestrator else None
                 await state.identity_workspace.maintenance_cycle(
                     memory_store=state.memory,
-                    llm=state.identity_workspace._llm if hasattr(state.identity_workspace, '_llm') else None,
+                    llm=_llm,
+                    session_id=session_id,
                 )
             except Exception as e:
                 logger.debug(f"Identity maintenance skipped: {e}")
