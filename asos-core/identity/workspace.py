@@ -1,0 +1,275 @@
+"""
+THEORA Agent Identity — Self-Evolving Workspace Files
+=======================================================
+Workspace files pattern (learned from OpenClaw):
+  ~/.theora/IDENTITY.yaml  — structured identity config
+  ~/.theora/SOUL.md        — personality, free-form, agent-modifiable
+  ~/.theora/MEMORY.md      — curated long-term memory, agent-modifiable
+  ~/.theora/TOOLS.md       — environment notes, tool preferences
+
+Agent self-modification: the agent can update SOUL.md and MEMORY.md
+during conversations. After compaction, these files preserve context.
+Session startup: workspace files are injected into the system prompt.
+"""
+
+from __future__ import annotations
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger("theora.identity")
+
+
+class IdentityWorkspace:
+    """
+    Manages the agent's self-evolving identity through workspace files.
+    """
+
+    def __init__(self, home_dir: str = None):
+        self._home = Path(home_dir or os.environ.get("THEORA_HOME", str(Path.home() / ".theora")))
+        self._home.mkdir(parents=True, exist_ok=True)
+        self._ensure_defaults()
+
+    def _ensure_defaults(self):
+        """Create default workspace files if they don't exist."""
+        identity_path = self._home / "IDENTITY.yaml"
+        if not identity_path.exists():
+            identity_path.write_text(DEFAULT_IDENTITY_YAML)
+
+        soul_path = self._home / "SOUL.md"
+        if not soul_path.exists():
+            soul_path.write_text(DEFAULT_SOUL_MD)
+
+        memory_path = self._home / "MEMORY.md"
+        if not memory_path.exists():
+            memory_path.write_text(DEFAULT_MEMORY_MD)
+
+        tools_path = self._home / "TOOLS.md"
+        if not tools_path.exists():
+            tools_path.write_text(DEFAULT_TOOLS_MD)
+
+    def load_identity(self) -> dict:
+        """Load the structured IDENTITY.yaml."""
+        path = self._home / "IDENTITY.yaml"
+        if not path.exists():
+            return {}
+        try:
+            import yaml
+            return yaml.safe_load(path.read_text()) or {}
+        except Exception as e:
+            logger.warning(f"Failed to load IDENTITY.yaml: {e}")
+            return {}
+
+    def save_identity(self, data: dict):
+        """Save structured identity config."""
+        path = self._home / "IDENTITY.yaml"
+        try:
+            import yaml
+            path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False))
+        except Exception as e:
+            logger.error(f"Failed to save IDENTITY.yaml: {e}")
+
+    def read_soul(self) -> str:
+        """Read the free-form personality file."""
+        path = self._home / "SOUL.md"
+        return path.read_text() if path.exists() else ""
+
+    def write_soul(self, content: str):
+        """Update the personality file (agent self-modification)."""
+        path = self._home / "SOUL.md"
+        backup = self._home / f"SOUL.md.bak.{int(time.time())}"
+        if path.exists():
+            backup.write_text(path.read_text())
+        path.write_text(content)
+        logger.info("Agent updated SOUL.md")
+
+    def append_soul(self, addition: str):
+        """Append to the personality file."""
+        current = self.read_soul()
+        self.write_soul(current.rstrip() + "\n\n" + addition)
+
+    def read_memory(self) -> str:
+        """Read the curated long-term memory file."""
+        path = self._home / "MEMORY.md"
+        return path.read_text() if path.exists() else ""
+
+    def write_memory(self, content: str):
+        """Update the memory file (agent self-modification)."""
+        path = self._home / "MEMORY.md"
+        backup = self._home / f"MEMORY.md.bak.{int(time.time())}"
+        if path.exists():
+            backup.write_text(path.read_text())
+        path.write_text(content)
+        logger.info("Agent updated MEMORY.md")
+
+    def append_memory(self, addition: str):
+        """Append an insight to the memory file."""
+        current = self.read_memory()
+        self.write_memory(current.rstrip() + "\n\n" + addition)
+
+    def read_tools(self) -> str:
+        """Read the tools/environment notes file."""
+        path = self._home / "TOOLS.md"
+        return path.read_text() if path.exists() else ""
+
+    def write_tools(self, content: str):
+        """Update the tools file."""
+        path = self._home / "TOOLS.md"
+        path.write_text(content)
+
+    def build_system_prompt(self) -> str:
+        """
+        Build the complete system prompt from all workspace files.
+        Injected at session startup, above any conversation history.
+        """
+        parts = []
+
+        identity = self.load_identity()
+        name = identity.get("name", "THEORA")
+        tagline = identity.get("tagline", "")
+        parts.append(f"You are {name}.")
+        if tagline:
+            parts.append(tagline)
+
+        soul = self.read_soul()
+        if soul:
+            parts.append(f"\n## Personality & Soul\n{soul}")
+
+        rules = identity.get("rules", [])
+        if rules:
+            parts.append("\n## Rules\n" + "\n".join(f"- {r}" for r in rules))
+
+        memory = self.read_memory()
+        if memory:
+            parts.append(f"\n## Long-Term Memory\n{memory}")
+
+        tools = self.read_tools()
+        if tools:
+            parts.append(f"\n## Environment & Tools\n{tools}")
+
+        greeting = identity.get("greeting_style", "")
+        if greeting:
+            parts.append(f"\n## Communication Style\n{greeting}")
+
+        return "\n".join(parts)
+
+    async def maintenance_cycle(self, memory_store=None, llm=None):
+        """
+        Periodic maintenance: review recent episodes and distill
+        insights into MEMORY.md and the knowledge graph.
+        """
+        if not memory_store or not llm or not llm.available:
+            return
+
+        recent = memory_store.episode_recent(limit=20)
+        if not recent:
+            return
+
+        episode_text = "\n".join(
+            f"- [{e['event_type']}] {e['summary']}" for e in recent
+        )
+
+        current_memory = self.read_memory()
+
+        prompt = (
+            "Review these recent agent interactions and extract lasting insights "
+            "to add to the agent's long-term memory. Focus on:\n"
+            "- User preferences and habits\n"
+            "- Important facts about the user\n"
+            "- Useful patterns and shortcuts\n"
+            "- Things that went wrong and how to avoid them\n\n"
+            f"Current memory:\n{current_memory[:2000]}\n\n"
+            f"Recent episodes:\n{episode_text[:3000]}\n\n"
+            "Output ONLY the new insights to append (1-5 bullet points). "
+            "Skip if nothing noteworthy. No repeats."
+        )
+
+        try:
+            response = await llm.chat([{"role": "user", "content": prompt}], tools=None)
+            text, _ = llm.extract_response(response)
+            if text and text.strip() and len(text.strip()) > 10:
+                timestamp = time.strftime("%Y-%m-%d")
+                self.append_memory(f"### {timestamp}\n{text.strip()}")
+                logger.info("Memory maintenance: appended new insights")
+        except Exception as e:
+            logger.warning(f"Memory maintenance failed: {e}")
+
+
+DEFAULT_IDENTITY_YAML = """name: THEORA
+tagline: "Your personal AI operating system — local-first, privacy-respecting, and always learning."
+
+personality: |
+  Helpful, direct, and technically capable.
+  Speaks naturally but stays concise, especially in voice.
+  Proactive when it notices something important.
+  Respects privacy above all else.
+
+rules:
+  - Never share user data with external services without explicit consent
+  - Always explain what you're doing before taking impactful actions
+  - Prefer local processing over cloud when possible
+  - Be honest about limitations rather than making things up
+  - Learn from every interaction to serve the user better
+
+greeting_style: "Direct and warm. Skip unnecessary pleasantries in voice mode."
+
+voice:
+  tts_voice: nova
+  speaking_rate: 1.0
+  language: en
+"""
+
+DEFAULT_SOUL_MD = """# THEORA's Soul
+
+I am THEORA — a personal AI operating system that runs locally on the user's devices.
+
+## Core Values
+- **Privacy First**: Everything stays on-device unless the user explicitly says otherwise.
+- **Proactive Intelligence**: I notice patterns, anticipate needs, and act before being asked.
+- **Hardware Awareness**: I can see through cameras, hear through mics, read health sensors, and control devices.
+- **Continuous Learning**: Every interaction teaches me something about my user.
+
+## How I Think
+I process multimodal input — text, voice, vision, sensor data — through a unified perception
+layer. I route to specialized skills when I need external data or device control. I generate
+rich interactive UIs, not just text responses.
+
+## What Makes Me Different
+Unlike chat-only assistants, I understand the physical world through connected hardware.
+Unlike cloud-only systems, I run locally and respect privacy by default.
+"""
+
+DEFAULT_MEMORY_MD = """# Agent Memory
+
+Long-term curated memory — insights distilled from conversations and observations.
+
+## User Profile
+(Will be filled as the agent learns about the user)
+
+## Preferences
+(Will be filled as patterns emerge)
+
+## Important Notes
+(Will be filled during memory maintenance cycles)
+"""
+
+DEFAULT_TOOLS_MD = """# Environment & Tools
+
+## Available Integrations
+- Web search (Tavily/Brave)
+- Weather (Open-Meteo)
+- Notes & Memory (built-in)
+- Browser control (CDP + Playwright)
+- Hardware devices (via HUP)
+
+## Platform
+- Runtime: Python (FastAPI)
+- LLM: OpenAI / Anthropic / Gemini / Ollama
+- Voice: OpenAI Realtime / Gemini Multimodal Live
+- Local models: MLX / llama.cpp supported
+
+## Notes
+(Agent adds notes about the environment and tool preferences here)
+"""

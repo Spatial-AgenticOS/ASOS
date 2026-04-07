@@ -1,23 +1,64 @@
 /**
- * Realtime Voice Engine — PCM16 capture & playback for OpenAI Realtime API
+ * Realtime Voice Engine — AudioWorklet-based PCM16 capture & playback
  *
- * Captures microphone audio as raw PCM16 at 24kHz, sends base64 chunks over WebSocket.
- * Receives PCM16 audio back and plays it through an AudioContext.
+ * Uses AudioWorklet (not deprecated ScriptProcessor) for mic capture.
+ * PCM16 at 24kHz, base64 chunks over WebSocket.
+ * Supports live transcription captions and tool-call status display.
  */
 
 const TARGET_SAMPLE_RATE = 24000;
+const WORKLET_NAME = 'pcm-capture-processor';
+
+const WORKLET_CODE = `
+class PCMCaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this._buffer = [];
+    this._bufferSize = 2400; // 100ms at 24kHz
+  }
+
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || !input[0]) return true;
+    const samples = input[0];
+
+    for (let i = 0; i < samples.length; i++) {
+      this._buffer.push(samples[i]);
+    }
+
+    while (this._buffer.length >= this._bufferSize) {
+      const chunk = this._buffer.splice(0, this._bufferSize);
+      const pcm16 = new Int16Array(chunk.length);
+      for (let i = 0; i < chunk.length; i++) {
+        const s = Math.max(-1, Math.min(1, chunk[i]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      this.port.postMessage({ type: 'audio', pcm16: pcm16.buffer }, [pcm16.buffer]);
+    }
+    return true;
+  }
+}
+registerProcessor('${WORKLET_NAME}', PCMCaptureProcessor);
+`;
+
 
 export class RealtimeVoiceEngine {
-  constructor(ws) {
+  constructor(ws, callbacks = {}) {
     this._ws = ws;
     this._audioCtx = null;
     this._stream = null;
-    this._processor = null;
+    this._workletNode = null;
     this._source = null;
     this._playbackCtx = null;
     this._playbackQueue = [];
     this._isPlaying = false;
     this._active = false;
+    this._nextPlayTime = 0;
+
+    this.onTranscript = callbacks.onTranscript || null;
+    this.onToolCall = callbacks.onToolCall || null;
+    this.onSpeechStarted = callbacks.onSpeechStarted || null;
+    this.onError = callbacks.onError || null;
   }
 
   get active() { return this._active; }
@@ -26,45 +67,57 @@ export class RealtimeVoiceEngine {
     this._active = true;
 
     this._ws.send(JSON.stringify({
-      hop: "client",
-      type: "voice_config",
-      payload: { mode: "realtime", supports_realtime: true }
+      hop: 'client',
+      type: 'voice_config',
+      payload: { mode: 'realtime', supports_realtime: true },
     }));
 
     this._stream = await navigator.mediaDevices.getUserMedia({
-      audio: { sampleRate: TARGET_SAMPLE_RATE, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+      audio: {
+        sampleRate: { ideal: TARGET_SAMPLE_RATE },
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
     });
 
     this._audioCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
     this._source = this._audioCtx.createMediaStreamSource(this._stream);
 
-    this._processor = this._audioCtx.createScriptProcessor(4096, 1, 1);
-    this._processor.onaudioprocess = (e) => {
-      if (!this._active) return;
-      const float32 = e.inputBuffer.getChannelData(0);
-      const pcm16 = this._float32ToPCM16(float32);
-      const b64 = this._arrayBufferToBase64(pcm16.buffer);
+    const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    try {
+      await this._audioCtx.audioWorklet.addModule(url);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
 
+    this._workletNode = new AudioWorkletNode(this._audioCtx, WORKLET_NAME);
+    this._workletNode.port.onmessage = (e) => {
+      if (!this._active || e.data.type !== 'audio') return;
+      const b64 = this._arrayBufferToBase64(e.data.pcm16);
       if (this._ws.readyState === WebSocket.OPEN) {
         this._ws.send(JSON.stringify({
-          hop: "client",
-          type: "audio_chunk",
+          hop: 'client',
+          type: 'audio_chunk',
           payload: {
-            encoding: "pcm16",
+            encoding: 'pcm16',
             sample_rate: TARGET_SAMPLE_RATE,
             channels: 1,
             chunk_index: 0,
             is_final: false,
             data_b64: b64,
-          }
+          },
         }));
       }
     };
 
-    this._source.connect(this._processor);
-    this._processor.connect(this._audioCtx.destination);
+    this._source.connect(this._workletNode);
+    this._workletNode.connect(this._audioCtx.destination);
 
     this._playbackCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    this._nextPlayTime = 0;
   }
 
   stop() {
@@ -72,22 +125,23 @@ export class RealtimeVoiceEngine {
 
     if (this._ws.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify({
-        hop: "client",
-        type: "voice_config",
-        payload: { mode: "disabled" }
+        hop: 'client',
+        type: 'voice_config',
+        payload: { mode: 'disabled' },
       }));
     }
 
-    if (this._processor) {
-      this._processor.disconnect();
-      this._processor = null;
+    if (this._workletNode) {
+      this._workletNode.port.close();
+      this._workletNode.disconnect();
+      this._workletNode = null;
     }
     if (this._source) {
       this._source.disconnect();
       this._source = null;
     }
     if (this._stream) {
-      this._stream.getTracks().forEach(t => t.stop());
+      this._stream.getTracks().forEach((t) => t.stop());
       this._stream = null;
     }
     if (this._audioCtx) {
@@ -100,10 +154,12 @@ export class RealtimeVoiceEngine {
     }
     this._playbackQueue = [];
     this._isPlaying = false;
+    this._nextPlayTime = 0;
   }
 
   handleAudioResponse(payload) {
     if (!payload.data_b64 || payload.is_final) return;
+    if (!this._playbackCtx) return;
 
     try {
       const pcm16 = this._base64ToPCM16(payload.data_b64);
@@ -112,34 +168,40 @@ export class RealtimeVoiceEngine {
       const buffer = this._playbackCtx.createBuffer(1, float32.length, TARGET_SAMPLE_RATE);
       buffer.getChannelData(0).set(float32);
 
-      this._playbackQueue.push(buffer);
-      if (!this._isPlaying) this._playNext();
+      const source = this._playbackCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this._playbackCtx.destination);
+
+      const now = this._playbackCtx.currentTime;
+      const startTime = Math.max(now, this._nextPlayTime);
+      source.start(startTime);
+      this._nextPlayTime = startTime + buffer.duration;
     } catch (e) {
-      console.error("Audio playback error:", e);
+      console.error('Audio playback error:', e);
     }
   }
 
-  _playNext() {
-    if (this._playbackQueue.length === 0) {
-      this._isPlaying = false;
-      return;
+  handleTranscript(payload) {
+    if (this.onTranscript) {
+      this.onTranscript(payload.text, payload.is_partial);
     }
-    this._isPlaying = true;
-    const buffer = this._playbackQueue.shift();
-    const source = this._playbackCtx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(this._playbackCtx.destination);
-    source.onended = () => this._playNext();
-    source.start();
   }
 
-  _float32ToPCM16(float32) {
-    const pcm16 = new Int16Array(float32.length);
-    for (let i = 0; i < float32.length; i++) {
-      const s = Math.max(-1, Math.min(1, float32[i]));
-      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  handleToolCallStatus(payload) {
+    if (this.onToolCall) {
+      this.onToolCall(payload.name, payload.status);
     }
-    return pcm16;
+  }
+
+  handleSpeechStarted() {
+    this._nextPlayTime = 0;
+    if (this._playbackCtx) {
+      this._playbackCtx.close().catch(() => {});
+      this._playbackCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    }
+    if (this.onSpeechStarted) {
+      this.onSpeechStarted();
+    }
   }
 
   _pcm16ToFloat32(pcm16) {
@@ -153,8 +215,10 @@ export class RealtimeVoiceEngine {
   _arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
     let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const slice = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode.apply(null, slice);
     }
     return btoa(binary);
   }

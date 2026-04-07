@@ -56,6 +56,7 @@ from mcp.server import TheoraMCPServer
 from mcp.client import MCPClientManager, MCPServerConnection
 from channels.base import ChannelManager, ChannelMessage, ChannelResponse
 from voice.realtime_proxy import RealtimeProxy
+from voice.gemini_realtime import GeminiRealtimeProxy
 from voice.router import VoiceRouter
 from memory.sync import SyncEngine
 from security.wasm_sandbox import WASMSandbox
@@ -66,6 +67,11 @@ from integrations.home_assistant import HomeAssistantIntegration
 from integrations.notion import NotionIntegration
 from integrations.webhook_receiver import WebhookReceiver, EventBus
 from skills.marketplace import MarketplaceClient
+from gateway.protocol import MethodRegistry, GatewaySession, register_core_methods
+from hardware.mesh import HardwareMesh
+from identity.workspace import IdentityWorkspace
+from genui.generator import GenUIEngine, ServiceProviderRegistry
+from skills.impl.browser_use import BrowserController
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("theora.brain")
@@ -194,6 +200,13 @@ class BrainState:
         self.wake_word: Optional[WakeWordDetector] = None
         self.orchestrator: Optional[Orchestrator] = None
         self.activity_log: deque = deque(maxlen=100)
+        self.gemini_proxy: Optional[GeminiRealtimeProxy] = None
+        self.gateway_registry: Optional[MethodRegistry] = None
+        self.hardware_mesh: Optional[HardwareMesh] = None
+        self.identity_workspace: Optional[IdentityWorkspace] = None
+        self.genui_engine: Optional[GenUIEngine] = None
+        self.service_providers: Optional[ServiceProviderRegistry] = None
+        self.browser: Optional[BrowserController] = None
 
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
@@ -299,6 +312,36 @@ class BrainState:
             send_to_session=self.send_to_session,
             send_to_node=self._send_dict_to_node,
         )
+
+        # Gemini Realtime Voice
+        self.gemini_proxy = GeminiRealtimeProxy(
+            skill_registry=self.skill_registry,
+            skill_executor=self.orchestrator.executor if self.orchestrator else None,
+            memory=self.memory,
+            perception=self.perception,
+            send_to_node=self._send_dict_to_node,
+            send_to_session=self.send_to_session,
+        )
+
+        # Gateway protocol
+        self.gateway_registry = MethodRegistry()
+        register_core_methods(self.gateway_registry, self)
+
+        # Hardware mesh
+        self.hardware_mesh = HardwareMesh(
+            device_registry=self.device_registry,
+            daemons=self.daemons,
+        )
+
+        # Identity workspace
+        self.identity_workspace = IdentityWorkspace()
+
+        # GenUI engine
+        self.genui_engine = GenUIEngine(llm=_shared_llm)
+        self.service_providers = ServiceProviderRegistry()
+
+        # Browser controller (non-blocking — just creates the object)
+        self.browser = BrowserController()
 
         stats = self.memory.stats()
         logger.info(
@@ -960,6 +1003,141 @@ async def marketplace_update(skill_id: str):
     return await state.marketplace.update(skill_id)
 
 
+# ─────────────────────────────────────────────
+# GenUI Service Provider API
+# ─────────────────────────────────────────────
+
+@app.post("/api/genui/providers/register")
+async def register_genui_provider(body: dict):
+    """Register an external service provider for GenUI."""
+    if not state.service_providers:
+        return {"error": "Service provider registry not initialized"}
+    provider = state.service_providers.register(body)
+    if state.genui_engine:
+        state.genui_engine.register_provider(provider)
+    return {"ok": True, "provider_id": provider.provider_id, "components": list(provider.components.keys())}
+
+
+@app.get("/api/genui/providers")
+async def list_genui_providers():
+    """List registered service providers."""
+    if not state.service_providers:
+        return {"providers": []}
+    return {"providers": state.service_providers.list_providers()}
+
+
+# ─────────────────────────────────────────────
+# Browser Control API
+# ─────────────────────────────────────────────
+
+@app.post("/api/browser/init")
+async def browser_init():
+    """Initialize browser control (CDP connection)."""
+    if not state.browser:
+        return {"error": "Browser controller not available"}
+    ok = await state.browser.initialize()
+    return {"connected": ok}
+
+
+@app.post("/api/browser/navigate")
+async def browser_navigate(body: dict):
+    if not state.browser or not state.browser.connected:
+        return {"error": "Browser not connected"}
+    return await state.browser.navigate(body.get("url", ""))
+
+
+@app.post("/api/browser/screenshot")
+async def browser_screenshot(body: dict):
+    if not state.browser or not state.browser.connected:
+        return {"error": "Browser not connected"}
+    return await state.browser.screenshot(body.get("full_page", False))
+
+
+@app.post("/api/browser/snapshot")
+async def browser_snapshot():
+    if not state.browser or not state.browser.connected:
+        return {"error": "Browser not connected"}
+    return await state.browser.snapshot()
+
+
+@app.post("/api/browser/action")
+async def browser_action(body: dict):
+    """Execute a browser action (click, type, scroll, etc.)."""
+    if not state.browser or not state.browser.connected:
+        return {"error": "Browser not connected"}
+    action = body.get("action", "")
+    if action == "click":
+        return await state.browser.click(body.get("selector", ""))
+    elif action == "type":
+        return await state.browser.type_text(body.get("selector", ""), body.get("text", ""))
+    elif action == "scroll":
+        return await state.browser.scroll(body.get("direction", "down"), body.get("amount", 500))
+    elif action == "evaluate":
+        return await state.browser.evaluate(body.get("js_code", ""))
+    elif action == "select":
+        return await state.browser.select(body.get("selector", ""), body.get("value", ""))
+    elif action == "wait":
+        return await state.browser.wait(body.get("ms", 1000))
+    return {"error": f"Unknown action: {action}"}
+
+
+# ─────────────────────────────────────────────
+# Hardware Mesh API
+# ─────────────────────────────────────────────
+
+@app.post("/api/hardware/invoke")
+async def hardware_invoke(body: dict):
+    """Invoke a command on a connected node via the hardware mesh."""
+    if not state.hardware_mesh:
+        return {"error": "Hardware mesh not initialized"}
+    return await state.hardware_mesh.invoke(
+        node_id=body.get("node_id", ""),
+        command=body.get("command", ""),
+        params=body.get("params", {}),
+        timeout=body.get("timeout", 10.0),
+    )
+
+
+@app.get("/api/hardware/mesh")
+async def hardware_mesh_status():
+    """Get hardware mesh status with all connected nodes."""
+    if not state.hardware_mesh:
+        return {"nodes": []}
+    return {"nodes": state.hardware_mesh.connected_nodes}
+
+
+# ─────────────────────────────────────────────
+# Identity API (enhanced)
+# ─────────────────────────────────────────────
+
+@app.get("/api/identity/soul")
+async def get_soul():
+    """Get the agent's SOUL.md (personality)."""
+    if state.identity_workspace:
+        return {"soul": state.identity_workspace.read_soul()}
+    return {"soul": ""}
+
+
+@app.post("/api/identity/soul")
+async def update_soul(body: dict):
+    """Update the agent's SOUL.md."""
+    if state.identity_workspace:
+        if body.get("append"):
+            state.identity_workspace.append_soul(body["append"])
+        elif body.get("content"):
+            state.identity_workspace.write_soul(body["content"])
+        return {"ok": True}
+    return {"error": "Identity workspace not initialized"}
+
+
+@app.get("/api/identity/memory_md")
+async def get_memory_md():
+    """Get the agent's MEMORY.md (long-term curated memory)."""
+    if state.identity_workspace:
+        return {"memory": state.identity_workspace.read_memory()}
+    return {"memory": ""}
+
+
 @app.get("/api/nodes")
 async def list_nodes():
     """List all connected hardware nodes."""
@@ -1298,17 +1476,27 @@ async def client_session(ws: WebSocket):
     state.sessions[session_id] = ws
     logger.info(f"Client connected: {session_id}")
 
+    # Create a GatewaySession for typed protocol support
+    gw_session = GatewaySession(session_id, ws, state.gateway_registry)
+
     # Bind session to all currently connected daemons
     for node_id in state.daemons:
         state.bind_session_to_daemon(session_id, node_id)
         state.perception.update_connected_nodes(session_id, list(state.daemons.keys()))
+
+    # Inject identity into greeting if available
+    greeting = "THEORA Brain connected. How can I help?"
+    if state.identity_workspace:
+        identity = state.identity_workspace.load_identity()
+        agent_name = identity.get("name", "THEORA")
+        greeting = f"{agent_name} connected. How can I help?"
 
     await ws.send_json(TheoraMessage(
         session_id=session_id,
         hop="brain",
         type="text_response",
         payload=TextResponsePayload(
-            text="THEORA Brain connected. How can I help?"
+            text=greeting
         ).model_dump(),
     ).model_dump())
 
@@ -1316,6 +1504,12 @@ async def client_session(ws: WebSocket):
         while True:
             raw = await ws.receive_json()
             raw["session_id"] = session_id
+
+            # New typed protocol: if message has "type": "req"/"res"/"event", use GatewaySession
+            msg_type = raw.get("type", "")
+            if msg_type in ("req", "res", "event"):
+                await gw_session.handle_message(raw)
+                continue
 
             try:
                 msg, payload = parse_message(raw)
@@ -1346,18 +1540,44 @@ async def client_session(ws: WebSocket):
                 elif msg.type == "voice_config":
                     vcfg = raw.get("payload", {})
                     mode = vcfg.get("mode", "realtime")
+                    provider = vcfg.get("provider", "openai")
                     if state.voice_router:
                         state.voice_router.set_session_voice_mode(session_id, mode)
                         if mode == "disabled":
                             await state.voice_router.stop_session_voice(session_id)
+                    # Start Gemini session if requested
+                    if provider == "gemini" and mode == "realtime" and state.gemini_proxy:
+                        system_prompt = ""
+                        if state.identity_workspace:
+                            system_prompt = state.identity_workspace.build_system_prompt()
+                        await state.gemini_proxy.start_session(
+                            session_id=session_id,
+                            node_id="web",
+                            system_prompt=system_prompt,
+                            on_audio_delta=lambda b64: asyncio.ensure_future(
+                                ws.send_json(TheoraMessage(
+                                    session_id=session_id, hop="brain", type="audio_delta",
+                                    payload={"data_b64": b64, "encoding": "pcm16", "sample_rate": 24000},
+                                ).model_dump())
+                            ),
+                            on_transcript=lambda text: asyncio.ensure_future(
+                                ws.send_json(TheoraMessage(
+                                    session_id=session_id, hop="brain", type="transcript",
+                                    payload={"text": text, "role": "assistant"},
+                                ).model_dump())
+                            ),
+                        )
                     await ws.send_json(TheoraMessage(
                         session_id=session_id, hop="brain", type="voice_config_ack",
-                        payload={"mode": mode, "status": "ok"},
+                        payload={"mode": mode, "provider": provider, "status": "ok"},
                     ).model_dump())
-                    logger.info(f"Web client voice mode: {mode}")
+                    logger.info(f"Web client voice mode: {mode} (provider: {provider})")
 
                 elif msg.type == "audio_chunk" and isinstance(payload, AudioChunkPayload):
-                    if state.voice_router:
+                    # Route to Gemini if that session is using Gemini voice
+                    if state.gemini_proxy and state.gemini_proxy.has_session(session_id):
+                        await state.gemini_proxy.relay_audio(session_id, payload.data_b64)
+                    elif state.voice_router:
                         await state.voice_router.handle_audio_from_client(
                             session_id=session_id,
                             audio_b64=payload.data_b64,
@@ -1438,6 +1658,15 @@ async def client_session(ws: WebSocket):
                 await state.orchestrator.on_session_disconnect(session_id)
             except Exception as e:
                 logger.warning(f"Session summarization failed: {e}")
+        # Run identity maintenance cycle (distill memory, update MEMORY.md)
+        if state.identity_workspace:
+            try:
+                await state.identity_workspace.maintenance_cycle(
+                    memory_store=state.memory,
+                    llm=state.identity_workspace._llm if hasattr(state.identity_workspace, '_llm') else None,
+                )
+            except Exception as e:
+                logger.debug(f"Identity maintenance skipped: {e}")
         state.sessions.pop(session_id, None)
         state.audio.clear_session(session_id)
         state.perception.clear(session_id)
@@ -1472,10 +1701,17 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 logger.info(f"Node registered: {node_id} ({payload.node_type}/{payload.platform}) — caps: {payload.capabilities}")
                 _log_activity("device_connected", f"{node_id} ({payload.node_type})")
 
-                # Bind to all active sessions and update perception
                 for sid in state.sessions:
                     state.bind_session_to_daemon(sid, node_id)
                     state.perception.update_connected_nodes(sid, list(state.daemons.keys()))
+
+                # Auto-register as HUP device via hardware mesh
+                if state.hardware_mesh:
+                    await state.hardware_mesh.on_node_connected(node_id, {
+                        "node_type": payload.node_type,
+                        "platform": payload.platform,
+                        "capabilities": payload.capabilities,
+                    })
 
                 await ws.send_json(TheoraMessage(
                     hop="brain", type="text_response",
@@ -1484,10 +1720,15 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
 
             elif msg.type == "execute_result":
                 logger.info(f"Daemon result from {node_id}")
+                result_payload = raw.get("payload", {})
+                request_id = result_payload.get("request_id", "")
+                # Resolve hardware mesh invoke futures
+                if state.hardware_mesh and request_id:
+                    state.hardware_mesh.resolve_invoke(request_id, result_payload)
                 if state.orchestrator:
                     await state.orchestrator.handle_daemon_result(
                         node_id=node_id,
-                        result=raw.get("payload", {}),
+                        result=result_payload,
                         session_id=msg.session_id,
                     )
 
@@ -1636,6 +1877,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
         if node_id:
             logger.info(f"Daemon disconnected: {node_id}")
             state.daemons.pop(node_id, None)
+            if state.hardware_mesh:
+                state.hardware_mesh.on_node_disconnected(node_id)
             for sid in state.get_sessions_for_daemon(node_id):
                 state.perception.update_connected_nodes(sid, list(state.daemons.keys()))
 
