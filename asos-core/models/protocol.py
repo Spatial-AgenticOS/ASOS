@@ -239,10 +239,10 @@ class ConfirmationResponsePayload(BaseModel):
 # ─────────────────────────────────────────────
 
 class VoiceConfigPayload(BaseModel):
-    """Node declares its voice capabilities on connect."""
-    node_id: str
+    """Client/node declares voice capabilities and selected mode."""
+    node_id: str = ""
     supports_realtime: bool = False
-    mode: Literal["realtime", "whisper", "auto"] = "auto"
+    mode: Literal["realtime", "whisper", "auto", "disabled"] = "auto"
     preferred_model: str = ""
     sample_rate: int = 24000
     encoding: str = "pcm16"

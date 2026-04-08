@@ -125,3 +125,31 @@ class TestGenUIAndHistory:
             {"role": "user", "content": [{"type": "text", "text": "hello"}]}
         )
         assert len(orchestrator.conversation_history[sid]) == 1
+
+
+class TestSubagentTool:
+    """Parallel subagent execution helper behavior."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_subagents_requires_tasks(self, orchestrator: Orchestrator) -> None:
+        out = await orchestrator._spawn_subagents_for_task("sess-1", {})
+        assert out["success"] is False
+        assert out["status_code"] == 400
+
+    @pytest.mark.asyncio
+    async def test_spawn_subagents_parallel_happy_path(self, orchestrator: Orchestrator) -> None:
+        mock_llm = MagicMock()
+        mock_llm.available = True
+        mock_llm.chat = AsyncMock(return_value={"choices": [{"message": {"content": "done"}}]})
+        mock_llm.extract_response = MagicMock(return_value=("done", []))
+        orchestrator.llm = mock_llm
+
+        out = await orchestrator._spawn_subagents_for_task(
+            "sess-1",
+            {"tasks": ["task a", "task b"], "max_workers": 2, "max_iterations": 2},
+        )
+        assert out["success"] is True
+        assert out["status_code"] == 200
+        assert out["data"]["task_count"] == 2
+        assert out["data"]["success_count"] == 2
+        assert len(out["data"]["results"]) == 2

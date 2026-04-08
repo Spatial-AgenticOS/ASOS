@@ -29,6 +29,15 @@ DANGEROUS_COMMANDS = re.compile(
 class ComputerUseSkill(BaseSkill):
     def __init__(self):
         super().__init__(skill_id="computer_use")
+        self._sandbox_bash_enabled = os.getenv("THEORA_SANDBOX_BASH", "false").lower() in ("true", "1", "yes")
+        self._docker_sandbox = None
+        if self._sandbox_bash_enabled:
+            try:
+                from security.docker_sandbox import get_sandbox
+
+                self._docker_sandbox = get_sandbox()
+            except Exception:
+                self._docker_sandbox = None
 
     async def execute(self, endpoint_id: str, args: Dict[str, Any], vault: Dict[str, str]) -> Dict[str, Any]:
         dispatch = {
@@ -63,6 +72,36 @@ class ComputerUseSkill(BaseSkill):
 
         timeout = min(int(args.get("timeout", BASH_TIMEOUT)), 120)
 
+        if self._sandbox_bash_enabled and self._docker_sandbox:
+            original_timeout = getattr(self._docker_sandbox, "_timeout", BASH_TIMEOUT)
+            try:
+                self._docker_sandbox._timeout = timeout
+                result = await self._docker_sandbox.execute_shell(command)
+            finally:
+                self._docker_sandbox._timeout = original_timeout
+
+            stdout = (result.get("stdout") or "")[:MAX_OUTPUT]
+            stderr = (result.get("stderr") or "")[:MAX_OUTPUT]
+            exit_code = int(result.get("exit_code", -1))
+            success = bool(result.get("success"))
+            data = {
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": exit_code,
+                "execution_time_ms": result.get("execution_time_ms"),
+                "sandbox": "docker",
+            }
+            return {
+                "success": success,
+                "status_code": 200,
+                "data": data,
+                "error": stderr if not success else None,
+            }
+
+        sandbox_note = None
+        if self._sandbox_bash_enabled and not self._docker_sandbox:
+            sandbox_note = "THEORA_SANDBOX_BASH is enabled but Docker sandbox is unavailable; executed on host."
+
         proc = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
@@ -85,6 +124,8 @@ class ComputerUseSkill(BaseSkill):
                 "stdout": stdout,
                 "stderr": stderr,
                 "exit_code": proc.returncode,
+                "sandbox": "host",
+                "note": sandbox_note,
             },
             "error": stderr if proc.returncode != 0 else None,
         }

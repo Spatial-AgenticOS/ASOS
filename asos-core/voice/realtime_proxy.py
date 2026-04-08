@@ -416,6 +416,53 @@ class RealtimeProxy:
             return self._skill_registry.get_all_tools()
         return []
 
+    @staticmethod
+    def _tool_feedback_text(tool_name: str) -> str:
+        """Generate natural spoken feedback while a tool is executing."""
+        parts = tool_name.split("__", 1)
+        if len(parts) != 2:
+            return "Working on that now."
+        skill_id, endpoint_id = parts
+        if skill_id == "web_search":
+            return "Searching the web now."
+        if skill_id == "weather_current":
+            return "Checking the weather."
+        if skill_id == "browser":
+            return f"Using the browser to {endpoint_id.replace('_', ' ')}."
+        if skill_id == "computer_use" and endpoint_id == "bash":
+            return "Running a command on your computer."
+        return f"Running {endpoint_id.replace('_', ' ')}."
+
+    async def _send_tool_feedback(self, session_id: str, text: str):
+        """Send transcript-style progress feedback to active voice clients."""
+        if not text:
+            return
+        rs = self._sessions.get(session_id)
+        if not rs:
+            return
+
+        if rs.node_id.startswith("webclient_") and self._send_to_session:
+            from models.protocol import TheoraMessage, TranscriptPayload
+
+            msg = TheoraMessage(
+                session_id=session_id,
+                hop="brain",
+                type="transcript",
+                payload=TranscriptPayload(
+                    text=text,
+                    role="assistant",
+                    is_partial=False,
+                ).model_dump(),
+            )
+            await self._send_to_session(session_id, msg)
+            return
+
+        if self._send_to_node:
+            await self._send_to_node(rs.node_id, {
+                "type": "transcript",
+                "payload": {"text": text, "role": "assistant", "is_partial": False},
+            })
+
     async def _handle_audio_delta(self, session_id: str, audio_b64: str, is_done: bool):
         """Forward audio from OpenAI back to the connected client (web or daemon node)."""
         rs = self._sessions.get(session_id)
@@ -487,6 +534,7 @@ class RealtimeProxy:
             return json.dumps({"error": f"Endpoint not found: {endpoint_id}"})
 
         logger.info(f"Realtime tool execution: {name} -> {args}")
+        await self._send_tool_feedback(session_id, self._tool_feedback_text(name))
         result = await self._skill_executor.execute(name, args, skill, endpoint)
 
         if self._memory:
@@ -497,15 +545,28 @@ class RealtimeProxy:
         return json.dumps(result.get("data") or {"status": result.get("error", "done")})
 
     async def _handle_speech_started(self, session_id: str):
-        """User started speaking — cancel current response and notify phone."""
+        """User started speaking — cancel current response and notify client."""
         rs = self._sessions.get(session_id)
         if not rs:
             return
         await rs.cancel_response()
+        payload = {"action": "stop_playback"}
+        if rs.node_id.startswith("webclient_") and self._send_to_session:
+            from models.protocol import TheoraMessage
+
+            msg = TheoraMessage(
+                session_id=session_id,
+                hop="brain",
+                type="speech_started",
+                payload=payload,
+            )
+            await self._send_to_session(session_id, msg)
+            return
+
         if self._send_to_node:
             await self._send_to_node(rs.node_id, {
                 "type": "speech_started",
-                "payload": {"action": "stop_playback"},
+                "payload": payload,
             })
 
     async def _handle_error(self, session_id: str, error: str):

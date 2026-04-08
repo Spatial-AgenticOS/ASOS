@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from models.protocol import (
@@ -384,27 +384,86 @@ class BrainState:
         """Register browser control as a skill the agent can call via tool use."""
         try:
             from skills.impl.browser_use import get_browser_skill_manifest
-            manifest = get_browser_skill_manifest()
-            from skills.registry import Skill, SkillEndpoint
-            skill = Skill(
-                id=manifest["skill_id"],
-                name=manifest["name"],
-                description=manifest["description"],
-                safety_level=manifest.get("safety_level", "WARN"),
-                endpoints=[
-                    SkillEndpoint(
-                        id=ep["id"],
-                        description=ep["description"],
-                        params=ep.get("params", []),
-                    )
-                    for ep in manifest["endpoints"]
-                ],
-                executor=self._execute_browser_action,
+            from skills.impl import register_instance
+            from models.skill_manifest import (
+                SkillManifest,
+                SkillEndpoint,
+                EndpointParam,
+                BrandProfile,
+                AuthConfig,
             )
-            self.skill_registry.skills[skill.id] = skill
-            logger.info(f"Browser skill registered: {len(manifest['endpoints'])} endpoints")
+
+            raw_manifest = get_browser_skill_manifest()
+            endpoints: list[SkillEndpoint] = []
+            for endpoint in raw_manifest.get("endpoints", []):
+                params = []
+                for param in endpoint.get("params", []):
+                    ptype = str(param.get("type", "string"))
+                    if ptype not in {"string", "number", "integer", "boolean", "array", "object"}:
+                        ptype = "string"
+                    params.append(
+                        EndpointParam(
+                            name=str(param.get("name", "")),
+                            type=ptype,
+                            required=bool(param.get("required", True)),
+                            description=str(param.get("description", "")),
+                            default=str(param.get("default")) if param.get("default") is not None else None,
+                            enum=[str(v) for v in (param.get("enum") or [])],
+                            items=param.get("items"),
+                        )
+                    )
+
+                endpoint_id = str(endpoint.get("id", ""))
+                endpoints.append(
+                    SkillEndpoint(
+                        id=endpoint_id,
+                        method=endpoint.get("method", "PYTHON"),
+                        url=endpoint.get("url", f"theora://browser/{endpoint_id}"),
+                        description=str(endpoint.get("description", "")),
+                        params=params,
+                        returns_description=str(endpoint.get("returns_description", "Browser action result")),
+                        ui_hint=endpoint.get("ui_hint"),
+                    )
+                )
+
+            manifest = SkillManifest(
+                skill_id=str(raw_manifest.get("skill_id", "browser")),
+                version=str(raw_manifest.get("version", "1.0.0")),
+                author="theora-core",
+                brand=BrandProfile(
+                    name=str(raw_manifest.get("name", "Browser Control")),
+                    primary_color="#2563EB",
+                    secondary_color="#1D4ED8",
+                    logo_url="",
+                    icon_set="sf_symbols",
+                ),
+                description=str(raw_manifest.get("description", "Control and inspect browser pages.")),
+                categories=["browser", "automation"],
+                auth=AuthConfig(type="none"),
+                endpoints=endpoints,
+            )
+            self.skill_registry.register(manifest)
+
+            class _BrowserSkillBridge:
+                def __init__(self, state: "BrainState"):
+                    self.skill_id = manifest.skill_id
+                    self._state = state
+
+                async def execute(self, endpoint_id: str, args: dict, vault: dict):
+                    result = await self._state._execute_browser_action(endpoint_id, args or {})
+                    success = not isinstance(result, dict) or bool(result.get("success", "error" not in result))
+                    error = result.get("error") if isinstance(result, dict) else None
+                    return {
+                        "success": success,
+                        "status_code": 200 if success else 500,
+                        "data": result,
+                        "error": error,
+                    }
+
+            register_instance(manifest.skill_id, _BrowserSkillBridge(self))
+            logger.info(f"Browser skill registered: {manifest.skill_id} ({len(endpoints)} endpoints)")
         except Exception as e:
-            logger.debug(f"Browser skill registration skipped: {e}")
+            logger.warning(f"Browser skill registration failed: {e}")
 
     async def _execute_browser_action(self, endpoint_id: str, args: dict) -> dict:
         """Execute a browser action when called by the agent."""
@@ -425,12 +484,23 @@ class BrainState:
             return await method()
         elif endpoint_id == "click":
             return await method(args.get("ref_or_selector", ""))
+        elif endpoint_id == "hover":
+            return await method(args.get("ref_or_selector", ""))
         elif endpoint_id == "type_text":
             return await method(args.get("ref_or_selector", ""), args.get("text", ""))
+        elif endpoint_id == "fill_form":
+            return await method(args.get("fields", {}))
         elif endpoint_id == "evaluate":
             return await method(args.get("js_code", ""))
         elif endpoint_id == "scroll":
             return await method(args.get("direction", "down"), args.get("amount", 500))
+        elif endpoint_id == "get_console_logs":
+            return await method(args.get("limit", 50), args.get("clear", False))
+        elif endpoint_id == "get_page_pdf":
+            return await method(
+                args.get("print_background", True),
+                args.get("landscape", False),
+            )
         elif endpoint_id == "get_page_info":
             return await method()
         return await method(**args) if args else await method()
@@ -1332,15 +1402,29 @@ async def browser_action(body: dict):
         return {"error": "Browser not connected"}
     action = body.get("action", "")
     if action == "click":
-        return await state.browser.click(body.get("selector", ""))
-    elif action == "type":
-        return await state.browser.type_text(body.get("selector", ""), body.get("text", ""))
+        return await state.browser.click(body.get("selector", body.get("ref_or_selector", "")))
+    elif action == "hover":
+        return await state.browser.hover(body.get("selector", body.get("ref_or_selector", "")))
+    elif action in ("type", "type_text"):
+        return await state.browser.type_text(
+            body.get("selector", body.get("ref_or_selector", "")),
+            body.get("text", ""),
+        )
+    elif action == "fill_form":
+        return await state.browser.fill_form(body.get("fields", {}))
     elif action == "scroll":
         return await state.browser.scroll(body.get("direction", "down"), body.get("amount", 500))
     elif action == "evaluate":
         return await state.browser.evaluate(body.get("js_code", ""))
     elif action == "select":
         return await state.browser.select(body.get("selector", ""), body.get("value", ""))
+    elif action == "console_logs":
+        return await state.browser.get_console_logs(body.get("limit", 50), body.get("clear", False))
+    elif action == "pdf":
+        return await state.browser.get_page_pdf(
+            body.get("print_background", True),
+            body.get("landscape", False),
+        )
     elif action == "wait":
         return await state.browser.wait(body.get("ms", 1000))
     return {"error": f"Unknown action: {action}"}
@@ -1819,7 +1903,7 @@ async def client_session(ws: WebSocket):
                         async def _gemini_audio_cb(sid, b64, is_done):
                             try:
                                 await ws.send_json(TheoraMessage(
-                                    session_id=sid, hop="brain", type="audio_delta",
+                                    session_id=sid, hop="brain", type="audio_response",
                                     payload={"data_b64": b64, "encoding": "pcm16", "sample_rate": 24000, "is_final": is_done},
                                 ).model_dump())
                             except Exception:

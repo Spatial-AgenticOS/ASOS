@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import re
-from typing import Optional
+from typing import Optional, Callable
 from uuid import uuid4
 
 logger = logging.getLogger("theora.browser")
@@ -40,6 +40,7 @@ class CDPConnection:
         self._recv_task: Optional[asyncio.Task] = None
         self._connected = False
         self._page_ws_url: Optional[str] = None
+        self._event_listeners: list[Callable[[dict], None]] = []
 
     @property
     def connected(self) -> bool:
@@ -119,6 +120,10 @@ class CDPConnection:
         result = await asyncio.wait_for(future, timeout=timeout)
         return result
 
+    def add_event_listener(self, listener: Callable[[dict], None]):
+        """Subscribe to raw CDP event messages (messages without request IDs)."""
+        self._event_listeners.append(listener)
+
     async def _receive_loop(self):
         try:
             async for raw in self._ws:
@@ -131,6 +136,14 @@ class CDPConnection:
                             future.set_exception(Exception(msg["error"].get("message", str(msg["error"]))))
                         else:
                             future.set_result(msg.get("result", {}))
+                    elif msg.get("method"):
+                        for listener in self._event_listeners:
+                            try:
+                                maybe_coro = listener(msg)
+                                if asyncio.iscoroutine(maybe_coro):
+                                    asyncio.create_task(maybe_coro)
+                            except Exception:
+                                continue
                 except json.JSONDecodeError:
                     continue
         except asyncio.CancelledError:
@@ -152,6 +165,8 @@ class BrowserController:
         self._browser = None
         self._page = None
         self._aria_refs: dict[str, dict] = {}
+        self._console_logs: list[dict] = []
+        self._console_listener_attached = False
 
     @property
     def connected(self) -> bool:
@@ -164,6 +179,16 @@ class BrowserController:
             logger.warning("CDP not available — browser control disabled. "
                            "Start Chrome with: google-chrome --remote-debugging-port=9222")
             return False
+
+        if not self._console_listener_attached:
+            self._cdp.add_event_listener(self._on_cdp_event)
+            self._console_listener_attached = True
+        try:
+            await self._cdp.send_command("Runtime.enable")
+            await self._cdp.send_command("Log.enable")
+            await self._cdp.send_command("Page.enable")
+        except Exception as e:
+            logger.debug(f"CDP event channels setup skipped: {e}")
 
         try:
             from playwright.async_api import async_playwright
@@ -183,6 +208,42 @@ class BrowserController:
             logger.info(f"Playwright not available (CDP-only mode): {e}")
 
         return True
+
+    def _on_cdp_event(self, event: dict):
+        """Capture console/log events so the agent can inspect browser errors."""
+        method = event.get("method", "")
+        params = event.get("params", {}) or {}
+
+        if method == "Runtime.consoleAPICalled":
+            args = []
+            for arg in params.get("args", []):
+                val = arg.get("value")
+                if val is None:
+                    val = arg.get("description") or arg.get("type")
+                if val is not None:
+                    args.append(str(val))
+            self._append_console_log({
+                "source": "runtime",
+                "level": params.get("type", "log"),
+                "text": " ".join(args).strip(),
+                "timestamp": params.get("timestamp"),
+            })
+        elif method == "Log.entryAdded":
+            entry = params.get("entry", {}) or {}
+            self._append_console_log({
+                "source": "log",
+                "level": entry.get("level", "info"),
+                "text": entry.get("text", ""),
+                "timestamp": entry.get("timestamp"),
+                "url": entry.get("url"),
+            })
+
+    def _append_console_log(self, entry: dict):
+        if not entry.get("text"):
+            return
+        self._console_logs.append(entry)
+        if len(self._console_logs) > 500:
+            self._console_logs = self._console_logs[-500:]
 
     async def navigate(self, url: str) -> dict:
         """Navigate to a URL and wait for load."""
@@ -318,6 +379,39 @@ class BrowserController:
         """Fill a form field (clears first, then types)."""
         return await self.type_text(ref_or_selector, value)
 
+    async def fill_form(self, fields: dict) -> dict:
+        """Fill multiple fields in one action: {selector_or_ref: value}."""
+        if not isinstance(fields, dict) or not fields:
+            return {"success": False, "error": "fields must be a non-empty object mapping selector/ref to value"}
+
+        filled: list[str] = []
+        failed: dict[str, str] = {}
+        for target, value in fields.items():
+            result = await self.fill(str(target), "" if value is None else str(value))
+            if result.get("success"):
+                filled.append(str(target))
+            else:
+                failed[str(target)] = str(result.get("error", "fill failed"))
+
+        return {
+            "success": len(failed) == 0,
+            "filled": filled,
+            "failed": failed,
+            "total": len(fields),
+        }
+
+    async def hover(self, ref_or_selector: str) -> dict:
+        """Hover over an element by ARIA ref or selector."""
+        try:
+            selector = self._resolve_selector(ref_or_selector)
+            if self._page:
+                await self._page.hover(selector, timeout=5000)
+            else:
+                await self._cdp_hover(selector)
+            return {"success": True, "hovered": ref_or_selector}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     async def evaluate(self, js_code: str) -> dict:
         """Execute JavaScript in the page context."""
         try:
@@ -378,6 +472,33 @@ class BrowserController:
         """Wait for a specified duration."""
         await asyncio.sleep(ms / 1000.0)
         return {"success": True, "waited_ms": ms}
+
+    async def get_console_logs(self, limit: int = 50, clear: bool = False) -> dict:
+        """Return captured browser console logs."""
+        try:
+            bounded = max(1, min(int(limit), 500))
+        except Exception:
+            bounded = 50
+        logs = self._console_logs[-bounded:]
+        if clear:
+            self._console_logs.clear()
+        return {"success": True, "count": len(logs), "logs": logs}
+
+    async def get_page_pdf(self, print_background: bool = True, landscape: bool = False) -> dict:
+        """Export current page to PDF via CDP."""
+        try:
+            await self._cdp.send_command("Page.enable")
+            result = await self._cdp.send_command("Page.printToPDF", {
+                "printBackground": bool(print_background),
+                "landscape": bool(landscape),
+            })
+            pdf_b64 = result.get("data", "")
+            if not pdf_b64:
+                return {"success": False, "error": "No PDF data returned by browser"}
+            size_bytes = len(base64.b64decode(pdf_b64))
+            return {"success": True, "pdf_b64": pdf_b64, "size_bytes": size_bytes}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     async def get_page_info(self) -> dict:
         """Get current page URL and title."""
@@ -459,26 +580,38 @@ class BrowserController:
 
     async def _cdp_click(self, selector: str):
         """Click via CDP (fallback when Playwright isn't available)."""
+        x, y = await self._cdp_get_element_center(selector)
+        for event_type in ("mousePressed", "mouseReleased"):
+            await self._cdp.send_command("Input.dispatchMouseEvent", {
+                "type": event_type, "x": x, "y": y, "button": "left", "clickCount": 1,
+            })
+
+    async def _cdp_hover(self, selector: str):
+        """Move mouse over element center via CDP."""
+        x, y = await self._cdp_get_element_center(selector)
+        await self._cdp.send_command("Input.dispatchMouseEvent", {
+            "type": "mouseMoved",
+            "x": x,
+            "y": y,
+        })
+
+    async def _cdp_get_element_center(self, selector: str) -> tuple[float, float]:
+        safe_selector = json.dumps(selector)
         result = await self._cdp.send_command("Runtime.evaluate", {
-            "expression": f"""
-                (function() {{
-                    const el = document.querySelector('{selector}');
-                    if (!el) return null;
-                    const rect = el.getBoundingClientRect();
-                    return {{ x: rect.x + rect.width/2, y: rect.y + rect.height/2 }};
-                }})()
-            """,
+            "expression": (
+                "(function() {"
+                f"const el = document.querySelector({safe_selector});"
+                "if (!el) return null;"
+                "const rect = el.getBoundingClientRect();"
+                "return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };"
+                "})()"
+            ),
             "returnByValue": True,
         })
         coords = result.get("result", {}).get("value")
         if not coords:
             raise Exception(f"Element not found: {selector}")
-
-        x, y = coords["x"], coords["y"]
-        for event_type in ("mousePressed", "mouseReleased"):
-            await self._cdp.send_command("Input.dispatchMouseEvent", {
-                "type": event_type, "x": x, "y": y, "button": "left", "clickCount": 1,
-            })
+        return float(coords["x"]), float(coords["y"])
 
 
 def get_browser_skill_manifest() -> dict:
@@ -503,12 +636,26 @@ def get_browser_skill_manifest() -> dict:
                 {"name": "ref_or_selector", "type": "string", "required": True},
                 {"name": "text", "type": "string", "required": True},
             ]},
+            {"id": "fill_form", "description": "Fill multiple form fields in one step", "params": [
+                {"name": "fields", "type": "object", "required": True, "description": "Mapping: selector/ref -> value"},
+            ]},
+            {"id": "hover", "description": "Hover over an element to reveal menus/tooltips", "params": [
+                {"name": "ref_or_selector", "type": "string", "required": True},
+            ]},
             {"id": "evaluate", "description": "Execute JavaScript in the page", "params": [
                 {"name": "js_code", "type": "string", "required": True},
             ]},
             {"id": "scroll", "description": "Scroll the page", "params": [
                 {"name": "direction", "type": "string", "required": False, "description": "up/down/left/right"},
                 {"name": "amount", "type": "integer", "required": False},
+            ]},
+            {"id": "get_console_logs", "description": "Read captured browser console logs", "params": [
+                {"name": "limit", "type": "integer", "required": False, "description": "Max log entries to return"},
+                {"name": "clear", "type": "boolean", "required": False, "description": "Clear logs after reading"},
+            ]},
+            {"id": "get_page_pdf", "description": "Export current page to PDF and return base64 bytes", "params": [
+                {"name": "print_background", "type": "boolean", "required": False},
+                {"name": "landscape", "type": "boolean", "required": False},
             ]},
             {"id": "get_page_info", "description": "Get current page URL and title", "params": []},
         ],

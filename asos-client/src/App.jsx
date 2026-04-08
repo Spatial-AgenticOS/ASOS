@@ -95,16 +95,25 @@ export default function App() {
             setIsStreaming(true);
           }
         } else if (msg.type === 'transcript') {
-          setTranscript(msg.payload.text);
+          const role = msg.payload.role || (msg.payload.text?.startsWith('[user] ') ? 'user' : 'assistant');
+          const normalizedText =
+            role === 'user' && msg.payload.text?.startsWith('[user] ')
+              ? msg.payload.text.slice(7)
+              : msg.payload.text;
+          setTranscript(normalizedText);
           if (!msg.payload.is_partial) {
-            setMessages(prev => [...prev, { role: 'user', type: 'text', content: msg.payload.text, source: 'voice' }]);
+            setMessages(prev => [...prev, { role, type: 'text', content: normalizedText, source: 'voice' }]);
             setTranscript('');
           }
         } else if (msg.type === 'tts_chunk') {
           playTTSChunk(msg.payload);
-        } else if (msg.type === 'audio_response') {
+        } else if (msg.type === 'audio_response' || msg.type === 'audio_delta') {
           if (voiceEngineRef.current?.active) {
             voiceEngineRef.current.handleAudioResponse(msg.payload);
+          }
+        } else if (msg.type === 'speech_started') {
+          if (voiceEngineRef.current?.active) {
+            voiceEngineRef.current.handleSpeechStarted();
           }
         } else if (msg.type === 'voice_config_ack') {
           console.log("Voice config acknowledged:", msg.payload);

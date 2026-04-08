@@ -110,7 +110,14 @@ class Orchestrator:
         self._proactive_cooldown = 60.0  # min seconds between proactive triggers per session
 
         # Streaming config
-        self._streaming_enabled = os.environ.get("THEORA_STREAMING", "").lower() in ("true", "1", "yes")
+        self._streaming_enabled = os.environ.get("THEORA_STREAMING", "true").lower() in ("true", "1", "yes")
+        try:
+            self._max_iterations = max(1, min(int(os.environ.get("THEORA_MAX_ITERATIONS", "15")), 30))
+        except ValueError:
+            self._max_iterations = 15
+
+        # Anti-loop guard (same tool + args repeated in a row)
+        self._tool_repeat_state: dict[str, dict] = {}
 
         self.executor.load_vault_from_env()
 
@@ -212,7 +219,7 @@ class Orchestrator:
 
         history = self._compact_context(self.conversation_history[session_id].copy())
 
-        max_iterations = 3
+        max_iterations = self._max_iterations
         for _ in range(max_iterations):
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -266,6 +273,9 @@ class Orchestrator:
                         "name": tc["name"],
                         "content": json.dumps(result_data, default=str)[:2000]
                     })
+                    anti_loop_guidance = result_data.get("_anti_loop_guidance")
+                    if anti_loop_guidance:
+                        history.append({"role": "system", "content": anti_loop_guidance})
             elif text_content:
                 if self.memory:
                     self.memory.working_push(session_id, {"role": "assistant", "text": text_content[:300]})
@@ -314,112 +324,112 @@ class Orchestrator:
         user_content = perception_frame.to_llm_user_content(text)
         self.conversation_history[session_id].append({"role": "user", "content": user_content})
         history = self._compact_context(self.conversation_history[session_id].copy())
-        messages = [{"role": "system", "content": system_prompt}, *history]
-
         from models.protocol import StreamDeltaPayload
 
-        stream_id = str(uuid4())[:8]
-        accumulated_text = ""
-        tool_calls_received = []
+        got_final_text = False
+        for _ in range(self._max_iterations):
+            messages = [{"role": "system", "content": system_prompt}, *history]
+            stream_id = str(uuid4())[:8]
+            accumulated_text = ""
+            streamed_text = False
+            tool_calls_received = []
 
-        try:
-            async for delta in self.llm.chat_stream(messages=messages, tools=tools if tools else None):
-                if delta["type"] == "text_delta":
-                    accumulated_text += delta["content"]
-                    await self.send(session_id, TheoraMessage(
-                        session_id=session_id, hop="brain", type="stream_delta",
-                        payload=StreamDeltaPayload(
-                            delta=delta["content"], stream_id=stream_id, is_final=False,
-                        ).model_dump(),
-                    ))
-                elif delta["type"] == "tool_call_delta":
-                    tool_calls_received.append(delta["tool_call"])
-                elif delta["type"] == "done":
-                    if accumulated_text:
-                        await self.send(session_id, TheoraMessage(
-                            session_id=session_id, hop="brain", type="stream_delta",
-                            payload=StreamDeltaPayload(
-                                delta="", stream_id=stream_id, is_final=True,
-                            ).model_dump(),
-                        ))
-                elif delta["type"] == "error":
-                    await self._send_text(session_id, f"Stream error: {delta.get('content', 'unknown')}")
-                    return
-        except Exception as e:
-            logger.error(f"Streaming failed, falling back: {e}")
-            await self.handle_command(session_id, text, context)
-            return
-
-        # Execute tool calls and feed results back to LLM for final answer
-        if tool_calls_received:
-            assistant_msg = {"role": "assistant", "tool_calls": [
-                {"id": tc.get("id", str(uuid4())[:8]), "type": "function",
-                 "function": {"name": tc["name"], "arguments": json.dumps(tc.get("args", {}))}}
-                for tc in tool_calls_received
-            ]}
-            if accumulated_text:
-                assistant_msg["content"] = accumulated_text
-            history.append(assistant_msg)
-
-            for tc in tool_calls_received:
-                t_start = time.time()
-                result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
-                latency_ms = (time.time() - t_start) * 1000
-                if self.memory:
-                    parts = tc["name"].split("__", 1)
-                    skill_id = parts[0] if len(parts) == 2 else tc["name"]
-                    endpoint_id = parts[1] if len(parts) == 2 else ""
-                    self.memory.log_execution(
-                        session_id=session_id, skill_id=skill_id,
-                        endpoint_id=endpoint_id, args=tc.get("args", {}),
-                        result_status="success" if result_data.get("success") or result_data.get("status") == "command_sent_to_hardware_daemon" else "failure",
-                        result_summary=json.dumps(result_data)[:300],
-                        latency_ms=latency_ms,
-                    )
-                history.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", str(uuid4())[:8]),
-                    "name": tc["name"],
-                    "content": json.dumps(result_data, default=str)[:2000],
-                })
-
-                # GenUI: generate rich UI for tool results when applicable
-                await self._try_genui_for_result(session_id, tc, result_data)
-
-            # Second LLM call: stream the final answer with tool results
-            messages2 = [{"role": "system", "content": system_prompt}, *history]
-            stream_id2 = str(uuid4())[:8]
-            final_text = ""
             try:
-                async for delta in self.llm.chat_stream(messages=messages2, tools=None):
+                async for delta in self.llm.chat_stream(messages=messages, tools=tools if tools else None):
                     if delta["type"] == "text_delta":
-                        final_text += delta["content"]
+                        piece = delta.get("content", "")
+                        if not piece:
+                            continue
+                        streamed_text = True
+                        accumulated_text += piece
                         await self.send(session_id, TheoraMessage(
                             session_id=session_id, hop="brain", type="stream_delta",
                             payload=StreamDeltaPayload(
-                                delta=delta["content"], stream_id=stream_id2, is_final=False,
+                                delta=piece, stream_id=stream_id, is_final=False,
                             ).model_dump(),
                         ))
+                    elif delta["type"] == "tool_call_delta":
+                        tc = delta.get("tool_call") or {}
+                        if tc:
+                            tool_calls_received.append(tc)
                     elif delta["type"] == "done":
-                        await self.send(session_id, TheoraMessage(
-                            session_id=session_id, hop="brain", type="stream_delta",
-                            payload=StreamDeltaPayload(
-                                delta="", stream_id=stream_id2, is_final=True,
-                            ).model_dump(),
-                        ))
+                        if streamed_text:
+                            await self.send(session_id, TheoraMessage(
+                                session_id=session_id, hop="brain", type="stream_delta",
+                                payload=StreamDeltaPayload(
+                                    delta="", stream_id=stream_id, is_final=True,
+                                ).model_dump(),
+                            ))
+                    elif delta["type"] == "error":
+                        await self._send_text(session_id, f"Stream error: {delta.get('content', 'unknown')}")
+                        return
             except Exception as e:
-                logger.error(f"Post-tool streaming failed: {e}")
+                logger.error(f"Streaming failed, falling back: {e}")
+                await self.handle_command(session_id, text, context)
+                return
 
-            if final_text:
-                history.append({"role": "assistant", "content": final_text})
+            normalized_tool_calls = [
+                tc for tc in tool_calls_received
+                if isinstance(tc, dict) and tc.get("name")
+            ]
+
+            if accumulated_text or normalized_tool_calls:
+                assistant_msg = {"role": "assistant"}
+                if accumulated_text:
+                    assistant_msg["content"] = accumulated_text
+                if normalized_tool_calls:
+                    assistant_msg["tool_calls"] = [
+                        {
+                            "id": tc.get("id", str(uuid4())[:8]),
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": json.dumps(tc.get("args", {})),
+                            },
+                        }
+                        for tc in normalized_tool_calls
+                    ]
+                history.append(assistant_msg)
+
+            if normalized_tool_calls:
+                for tc in normalized_tool_calls:
+                    t_start = time.time()
+                    result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
+                    latency_ms = (time.time() - t_start) * 1000
+                    if self.memory:
+                        parts = tc["name"].split("__", 1)
+                        skill_id = parts[0] if len(parts) == 2 else tc["name"]
+                        endpoint_id = parts[1] if len(parts) == 2 else ""
+                        self.memory.log_execution(
+                            session_id=session_id, skill_id=skill_id,
+                            endpoint_id=endpoint_id, args=tc.get("args", {}),
+                            result_status="success" if result_data.get("success") or result_data.get("status") == "command_sent_to_hardware_daemon" else "failure",
+                            result_summary=json.dumps(result_data)[:300],
+                            latency_ms=latency_ms,
+                        )
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", str(uuid4())[:8]),
+                        "name": tc["name"],
+                        "content": json.dumps(result_data, default=str)[:2000],
+                    })
+                    anti_loop_guidance = result_data.get("_anti_loop_guidance")
+                    if anti_loop_guidance:
+                        history.append({"role": "system", "content": anti_loop_guidance})
+
+                    # GenUI: generate rich UI for tool results when applicable
+                    await self._try_genui_for_result(session_id, tc, result_data)
+                continue
+
+            if accumulated_text:
+                got_final_text = True
                 if self.memory:
-                    self.memory.working_push(session_id, {"role": "assistant", "text": final_text[:300]})
+                    self.memory.working_push(session_id, {"role": "assistant", "text": accumulated_text[:300]})
+                break
 
-        elif accumulated_text:
-            history.append({"role": "assistant", "content": accumulated_text})
-            if self.memory:
-                self.memory.working_push(session_id, {"role": "assistant", "text": accumulated_text[:300]})
-        else:
+            break
+
+        if not got_final_text:
             await self._send_text(session_id, "I processed your request but have no text response.")
 
         self.conversation_history[session_id] = history[-20:]
@@ -487,6 +497,7 @@ class Orchestrator:
             await self.learner.summarize_session(session_id)
         self.conversation_history.pop(session_id, None)
         self._last_proactive_check.pop(session_id, None)
+        self._tool_repeat_state.pop(session_id, None)
 
     # ─────────────────────────────────────────────
     # Skill Routing
@@ -661,6 +672,200 @@ class Orchestrator:
     # Tool Execution
     # ─────────────────────────────────────────────
 
+    @staticmethod
+    def _tool_signature(tool_name: str, args: dict) -> str:
+        """Create a stable signature for anti-loop detection."""
+        try:
+            args_key = json.dumps(args or {}, sort_keys=True, default=str)
+        except Exception:
+            args_key = str(args)
+        return f"{tool_name}::{args_key}"
+
+    def _register_tool_attempt(self, session_id: str, tool_name: str, args: dict) -> int:
+        """Track consecutive identical tool calls and return current streak."""
+        signature = self._tool_signature(tool_name, args)
+        state = self._tool_repeat_state.get(session_id)
+        if state and state.get("signature") == signature:
+            count = int(state.get("count", 0)) + 1
+        else:
+            count = 1
+        self._tool_repeat_state[session_id] = {
+            "signature": signature,
+            "count": count,
+            "tool_name": tool_name,
+        }
+        return count
+
+    @staticmethod
+    def _anti_loop_guidance(tool_name: str, streak: int) -> str:
+        return (
+            f"System guard: You have called '{tool_name}' with the same arguments "
+            f"{streak} times in a row. Do not repeat this action again. "
+            "Try a different tool, adjust parameters, or explain the blocker to the user."
+        )
+
+    async def _spawn_subagents_for_task(self, session_id: str, args: dict) -> dict:
+        """Run multiple sub-tasks in parallel with isolated subagent contexts."""
+        tasks_arg = args.get("tasks")
+        if isinstance(tasks_arg, str):
+            tasks = [tasks_arg]
+        elif isinstance(tasks_arg, list):
+            tasks = [str(t).strip() for t in tasks_arg if str(t).strip()]
+        else:
+            single = str(args.get("task", "")).strip()
+            tasks = [single] if single else []
+
+        if not tasks:
+            return {
+                "success": False,
+                "status_code": 400,
+                "data": None,
+                "error": "Provide 'tasks' (array) or 'task' (string) for subagent execution.",
+            }
+        if not self.llm or not self.llm.available:
+            return {
+                "success": False,
+                "status_code": 503,
+                "data": None,
+                "error": "LLM unavailable; cannot spawn subagents.",
+            }
+
+        goal = str(args.get("goal", "") or "").strip()
+        try:
+            max_workers = int(args.get("max_workers", min(3, len(tasks))) or 3)
+        except Exception:
+            max_workers = min(3, len(tasks))
+        try:
+            max_iterations = int(args.get("max_iterations", min(self._max_iterations, 8)) or 4)
+        except Exception:
+            max_iterations = min(self._max_iterations, 8)
+        max_workers = max(1, min(max_workers, 6))
+        max_iterations = max(1, min(max_iterations, 12))
+        sem = asyncio.Semaphore(max_workers)
+
+        async def _run_one(i: int, task_text: str) -> dict:
+            scoped_task = task_text if not goal else f"Goal: {goal}\nTask: {task_text}"
+            async with sem:
+                started = time.time()
+                try:
+                    result = await self._run_subagent_task(
+                        parent_session_id=session_id,
+                        task_text=scoped_task,
+                        max_iterations=max_iterations,
+                        ordinal=i,
+                    )
+                    result["elapsed_ms"] = round((time.time() - started) * 1000, 2)
+                    return result
+                except Exception as e:
+                    return {
+                        "task_index": i,
+                        "task": task_text,
+                        "success": False,
+                        "result": "",
+                        "error": str(e),
+                        "iterations": 0,
+                        "tool_calls_executed": 0,
+                        "elapsed_ms": round((time.time() - started) * 1000, 2),
+                    }
+
+        results = await asyncio.gather(*[_run_one(i, t) for i, t in enumerate(tasks, 1)])
+        success_count = sum(1 for r in results if r.get("success"))
+
+        return {
+            "success": True,
+            "status_code": 200,
+            "data": {
+                "goal": goal or None,
+                "task_count": len(tasks),
+                "max_workers": max_workers,
+                "max_iterations": max_iterations,
+                "success_count": success_count,
+                "results": results,
+            },
+            "error": None,
+        }
+
+    async def _run_subagent_task(
+        self,
+        *,
+        parent_session_id: str,
+        task_text: str,
+        max_iterations: int,
+        ordinal: int,
+    ) -> dict:
+        """Execute one subagent task with isolated history and full tool access."""
+        relevant_skills = await self._route_prompt(task_text)
+        tools = self.skills.get_tools_for_skills(relevant_skills)
+        if self._mcp_client:
+            mcp_tools = self._mcp_client.to_llm_tool_definitions()
+            if mcp_tools:
+                tools = (tools or []) + mcp_tools
+
+        frame = self.perception.get_frame(parent_session_id)
+        system_prompt = self._build_system_prompt(frame, relevant_skills, parent_session_id)
+        history: list[dict] = [{"role": "user", "content": task_text}]
+        sub_session_id = f"{parent_session_id}:sub:{ordinal}:{str(uuid4())[:6]}"
+        final_text = ""
+        tool_calls_executed = 0
+        iterations_used = 0
+
+        for i in range(max_iterations):
+            iterations_used = i + 1
+            response = await self.llm.chat(
+                messages=[{"role": "system", "content": system_prompt}, *history],
+                tools=tools if tools else None,
+            )
+            text_content, tool_calls = self.llm.extract_response(response)
+
+            assistant_msg = {"role": "assistant"}
+            if text_content:
+                assistant_msg["content"] = text_content
+            if "choices" in response and response["choices"]:
+                raw_msg = response["choices"][0].get("message", {})
+                if raw_msg.get("tool_calls"):
+                    assistant_msg["tool_calls"] = raw_msg["tool_calls"]
+            if len(assistant_msg) > 1:
+                history.append(assistant_msg)
+
+            if tool_calls:
+                for tc in tool_calls:
+                    if tc.get("name", "").startswith("subagent__"):
+                        result_data = {
+                            "success": False,
+                            "error": "Nested subagent spawning is blocked to prevent recursion loops.",
+                        }
+                    else:
+                        result_data = await self._execute_tool_call_for_llm(
+                            sub_session_id,
+                            tc,
+                            relevant_skills,
+                        )
+                    tool_calls_executed += 1
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", str(uuid4())[:8]),
+                        "name": tc.get("name", ""),
+                        "content": json.dumps(result_data, default=str)[:2000],
+                    })
+                continue
+
+            if text_content:
+                final_text = text_content
+            break
+
+        if not final_text:
+            final_text = "No final answer produced by subagent."
+
+        return {
+            "task_index": ordinal,
+            "task": task_text,
+            "success": True,
+            "result": final_text,
+            "error": None,
+            "iterations": iterations_used,
+            "tool_calls_executed": tool_calls_executed,
+        }
+
     async def _execute_tool_call_for_llm(self, session_id: str, tool_call: dict, available_skills: list[SkillManifest]) -> dict:
         tool_name = tool_call["name"]
         args = tool_call["args"]
@@ -680,8 +885,28 @@ class Orchestrator:
             return {"error": f"Invalid tool reference: {tool_name}"}
 
         skill_id, endpoint_id = parts
+        if skill_id == "subagent" and endpoint_id == "spawn_subagent":
+            return await self._spawn_subagents_for_task(session_id, args)
 
         logger.info(f"  Tool executing: {skill_id}__{endpoint_id}")
+
+        streak = self._register_tool_attempt(session_id, tool_name, args)
+        anti_loop_note = None
+        if streak >= 5:
+            message = (
+                f"Anti-loop guard: blocked repeated call '{tool_name}' with identical "
+                f"arguments ({streak}x in a row)."
+            )
+            logger.warning(message)
+            return {
+                "success": False,
+                "error": message,
+                "anti_loop_blocked": True,
+                "anti_loop_streak": streak,
+            }
+        if streak >= 3:
+            anti_loop_note = self._anti_loop_guidance(tool_name, streak)
+            logger.warning(anti_loop_note)
 
         # Safety check
         denial = self._enforce_safety(tool_name, args)
@@ -721,6 +946,11 @@ class Orchestrator:
                 ))
             except Exception as e:
                 logger.debug(f"GenUI generation skipped for {tool_name}: {e}")
+
+        if anti_loop_note:
+            result = dict(result)
+            result["_anti_loop_guidance"] = anti_loop_note
+            result["_anti_loop_streak"] = streak
 
         return result
 

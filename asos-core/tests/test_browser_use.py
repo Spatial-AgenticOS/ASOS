@@ -98,6 +98,37 @@ class TestBrowserController:
         assert ctrl._resolve_selector("ax0") == "#primary-btn"
         assert ctrl._resolve_selector(".sidebar a") == ".sidebar a"
 
+    @pytest.mark.asyncio
+    async def test_get_console_logs_limit_and_clear(self) -> None:
+        """Console logs endpoint honors limit and clear semantics."""
+        ctrl = BrowserController()
+        ctrl._console_logs = [
+            {"text": "first", "level": "info"},
+            {"text": "second", "level": "warn"},
+            {"text": "third", "level": "error"},
+        ]
+        out = await ctrl.get_console_logs(limit=2, clear=True)
+        assert out["success"] is True
+        assert out["count"] == 2
+        assert [x["text"] for x in out["logs"]] == ["second", "third"]
+        assert ctrl._console_logs == []
+
+    @pytest.mark.asyncio
+    async def test_fill_form_reports_partial_failures(self) -> None:
+        """Batch form fill returns both successful and failed selectors."""
+        ctrl = BrowserController()
+
+        async def fake_fill(target: str, value: str):
+            if target == "#missing":
+                return {"success": False, "error": "not found"}
+            return {"success": True}
+
+        ctrl.fill = fake_fill  # type: ignore[method-assign]
+        out = await ctrl.fill_form({"#email": "a@b.com", "#missing": "x"})
+        assert out["success"] is False
+        assert "#email" in out["filled"]
+        assert out["failed"]["#missing"] == "not found"
+
 
 class TestBrowserSkillManifest:
     """Tests for the exported manifest helper."""
@@ -113,3 +144,4 @@ class TestBrowserSkillManifest:
         assert isinstance(m.get("endpoints"), list)
         endpoint_ids = {e["id"] for e in m["endpoints"]}
         assert {"navigate", "screenshot", "snapshot", "click"}.issubset(endpoint_ids)
+        assert {"hover", "fill_form", "get_console_logs", "get_page_pdf"}.issubset(endpoint_ids)

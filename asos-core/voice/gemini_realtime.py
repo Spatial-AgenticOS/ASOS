@@ -334,6 +334,45 @@ class GeminiRealtimeProxy:
             return self._skill_registry.get_all_tools()
         return []
 
+    @staticmethod
+    def _tool_feedback_text(tool_name: str) -> str:
+        parts = tool_name.split("__", 1)
+        if len(parts) != 2:
+            return "Working on that now."
+        skill_id, endpoint_id = parts
+        if skill_id == "web_search":
+            return "Searching the web now."
+        if skill_id == "weather_current":
+            return "Checking the weather."
+        if skill_id == "browser":
+            return f"Using the browser to {endpoint_id.replace('_', ' ')}."
+        if skill_id == "computer_use" and endpoint_id == "bash":
+            return "Running a command on your computer."
+        return f"Running {endpoint_id.replace('_', ' ')}."
+
+    async def _send_tool_feedback(self, session_id: str, text: str):
+        if not text:
+            return
+        gs = self._sessions.get(session_id)
+        if not gs:
+            return
+        if gs.node_id.startswith("webclient_") and self._send_to_session:
+            from models.protocol import TheoraMessage
+
+            msg = TheoraMessage(
+                session_id=session_id,
+                hop="brain",
+                type="transcript",
+                payload={"text": text, "role": "assistant", "is_partial": False},
+            )
+            await self._send_to_session(session_id, msg)
+            return
+        if self._send_to_node:
+            await self._send_to_node(gs.node_id, {
+                "type": "transcript",
+                "payload": {"text": text, "role": "assistant", "is_partial": False},
+            })
+
     async def _handle_audio_delta(self, session_id: str, audio_b64: str, is_done: bool):
         gs = self._sessions.get(session_id)
         if not gs:
@@ -375,6 +414,7 @@ class GeminiRealtimeProxy:
         endpoint = next((ep for ep in skill.endpoints if ep.id == endpoint_id), None)
         if not endpoint:
             return json.dumps({"error": f"Endpoint not found: {endpoint_id}"})
+        await self._send_tool_feedback(session_id, self._tool_feedback_text(name))
         result = await self._skill_executor.execute(name, args, skill, endpoint)
         return json.dumps(result.get("data") or {"status": result.get("error", "done")})
 
@@ -382,9 +422,21 @@ class GeminiRealtimeProxy:
         gs = self._sessions.get(session_id)
         if not gs:
             return
+        payload = {"action": "stop_playback"}
+        if gs.node_id.startswith("webclient_") and self._send_to_session:
+            from models.protocol import TheoraMessage
+
+            msg = TheoraMessage(
+                session_id=session_id,
+                hop="brain",
+                type="speech_started",
+                payload=payload,
+            )
+            await self._send_to_session(session_id, msg)
+            return
         if self._send_to_node:
             await self._send_to_node(gs.node_id, {
-                "type": "speech_started", "payload": {"action": "stop_playback"},
+                "type": "speech_started", "payload": payload,
             })
 
     async def _handle_error(self, session_id: str, error: str):

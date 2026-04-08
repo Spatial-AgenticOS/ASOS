@@ -18,6 +18,7 @@ import io
 import logging
 import os
 import time
+import wave
 from typing import Optional, Callable, Awaitable
 from uuid import uuid4
 
@@ -98,22 +99,32 @@ class AudioPipeline:
             audio_data = buf.flush()
             if not audio_data or len(audio_data) < 1000:
                 return None
-            transcript = await self._transcribe(audio_data, encoding)
+            transcript = await self._transcribe(audio_data, encoding, sample_rate)
             return transcript
 
         return None
 
-    async def _transcribe(self, audio_bytes: bytes, encoding: str = "opus") -> Optional[str]:
+    async def _transcribe(
+        self,
+        audio_bytes: bytes,
+        encoding: str = "opus",
+        sample_rate: int = 16000,
+    ) -> Optional[str]:
         """Send accumulated audio to Whisper API for transcription."""
         if not self.available:
             return None
 
-        ext_map = {"opus": "ogg", "wav": "wav", "mp3": "mp3", "webm": "webm", "ogg": "ogg"}
+        encoding = (encoding or "opus").lower()
+        ext_map = {"opus": "ogg", "wav": "wav", "mp3": "mp3", "webm": "webm", "ogg": "ogg", "pcm16": "wav"}
         ext = ext_map.get(encoding, "ogg")
         filename = f"audio.{ext}"
+        payload_audio = audio_bytes
+        if encoding == "pcm16":
+            payload_audio = self._pcm16_to_wav(audio_bytes, sample_rate=sample_rate)
+        mime_type = "audio/wav" if ext == "wav" else f"audio/{ext}"
 
         try:
-            files = {"file": (filename, io.BytesIO(audio_bytes), f"audio/{ext}")}
+            files = {"file": (filename, io.BytesIO(payload_audio), mime_type)}
             data = {"model": self._stt_model, "response_format": "text"}
 
             resp = await self._client.post(
@@ -129,6 +140,17 @@ class AudioPipeline:
         except Exception as e:
             logger.error(f"STT transcription failed: {e}")
             return None
+
+    @staticmethod
+    def _pcm16_to_wav(audio_bytes: bytes, sample_rate: int) -> bytes:
+        """Wrap raw PCM16 mono audio in a WAV container for Whisper."""
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)  # 16-bit PCM
+            wav_file.setframerate(max(sample_rate, 8000))
+            wav_file.writeframes(audio_bytes)
+        return output.getvalue()
 
     async def synthesize_speech(
         self,
