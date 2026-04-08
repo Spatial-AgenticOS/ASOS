@@ -16,9 +16,11 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from config.loader import theora_home
+
 logger = logging.getLogger("theora.mcp.registry")
 
-CONFIG_PATH = Path(os.path.expanduser("~/.theora/mcp_servers.json"))
+CONFIG_PATH = theora_home() / "mcp_servers.json"
 
 
 KNOWN_SERVERS = {
@@ -37,7 +39,7 @@ KNOWN_SERVERS = {
         "name": "Filesystem",
         "description": "Read/write files and directories",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users"],
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", str(Path.home())],
         "env": {},
         "install_hint": "npm install -g @modelcontextprotocol/server-filesystem",
         "category": "system",

@@ -25,15 +25,16 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
+from config.loader import theora_data_home
+from config.runtime import brain_port
 from memory.hlc import HybridLogicalClock, HLCTimestamp
 
 logger = logging.getLogger("theora.memory.sync")
 
-SYNC_PORT = int(os.getenv("THEORA_SYNC_PORT", os.getenv("THEORA_PORT", "9090")))
+SYNC_PORT = int(os.getenv("THEORA_SYNC_PORT", str(brain_port())))
 SYNC_PASSPHRASE = os.getenv("THEORA_SYNC_PASSPHRASE", "")
 SERVICE_TYPE = "_theora._tcp.local."
 
@@ -182,7 +183,7 @@ class SyncEngine:
         self._hlc = HybridLogicalClock(node_id)
         self._vector_clock = VectorClock()
 
-        wal_path = db_path or str(Path.home() / ".theora" / "sync_wal.db")
+        wal_path = db_path or str(theora_data_home() / "sync_wal.db")
         self._wal = SyncWAL(wal_path)
 
         self._peers: dict[str, dict] = {}

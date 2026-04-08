@@ -14,10 +14,11 @@ Session startup: workspace files are injected into the system prompt.
 
 from __future__ import annotations
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Optional
+
+from config.loader import theora_home
 
 logger = logging.getLogger("theora.identity")
 
@@ -28,7 +29,7 @@ class IdentityWorkspace:
     """
 
     def __init__(self, home_dir: str = None):
-        self._home = Path(home_dir or os.environ.get("THEORA_HOME", str(Path.home() / ".theora")))
+        self._home = Path(home_dir) if home_dir else theora_home()
         self._home.mkdir(parents=True, exist_ok=True)
         self._ensure_defaults()
 

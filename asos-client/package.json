@@ -8,6 +8,9 @@
     "build": "vite build",
     "preview": "vite preview"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
     "leaflet": "^1.9.4",

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SduiRenderer } from './components/SduiRenderer';
-import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle, Phone, Camera, CameraOff } from 'lucide-react';
+import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle, Phone, Camera, CameraOff, BookOpen, RefreshCw, Search } from 'lucide-react';
 import { WS_URL, API_BASE } from './config';
 import { RealtimeVoiceEngine } from './lib/voiceRealtime';
 import { VisionCapture } from './lib/visionCapture';
@@ -19,6 +19,11 @@ export default function App() {
   const [isThinking, setIsThinking] = useState(false);
   const [llmStatus, setLlmStatus] = useState(null);
   const [cameraOn, setCameraOn] = useState(false);
+  const [wikiOpen, setWikiOpen] = useState(false);
+  const [wikiPages, setWikiPages] = useState([]);
+  const [wikiQuery, setWikiQuery] = useState('');
+  const [wikiLoading, setWikiLoading] = useState(false);
+  const [wikiSelected, setWikiSelected] = useState(null);
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -47,6 +52,12 @@ export default function App() {
       if (wsRef.current) wsRef.current.close();
     };
   }, []);
+
+  useEffect(() => {
+    if (wikiOpen) {
+      fetchWikiPages(wikiQuery);
+    }
+  }, [wikiOpen, fetchWikiPages]);
 
   const connect = () => {
     const ws = new WebSocket(WS_URL);
@@ -125,6 +136,48 @@ export default function App() {
 
     wsRef.current = ws;
   };
+
+  const fetchWikiPages = useCallback(async (q = '') => {
+    setWikiLoading(true);
+    try {
+      const query = q ? `?q=${encodeURIComponent(q)}&limit=40` : '?limit=40';
+      const res = await fetch(`${API_BASE}/api/wiki/pages${query}`);
+      const data = await res.json();
+      const pages = data.pages || [];
+      setWikiPages(pages);
+      if (pages.length > 0) {
+        const detail = await fetch(`${API_BASE}/api/wiki/pages/${encodeURIComponent(pages[0].id)}`).then(r => r.json());
+        if (!detail.error) {
+          setWikiSelected((prev) => prev || detail);
+        }
+      }
+    } catch (e) {
+      console.error('Wiki fetch failed:', e);
+    } finally {
+      setWikiLoading(false);
+    }
+  }, []);
+
+  const openWikiPage = useCallback(async (pageId) => {
+    try {
+      const detail = await fetch(`${API_BASE}/api/wiki/pages/${encodeURIComponent(pageId)}`).then(r => r.json());
+      if (!detail.error) setWikiSelected(detail);
+    } catch (e) {
+      console.error('Wiki page fetch failed:', e);
+    }
+  }, []);
+
+  const compileWiki = useCallback(async () => {
+    setWikiLoading(true);
+    try {
+      await fetch(`${API_BASE}/api/wiki/compile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      await fetchWikiPages(wikiQuery);
+    } catch (e) {
+      console.error('Wiki compile failed:', e);
+    } finally {
+      setWikiLoading(false);
+    }
+  }, [fetchWikiPages, wikiQuery]);
 
   const playTTSChunk = useCallback((chunk) => {
     try {
@@ -244,6 +297,13 @@ export default function App() {
             <Activity size={16} className="animate-pulse" />
             <span className="font-mono text-sm">{hr}</span>
           </div>
+          <button
+            onClick={() => setWikiOpen(v => !v)}
+            className={`p-1 transition ${wikiOpen ? 'text-asos-accent' : 'text-gray-400 hover:text-white'}`}
+            title="Memory Wiki"
+          >
+            <BookOpen size={16} />
+          </button>
           <button onClick={() => navigate('/settings')} className="p-1 text-gray-400 hover:text-white transition">
             <Settings size={16} />
           </button>
@@ -264,6 +324,75 @@ export default function App() {
           <span className="text-xs text-yellow-300">
             No LLM connected. Set <code className="bg-black bg-opacity-30 px-1 rounded text-[10px]">OPENAI_API_KEY</code> or start Ollama for full conversation.
           </span>
+        </div>
+      )}
+
+      {wikiOpen && (
+        <div className="absolute inset-0 z-20 bg-black/90 backdrop-blur-sm flex flex-col">
+          <div className="pt-16 px-4 pb-3 border-b border-asos-border">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2">
+                <BookOpen size={16} className="text-asos-accent" />
+                <span className="text-sm font-semibold">Memory Wiki</span>
+              </div>
+              <button
+                onClick={compileWiki}
+                className="text-xs px-2 py-1 rounded bg-asos-card border border-asos-border hover:border-asos-accent flex items-center gap-1"
+                disabled={wikiLoading}
+              >
+                <RefreshCw size={12} className={wikiLoading ? 'animate-spin' : ''} />
+                Compile
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={wikiQuery}
+                onChange={(e) => setWikiQuery(e.target.value)}
+                placeholder="Search wiki pages..."
+                className="flex-1 bg-asos-card border border-asos-border rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+              />
+              <button
+                onClick={() => fetchWikiPages(wikiQuery)}
+                className="px-3 py-2 rounded-full bg-asos-card border border-asos-border hover:border-asos-accent"
+              >
+                <Search size={14} />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 grid grid-cols-1 md:grid-cols-2 overflow-hidden">
+            <div className="border-r border-asos-border overflow-y-auto">
+              {wikiPages.map((page) => (
+                <button
+                  key={page.id}
+                  onClick={() => openWikiPage(page.id)}
+                  className={`w-full text-left px-4 py-3 border-b border-asos-border/40 hover:bg-asos-card ${
+                    wikiSelected?.id === page.id ? 'bg-asos-card' : ''
+                  }`}
+                >
+                  <div className="text-sm font-medium">{page.title}</div>
+                  <div className="text-xs opacity-60">{page.kind} • {page.id}</div>
+                </button>
+              ))}
+              {!wikiPages.length && !wikiLoading && (
+                <div className="p-4 text-sm opacity-60">No wiki pages yet. Press Compile.</div>
+              )}
+            </div>
+            <div className="overflow-y-auto p-4">
+              {wikiSelected ? (
+                <div className="space-y-3">
+                  <div className="text-lg font-semibold">{wikiSelected.title}</div>
+                  <div className="text-xs opacity-60">{wikiSelected.kind} • {wikiSelected.id}</div>
+                  <pre className="whitespace-pre-wrap text-sm leading-relaxed bg-asos-card border border-asos-border rounded-xl p-3">
+                    {wikiSelected.body_markdown}
+                  </pre>
+                </div>
+              ) : (
+                <div className="text-sm opacity-60">Select a wiki page to view details.</div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

@@ -34,6 +34,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Any
 
+from config.loader import theora_home
+
 logger = logging.getLogger("theora.mcp.client")
 
 
@@ -191,8 +193,7 @@ class MCPClientManager:
     """
 
     def __init__(self, config_path: Optional[str] = None):
-        home = os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))
-        self._config_path = Path(config_path) if config_path else Path(home) / "mcp_servers.json"
+        self._config_path = Path(config_path) if config_path else theora_home() / "mcp_servers.json"
         self._servers: dict[str, MCPServerConnection] = {}
 
     async def load_and_connect(self):

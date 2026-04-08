@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from config.loader import theora_home
 from models.skill_manifest import SkillManifest, WEATHER_SKILL
 
 logger = logging.getLogger("theora.skills")
@@ -40,7 +41,7 @@ class SkillRegistry:
 
     def _load_marketplace_skills(self):
         """Scan ~/.theora/skills/ for marketplace-installed skill packages."""
-        skills_dir = Path.home() / ".theora" / "skills"
+        skills_dir = theora_home() / "skills"
         if not skills_dir.exists():
             return
 

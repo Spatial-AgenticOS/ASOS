@@ -16,6 +16,7 @@ from typing import Optional
 
 import httpx
 
+from config.runtime import market_registry_url
 from skills.package import (
     SkillPackage,
     SkillValidator,
@@ -27,7 +28,7 @@ from skills.package import (
 
 logger = logging.getLogger("theora.marketplace")
 
-DEFAULT_REGISTRY_URL = os.getenv("THEORA_MARKETPLACE_URL", "http://localhost:8080/api/v1")
+DEFAULT_REGISTRY_URL = market_registry_url()
 
 GITHUB_INDEX_URL = os.getenv(
     "THEORA_MARKETPLACE_GITHUB",

@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict
 
+from config.loader import theora_data_home
 from skills.base import BaseSkill
 from skills.impl import register_skill
 
@@ -31,8 +32,9 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 class CodeInterpreterSkill(BaseSkill):
     def __init__(self):
         super().__init__(skill_id="code_interpreter")
+        default_artifacts_root = theora_data_home() / "artifacts"
         self._artifacts_root = Path(
-            os.getenv("THEORA_ARTIFACTS_DIR", str(Path.home() / ".theora" / "artifacts"))
+            os.getenv("THEORA_ARTIFACTS_DIR", str(default_artifacts_root))
         ).expanduser()
 
     async def execute(self, endpoint_id: str, args: Dict[str, Any], vault: Dict[str, str]) -> Dict[str, Any]:

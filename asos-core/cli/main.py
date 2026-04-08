@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import sys
+from urllib.parse import urlparse
 
 try:
     import websockets
@@ -30,10 +31,30 @@ try:
 except ImportError:
     httpx = None
 
-BRAIN_HOST = os.environ.get("THEORA_BRAIN_HOST", "localhost")
-BRAIN_PORT = os.environ.get("THEORA_BRAIN_PORT", "9090")
-WS_URL = f"ws://{BRAIN_HOST}:{BRAIN_PORT}/v1/session"
-HTTP_BASE = f"http://{BRAIN_HOST}:{BRAIN_PORT}"
+from config.loader import theora_home
+from config.runtime import (
+    brain_bind_host,
+    brain_port,
+    brain_public_base_url,
+    brain_public_host,
+    brain_public_port,
+    brain_public_scheme,
+)
+
+
+def _runtime_http_base() -> str:
+    return brain_public_base_url().rstrip("/")
+
+
+def _runtime_ws_url() -> str:
+    parsed = urlparse(_runtime_http_base())
+    ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"{ws_scheme}://{parsed.hostname}{port}/v1/session"
+
+
+WS_URL = _runtime_ws_url()
+HTTP_BASE = _runtime_http_base()
 
 BANNER = """
 ╔══════════════════════════════════════╗
@@ -250,7 +271,7 @@ async def one_shot(text: str):
         sys.exit(1)
 
 
-def cmd_serve(host: str = "0.0.0.0", port: int = 9090):
+def cmd_serve(host: str | None = None, port: int | None = None):
     """Start the THEORA Brain server."""
     try:
         import uvicorn
@@ -258,20 +279,21 @@ def cmd_serve(host: str = "0.0.0.0", port: int = 9090):
         print("uvicorn not installed. Run: pip install 'theora-asos[all]'")
         sys.exit(1)
 
+    host = host or brain_bind_host()
+    port = int(port or brain_port())
+    public_base = os.getenv("THEORA_PUBLIC_BASE_URL", f"http://localhost:{port}")
     print(f"\n  Starting THEORA Brain on {host}:{port} ...")
-    print(f"  Dashboard: http://localhost:{port}")
-    print(f"  API docs:  http://localhost:{port}/docs\n")
+    print(f"  Dashboard: {public_base}")
+    print(f"  API docs:  {public_base}/docs\n")
 
     uvicorn.run("api.server:app", host=host, port=port, reload=False, log_level="info")
 
 
 def _is_first_run() -> bool:
     """Check if this is the first time running THEORA."""
-    theora_home = os.path.expanduser(os.environ.get("THEORA_HOME", "~/.theora"))
-    creds_path = os.path.join(theora_home, "credentials.json")
-    config_path = os.path.join(theora_home, "config.json")
-    has_creds = os.path.exists(creds_path)
-    has_config = os.path.exists(config_path)
+    home_path = theora_home()
+    creds_path = home_path / "credentials.json"
+    has_creds = creds_path.exists()
     has_env_key = bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
                        or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GROQ_API_KEY"))
 
@@ -280,7 +302,7 @@ def _is_first_run() -> bool:
 
     if has_creds:
         try:
-            creds = json.loads(open(creds_path).read())
+            creds = json.loads(creds_path.read_text())
             if any(v for v in creds.values() if v):
                 return False
         except Exception:
@@ -289,7 +311,7 @@ def _is_first_run() -> bool:
     return True
 
 
-def cmd_start(port: int = 9090, no_browser: bool = False):
+def cmd_start(port: int | None = None, no_browser: bool = False):
     """
     One command to rule them all.
     Starts the brain, checks health, opens browser, and drops into chat.
@@ -304,6 +326,8 @@ def cmd_start(port: int = 9090, no_browser: bool = False):
         print("  Missing dependencies. Run: pip install 'theora-asos[llm]'")
         sys.exit(1)
 
+    port = int(port or brain_port())
+
     # First run detection — auto-launch setup
     if _is_first_run():
         print()
@@ -313,8 +337,9 @@ def cmd_start(port: int = 9090, no_browser: bool = False):
 
     # Check if already running
     try:
+        health_url = os.getenv("THEORA_HEALTH_URL", f"http://127.0.0.1:{port}/health")
         if httpx:
-            r = httpx.get(f"http://localhost:{port}/health", timeout=2)
+            r = httpx.get(health_url, timeout=2)
             if r.status_code == 200:
                 print(f"  THEORA is already running on port {port}")
                 if not no_browser:
@@ -337,7 +362,7 @@ def cmd_start(port: int = 9090, no_browser: bool = False):
     def _run_server():
         import uvicorn
         config = uvicorn.Config(
-            "api.server:app", host="0.0.0.0", port=port,
+            "api.server:app", host=brain_bind_host(), port=port,
             log_level="warning", access_log=False,
         )
         server = uvicorn.Server(config)
@@ -349,16 +374,17 @@ def cmd_start(port: int = 9090, no_browser: bool = False):
 
     # Wait for server to be healthy
     print("  Starting brain...", end="", flush=True)
+    health_url = os.getenv("THEORA_HEALTH_URL", f"http://127.0.0.1:{port}/health")
     for i in range(30):
         time.sleep(1)
         try:
             if httpx:
-                r = httpx.get(f"http://localhost:{port}/health", timeout=2)
+                r = httpx.get(health_url, timeout=2)
                 if r.status_code == 200:
                     break
             else:
                 import urllib.request
-                urllib.request.urlopen(f"http://localhost:{port}/health", timeout=2)
+                urllib.request.urlopen(health_url, timeout=2)
                 break
         except Exception:
             print(".", end="", flush=True)
@@ -373,7 +399,7 @@ def cmd_start(port: int = 9090, no_browser: bool = False):
     mem = data.get("memory", {})
     print(f"\n  Brain ready!")
     print(f"  LLM: {llm_ok} | Skills: {skills_count} | Memory: {mem.get('notes', 0)} notes")
-    print(f"  Dashboard: http://localhost:{port}")
+    print(f"  Dashboard: {os.getenv('THEORA_PUBLIC_BASE_URL', f'http://localhost:{port}')}")
 
     if not no_browser:
         _open_browser(port)
@@ -387,7 +413,8 @@ def _open_browser(port: int):
     """Open the THEORA dashboard in the default browser."""
     try:
         import webbrowser
-        webbrowser.open(f"http://localhost:{port}")
+        url = os.getenv("THEORA_PUBLIC_BASE_URL", f"http://localhost:{port}")
+        webbrowser.open(url)
     except Exception:
         pass
 
@@ -427,8 +454,8 @@ def cmd_doctor():
             print(f"    {name:20s} {masked}")
             any_key = True
     if not any_key:
-        creds = os.path.expanduser("~/.theora/credentials.json")
-        if os.path.exists(creds):
+        creds = theora_home() / "credentials.json"
+        if creds.exists():
             print(f"    (loaded from {creds})")
         else:
             print(f"    NONE — run: theora setup")
@@ -637,10 +664,13 @@ def cmd_sync(action: str, file_path: str):
 
 def _apply_connection_args(args):
     global WS_URL, HTTP_BASE
-    host = getattr(args, "host", None) or BRAIN_HOST
-    port = getattr(args, "port", None) or BRAIN_PORT
-    WS_URL = f"ws://{host}:{port}/v1/session"
-    HTTP_BASE = f"http://{host}:{port}"
+    host = getattr(args, "host", None) or brain_public_host()
+    port = str(getattr(args, "port", None) or brain_public_port())
+    http_scheme = "https" if brain_public_scheme() == "https" else "http"
+    ws_scheme = "wss" if http_scheme == "https" else "ws"
+    origin = f"{host}:{port}"
+    WS_URL = f"{ws_scheme}://{origin}/v1/session"
+    HTTP_BASE = f"{http_scheme}://{origin}"
 
 
 def main():
@@ -655,13 +685,13 @@ def main():
 
     # theora start (THE main command)
     start_p = sub.add_parser("start", help="Start THEORA — brain + dashboard + chat in one command")
-    start_p.add_argument("--serve-port", default="9090", help="Port (default 9090)")
+    start_p.add_argument("--serve-port", default=str(brain_port()), help=f"Port (default {brain_port()})")
     start_p.add_argument("--no-browser", action="store_true", help="Don't open browser")
 
     # theora serve (headless server only)
     serve_p = sub.add_parser("serve", help="Start the brain server (headless, no chat)")
-    serve_p.add_argument("--bind", default="0.0.0.0", help="Bind address (default 0.0.0.0)")
-    serve_p.add_argument("--serve-port", default="9090", help="Port (default 9090)")
+    serve_p.add_argument("--bind", default=brain_bind_host(), help=f"Bind address (default {brain_bind_host()})")
+    serve_p.add_argument("--serve-port", default=str(brain_port()), help=f"Port (default {brain_port()})")
 
     # theora setup
     sub.add_parser("setup", help="Guided setup wizard — configure provider, keys, features")

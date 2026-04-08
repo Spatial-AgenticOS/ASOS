@@ -130,7 +130,7 @@ class Learner:
                         predicate=predicate,
                         obj=obj,
                         confidence=0.8,
-                        source="conversation_extraction",
+                        source=f"conversation_extraction:{session_id}",
                     )
                     extracted += 1
 

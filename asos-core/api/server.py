@@ -42,13 +42,15 @@ from models.protocol import (
 from agents.orchestrator import Orchestrator
 from agents.learner import Learner
 from agents.skill_generator import SkillGenerator
+from agents.taskflow import TaskFlowRuntime
 from skills.registry import SkillRegistry
 from memory.store import MemoryStore
 from perception.fusion import PerceptionEngine
 from perception.audio_pipeline import AudioPipeline
 from perception.scene import SceneAnalyzer
 from perception.change_detector import ChangeDetector
-from config.loader import ConfigLoader
+from config.loader import ConfigLoader, theora_home
+from config.runtime import brain_bind_host, brain_port, brain_public_base_url, ollama_base_url
 from security.vault import BlindVault, PermissionTier, ExecutionSandbox
 from security.sandbox_policy import SandboxPolicy
 from hardware.protocol import DeviceRegistry, DeviceManifest, HUPAction, HUPActionType, THEORA_GLASSES_MANIFEST
@@ -210,6 +212,7 @@ class BrainState:
         self.approval_manager = None
         self.cron_service = None
         self.docker_sandbox = None
+        self.taskflows: Optional[TaskFlowRuntime] = None
 
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
@@ -287,6 +290,7 @@ class BrainState:
             vision_buffer=self.vision_buffer,
             perception=self.perception,
             learner=self.learner,
+            taskflows=self.taskflows,
         )
         self.orchestrator.set_llm(_shared_llm)
         if self.vault:
@@ -372,6 +376,14 @@ class BrainState:
             logger.info("Cron scheduler initialized")
         except Exception as e:
             logger.debug(f"Cron scheduler skipped: {e}")
+
+        # TaskFlow runtime
+        try:
+            self.taskflows = TaskFlowRuntime(memory_store=self.memory)
+            await self.taskflows.start()
+            logger.info("TaskFlow runtime initialized")
+        except Exception as e:
+            logger.warning(f"TaskFlow runtime skipped: {e}")
 
         stats = self.memory.stats()
         logger.info(
@@ -508,7 +520,7 @@ class BrainState:
     @staticmethod
     def _load_stored_credentials():
         """Load API keys from ~/.theora/credentials.json into environment if not already set."""
-        creds_path = Path(os.environ.get("THEORA_HOME", Path.home() / ".theora")) / "credentials.json"
+        creds_path = theora_home() / "credentials.json"
         if not creds_path.exists():
             return
         try:
@@ -623,7 +635,7 @@ async def get_config():
 @app.get("/api/identity")
 async def get_identity():
     """Get the agent identity configuration."""
-    identity_path = Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "identity.yaml"
+    identity_path = theora_home() / "identity.yaml"
     if identity_path.exists():
         try:
             import yaml
@@ -637,7 +649,7 @@ async def get_identity():
 @app.post("/api/identity")
 async def update_identity(body: dict):
     """Update the agent identity configuration."""
-    identity_path = Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "identity.yaml"
+    identity_path = theora_home() / "identity.yaml"
     try:
         import yaml
         with open(identity_path, "w") as f:
@@ -871,7 +883,7 @@ async def validate_key(body: dict):
         elif provider == "ollama":
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
-                    body.get("base_url", "http://localhost:11434") + "/api/tags",
+                    body.get("base_url", ollama_base_url()) + "/api/tags",
                     timeout=5.0,
                 )
                 if resp.status_code == 200:
@@ -1007,7 +1019,7 @@ async def update_permissions(body: dict):
 @app.get("/api/security/audit")
 async def get_audit_log():
     """Get recent security audit entries."""
-    audit_path = Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "audit.log"
+    audit_path = theora_home() / "audit.log"
     if not audit_path.exists():
         return {"entries": []}
     entries = []
@@ -1537,6 +1549,7 @@ async def system_info():
             "realtime_available": state.realtime_proxy.available if state.realtime_proxy else False,
             "active_realtime_sessions": len(state.realtime_proxy._sessions) if state.realtime_proxy else 0,
         },
+        "taskflows": state.taskflows.stats() if state.taskflows else {},
         "vision": {
             "change_detector": state.change_detector.stats() if state.change_detector else {},
             "scene_available": state.scene.available if state.scene else False,
@@ -1601,6 +1614,7 @@ async def dashboard_data():
         "sync": state.sync_engine.stats if state.sync_engine else {},
         "wasm_available": state.wasm_sandbox.available if state.wasm_sandbox else False,
         "wake_word_enabled": state.wake_word.enabled if state.wake_word else False,
+        "taskflows": state.taskflows.stats() if state.taskflows else {},
     }
 
 
@@ -1719,6 +1733,31 @@ async def llm_switch(body: dict):
     }
 
 
+@app.get("/api/llm/presets")
+async def llm_presets():
+    if not state.orchestrator or not state.orchestrator.llm:
+        return {"presets": []}
+    return {"presets": state.orchestrator.llm.list_presets()}
+
+
+@app.post("/api/llm/presets/apply")
+async def llm_apply_preset(body: dict):
+    if not state.orchestrator or not state.orchestrator.llm:
+        return {"error": "Brain not initialized"}
+    preset_id = body.get("preset", "")
+    if not preset_id:
+        return {"error": "preset is required"}
+    result = await state.orchestrator.llm.apply_preset(preset_id)
+    if result.get("ok"):
+        state.config.update_settings("llm", "provider", result.get("provider"))
+        state.config.update_settings("llm", "model", result.get("model"))
+        if result.get("preset") == "ollama_vision":
+            state.config.update_settings("vision", "enabled", True)
+            state.config.update_settings("vision", "provider", "ollama")
+            state.config.update_settings("vision", "model", result.get("model", "llava"))
+    return result
+
+
 @app.get("/api/voice/status")
 async def voice_status():
     """Voice subsystem status."""
@@ -1812,6 +1851,218 @@ async def episodes_recent(limit: int = 10, session_id: str = ""):
 @app.get("/internal/execution-log")
 async def execution_log(skill_id: str = "", limit: int = 20):
     return state.memory.log_recent(skill_id=skill_id, limit=limit)
+
+
+@app.post("/api/wiki/compile")
+async def wiki_compile(body: dict | None = None):
+    """Compile notes/episodes/knowledge into durable wiki pages."""
+    payload = body or {}
+    return state.memory.wiki_compile(
+        notes_limit=int(payload.get("notes_limit", 200)),
+        episodes_limit=int(payload.get("episodes_limit", 200)),
+        knowledge_limit=int(payload.get("knowledge_limit", 400)),
+    )
+
+
+@app.get("/api/wiki/pages")
+async def wiki_pages(q: str = "", kind: str = "", limit: int = 50):
+    pages = state.memory.wiki_list_pages(query=q, kind=kind, limit=limit)
+    return {"pages": pages}
+
+
+@app.get("/api/wiki/pages/{page_id}")
+async def wiki_page(page_id: str):
+    page = state.memory.wiki_get_page(page_id)
+    if not page:
+        return {"error": f"Wiki page not found: {page_id}"}
+    return page
+
+
+@app.get("/api/wiki/stats")
+async def wiki_stats():
+    return state.memory.wiki_stats()
+
+
+@app.post("/api/wiki/ingest")
+async def wiki_ingest(body: dict):
+    """Ingest a raw note and optionally compile wiki pages."""
+    content = (body or {}).get("content", "")
+    if not content:
+        return {"error": "content is required"}
+    tags = body.get("tags", [])
+    importance = body.get("importance", "normal")
+    compile_after = bool(body.get("compile_after", True))
+    note = state.memory.save(content=content, tags=tags, importance=importance, source="wiki_ingest")
+    compile_result = state.memory.wiki_compile() if compile_after else {"compiled": False}
+    return {"note": note, "compile": compile_result}
+
+
+@app.post("/api/taskflows")
+async def create_taskflow(body: dict):
+    """Create a persistent background TaskFlow."""
+    if not state.taskflows:
+        return {"error": "TaskFlow runtime not initialized"}
+    steps = body.get("steps", [])
+    if not isinstance(steps, list) or not steps:
+        return {"error": "steps (non-empty list) is required"}
+    session_id = body.get("session_id", "")
+    title = body.get("title", "Background TaskFlow")
+    context = body.get("context", {})
+    try:
+        flow = state.taskflows.create_flow(
+            session_id=session_id,
+            title=title,
+            steps=steps,
+            context=context,
+        )
+        return flow
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/taskflows")
+async def list_taskflows(status: str = "", session_id: str = "", limit: int = 50):
+    if not state.taskflows:
+        return {"flows": []}
+    return {"flows": state.taskflows.list_flows(status=status, session_id=session_id, limit=limit)}
+
+
+@app.get("/api/taskflows/{flow_id}")
+async def get_taskflow(flow_id: str):
+    if not state.taskflows:
+        return {"error": "TaskFlow runtime not initialized"}
+    flow = state.taskflows.get_flow(flow_id)
+    if not flow:
+        return {"error": f"TaskFlow not found: {flow_id}"}
+    return flow
+
+
+@app.post("/api/taskflows/{flow_id}/resume")
+async def resume_taskflow(flow_id: str):
+    if not state.taskflows:
+        return {"error": "TaskFlow runtime not initialized"}
+    flow = state.taskflows.resume_flow(flow_id)
+    if not flow:
+        return {"error": f"TaskFlow not found: {flow_id}"}
+    return flow
+
+
+@app.post("/api/taskflows/{flow_id}/cancel")
+async def cancel_taskflow(flow_id: str):
+    if not state.taskflows:
+        return {"error": "TaskFlow runtime not initialized"}
+    flow = state.taskflows.cancel_flow(flow_id)
+    if not flow:
+        return {"error": f"TaskFlow not found: {flow_id}"}
+    return flow
+
+
+@app.post("/api/session/snapshot")
+async def create_session_snapshot(body: dict):
+    if not state.memory:
+        return {"error": "Memory store not initialized"}
+    session_id = body.get("session_id", "")
+    if not session_id:
+        return {"error": "session_id is required"}
+    history = state.orchestrator.conversation_history.get(session_id, []) if state.orchestrator else []
+    return state.memory.snapshot_session(
+        session_id=session_id,
+        history=history,
+        label=body.get("label", ""),
+        branch_name=body.get("branch_name", "main"),
+    )
+
+
+@app.get("/api/session/snapshots")
+async def list_session_snapshots(session_id: str = "", branch_name: str = "", limit: int = 50):
+    if not state.memory:
+        return {"snapshots": []}
+    snapshots = state.memory.list_snapshots(
+        session_id=session_id,
+        branch_name=branch_name,
+        limit=limit,
+    )
+    return {"snapshots": snapshots}
+
+
+@app.post("/api/session/branch")
+async def branch_session(body: dict):
+    if not state.memory:
+        return {"error": "Memory store not initialized"}
+    source_snapshot_id = body.get("snapshot_id", "")
+    if source_snapshot_id:
+        source = state.memory.get_snapshot(source_snapshot_id)
+    else:
+        session_id = body.get("session_id", "")
+        if not session_id:
+            return {"error": "session_id is required when snapshot_id is omitted"}
+        history = state.orchestrator.conversation_history.get(session_id, []) if state.orchestrator else []
+        auto = state.memory.snapshot_session(
+            session_id=session_id,
+            history=history,
+            label="auto-branch-source",
+            branch_name="main",
+        )
+        source_snapshot_id = auto["snapshot_id"]
+        source = state.memory.get_snapshot(source_snapshot_id)
+
+    if not source:
+        return {"error": f"Snapshot not found: {source_snapshot_id}"}
+
+    branch_name = body.get("branch_name", f"branch-{int(time.time())}")
+    branch_session_id = body.get("target_session_id", f"{source['session_id']}:{branch_name}:{str(uuid4())[:6]}")
+    state.memory.working_replace(branch_session_id, source.get("working", []))
+    if state.orchestrator:
+        state.orchestrator.conversation_history[branch_session_id] = source.get("history", [])
+    branched_snapshot = state.memory.snapshot_session(
+        session_id=branch_session_id,
+        history=source.get("history", []),
+        label=body.get("label", f"branch from {source_snapshot_id}"),
+        branch_name=branch_name,
+        source_snapshot_id=source_snapshot_id,
+    )
+    return {
+        "status": "branched",
+        "source_snapshot_id": source_snapshot_id,
+        "target_session_id": branch_session_id,
+        "snapshot": branched_snapshot,
+    }
+
+
+@app.post("/api/session/restore")
+async def restore_session_snapshot(body: dict):
+    if not state.memory:
+        return {"error": "Memory store not initialized"}
+    snapshot_id = body.get("snapshot_id", "")
+    if not snapshot_id:
+        return {"error": "snapshot_id is required"}
+    snapshot = state.memory.get_snapshot(snapshot_id)
+    if not snapshot:
+        return {"error": f"Snapshot not found: {snapshot_id}"}
+
+    session_id = body.get("session_id", snapshot["session_id"])
+    as_new_session = bool(body.get("as_new_session", False))
+    target_session_id = body.get("target_session_id")
+    if not target_session_id:
+        target_session_id = f"{session_id}:restore:{str(uuid4())[:6]}" if as_new_session else session_id
+
+    state.memory.working_replace(target_session_id, snapshot.get("working", []))
+    if state.orchestrator:
+        state.orchestrator.conversation_history[target_session_id] = snapshot.get("history", [])
+
+    restore_snapshot = state.memory.snapshot_session(
+        session_id=target_session_id,
+        history=snapshot.get("history", []),
+        label=body.get("label", f"restore {snapshot_id}"),
+        branch_name=snapshot.get("branch_name", "main"),
+        source_snapshot_id=snapshot_id,
+    )
+    return {
+        "status": "restored",
+        "target_session_id": target_session_id,
+        "restored_from_snapshot_id": snapshot_id,
+        "snapshot": restore_snapshot,
+    }
 
 
 # ─────────────────────────────────────────────
@@ -2294,6 +2545,8 @@ async def shutdown_event():
         await state.mcp_client.disconnect_all()
     if state.sync_engine:
         await state.sync_engine.stop_discovery()
+    if state.taskflows:
+        await state.taskflows.stop()
     logger.info("Shutdown complete.")
 
 
@@ -2316,7 +2569,7 @@ if _webui_dir.is_dir() and (_webui_dir / "index.html").exists():
             return FileResponse(file_path)
         return FileResponse(_webui_dir / "index.html")
 
-    logger.info(f"Web UI bundled from {_webui_dir} — open http://localhost:9090")
+    logger.info(f"Web UI bundled from {_webui_dir} — open {brain_public_base_url()}")
 
 
 if __name__ == "__main__":
@@ -2328,4 +2581,4 @@ if __name__ == "__main__":
     ║   Voice · GenUI · Hardware          ║
     ╚══════════════════════════════════════╝
     """)
-    uvicorn.run(app, host="0.0.0.0", port=9090, log_level="info")
+    uvicorn.run(app, host=brain_bind_host(), port=brain_port(), log_level="info")

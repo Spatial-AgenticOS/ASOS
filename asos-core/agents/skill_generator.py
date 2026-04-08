@@ -20,10 +20,11 @@ This is not "tool use" — this is tool *creation*.
 from __future__ import annotations
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
+
+from config.loader import theora_home
 
 if TYPE_CHECKING:
     from agents.llm_provider import LLMProvider
@@ -117,8 +118,7 @@ class SkillGenerator:
 
     @staticmethod
     def _default_skills_dir() -> Path:
-        home = os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))
-        return Path(home) / "skills"
+        return theora_home() / "skills"
 
     async def detect_unmet_need(self, conversation: list[dict]) -> Optional[dict]:
         """

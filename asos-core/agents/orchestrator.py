@@ -19,12 +19,12 @@ import logging
 import os
 import re
 import time
-from pathlib import Path
 from typing import Optional, Callable, Awaitable, TYPE_CHECKING
 from uuid import uuid4
 
 from fastapi import WebSocket
 
+from config.loader import theora_home
 from models.protocol import (
     TheoraMessage,
     TextResponsePayload,
@@ -74,6 +74,7 @@ class Orchestrator:
         vision_buffer: "VisionBuffer" = None,
         perception: PerceptionEngine = None,
         learner: "Learner" = None,
+        taskflows=None,
     ):
         self.skills = skill_registry
         self.send = send_to_client
@@ -82,6 +83,7 @@ class Orchestrator:
         self.vision_buffer = vision_buffer
         self.perception = perception or PerceptionEngine()
         self.learner = learner
+        self.taskflows = taskflows
 
         # Components — use shared LLM if provided
         self.llm = None  # set via set_llm() from BrainState
@@ -96,6 +98,7 @@ class Orchestrator:
         self._pending_frame_futures: dict[str, asyncio.Future] = {}
         self._daemon_session_map: dict[str, str] = {}
         self._pending_confirmations: dict[str, dict] = {}
+        self._session_finalized: set[str] = set()
 
         # Multi-agent
         self._multi_agent_enabled = os.environ.get("THEORA_MULTI_AGENT", "false").lower() in ("true", "1", "yes")
@@ -162,6 +165,24 @@ class Orchestrator:
     async def handle_command(self, session_id: str, text: str, context: Optional[dict] = None):
         """Process a user command through the full agentic pipeline."""
         logger.info(f"[{session_id[:8]}] Command: {text}")
+        self._session_finalized.discard(session_id)
+
+        if self.taskflows and isinstance(context, dict):
+            taskflow_spec = context.get("taskflow")
+            if isinstance(taskflow_spec, dict):
+                steps = taskflow_spec.get("steps", [])
+                if isinstance(steps, list) and steps:
+                    flow = self.taskflows.create_flow(
+                        session_id=session_id,
+                        title=taskflow_spec.get("title", text[:80] or "Background TaskFlow"),
+                        steps=steps,
+                        context=taskflow_spec.get("context", {"prompt": text}),
+                    )
+                    ack = f"Started TaskFlow {flow['id']} with {len(steps)} step(s)."
+                    await self._send_text(session_id, ack)
+                    if self.memory:
+                        self.memory.working_push(session_id, {"role": "assistant", "text": ack})
+                    return
 
         # Record in episodic memory
         if self.memory:
@@ -492,6 +513,9 @@ class Orchestrator:
 
     async def on_session_disconnect(self, session_id: str):
         """Called when a client disconnects. Summarize and learn."""
+        if session_id in self._session_finalized:
+            return
+        self._session_finalized.add(session_id)
         if self.learner:
             await self.learner.extract_knowledge(session_id)
             await self.learner.summarize_session(session_id)
@@ -1568,8 +1592,8 @@ class Orchestrator:
     def _load_identity(self) -> str:
         """Load agent identity from ~/.theora/identity.yaml or use defaults."""
         identity_paths = [
-            Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "identity.yaml",
-            Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "identity.yml",
+            theora_home() / "identity.yaml",
+            theora_home() / "identity.yml",
         ]
 
         for p in identity_paths:

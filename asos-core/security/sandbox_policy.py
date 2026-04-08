@@ -19,6 +19,8 @@ import os
 from pathlib import Path
 from typing import Optional, Any
 
+from config.loader import theora_home
+
 logger = logging.getLogger("theora.sandbox_policy")
 
 
@@ -183,8 +185,7 @@ class SandboxPolicy:
 
     @classmethod
     def load_default(cls) -> "SandboxPolicy":
-        home = os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))
-        policy_dir = Path(home) / "policies"
+        policy_dir = theora_home() / "policies"
         for name in ["default.yaml", "default.yml", "default.json"]:
             p = policy_dir / name
             if p.exists():
@@ -303,8 +304,7 @@ class SandboxPolicy:
     def save(self, path: Optional[str] = None):
         import json
         if path is None:
-            home = os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))
-            p = Path(home) / "policies" / "default.json"
+            p = theora_home() / "policies" / "default.json"
         else:
             p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)

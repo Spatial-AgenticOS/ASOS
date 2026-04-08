@@ -15,11 +15,15 @@ export default function Settings() {
   const [saved, setSaved] = useState(false);
   const [newSkillKey, setNewSkillKey] = useState({ id: '', key: '' });
   const [activeTab, setActiveTab] = useState('identity');
+  const [llmPresets, setLlmPresets] = useState([]);
+  const [applyingPreset, setApplyingPreset] = useState('');
+  const [presetFeedback, setPresetFeedback] = useState('');
 
   useEffect(() => {
     fetch(`${API}/api/config`).then(r => r.json()).then(setConfig).catch(() => {});
     fetch(`${API}/api/identity`).then(r => r.json()).then(setIdentity).catch(() => {});
     fetch(`${API}/api/devices`).then(r => r.json()).then(d => setDevices(d.devices || [])).catch(() => {});
+    fetch(`${API}/api/llm/presets`).then(r => r.json()).then(d => setLlmPresets(d.presets || [])).catch(() => {});
   }, []);
 
   const updateSetting = async (section, key, value) => {
@@ -63,6 +67,35 @@ export default function Settings() {
   const flash = () => {
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const isPresetActive = (preset) => {
+    if (!config?.llm) return false;
+    return config.llm.provider === preset.provider && config.llm.model === preset.model;
+  };
+
+  const applyPreset = async (presetId) => {
+    setApplyingPreset(presetId);
+    setPresetFeedback('');
+    try {
+      const res = await fetch(`${API}/api/llm/presets/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preset: presetId }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setPresetFeedback(data.error || 'Preset apply failed');
+      } else {
+        const cfg = await fetch(`${API}/api/config`).then(r => r.json());
+        setConfig(cfg);
+        setPresetFeedback(`Applied preset: ${presetId}`);
+      }
+    } catch (e) {
+      setPresetFeedback(e.message || 'Preset apply failed');
+    } finally {
+      setApplyingPreset('');
+    }
   };
 
   if (!config) {
@@ -282,6 +315,43 @@ export default function Settings() {
         {activeTab === 'llm' && (
           <Section title="LLM Provider" icon={Sparkles}>
             <div className="space-y-4">
+              {llmPresets.length > 0 && (
+                <div>
+                  <label className="text-xs text-gray-400 mb-2 block">Provider Presets</label>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    {llmPresets.map(preset => {
+                      const active = isPresetActive(preset);
+                      const applying = applyingPreset === preset.id;
+                      return (
+                        <button
+                          key={preset.id}
+                          onClick={() => applyPreset(preset.id)}
+                          disabled={applyingPreset !== '' && !applying}
+                          className={`text-left px-3 py-2 rounded-lg border transition ${
+                            active
+                              ? 'border-asos-accent bg-asos-accent bg-opacity-10'
+                              : 'border-asos-border bg-black hover:border-gray-500'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium">{preset.id}</span>
+                            {active && <Check size={14} className="text-asos-accent" />}
+                            {applying && <Loader2 size={14} className="animate-spin" />}
+                          </div>
+                          <div className="text-[11px] text-gray-400 mt-1">{preset.description}</div>
+                          <div className="text-[10px] text-gray-500 mt-1 font-mono">
+                            {preset.provider}/{preset.model}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {presetFeedback && (
+                    <div className="text-xs mt-2 text-gray-300">{presetFeedback}</div>
+                  )}
+                </div>
+              )}
+
               <div className="grid grid-cols-3 gap-3">
                 {['openai', 'groq', 'ollama'].map(p => (
                   <button
@@ -304,6 +374,11 @@ export default function Settings() {
                   value={config.llm?.model || ''}
                   onChange={e => updateSetting('llm', 'model', e.target.value)}
                 />
+                {config.llm?.provider === 'ollama' && !/llava|moondream|qwen2-vl|minicpm-v|bakllava|gemma3/i.test(config.llm?.model || '') && (
+                  <p className="text-[11px] text-yellow-400 mt-1">
+                    This model may be text-only. For local vision, use preset <code>ollama_vision</code>.
+                  </p>
+                )}
               </div>
               <div>
                 <label className="text-xs text-gray-400 mb-1 block">Base URL (leave blank for defaults)</label>

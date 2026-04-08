@@ -12,7 +12,39 @@ import logging
 import httpx
 from typing import Optional, AsyncGenerator
 
+from config.runtime import ollama_base_url, ollama_openai_base_url
+
 logger = logging.getLogger("theora.llm")
+
+VISION_READY_OLLAMA_MODELS = (
+    "llava",
+    "moondream",
+    "qwen2-vl",
+    "minicpm-v",
+    "bakllava",
+    "gemma3",
+)
+
+LLM_PRESETS = {
+    "ollama_text": {
+        "provider": "ollama",
+        "model": "llama3.1",
+        "description": "Local text path on Ollama",
+        "vision_supported": False,
+    },
+    "ollama_vision": {
+        "provider": "ollama",
+        "model": "llava",
+        "description": "Local vision path on Ollama VLM",
+        "vision_supported": True,
+    },
+    "openai_default": {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "description": "Cloud default for balanced latency/quality",
+        "vision_supported": True,
+    },
+}
 
 
 class LLMProvider:
@@ -51,7 +83,7 @@ class LLMProvider:
 
         # Set defaults based on provider
         if self.provider == "ollama":
-            self.base_url = self.base_url or "http://localhost:11434/v1"
+            self.base_url = self.base_url or ollama_openai_base_url()
             self.model = self.model or "llama3"
             self.api_key = "ollama"
         elif self.provider == "groq":
@@ -74,7 +106,7 @@ class LLMProvider:
             ollama_model = self._detect_ollama()
             if ollama_model:
                 self.provider = "ollama"
-                self.base_url = "http://localhost:11434/v1"
+                self.base_url = ollama_openai_base_url()
                 self.model = ollama_model
                 self.api_key = "ollama"
                 logger.info(f"Ollama detected — using model '{ollama_model}'")
@@ -91,6 +123,10 @@ class LLMProvider:
         status = "READY" if self.available else "DIRECT-EXECUTION MODE (no LLM)"
         logger.info(f"LLM Provider: {self.provider} | Model: {self.model} | Status: {status}")
 
+    @staticmethod
+    def list_presets() -> list[dict]:
+        return [{"id": k, **v} for k, v in LLM_PRESETS.items()]
+
     def _build_client(self) -> httpx.AsyncClient:
         headers = {"Content-Type": "application/json"}
         if self.provider == "anthropic":
@@ -106,7 +142,7 @@ class LLMProvider:
         preferred = ["llama3.1", "llama3", "mistral", "gemma2", "phi3", "qwen2"]
         try:
             import urllib.request
-            resp = urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3)
+            resp = urllib.request.urlopen(f"{ollama_base_url().rstrip('/')}/api/tags", timeout=3)
             data = json.loads(resp.read())
             models = [m.get("name", "").split(":")[0] for m in data.get("models", [])]
             if not models:
@@ -149,6 +185,12 @@ class LLMProvider:
         Send a chat completion request.
         Returns the full response dict.
         """
+        if self._messages_contain_vision(messages):
+            ok, reason = self._vision_support_status()
+            if not ok:
+                logger.warning(reason)
+                return {"error": reason, "choices": []}
+
         # Local inference path
         if self._local_engine and self.provider in ("local", "hybrid"):
             use_local = self.provider == "local" or not self._hybrid_cloud_provider
@@ -215,6 +257,51 @@ class LLMProvider:
             })
 
         return text, parsed_tools
+
+    @staticmethod
+    def _messages_contain_vision(messages: list[dict]) -> bool:
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        block_type = str(block.get("type", ""))
+                        if block_type in ("image_url", "input_image", "image", "image_base64"):
+                            return True
+                        if "image_url" in block:
+                            return True
+            elif isinstance(content, dict):
+                block_type = str(content.get("type", ""))
+                if block_type in ("image_url", "input_image", "image", "image_base64"):
+                    return True
+                if "image_url" in content:
+                    return True
+        return False
+
+    def _vision_support_status(self) -> tuple[bool, str]:
+        if self.provider in ("openai", "gemini"):
+            return True, ""
+
+        if self.provider == "ollama":
+            model_lower = (self.model or "").lower()
+            if any(hint in model_lower for hint in VISION_READY_OLLAMA_MODELS):
+                return True, ""
+            return (
+                False,
+                "Current Ollama model does not appear vision-capable. "
+                "Use a VLM model such as 'llava' or apply preset 'ollama_vision'.",
+            )
+
+        if self.provider in ("local", "hybrid") and self._local_engine:
+            if getattr(self._local_engine, "supports_vision", False):
+                return True, ""
+            return (
+                False,
+                "Local inference engine is text-only and cannot process images. "
+                "Use Ollama VLM for local vision (`provider=ollama`, model `llava`).",
+            )
+
+        return False, f"Provider '{self.provider}' does not support vision input."
 
     async def _chat_anthropic(
         self, messages: list[dict], tools: Optional[list[dict]],
@@ -323,6 +410,12 @@ class LLMProvider:
           {"type": "tool_call_delta", "tool_call": {...}}
           {"type": "done"}
         """
+        if self._messages_contain_vision(messages):
+            ok, reason = self._vision_support_status()
+            if not ok:
+                yield {"type": "error", "content": reason}
+                return
+
         # Local streaming path
         if self._local_engine and self.provider in ("local", "hybrid"):
             use_local = self.provider == "local" or not self._hybrid_cloud_provider
@@ -516,14 +609,16 @@ class LLMProvider:
 
     async def switch_provider(self, provider: str, model: str = "", api_key: str = ""):
         """Hot-swap the LLM provider at runtime."""
-        await self.client.aclose()
+        client = getattr(self, "client", None)
+        if client is not None:
+            await client.aclose()
 
         self.provider = provider
         if model:
             self.model = model
 
         PROVIDER_DEFAULTS = {
-            "ollama": ("http://localhost:11434/v1", "OLLAMA_DUMMY", "llama3.1"),
+            "ollama": (ollama_openai_base_url(), "OLLAMA_DUMMY", "llama3.1"),
             "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "llama-3.1-70b-versatile"),
             "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"),
             "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "claude-sonnet-4-20250514"),
@@ -531,7 +626,7 @@ class LLMProvider:
         }
 
         if provider == "ollama":
-            self.base_url = "http://localhost:11434/v1"
+            self.base_url = ollama_openai_base_url()
             self.api_key = "ollama"
             if not model:
                 detected = self._detect_ollama()
@@ -560,5 +655,24 @@ class LLMProvider:
         self.available = bool(self.api_key)
         logger.info(f"Switched LLM to {provider}/{self.model} (available={self.available})")
 
+    async def apply_preset(self, preset_id: str) -> dict:
+        preset = LLM_PRESETS.get(preset_id)
+        if not preset:
+            return {"ok": False, "error": f"Unknown preset: {preset_id}"}
+        await self.switch_provider(
+            provider=preset["provider"],
+            model=preset.get("model", ""),
+            api_key="",
+        )
+        return {
+            "ok": True,
+            "preset": preset_id,
+            "provider": self.provider,
+            "model": self.model,
+            "vision_supported": bool(preset.get("vision_supported", False)),
+        }
+
     async def close(self):
-        await self.client.aclose()
+        client = getattr(self, "client", None)
+        if client is not None:
+            await client.aclose()

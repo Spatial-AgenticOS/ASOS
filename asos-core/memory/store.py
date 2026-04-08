@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import sqlite3
 import time
 from collections import deque
@@ -28,6 +29,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from config.loader import theora_data_home, theora_home
 from memory.embeddings import (
     EmbeddingProvider,
     VectorIndex,
@@ -42,7 +44,7 @@ from memory.embeddings import (
 
 logger = logging.getLogger("theora.memory")
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 TEXT_WEIGHT = 0.3
 VECTOR_WEIGHT = 0.7
@@ -57,7 +59,7 @@ class MemoryStore:
 
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
-            data_dir = Path.home() / ".theora"
+            data_dir = theora_data_home()
             data_dir.mkdir(exist_ok=True)
             db_path = str(data_dir / "memory.db")
 
@@ -240,6 +242,59 @@ class MemoryStore:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source ON memory_chunks(source_table, source_id)")
 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wiki_pages (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                body_markdown TEXT NOT NULL,
+                source_refs TEXT DEFAULT '[]',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_kind ON wiki_pages(kind)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_updated ON wiki_pages(updated_at DESC)")
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS wiki_pages_fts
+            USING fts5(title, body_markdown, tokenize='porter')
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS wiki_pages_ai AFTER INSERT ON wiki_pages BEGIN
+                INSERT INTO wiki_pages_fts(rowid, title, body_markdown)
+                VALUES (new.rowid, new.title, new.body_markdown);
+            END
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS wiki_pages_au AFTER UPDATE ON wiki_pages BEGIN
+                DELETE FROM wiki_pages_fts WHERE rowid = old.rowid;
+                INSERT INTO wiki_pages_fts(rowid, title, body_markdown)
+                VALUES (new.rowid, new.title, new.body_markdown);
+            END
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS wiki_pages_ad AFTER DELETE ON wiki_pages BEGIN
+                DELETE FROM wiki_pages_fts WHERE rowid = old.rowid;
+            END
+        """)
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_snapshots (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                branch_name TEXT NOT NULL DEFAULT 'main',
+                label TEXT NOT NULL DEFAULT '',
+                working_json TEXT NOT NULL DEFAULT '[]',
+                history_json TEXT NOT NULL DEFAULT '[]',
+                source_snapshot_id TEXT,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_session ON session_snapshots(session_id, created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_branch ON session_snapshots(branch_name, created_at DESC)")
+
         conn.commit()
         conn.close()
 
@@ -270,6 +325,146 @@ class MemoryStore:
 
     def working_clear(self, session_id: str):
         self._working.pop(session_id, None)
+
+    def working_replace(self, session_id: str, entries: list[dict]):
+        buf = deque(maxlen=self._working_max)
+        for item in entries[-self._working_max:]:
+            entry = dict(item)
+            entry.setdefault("ts", time.time())
+            buf.append(entry)
+        self._working[session_id] = buf
+
+    def snapshot_session(
+        self,
+        *,
+        session_id: str,
+        history: list[dict],
+        label: str = "",
+        branch_name: str = "main",
+        source_snapshot_id: str = "",
+    ) -> dict:
+        snapshot_id = str(uuid4())[:12]
+        now = time.time()
+        working = list(self._working.get(session_id, deque()))
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO session_snapshots
+            (id, session_id, branch_name, label, working_json, history_json, source_snapshot_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_id,
+                session_id,
+                branch_name or "main",
+                label or "",
+                json.dumps(working),
+                json.dumps(history[-200:]),
+                source_snapshot_id or None,
+                now,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return {
+            "snapshot_id": snapshot_id,
+            "session_id": session_id,
+            "branch_name": branch_name or "main",
+            "label": label or "",
+            "created_at": now,
+            "working_count": len(working),
+            "history_count": len(history),
+            "source_snapshot_id": source_snapshot_id or None,
+        }
+
+    def list_snapshots(
+        self,
+        *,
+        session_id: str = "",
+        branch_name: str = "",
+        limit: int = 50,
+    ) -> list[dict]:
+        lim = max(1, min(limit, 200))
+        conn = self._conn()
+        if session_id and branch_name:
+            rows = conn.execute(
+                """
+                SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
+                FROM session_snapshots
+                WHERE session_id = ? AND branch_name = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (session_id, branch_name, lim),
+            ).fetchall()
+        elif session_id:
+            rows = conn.execute(
+                """
+                SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
+                FROM session_snapshots
+                WHERE session_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (session_id, lim),
+            ).fetchall()
+        elif branch_name:
+            rows = conn.execute(
+                """
+                SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
+                FROM session_snapshots
+                WHERE branch_name = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (branch_name, lim),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
+                FROM session_snapshots
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (lim,),
+            ).fetchall()
+        conn.close()
+        return [
+            {
+                "snapshot_id": r["id"],
+                "session_id": r["session_id"],
+                "branch_name": r["branch_name"],
+                "label": r["label"],
+                "source_snapshot_id": r["source_snapshot_id"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    def get_snapshot(self, snapshot_id: str) -> Optional[dict]:
+        conn = self._conn()
+        row = conn.execute(
+            """
+            SELECT id, session_id, branch_name, label, working_json, history_json, source_snapshot_id, created_at
+            FROM session_snapshots
+            WHERE id = ?
+            """,
+            (snapshot_id,),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "snapshot_id": row["id"],
+            "session_id": row["session_id"],
+            "branch_name": row["branch_name"],
+            "label": row["label"],
+            "working": json.loads(row["working_json"] or "[]"),
+            "history": json.loads(row["history_json"] or "[]"),
+            "source_snapshot_id": row["source_snapshot_id"],
+            "created_at": row["created_at"],
+        }
 
     # ─────────────────────────────────────────────
     # Tier 2: Episodic Memory (with embeddings)
@@ -837,6 +1032,321 @@ class MemoryStore:
         return results[:limit]
 
     # ─────────────────────────────────────────────
+    # Memory Wiki (durable markdown knowledge surface)
+    # ─────────────────────────────────────────────
+
+    @staticmethod
+    def _wiki_slug(value: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
+        return slug or "unknown"
+
+    def wiki_upsert_page(
+        self,
+        *,
+        page_id: str,
+        title: str,
+        kind: str,
+        body_markdown: str,
+        source_refs: list[dict] | None = None,
+    ) -> dict:
+        now = time.time()
+        refs = source_refs or []
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO wiki_pages (id, title, kind, body_markdown, source_refs, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              title=excluded.title,
+              kind=excluded.kind,
+              body_markdown=excluded.body_markdown,
+              source_refs=excluded.source_refs,
+              updated_at=excluded.updated_at
+            """,
+            (page_id, title, kind, body_markdown, json.dumps(refs), now, now),
+        )
+        conn.commit()
+        conn.close()
+        return {
+            "id": page_id,
+            "title": title,
+            "kind": kind,
+            "updated_at": now,
+            "source_refs": refs,
+        }
+
+    def wiki_get_page(self, page_id: str) -> Optional[dict]:
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT id, title, kind, body_markdown, source_refs, created_at, updated_at FROM wiki_pages WHERE id = ?",
+            (page_id,),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "kind": row["kind"],
+            "body_markdown": row["body_markdown"],
+            "source_refs": json.loads(row["source_refs"] or "[]"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def wiki_list_pages(self, *, query: str = "", kind: str = "", limit: int = 50) -> list[dict]:
+        lim = max(1, min(limit, 200))
+        conn = self._conn()
+        rows = []
+        if query.strip():
+            if kind:
+                rows = conn.execute(
+                    """
+                    SELECT w.id, w.title, w.kind, w.source_refs, w.updated_at
+                    FROM wiki_pages_fts f
+                    JOIN wiki_pages w ON f.rowid = w.rowid
+                    WHERE wiki_pages_fts MATCH ? AND w.kind = ?
+                    ORDER BY rank, w.updated_at DESC
+                    LIMIT ?
+                    """,
+                    (query.strip(), kind, lim),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT w.id, w.title, w.kind, w.source_refs, w.updated_at
+                    FROM wiki_pages_fts f
+                    JOIN wiki_pages w ON f.rowid = w.rowid
+                    WHERE wiki_pages_fts MATCH ?
+                    ORDER BY rank, w.updated_at DESC
+                    LIMIT ?
+                    """,
+                    (query.strip(), lim),
+                ).fetchall()
+        elif kind:
+            rows = conn.execute(
+                """
+                SELECT id, title, kind, source_refs, updated_at
+                FROM wiki_pages
+                WHERE kind = ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (kind, lim),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, title, kind, source_refs, updated_at
+                FROM wiki_pages
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (lim,),
+            ).fetchall()
+        conn.close()
+        return [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "kind": r["kind"],
+                "source_refs": json.loads(r["source_refs"] or "[]"),
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
+
+    def wiki_stats(self) -> dict:
+        conn = self._conn()
+        total = conn.execute("SELECT COUNT(*) FROM wiki_pages").fetchone()[0]
+        kinds = conn.execute(
+            "SELECT kind, COUNT(*) AS count FROM wiki_pages GROUP BY kind ORDER BY count DESC"
+        ).fetchall()
+        conn.close()
+        return {
+            "pages": total,
+            "kinds": [{"kind": row["kind"], "count": row["count"]} for row in kinds],
+        }
+
+    def wiki_compile(
+        self,
+        *,
+        notes_limit: int = 200,
+        episodes_limit: int = 200,
+        knowledge_limit: int = 400,
+    ) -> dict:
+        conn = self._conn()
+        notes = conn.execute(
+            """
+            SELECT id, content, tags, importance, source, created_at, updated_at
+            FROM notes
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (max(1, notes_limit),),
+        ).fetchall()
+        episodes = conn.execute(
+            """
+            SELECT id, session_id, event_type, summary, detail, created_at
+            FROM episodes
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (max(1, episodes_limit),),
+        ).fetchall()
+        triples = conn.execute(
+            """
+            SELECT id, subject, predicate, object, confidence, source, updated_at
+            FROM knowledge
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (max(1, knowledge_limit),),
+        ).fetchall()
+        conn.close()
+
+        note_pages = 0
+        for row in notes:
+            tags = json.loads(row["tags"] or "[]")
+            title = f"Note {row['id']}"
+            body = (
+                f"# {title}\n\n"
+                f"{row['content']}\n\n"
+                f"## Metadata\n"
+                f"- Importance: {row['importance']}\n"
+                f"- Source: {row['source']}\n"
+                f"- Tags: {', '.join(tags) if tags else 'none'}\n"
+                f"- Updated: {row['updated_at']}\n"
+            )
+            self.wiki_upsert_page(
+                page_id=f"note.{row['id']}",
+                title=title,
+                kind="note",
+                body_markdown=body,
+                source_refs=[
+                    {"type": "note", "id": row["id"], "updated_at": row["updated_at"]},
+                ],
+            )
+            note_pages += 1
+
+        episode_pages = 0
+        for row in episodes:
+            title = f"Episode {row['id']} ({row['event_type']})"
+            body = (
+                f"# {title}\n\n"
+                f"## Summary\n{row['summary']}\n\n"
+                f"## Detail\n{row['detail'] or '-'}\n\n"
+                f"## Metadata\n"
+                f"- Session: {row['session_id']}\n"
+                f"- Created: {row['created_at']}\n"
+            )
+            self.wiki_upsert_page(
+                page_id=f"episode.{row['id']}",
+                title=title,
+                kind="episode",
+                body_markdown=body,
+                source_refs=[
+                    {
+                        "type": "episode",
+                        "id": row["id"],
+                        "session_id": row["session_id"],
+                        "created_at": row["created_at"],
+                    },
+                ],
+            )
+            episode_pages += 1
+
+        triples_by_subject: dict[str, list[dict]] = {}
+        for row in triples:
+            triples_by_subject.setdefault(row["subject"], []).append(
+                {
+                    "id": row["id"],
+                    "predicate": row["predicate"],
+                    "object": row["object"],
+                    "confidence": row["confidence"],
+                    "source": row["source"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+
+        entity_pages = 0
+        for subject, items in triples_by_subject.items():
+            page_id = f"entity.{self._wiki_slug(subject)}"
+            title = f"Entity: {subject}"
+            lines = [f"# {title}", "", "## Facts"]
+            for item in items[:200]:
+                lines.append(
+                    f"- {subject} **{item['predicate']}** {item['object']} "
+                    f"(confidence={item['confidence']:.2f}, source={item['source']})"
+                )
+            body = "\n".join(lines)
+            refs = [
+                {
+                    "type": "knowledge",
+                    "id": item["id"],
+                    "subject": subject,
+                    "updated_at": item["updated_at"],
+                }
+                for item in items
+            ]
+            self.wiki_upsert_page(
+                page_id=page_id,
+                title=title,
+                kind="entity",
+                body_markdown=body,
+                source_refs=refs,
+            )
+            entity_pages += 1
+
+        identity_page_written = False
+        memory_md = theora_home() / "MEMORY.md"
+        if memory_md.exists():
+            memory_text = memory_md.read_text(encoding="utf-8", errors="replace")
+            self.wiki_upsert_page(
+                page_id="identity.memory",
+                title="Identity Memory",
+                kind="identity",
+                body_markdown=memory_text or "# Identity Memory\n\n(empty)",
+                source_refs=[
+                    {"type": "identity_file", "path": str(memory_md)},
+                ],
+            )
+            identity_page_written = True
+
+        index_lines = [
+            "# THEORA Memory Wiki",
+            "",
+            "## Summary",
+            f"- Notes compiled: {note_pages}",
+            f"- Episodes compiled: {episode_pages}",
+            f"- Entity pages compiled: {entity_pages}",
+            f"- Identity page: {'yes' if identity_page_written else 'no'}",
+            "",
+            "## How to use",
+            "- Search pages with `q` in `/api/wiki/pages`.",
+            "- Fetch full page content from `/api/wiki/pages/{page_id}`.",
+            "- Recompile after new memory writes using `/api/wiki/compile`.",
+        ]
+        self.wiki_upsert_page(
+            page_id="index",
+            title="Wiki Index",
+            kind="index",
+            body_markdown="\n".join(index_lines),
+            source_refs=[],
+        )
+
+        stats = self.wiki_stats()
+        return {
+            "compiled": True,
+            "notes_pages": note_pages,
+            "episode_pages": episode_pages,
+            "entity_pages": entity_pages,
+            "identity_page": identity_page_written,
+            "total_pages": stats["pages"],
+            "kinds": stats["kinds"],
+        }
+
+    # ─────────────────────────────────────────────
     # Legacy Notes API (backward compat)
     # ─────────────────────────────────────────────
 
@@ -861,7 +1371,7 @@ class MemoryStore:
                 chunk_index=i, db_path=self.db_path,
             )
 
-        self.knowledge_store(subject="user_note", predicate="says", obj=content[:300], source="notes")
+        self.knowledge_store(subject="user_note", predicate="says", obj=content[:300], source=f"notes:{note_id}")
         self._log_sync("notes", "insert", note_id, {
             "id": note_id, "content": content, "tags": json.dumps(tags),
             "importance": importance, "source": source, "created_at": now,
@@ -921,6 +1431,8 @@ class MemoryStore:
         episodes_count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
         knowledge_count = conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0]
         exec_count = conn.execute("SELECT COUNT(*) FROM execution_log").fetchone()[0]
+        wiki_count = conn.execute("SELECT COUNT(*) FROM wiki_pages").fetchone()[0]
+        snapshot_count = conn.execute("SELECT COUNT(*) FROM session_snapshots").fetchone()[0]
         try:
             chunk_count = conn.execute("SELECT COUNT(*) FROM memory_chunks").fetchone()[0]
         except Exception:
@@ -935,6 +1447,8 @@ class MemoryStore:
             "episodes": episodes_count,
             "knowledge_triples": knowledge_count,
             "execution_logs": exec_count,
+            "wiki_pages": wiki_count,
+            "session_snapshots": snapshot_count,
             "active_working_sessions": working_sessions,
             "embedded_chunks": chunk_count,
             "vec_index_count": self._vec_index.count,

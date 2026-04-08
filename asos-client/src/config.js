@@ -1,8 +1,17 @@
-const BRAIN_HOST = import.meta.env.VITE_BRAIN_HOST || window.location.hostname || 'localhost';
-const BRAIN_PORT = import.meta.env.VITE_BRAIN_PORT || window.location.port || '9090';
-const BRAIN_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
-const HTTP_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
+const explicitBase = (import.meta.env.VITE_BRAIN_BASE_URL || '').trim();
 
-const origin = `${BRAIN_HOST}${BRAIN_PORT ? ':' + BRAIN_PORT : ''}`;
-export const API_BASE = `${HTTP_PROTOCOL}://${origin}`;
-export const WS_URL = `${BRAIN_PROTOCOL}://${origin}/v1/session`;
+let apiBase = explicitBase.replace(/\/$/, '');
+if (!apiBase) {
+  const host = import.meta.env.VITE_BRAIN_HOST || window.location.hostname || 'localhost';
+  const port = import.meta.env.VITE_BRAIN_PORT || window.location.port || '9090';
+  const scheme = window.location.protocol === 'https:' ? 'https' : 'http';
+  const origin = `${host}${port ? `:${port}` : ''}`;
+  apiBase = `${scheme}://${origin}`;
+}
+
+const wsBase = apiBase.startsWith('https://')
+  ? apiBase.replace(/^https:\/\//, 'wss://')
+  : apiBase.replace(/^http:\/\//, 'ws://');
+
+export const API_BASE = apiBase;
+export const WS_URL = `${wsBase}/v1/session`;

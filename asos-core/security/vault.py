@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from config.loader import theora_home
+
 logger = logging.getLogger("theora.vault")
 
 
@@ -34,9 +36,9 @@ class BlindVault:
     """
 
     def __init__(self, vault_path: Optional[str] = None):
-        home = os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))
-        self._vault_path = Path(vault_path) if vault_path else Path(home) / "credentials.json"
-        self._audit_path = Path(home) / "audit.log"
+        home = theora_home()
+        self._vault_path = Path(vault_path) if vault_path else home / "credentials.json"
+        self._audit_path = home / "audit.log"
         self._cache: dict = {}
         self._load()
 

@@ -25,10 +25,17 @@ from urllib.parse import urlencode
 
 import httpx
 
+from config.loader import theora_home
+from config.runtime import brain_public_base_url
+
 logger = logging.getLogger("theora.oauth")
 
-OAUTH_CONFIG_PATH = Path(os.path.expanduser("~/.theora/oauth_providers.json"))
-OAUTH_STATE_PATH = Path(os.path.expanduser("~/.theora/oauth_state.json"))
+OAUTH_CONFIG_PATH = theora_home() / "oauth_providers.json"
+OAUTH_STATE_PATH = theora_home() / "oauth_state.json"
+
+
+def _default_redirect_uri() -> str:
+    return f"{brain_public_base_url()}/api/oauth/callback"
 
 
 class OAuthProvider:
@@ -42,7 +49,7 @@ class OAuthProvider:
         self.client_id: str = data.get("client_id", "")
         self.client_secret: str = data.get("client_secret", "")
         self.scopes: list[str] = data.get("scopes", [])
-        self.redirect_uri: str = data.get("redirect_uri", "http://localhost:9090/api/oauth/callback")
+        self.redirect_uri: str = data.get("redirect_uri", _default_redirect_uri())
         self.pkce: bool = data.get("pkce", True)
         self.auth_type: str = data.get("auth_type", "oauth2")
 

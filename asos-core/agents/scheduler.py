@@ -13,8 +13,9 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from pathlib import Path
 from typing import Any, Callable, Optional
+
+from config.loader import theora_data_home
 
 
 class JobType(str, Enum):
@@ -41,7 +42,7 @@ class ScheduledJob:
 
 
 def _default_db_path() -> str:
-    base = Path.home() / ".theora"
+    base = theora_data_home()
     base.mkdir(parents=True, exist_ok=True)
     return str(base / "scheduled_jobs.db")
 

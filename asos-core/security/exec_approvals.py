@@ -13,8 +13,9 @@ import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import Any, Optional
+
+from config.loader import theora_data_home
 
 
 class ApprovalPolicy(str, Enum):
@@ -35,7 +36,7 @@ class ApprovalRecord:
 
 
 def _default_db_path() -> str:
-    base = Path.home() / ".theora"
+    base = theora_data_home()
     base.mkdir(parents=True, exist_ok=True)
     return str(base / "exec_approvals.db")
 

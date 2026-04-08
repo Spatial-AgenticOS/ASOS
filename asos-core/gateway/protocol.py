@@ -19,6 +19,8 @@ import time
 from typing import Callable, Awaitable, Optional, Any
 from uuid import uuid4
 
+from config.loader import theora_home
+
 logger = logging.getLogger("theora.gateway")
 
 
@@ -232,6 +234,100 @@ def register_core_methods(registry: MethodRegistry, state):
             return result
         return {"compacted": False}
 
+    @registry.method("session.snapshot")
+    async def session_snapshot(session_id: str, params: dict, session: GatewaySession):
+        if not state.memory:
+            raise GatewayError("NOT_FOUND", "Memory store not initialized")
+        history = state.orchestrator.conversation_history.get(session_id, []) if state.orchestrator else []
+        snapshot = state.memory.snapshot_session(
+            session_id=session_id,
+            history=history,
+            label=params.get("label", ""),
+            branch_name=params.get("branch_name", "main"),
+        )
+        return snapshot
+
+    @registry.method("session.snapshots")
+    async def session_snapshots(session_id: str, params: dict, session: GatewaySession):
+        if not state.memory:
+            return {"snapshots": []}
+        snapshots = state.memory.list_snapshots(
+            session_id=params.get("session_id", session_id),
+            branch_name=params.get("branch_name", ""),
+            limit=int(params.get("limit", 50)),
+        )
+        return {"snapshots": snapshots}
+
+    @registry.method("session.branch")
+    async def session_branch(session_id: str, params: dict, session: GatewaySession):
+        if not state.memory:
+            raise GatewayError("NOT_FOUND", "Memory store not initialized")
+
+        source_snapshot_id = params.get("snapshot_id", "")
+        if source_snapshot_id:
+            source_snapshot = state.memory.get_snapshot(source_snapshot_id)
+            if not source_snapshot:
+                raise GatewayError("NOT_FOUND", f"Snapshot not found: {source_snapshot_id}")
+        else:
+            base = await session_snapshot(session_id, {"label": "auto-branch-source", "branch_name": "main"}, session)
+            source_snapshot_id = base["snapshot_id"]
+            source_snapshot = state.memory.get_snapshot(source_snapshot_id)
+
+        branch_name = params.get("branch_name", f"branch-{int(time.time())}")
+        branch_session_id = params.get("target_session_id", f"{session_id}:{branch_name}:{str(uuid4())[:6]}")
+
+        state.memory.working_replace(branch_session_id, source_snapshot.get("working", []))
+        if state.orchestrator:
+            state.orchestrator.conversation_history[branch_session_id] = source_snapshot.get("history", [])
+
+        branched_snapshot = state.memory.snapshot_session(
+            session_id=branch_session_id,
+            history=source_snapshot.get("history", []),
+            label=params.get("label", f"branch from {source_snapshot_id}"),
+            branch_name=branch_name,
+            source_snapshot_id=source_snapshot_id,
+        )
+        return {
+            "status": "branched",
+            "source_snapshot_id": source_snapshot_id,
+            "target_session_id": branch_session_id,
+            "snapshot": branched_snapshot,
+        }
+
+    @registry.method("session.restore")
+    async def session_restore(session_id: str, params: dict, session: GatewaySession):
+        if not state.memory:
+            raise GatewayError("NOT_FOUND", "Memory store not initialized")
+        snapshot_id = params.get("snapshot_id", "")
+        if not snapshot_id:
+            raise GatewayError("INVALID_PARAMS", "snapshot_id is required")
+        snapshot = state.memory.get_snapshot(snapshot_id)
+        if not snapshot:
+            raise GatewayError("NOT_FOUND", f"Snapshot not found: {snapshot_id}")
+
+        as_new_session = bool(params.get("as_new_session", False))
+        target_session_id = params.get("target_session_id")
+        if not target_session_id:
+            target_session_id = f"{session_id}:restore:{str(uuid4())[:6]}" if as_new_session else session_id
+
+        state.memory.working_replace(target_session_id, snapshot.get("working", []))
+        if state.orchestrator:
+            state.orchestrator.conversation_history[target_session_id] = snapshot.get("history", [])
+
+        restore_snapshot = state.memory.snapshot_session(
+            session_id=target_session_id,
+            history=snapshot.get("history", []),
+            label=params.get("label", f"restore {snapshot_id}"),
+            branch_name=snapshot.get("branch_name", "main"),
+            source_snapshot_id=snapshot_id,
+        )
+        return {
+            "status": "restored",
+            "target_session_id": target_session_id,
+            "restored_from_snapshot_id": snapshot_id,
+            "snapshot": restore_snapshot,
+        }
+
     @registry.method("voice.config")
     async def voice_config(session_id: str, params: dict, session: GatewaySession):
         mode = params.get("mode", "realtime")
@@ -264,11 +360,71 @@ def register_core_methods(registry: MethodRegistry, state):
         results = await state.memory.search_all(query, limit=limit)
         return {"results": results}
 
+    @registry.method("taskflow.create")
+    async def taskflow_create(session_id: str, params: dict, session: GatewaySession):
+        if not state.taskflows:
+            raise GatewayError("NOT_FOUND", "TaskFlow runtime not initialized")
+        steps = params.get("steps", [])
+        if not isinstance(steps, list) or not steps:
+            raise GatewayError("INVALID_PARAMS", "steps (non-empty list) is required")
+        flow = state.taskflows.create_flow(
+            session_id=params.get("session_id", session_id),
+            title=params.get("title", "Background TaskFlow"),
+            steps=steps,
+            context=params.get("context", {}),
+        )
+        return flow
+
+    @registry.method("taskflow.list")
+    async def taskflow_list(session_id: str, params: dict, session: GatewaySession):
+        if not state.taskflows:
+            return {"flows": []}
+        flows = state.taskflows.list_flows(
+            session_id=params.get("session_id", ""),
+            status=params.get("status", ""),
+            limit=int(params.get("limit", 50)),
+        )
+        return {"flows": flows}
+
+    @registry.method("taskflow.get")
+    async def taskflow_get(session_id: str, params: dict, session: GatewaySession):
+        if not state.taskflows:
+            raise GatewayError("NOT_FOUND", "TaskFlow runtime not initialized")
+        flow_id = params.get("flow_id", "")
+        if not flow_id:
+            raise GatewayError("INVALID_PARAMS", "flow_id is required")
+        flow = state.taskflows.get_flow(flow_id)
+        if not flow:
+            raise GatewayError("NOT_FOUND", f"TaskFlow not found: {flow_id}")
+        return flow
+
+    @registry.method("taskflow.resume")
+    async def taskflow_resume(session_id: str, params: dict, session: GatewaySession):
+        if not state.taskflows:
+            raise GatewayError("NOT_FOUND", "TaskFlow runtime not initialized")
+        flow_id = params.get("flow_id", "")
+        if not flow_id:
+            raise GatewayError("INVALID_PARAMS", "flow_id is required")
+        flow = state.taskflows.resume_flow(flow_id)
+        if not flow:
+            raise GatewayError("NOT_FOUND", f"TaskFlow not found: {flow_id}")
+        return flow
+
+    @registry.method("taskflow.cancel")
+    async def taskflow_cancel(session_id: str, params: dict, session: GatewaySession):
+        if not state.taskflows:
+            raise GatewayError("NOT_FOUND", "TaskFlow runtime not initialized")
+        flow_id = params.get("flow_id", "")
+        if not flow_id:
+            raise GatewayError("INVALID_PARAMS", "flow_id is required")
+        flow = state.taskflows.cancel_flow(flow_id)
+        if not flow:
+            raise GatewayError("NOT_FOUND", f"TaskFlow not found: {flow_id}")
+        return flow
+
     @registry.method("identity.get")
     async def identity_get(session_id: str, params: dict, session: GatewaySession):
-        from pathlib import Path
-        import os
-        identity_path = Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "identity.yaml"
+        identity_path = theora_home() / "identity.yaml"
         if identity_path.exists():
             try:
                 import yaml
@@ -280,9 +436,9 @@ def register_core_methods(registry: MethodRegistry, state):
 
     @registry.method("identity.update")
     async def identity_update(session_id: str, params: dict, session: GatewaySession):
-        from pathlib import Path
-        import os, yaml
-        identity_path = Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora"))) / "identity.yaml"
+        import yaml
+
+        identity_path = theora_home() / "identity.yaml"
         with open(identity_path, "w") as f:
             yaml.dump(params, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
         return {"ok": True}

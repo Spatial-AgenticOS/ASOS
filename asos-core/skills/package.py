@@ -15,11 +15,12 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from config.loader import theora_home
 from models.skill_manifest import SkillManifest
 
 logger = logging.getLogger("theora.skills.package")
 
-SKILLS_DIR = Path.home() / ".theora" / "skills"
+SKILLS_DIR = theora_home() / "skills"
 
 
 class SkillPackage:

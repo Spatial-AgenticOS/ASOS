@@ -24,6 +24,8 @@ import os
 import time
 from typing import Optional, TYPE_CHECKING
 
+from config.runtime import ollama_base_url
+
 if TYPE_CHECKING:
     from agents.llm_provider import LLMProvider
 
@@ -114,13 +116,19 @@ class SceneAnalyzer:
                 }
                 logger.info(f"VLM: Gemini ({self._vlm_client['model']})")
         elif self._vlm_provider == "ollama":
-            base = self._vlm_base_url or "http://localhost:11434"
+            base = self._vlm_base_url or ollama_base_url()
+            model = self._vlm_model or "llava"
             self._vlm_client = {
                 "type": "ollama",
                 "base_url": base,
-                "model": self._vlm_model or "llava",
+                "model": model,
                 "http": httpx.AsyncClient(base_url=f"{base}/v1", timeout=60.0),
             }
+            if not any(h in model.lower() for h in ("llava", "moondream", "qwen2-vl", "minicpm-v", "bakllava", "gemma3")):
+                logger.warning(
+                    "Ollama VLM model '%s' may not support vision. Recommended: llava or moondream.",
+                    model,
+                )
             logger.info(f"VLM: Ollama ({self._vlm_client['model']})")
 
     @property

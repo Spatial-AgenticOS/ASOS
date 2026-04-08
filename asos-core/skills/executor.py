@@ -15,6 +15,7 @@ import uuid
 from typing import Optional
 import httpx
 
+from config.loader import theora_home
 from models.skill_manifest import SkillManifest, SkillEndpoint
 
 logger = logging.getLogger("theora.executor")
@@ -181,8 +182,7 @@ class SkillExecutor:
         self, tool_name: str, endpoint: SkillEndpoint, args: dict, skill: SkillManifest,
     ) -> dict:
         """Execute a skill via the WASM sandbox."""
-        from pathlib import Path
-        skills_dir = Path.home() / ".theora" / "skills" / skill.skill_id
+        skills_dir = theora_home() / "skills" / skill.skill_id
         wasm_files = list(skills_dir.glob("*.wasm"))
         if not wasm_files:
             return {"success": False, "status_code": 404, "data": None, "error": f"No .wasm file found for {skill.skill_id}"}

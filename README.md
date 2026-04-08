@@ -42,6 +42,7 @@ It can:
 - **Render rich UI** — tool results display as cards, metrics, and interactive components (GenUI)
 - **Control hardware** — smart glasses, wristbands, IoT devices connect via WebSocket
 - **Work with any LLM** — OpenAI, Anthropic Claude, Google Gemini, Groq, Ollama (local/free)
+- **Use one stable local multimodal path** — Ollama vision preset (`ollama_vision` / `llava`)
 
 ---
 
@@ -81,6 +82,15 @@ theora serve      # start the server
 theora            # interactive chat
 ```
 
+**With Nix (thin foundation):**
+
+```bash
+nix develop        # dev shell
+nix run .#brain    # run THEORA brain
+```
+
+See [`docs/NIX.md`](docs/NIX.md) for package outputs and module details.
+
 ---
 
 ## Features
@@ -104,6 +114,7 @@ theora            # interactive chat
 | **Skill Manifests** | Drop a JSON file to add any REST API as an agent tool |
 | **Blind Vault** | API keys stored securely, never exposed to the LLM |
 | **Hot Provider Switch** | `POST /api/llm/switch` — change LLM provider without restarting |
+| **Provider Presets** | `GET /api/llm/presets`, `POST /api/llm/presets/apply` |
 | **Self-Learning** | Agent learns routing preferences and extracts knowledge over time |
 | **Web Dashboard** | React UI at `localhost:9090` — bundled with the server |
 
@@ -440,6 +451,8 @@ All config lives in `~/.theora/`:
 | `/api/info` | GET | System info and capabilities |
 | `/api/llm/status` | GET | Current LLM provider and availability |
 | `/api/llm/switch` | POST | Hot-swap LLM provider |
+| `/api/llm/presets` | GET | List named provider/model presets |
+| `/api/llm/presets/apply` | POST | Apply a preset (e.g. `ollama_vision`) |
 | `/api/voice/status` | GET | Voice subsystem status |
 | `/api/dashboard` | GET | Full dashboard data |
 | `/api/identity` | GET | Agent identity config |

@@ -20,9 +20,11 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, AsyncGenerator
 
+from config.loader import theora_data_home
+
 logger = logging.getLogger("theora.local_inference")
 
-MODELS_DIR = Path.home() / ".theora" / "models"
+MODELS_DIR = theora_data_home() / "models"
 
 
 class LocalLLMEngine(ABC):
@@ -31,6 +33,7 @@ class LocalLLMEngine(ABC):
     def __init__(self, model_id: str):
         self.model_id = model_id
         self.loaded = False
+        self.supports_vision = False
 
     @abstractmethod
     async def load_model(self):
@@ -54,14 +57,21 @@ class LocalLLMEngine(ABC):
         for m in messages:
             role = m.get("role", "user")
             content = m.get("content", "")
+            normalized, has_vision = self._normalize_content(content)
+            if has_vision and not self.supports_vision:
+                raise ValueError(
+                    "Local model received image content but this local engine is text-only. "
+                    "Use Ollama VLM via THEORA_VLM_PROVIDER=ollama (for scene/vision) or "
+                    "switch to a provider/model that supports multimodal input."
+                )
             if role == "system":
-                parts.append(f"<|system|>\n{content}")
+                parts.append(f"<|system|>\n{normalized}")
             elif role == "user":
-                parts.append(f"<|user|>\n{content}")
+                parts.append(f"<|user|>\n{normalized}")
             elif role == "assistant":
-                parts.append(f"<|assistant|>\n{content}")
+                parts.append(f"<|assistant|>\n{normalized}")
             elif role == "tool":
-                parts.append(f"<|tool|>\n{content}")
+                parts.append(f"<|tool|>\n{normalized}")
 
         if tools:
             tool_desc = json.dumps([{"name": t.get("function", {}).get("name", ""), "description": t.get("function", {}).get("description", "")} for t in tools[:10]], indent=2)
@@ -69,6 +79,42 @@ class LocalLLMEngine(ABC):
 
         parts.append("<|assistant|>\n")
         return "\n".join(parts)
+
+    @staticmethod
+    def _normalize_content(content: object) -> tuple[str, bool]:
+        if isinstance(content, str):
+            return content, False
+
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            has_vision = False
+            for block in content:
+                if isinstance(block, str):
+                    text_parts.append(block)
+                    continue
+                if not isinstance(block, dict):
+                    text_parts.append(str(block))
+                    continue
+
+                block_type = str(block.get("type", ""))
+                if block_type in ("text", "input_text"):
+                    text_parts.append(str(block.get("text", "")))
+                elif block_type in ("image_url", "input_image", "image", "image_base64"):
+                    has_vision = True
+                elif "text" in block:
+                    text_parts.append(str(block.get("text", "")))
+                else:
+                    text_parts.append(json.dumps(block))
+            return "\n".join(p for p in text_parts if p).strip(), has_vision
+
+        if isinstance(content, dict):
+            if content.get("type") in ("image_url", "input_image", "image", "image_base64"):
+                return "", True
+            if "text" in content:
+                return str(content.get("text", "")), False
+            return json.dumps(content), False
+
+        return str(content), False
 
     def parse_tool_calls(self, text: str) -> tuple[str, list[dict]]:
         """Try to extract tool calls from model output."""

@@ -34,6 +34,12 @@ fn python_bin() -> &'static str {
     }
 }
 
+fn brain_base_url() -> String {
+    std::env::var("THEORA_PUBLIC_BASE_URL")
+        .or_else(|_| std::env::var("THEORA_BRAIN_URL"))
+        .unwrap_or_else(|_| "http://localhost:9090".to_string())
+}
+
 #[tauri::command]
 fn start_brain(state: State<'_, BrainProcess>) -> Result<u32, String> {
     let mut guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
@@ -91,7 +97,8 @@ fn kill_pid(pid: u32) -> std::io::Result<()> {
 }
 
 fn brain_health_probe() -> (bool, String) {
-    match reqwest::blocking::get("http://localhost:9090/health") {
+    let url = format!("{}/health", brain_base_url().trim_end_matches('/'));
+    match reqwest::blocking::get(url) {
         Ok(resp) => {
             let code = resp.status().as_u16();
             let ok = resp.status().is_success();
@@ -109,7 +116,7 @@ fn check_brain_health() -> Result<String, String> {
 
 #[tauri::command]
 fn get_brain_url() -> String {
-    "http://localhost:9090".to_string()
+    brain_base_url()
 }
 
 fn main() {

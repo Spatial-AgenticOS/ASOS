@@ -23,6 +23,9 @@ import sys
 import textwrap
 from pathlib import Path
 
+from config.loader import theora_home
+from config.runtime import ollama_base_url
+
 try:
     from rich.console import Console
     from rich.panel import Panel
@@ -34,7 +37,7 @@ try:
 except ImportError:
     HAS_RICH = False
 
-THEORA_HOME = Path(os.environ.get("THEORA_HOME", str(Path.home() / ".theora")))
+THEORA_HOME = theora_home()
 
 PROVIDERS = {
     "openai": {
@@ -159,6 +162,11 @@ PERSONALITY_PRESETS = {
         "soul": "",
     },
 }
+
+
+def _looks_like_vision_model(model_name: str) -> bool:
+    lower = (model_name or "").lower()
+    return any(token in lower for token in ("llava", "moondream", "qwen2-vl", "minicpm-v", "bakllava", "gemma3"))
 
 
 def run_setup():
@@ -297,9 +305,18 @@ class OnboardWizard:
                     self.c.print(f"  {i}. {m}")
                 model = Prompt.ask("Choose model", default=models[0] if models else "llama3.1")
                 self.config["model"] = model
+                self.config["local_preset"] = "ollama_vision" if _looks_like_vision_model(model) else "ollama_text"
+
+                vision_models = [m for m in models if _looks_like_vision_model(m)]
+                if vision_models and Confirm.ask("Enable Ollama local vision path now?", default=True):
+                    vlm_model = Prompt.ask("Vision model", default=vision_models[0])
+                    self.config["vlm_provider"] = "ollama"
+                    self.config["vlm_model"] = vlm_model
+                    self.config["local_preset"] = "ollama_vision"
             else:
                 self.c.print("  [dim]No Ollama models found. Pull one: ollama pull llama3.1[/]")
                 self.config["model"] = "llama3.1"
+                self.config["local_preset"] = "ollama_text"
             self.c.print()
             return
 
@@ -491,6 +508,24 @@ class OnboardWizard:
         config_path = THEORA_HOME / "config.json"
         config_path.write_text(json.dumps(self.config, indent=2))
 
+        # Settings consumed by ConfigLoader
+        settings = {
+            "llm": {
+                "provider": self.config.get("provider", "openai"),
+                "model": self.config.get("model", "gpt-4o-mini"),
+            },
+            "vision": {
+                "enabled": bool(self.config.get("vlm_provider")),
+                "provider": self.config.get("vlm_provider", ""),
+                "model": self.config.get("vlm_model", ""),
+            },
+            "meta": {
+                "local_preset": self.config.get("local_preset", ""),
+            },
+        }
+        settings_path = THEORA_HOME / "settings.json"
+        settings_path.write_text(json.dumps(settings, indent=2))
+
     def _step_finish(self):
         provider_name = PROVIDERS.get(self.config.get("provider", ""), {}).get("name", "?")
         model = self.config.get("model", "default")
@@ -541,8 +576,9 @@ class OnboardWizard:
     async def _check_ollama(self):
         try:
             import httpx
+            base = ollama_base_url()
             async with httpx.AsyncClient(timeout=3.0) as client:
-                r = await client.get("http://localhost:11434/api/tags")
+                r = await client.get(f"{base}/api/tags")
                 if r.status_code == 200:
                     models = [m["name"] for m in r.json().get("models", [])]
                     if models:
@@ -557,8 +593,9 @@ class OnboardWizard:
     async def _list_ollama_models(self) -> list[str]:
         try:
             import httpx
+            base = ollama_base_url()
             async with httpx.AsyncClient(timeout=3.0) as client:
-                r = await client.get("http://localhost:11434/api/tags")
+                r = await client.get(f"{base}/api/tags")
                 if r.status_code == 200:
                     return [m["name"] for m in r.json().get("models", [])]
         except Exception:

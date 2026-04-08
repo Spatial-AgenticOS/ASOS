@@ -149,3 +149,79 @@ class TestSwitchProvider:
         assert llm.api_key == "gq-key"
 
         await llm.close()
+
+
+class TestVisionAndPresets:
+    @pytest.mark.asyncio
+    async def test_ollama_text_model_rejects_image_input(self) -> None:
+        env = {
+            "THEORA_LLM_PROVIDER": "ollama",
+            "THEORA_LLM_MODEL": "llama3.1",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(LLMProvider, "_detect_ollama", return_value="http://127.0.0.1:11434"):
+                llm = LLMProvider()
+
+        out = await llm.chat(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe this"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+                    ],
+                }
+            ],
+            tools=None,
+        )
+        assert "error" in out
+        assert "ollama_vision" in out["error"]
+        await llm.close()
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_yields_error_for_vision_mismatch(self) -> None:
+        env = {
+            "THEORA_LLM_PROVIDER": "local",
+            "THEORA_LLM_MODEL": "tiny-local",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(LLMProvider, "_detect_ollama", return_value=None):
+                llm = LLMProvider()
+
+        events = []
+        async for ev in llm.chat_stream(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is this"},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}},
+                    ],
+                }
+            ],
+            tools=None,
+        ):
+            events.append(ev)
+
+        assert events
+        assert events[0]["type"] == "error"
+        await llm.close()
+
+    @pytest.mark.asyncio
+    async def test_apply_preset_switches_provider_model(self) -> None:
+        env = {
+            "THEORA_LLM_PROVIDER": "openai",
+            "OPENAI_API_KEY": "sk-test",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(LLMProvider, "_detect_ollama", return_value=None):
+                llm = LLMProvider()
+
+        presets = llm.list_presets()
+        assert any(p["id"] == "ollama_vision" for p in presets)
+
+        result = await llm.apply_preset("ollama_vision")
+        assert result["ok"] is True
+        assert llm.provider == "ollama"
+        assert llm.model == "llava"
+        await llm.close()

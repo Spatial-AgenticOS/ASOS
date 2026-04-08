@@ -184,3 +184,43 @@ class TestStats:
         assert stats["episodes"] == 1
         assert stats["knowledge_triples"] == 2  # 1 from save cross-tier + 1 explicit
         assert stats["execution_logs"] == 1
+
+
+class TestMemoryWiki:
+    def test_compile_and_fetch_pages(self, store):
+        store.save("I like Ethiopian coffee", tags=["preference"])
+        store.episode_save("s1", "cmd", "Asked for coffee recommendations")
+        store.knowledge_store("user", "likes", "coffee")
+
+        compiled = store.wiki_compile(notes_limit=20, episodes_limit=20, knowledge_limit=20)
+        assert compiled["compiled"] is True
+        assert compiled["total_pages"] >= 1
+
+        pages = store.wiki_list_pages(limit=20)
+        assert len(pages) >= 1
+
+        index_page = store.wiki_get_page("index")
+        assert index_page is not None
+        assert "Memory Wiki" in index_page["title"] or "Memory Wiki" in index_page["body_markdown"]
+
+
+class TestSessionSnapshots:
+    def test_snapshot_and_restore_payload(self, store):
+        store.working_push("s1", {"role": "user", "text": "original"})
+        history = [{"role": "user", "content": "hello"}]
+        snap = store.snapshot_session(
+            session_id="s1",
+            history=history,
+            label="checkpoint-1",
+            branch_name="main",
+        )
+        assert snap["snapshot_id"]
+
+        fetched = store.get_snapshot(snap["snapshot_id"])
+        assert fetched is not None
+        assert fetched["session_id"] == "s1"
+        assert fetched["history"][0]["content"] == "hello"
+
+        store.working_replace("s1", [{"role": "assistant", "text": "restored"}])
+        restored = store.working_get("s1")
+        assert restored[-1]["text"] == "restored"
