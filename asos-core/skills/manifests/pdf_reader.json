@@ -1,0 +1,66 @@
+{
+    "skill_id": "pdf_reader",
+    "version": "1.0.0",
+    "author": "theora-core",
+    "brand": {
+        "name": "PDF Reader",
+        "primary_color": "#1D4ED8",
+        "secondary_color": "#1E3A8A",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Read local PDF files and extract text for analysis, summaries, and Q&A.",
+    "trigger_phrases": [
+        "read this pdf",
+        "extract pdf text",
+        "summarize this document",
+        "what does this pdf say",
+        "open pdf"
+    ],
+    "categories": ["documents", "analysis", "productivity"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "extract_text",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Extract text from a local PDF file. Supports page ranges and max character limits.",
+            "params": [
+                {
+                    "name": "path",
+                    "type": "string",
+                    "required": true,
+                    "description": "Absolute or relative path to a PDF file"
+                },
+                {
+                    "name": "page_start",
+                    "type": "integer",
+                    "required": false,
+                    "description": "1-based page number to start from (default 1)"
+                },
+                {
+                    "name": "page_end",
+                    "type": "integer",
+                    "required": false,
+                    "description": "1-based page number to end at (default: last page)"
+                },
+                {
+                    "name": "max_chars",
+                    "type": "integer",
+                    "required": false,
+                    "description": "Maximum number of characters to return (default 60000)"
+                }
+            ],
+            "returns_description": "Extracted text with page metadata and truncation flag",
+            "ui_hint": "detail_card"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": ["filesystem"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 2000
+}

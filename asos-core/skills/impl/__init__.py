@@ -48,3 +48,23 @@ try:
     import skills.impl.weather
 except ImportError:
     pass
+
+try:
+    import skills.impl.pdf_reader
+except ImportError:
+    pass
+
+try:
+    import skills.impl.screen_capture
+except ImportError:
+    pass
+
+try:
+    import skills.impl.subagent
+except ImportError:
+    pass
+
+try:
+    import skills.impl.code_interpreter
+except ImportError:
+    pass
