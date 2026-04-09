@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="#install">Install</a> •
+  <a href="#at-a-glance">At a Glance</a> •
   <a href="#features">Features</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#voice">Voice</a> •
@@ -46,6 +47,43 @@ It can:
 - **Control hardware** — smart glasses, wristbands, IoT devices connect via WebSocket
 - **Work with any LLM** — OpenAI, Anthropic Claude, Google Gemini, Groq, Ollama (local/free)
 - **Use one stable local multimodal path** — Ollama vision preset (`ollama_vision` / `llava`)
+
+<a id="at-a-glance"></a>
+## At a Glance
+
+### Product Surface
+
+```mermaid
+flowchart LR
+  user[User] --> web[Web UI]
+  user --> cli[CLI]
+  user --> devices[Hardware Nodes]
+
+  web --> brain[THEORA Brain]
+  cli --> brain
+  devices --> brain
+
+  brain --> llm[LLM Providers]
+  brain --> memory[Memory System]
+  brain --> tools[Tooling + Skills]
+  brain --> channels[Messaging Channels]
+  brain --> mcp[MCP Server/Client]
+
+  memory --> wiki[Memory Wiki]
+  memory --> taskflows[TaskFlows]
+  memory --> sessions[Session Branch/Restore]
+```
+
+### Why It Feels Different
+
+| Plane | What you get |
+|:------|:-------------|
+| **Reasoning Plane** | Multi-provider LLM routing + local vision path via Ollama preset |
+| **Memory Plane** | Notes, episodes, graph, and compiled Memory Wiki with provenance |
+| **Workflow Plane** | Restart-safe TaskFlows with wait/resume/cancel |
+| **Conversation Plane** | Snapshot, branch, and restore sessions |
+| **Interface Plane** | SDUI/GenUI cards, charts, maps, and interactive controls |
+| **Execution Plane** | Computer-use tools, MCP integrations, channels, hardware daemons |
 
 ---
 
@@ -158,43 +196,70 @@ theora skills
 <a id="architecture"></a>
 ## Architecture
 
+```mermaid
+flowchart TD
+  subgraph clients [Client Surfaces]
+    webUi[Web UI (React/Vite)]
+    cliUi[CLI (theora)]
+    hwNodes[Hardware Daemons]
+    channelClients[Telegram/Discord/Slack/WhatsApp]
+    mcpClients[MCP Clients]
+  end
+
+  subgraph brain [THEORA Brain (FastAPI/Python)]
+    orchestrator[Orchestrator + Multi-Agent Router]
+    genuiEngine[GenUI Engine]
+    voiceRouter[Voice Router]
+    taskflowRuntime[TaskFlow Runtime]
+    securityLayer[Security Layer]
+  end
+
+  subgraph cognition [Cognition + State]
+    llmProviders[LLM Providers]
+    memoryCore[Working/Notes/Episodes/Graph]
+    memoryWiki[Memory Wiki]
+    sessionState[Session Snapshots]
+  end
+
+  subgraph execution [Execution Plane]
+    tools[Tools + Skills]
+    mcpLayer[MCP Server/Client]
+    channels[Channel Manager]
+    hardwarePlane[Hardware Protocol]
+  end
+
+  webUi --> orchestrator
+  cliUi --> orchestrator
+  hwNodes --> orchestrator
+  channelClients --> channels
+  mcpClients --> mcpLayer
+
+  orchestrator --> llmProviders
+  orchestrator --> memoryCore
+  orchestrator --> genuiEngine
+  orchestrator --> voiceRouter
+  orchestrator --> taskflowRuntime
+  orchestrator --> tools
+  orchestrator --> channels
+  orchestrator --> mcpLayer
+  orchestrator --> hardwarePlane
+  orchestrator --> securityLayer
+
+  memoryCore --> memoryWiki
+  memoryCore --> sessionState
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                        THEORA Brain                          │
-│                    (FastAPI / Python)                         │
-│                                                              │
-│  ┌─────────────┐  ┌──────────┐  ┌────────────────────────┐  │
-│  │ Orchestrator │──│ LLM      │  │ Tools                  │  │
-│  │ (agentic    │  │ Provider │  │  • Computer use (7)    │  │
-│  │  loop)      │  │ ┌──────┐ │  │  • Web search          │  │
-│  │             │  │ │OpenAI│ │  │  • Notes/memory         │  │
-│  │ Multi-agent │  │ │Claude│ │  │  • Hardware commands    │  │
-│  │ router →    │  │ │Gemini│ │  │  • Custom skills (JSON) │  │
-│  │ workers     │  │ │Groq  │ │  │  • MCP tools            │  │
-│  │             │  │ │Ollama│ │  └────────────────────────┘  │
-│  └──────┬──────┘  └──────┘ │                                │
-│         │                   │  ┌────────────────────────┐   │
-│         │    ┌──────────┐   │  │ Memory                 │   │
-│         ├────│ GenUI    │   │  │  Tier 1: Working (RAM) │   │
-│         │    │ Engine   │   │  │  Tier 2: Notes (SQLite)│   │
-│         │    └──────────┘   │  │  Tier 3: Episodes      │   │
-│         │                   │  │  Tier 4: Knowledge     │   │
-│         │    ┌──────────┐   │  │         Graph          │   │
-│         └────│ Voice    │   │  └────────────────────────┘   │
-│              │ Router   │   │                                │
-│              │ ┌──────┐ │   │  ┌────────────────────────┐   │
-│              │ │RT API│ │   │  │ Security               │   │
-│              │ │Whspr │ │   │  │  Blind vault, sandbox  │   │
-│              │ │TTS   │ │   │  │  Permission tiers      │   │
-│              │ └──────┘ │   │  └────────────────────────┘   │
-│              └──────────┘   │                                │
-└──────────┬──────────────┬───┘────────────┬──────────────────┘
-           │              │                │
-    ┌──────┴──────┐ ┌─────┴─────┐  ┌──────┴──────┐
-    │  Web UI     │ │   CLI     │  │  Hardware   │
-    │ React/Vite  │ │  theora   │  │  Daemons    │
-    │ :9090       │ │  command  │  │  (WebSocket) │
-    └─────────────┘ └───────────┘  └─────────────┘
+
+### Demo Story Flow
+
+```mermaid
+flowchart LR
+  setup[Setup + Identity] --> conversation[Text/Voice Conversation]
+  conversation --> action[Computer/Browser Action]
+  action --> ingest[Ingest Repo/PDF/Text]
+  ingest --> wiki[Compile + Browse Memory Wiki]
+  wiki --> taskflow[Run TaskFlow]
+  taskflow --> branch[Snapshot + Branch + Restore]
+  branch --> vision[Local Vision + GenUI Output]
 ```
 
 ---
