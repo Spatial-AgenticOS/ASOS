@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Spatial-AgenticOS/ASOS/main/Theora-logo.png" alt="THEORA" width="120" />
+  <img src="./Theora-logo.svg" alt="THEORA" width="120" />
 </p>
 
 <h1 align="center">THEORA</h1>
@@ -198,32 +198,32 @@ theora skills
 
 ```mermaid
 flowchart TD
-  subgraph clients [Client Surfaces]
-    webUi[Web UI (React/Vite)]
-    cliUi[CLI (theora)]
+  subgraph clients[Client Surfaces]
+    webUi[Web UI React Vite]
+    cliUi[CLI theora]
     hwNodes[Hardware Daemons]
-    channelClients[Telegram/Discord/Slack/WhatsApp]
+    channelClients[Telegram Discord Slack WhatsApp]
     mcpClients[MCP Clients]
   end
 
-  subgraph brain [THEORA Brain (FastAPI/Python)]
-    orchestrator[Orchestrator + Multi-Agent Router]
+  subgraph brain[THEORA Brain FastAPI Python]
+    orchestrator[Orchestrator and Multi Agent Router]
     genuiEngine[GenUI Engine]
     voiceRouter[Voice Router]
     taskflowRuntime[TaskFlow Runtime]
     securityLayer[Security Layer]
   end
 
-  subgraph cognition [Cognition + State]
+  subgraph cognition[Cognition and State]
     llmProviders[LLM Providers]
-    memoryCore[Working/Notes/Episodes/Graph]
+    memoryCore[Working Notes Episodes Graph]
     memoryWiki[Memory Wiki]
     sessionState[Session Snapshots]
   end
 
-  subgraph execution [Execution Plane]
-    tools[Tools + Skills]
-    mcpLayer[MCP Server/Client]
+  subgraph execution[Execution Plane]
+    tools[Tools and Skills]
+    mcpLayer[MCP Server Client]
     channels[Channel Manager]
     hardwarePlane[Hardware Protocol]
   end
