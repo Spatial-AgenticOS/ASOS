@@ -1,6 +1,6 @@
 {
     "skill_id": "desktop_control",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "author": "theora-core",
     "brand": {
         "name": "Desktop Control",
@@ -9,23 +9,45 @@
         "logo_url": "",
         "icon_set": "sf_symbols"
     },
-    "description": "Control your desktop computer: open apps, run scripts, manage windows, lock screen, take screenshots, and execute shell commands. Requires a connected THEORA daemon.",
+    "description": "Control the local computer: open any app, create/read/write files, run shell commands, take screenshots, adjust volume, and get system info. Always available on the user's machine.",
     "trigger_phrases": [
         "open chrome",
         "open safari",
+        "open music",
+        "open spotify",
+        "open terminal",
+        "open vscode",
+        "open finder",
+        "open notes",
+        "open an app",
+        "open application",
+        "launch app",
+        "start app",
         "lock my mac",
         "take a screenshot",
-        "open terminal",
         "run a script",
-        "open vscode",
-        "open file manager",
+        "run a command",
         "adjust volume",
         "mute",
         "turn up the volume",
+        "set volume",
         "dark mode",
         "what apps are running",
         "close this app",
-        "open spotify"
+        "create a file",
+        "create a note on my desktop",
+        "write a file",
+        "make a file",
+        "save a file",
+        "create a text file",
+        "write to desktop",
+        "create note on desktop",
+        "write hello",
+        "system info",
+        "cpu usage",
+        "disk space",
+        "battery level",
+        "how much storage"
     ],
     "categories": ["system", "desktop", "hardware"],
     "auth": {
@@ -36,23 +58,23 @@
             "id": "open_app",
             "method": "POST",
             "url": "daemon://local/applescript",
-            "description": "Open an application on the user's Mac. Specify the app name.",
+            "description": "Open ANY application on the user's Mac using AppleScript. Use this whenever the user asks to open, launch, or start an app (Music, Safari, Chrome, Spotify, Notes, Terminal, Finder, etc.). The script parameter should be AppleScript like: tell application \"AppName\" to activate",
             "params": [
-                {"name": "script", "type": "string", "required": true, "description": "AppleScript to execute. Example: tell application \"Safari\" to activate"}
+                {"name": "script", "type": "string", "required": true, "description": "AppleScript to execute. MUST use format: tell application \"AppName\" to activate. Examples: tell application \"Music\" to activate, tell application \"Safari\" to activate, tell application \"Notes\" to activate"}
             ],
-            "returns_description": "{status, stdout, stderr}",
+            "returns_description": "{output, exit_code}",
             "ui_hint": null
         },
         {
             "id": "shell_command",
             "method": "POST",
             "url": "daemon://local/shell",
-            "description": "Run a shell command on the user's machine. Use for system tasks like volume control, screenshots, etc.",
+            "description": "Run any shell command on the user's Mac. Use for: creating files (echo/cat/touch), reading files, listing directories, volume control, screenshots, system tasks. When user says 'create a note/file on my desktop', use: echo 'content' > ~/Desktop/filename.txt",
             "params": [
-                {"name": "command", "type": "string", "required": true, "description": "Shell command to execute"},
+                {"name": "command", "type": "string", "required": true, "description": "Shell command to execute. Examples: echo 'hello' > ~/Desktop/note.txt, ls ~/Desktop, cat ~/Desktop/file.txt, screencapture -x /tmp/screenshot.png"},
                 {"name": "timeout_seconds", "type": "number", "required": false, "default": "10", "description": "Max execution time"}
             ],
-            "returns_description": "{status, exit_code, stdout, stderr}",
+            "returns_description": "{output, exit_code}",
             "ui_hint": null
         },
         {
@@ -61,9 +83,9 @@
             "url": "daemon://local/shell",
             "description": "Capture a screenshot of the user's screen.",
             "params": [
-                {"name": "command", "type": "string", "required": false, "default": "screencapture -x /tmp/theora_screenshot.png", "description": "Screenshot command"}
+                {"name": "command", "type": "string", "required": false, "default": "screencapture -x /tmp/theora_screenshot.png && echo 'Screenshot saved to /tmp/theora_screenshot.png'", "description": "Screenshot command"}
             ],
-            "returns_description": "{status, file_path}",
+            "returns_description": "{output, exit_code}",
             "ui_hint": null
         },
         {
@@ -85,7 +107,7 @@
             "params": [
                 {"name": "command", "type": "string", "required": true, "description": "osascript command for volume. Example: osascript -e 'set volume output volume 50'"}
             ],
-            "returns_description": "{status}",
+            "returns_description": "{output, exit_code}",
             "ui_hint": null
         }
     ],
@@ -101,7 +123,7 @@
     "crons": [],
     "triggers": [],
     "permissions": ["system", "shell"],
-    "requires_daemon": true,
+    "requires_daemon": false,
     "daemon_node_type": "desktop",
     "max_calls_per_hour": 500
 }

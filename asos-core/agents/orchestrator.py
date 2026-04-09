@@ -531,13 +531,15 @@ class Orchestrator:
     # Skill Routing
     # ─────────────────────────────────────────────
 
+    ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use"}
+
     async def _route_prompt(self, text: str) -> list[SkillManifest]:
         if not self.skills.skills:
             return []
 
         if not self.llm.available or len(self.skills.skills) <= 5:
             results = self.skills.find_skills_for_query(text, top_k=5)
-            return self._apply_routing_penalties(results)
+            return self._ensure_core_skills(self._apply_routing_penalties(results))
 
         prompt = "You are a Semantic Tool Router. Select up to 5 relevant tool IDs for the user's query.\n"
         prompt += "Available Tools:\n"
@@ -562,11 +564,19 @@ class Orchestrator:
                 if isinstance(sid, str) and sid in self.skills.skills:
                     relevant.append(self.skills.skills[sid])
             results = relevant[:5] if relevant else self.skills.find_skills_for_query(text, top_k=5)
-            return self._apply_routing_penalties(results)
+            return self._ensure_core_skills(self._apply_routing_penalties(results))
         except Exception as e:
             logger.warning(f"RoutePrompt failed, falling back to heuristic: {e}")
             results = self.skills.find_skills_for_query(text, top_k=5)
-            return self._apply_routing_penalties(results)
+            return self._ensure_core_skills(self._apply_routing_penalties(results))
+
+    def _ensure_core_skills(self, skills: list[SkillManifest]) -> list[SkillManifest]:
+        """Guarantee core skills like desktop_control are always available to the LLM."""
+        existing_ids = {s.skill_id for s in skills}
+        for core_id in self.ALWAYS_INCLUDE_SKILLS:
+            if core_id not in existing_ids and core_id in self.skills.skills:
+                skills.append(self.skills.skills[core_id])
+        return skills
 
     def _apply_routing_penalties(self, skills: list[SkillManifest]) -> list[SkillManifest]:
         """
@@ -1566,9 +1576,19 @@ class Orchestrator:
             "## How to respond\n"
             "- Respond in natural, conversational language. Be concise and helpful.\n"
             "- When the user asks a question, answer directly. No JSON, no UI markup.\n"
-            "- Use tools when you need external data (weather, web search, device control, etc.).\n"
+            "- Use tools when you need external data or to perform actions.\n"
             "- After a tool call, summarize the result in plain language.\n"
             "- Be proactive — if you notice something relevant in sensor data or context, mention it.\n"
+            "\n## CRITICAL — Local Computer Control\n"
+            "You can control the user's Mac directly. ALWAYS use these tools:\n"
+            "- **desktop_control__open_app**: To open ANY app (Music, Safari, Chrome, Notes, Spotify, Terminal, etc.).\n"
+            "  Call with script='tell application \"AppName\" to activate'.\n"
+            "  NEVER say you cannot open apps. You CAN.\n"
+            "- **desktop_control__shell_command**: To create files, read files, run commands on the user's machine.\n"
+            "  When user says 'create a note/file on my desktop', use: echo 'content' > ~/Desktop/filename.txt\n"
+            "  This creates a REAL FILE on the filesystem, not an internal memory note.\n"
+            "- **notes_memory** is for THEORA's internal memory system, NOT for creating files the user can see on their Desktop.\n"
+            "  Only use notes_memory when the user wants to save something for the agent to remember.\n"
         )
 
         # Perception Context
