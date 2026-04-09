@@ -431,7 +431,8 @@ class TaskFlowRuntime:
 
     async def _execute_step(self, flow: dict, step: dict) -> dict:
         step_type = step.get("step_type", "")
-        payload = step.get("payload", {})
+        raw_payload = step.get("payload", {})
+        payload = raw_payload.get("config", raw_payload) if isinstance(raw_payload.get("config"), dict) else raw_payload
 
         if step_type == "noop":
             return {"status": "completed", "message": "noop"}
