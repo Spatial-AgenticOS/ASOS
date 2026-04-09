@@ -68,3 +68,8 @@ try:
     import skills.impl.code_interpreter
 except ImportError:
     pass
+
+try:
+    import skills.impl.desktop_automation
+except ImportError:
+    pass

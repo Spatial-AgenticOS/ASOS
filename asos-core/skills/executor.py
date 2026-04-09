@@ -37,6 +37,7 @@ class SkillExecutor:
     def __init__(self, daemons: dict = None):
         self.client = httpx.AsyncClient(timeout=15.0)
         self._daemons = daemons or {}
+        self._daemon_types: dict[str, str] = {}
         self._vault: dict[str, str] = {}
         self._blind_vault = None
         self._pending_results: dict[str, asyncio.Future] = {}
@@ -242,30 +243,42 @@ class SkillExecutor:
             "error": result.get("error"),
         }
 
+    def register_daemon_type(self, node_id: str, node_type: str):
+        """Record the declared type of a connected daemon node."""
+        self._daemon_types[node_id] = node_type.lower() if node_type else "unknown"
+
+    def unregister_daemon(self, node_id: str):
+        """Remove daemon type record when a node disconnects."""
+        self._daemon_types.pop(node_id, None)
+
     async def _execute_via_daemon(
         self, tool_name: str, endpoint: SkillEndpoint, args: dict, skill: SkillManifest,
     ) -> dict:
-        """Route a WS_EXECUTE skill call to the appropriate connected daemon."""
-        target_type = skill.daemon_node_type or "robot"
+        """Route a WS_EXECUTE skill call to the appropriate connected daemon with strict type matching."""
+        target_type = (skill.daemon_node_type or "robot").lower()
 
         target_daemon = None
         target_ws = None
-        for node_id, ws in self._daemons.items():
-            if target_type in node_id or target_type == "any":
-                target_daemon = node_id
-                target_ws = ws
-                break
 
-        if not target_daemon:
+        if target_type == "any":
             for node_id, ws in self._daemons.items():
                 target_daemon = node_id
                 target_ws = ws
                 break
+        else:
+            for node_id, ws in self._daemons.items():
+                registered_type = self._daemon_types.get(node_id, "unknown")
+                if registered_type == target_type or target_type in node_id.lower():
+                    target_daemon = node_id
+                    target_ws = ws
+                    break
 
         if not target_ws:
+            available = {nid: self._daemon_types.get(nid, "unknown") for nid in self._daemons}
+            available_str = ", ".join(f"{nid} ({t})" for nid, t in available.items()) or "none"
             return {
                 "success": False, "status_code": 503, "data": None,
-                "error": f"No connected daemon of type '{target_type}' to execute {tool_name}",
+                "error": f"No connected daemon of type '{target_type}' to execute {tool_name}. Available daemons: {available_str}",
             }
 
         request_id = str(uuid.uuid4())

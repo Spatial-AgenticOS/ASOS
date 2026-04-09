@@ -118,6 +118,7 @@ class VoiceRouter:
             is_final=is_final,
             encoding=encoding,
             sample_rate=sample_rate,
+            source_node_id=node_id,
         )
 
     async def handle_audio_from_client(
@@ -160,6 +161,7 @@ class VoiceRouter:
         is_final: bool,
         encoding: str,
         sample_rate: int,
+        source_node_id: str = "",
     ):
         """Classic STT → Orchestrator → TTS flow."""
         if not self._audio:
@@ -185,6 +187,12 @@ class VoiceRouter:
             )
             await self._send_to_session(session_id, msg)
 
+        if source_node_id and self._send_to_node:
+            await self._send_to_node(source_node_id, {
+                "type": "transcript",
+                "payload": {"text": transcript, "role": "user", "is_partial": False},
+            })
+
         if self._memory:
             self._memory.working_push(session_id, {
                 "role": "user", "text": transcript, "source": "voice",
@@ -197,19 +205,25 @@ class VoiceRouter:
             await self._orchestrator.handle_command_stream(
                 session_id=session_id,
                 text=transcript,
-                context={"source": "voice"},
+                context={"source": "voice", "node_id": source_node_id} if source_node_id else {"source": "voice"},
             )
 
             tts_text = self._get_last_assistant_text(session_id)
             if tts_text and self._audio:
                 chunks = await self._audio.synthesize_speech(tts_text)
-                if chunks and self._send_to_session:
+                if chunks:
                     for chunk in chunks:
                         tts_msg = TheoraMessage(
                             session_id=session_id, hop="brain", type="tts_chunk",
                             payload=chunk,
                         )
-                        await self._send_to_session(session_id, tts_msg)
+                        if self._send_to_session:
+                            await self._send_to_session(session_id, tts_msg)
+                        if source_node_id and self._send_to_node:
+                            await self._send_to_node(source_node_id, {
+                                "type": "tts_chunk",
+                                "payload": chunk,
+                            })
 
     def _get_last_assistant_text(self, session_id: str) -> str:
         """Pull the latest assistant response from working memory for TTS."""

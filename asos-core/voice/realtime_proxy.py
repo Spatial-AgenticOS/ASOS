@@ -487,7 +487,7 @@ class RealtimeProxy:
             await self._send_to_node(rs.node_id, {"type": "audio_response", "payload": payload})
 
     async def _handle_transcript(self, session_id: str, text: str, is_final: bool):
-        """Store transcripts in memory and forward to client sessions."""
+        """Store transcripts in memory and forward to both client sessions and daemon nodes."""
         if is_final and text and self._memory:
             if text.startswith("[user] "):
                 self._memory.working_push(session_id, {
@@ -498,15 +498,25 @@ class RealtimeProxy:
                     "role": "assistant", "text": text[:300], "source": "voice_realtime",
                 })
 
-        if self._send_to_session and is_final and text:
-            from models.protocol import TheoraMessage, TranscriptPayload
-            msg = TheoraMessage(
-                session_id=session_id, hop="brain", type="transcript",
-                payload=TranscriptPayload(
-                    text=text, is_partial=not is_final,
-                ).model_dump(),
-            )
-            await self._send_to_session(session_id, msg)
+        if is_final and text:
+            rs = self._sessions.get(session_id)
+
+            if self._send_to_session:
+                from models.protocol import TheoraMessage, TranscriptPayload
+                msg = TheoraMessage(
+                    session_id=session_id, hop="brain", type="transcript",
+                    payload=TranscriptPayload(
+                        text=text, is_partial=not is_final,
+                    ).model_dump(),
+                )
+                await self._send_to_session(session_id, msg)
+
+            if rs and not rs.node_id.startswith("webclient_") and self._send_to_node:
+                role = "user" if text.startswith("[user] ") else "assistant"
+                await self._send_to_node(rs.node_id, {
+                    "type": "transcript",
+                    "payload": {"text": text, "role": role, "is_partial": False},
+                })
 
     async def _handle_tool_call(
         self, session_id: str, call_id: str, name: str, arguments: str,

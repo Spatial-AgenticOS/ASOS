@@ -1,0 +1,135 @@
+{
+    "skill_id": "desktop_automation",
+    "version": "1.0.0",
+    "author": "theora-core",
+    "brand": {
+        "name": "Desktop Automation",
+        "primary_color": "#8b5cf6",
+        "secondary_color": "#6d28d9",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Global mouse and keyboard control for vision-action automation loops. Click, type, scroll, and press key combos anywhere on screen.",
+    "trigger_phrases": [
+        "click on",
+        "move mouse",
+        "type text",
+        "press keys",
+        "scroll down",
+        "scroll up",
+        "key combo",
+        "double click",
+        "right click",
+        "where is my cursor",
+        "cursor position",
+        "automate desktop",
+        "control my screen"
+    ],
+    "categories": ["desktop", "automation", "vision"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "click_screen",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Click at absolute screen coordinates (x, y). Use after taking a screenshot to click UI elements.",
+            "params": [
+                {"name": "x", "type": "integer", "required": true, "description": "X coordinate on screen"},
+                {"name": "y", "type": "integer", "required": true, "description": "Y coordinate on screen"}
+            ],
+            "returns_description": "Confirmation of click action at coordinates",
+            "ui_hint": "inline_text"
+        },
+        {
+            "id": "double_click",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Double-click at absolute screen coordinates. Use for opening files/apps.",
+            "params": [
+                {"name": "x", "type": "integer", "required": true, "description": "X coordinate"},
+                {"name": "y", "type": "integer", "required": true, "description": "Y coordinate"}
+            ],
+            "returns_description": "Confirmation of double-click",
+            "ui_hint": "inline_text"
+        },
+        {
+            "id": "right_click",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Right-click at screen coordinates for context menus.",
+            "params": [
+                {"name": "x", "type": "integer", "required": true, "description": "X coordinate"},
+                {"name": "y", "type": "integer", "required": true, "description": "Y coordinate"}
+            ],
+            "returns_description": "Confirmation of right-click",
+            "ui_hint": "inline_text"
+        },
+        {
+            "id": "move_mouse",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Move the mouse cursor to absolute screen coordinates.",
+            "params": [
+                {"name": "x", "type": "integer", "required": true, "description": "Target X coordinate"},
+                {"name": "y", "type": "integer", "required": true, "description": "Target Y coordinate"},
+                {"name": "duration", "type": "number", "required": false, "description": "Movement duration in seconds (default 0.3)"}
+            ],
+            "returns_description": "Confirmation of mouse movement",
+            "ui_hint": "inline_text"
+        },
+        {
+            "id": "type_text",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Type text globally via keyboard. Works in any focused application.",
+            "params": [
+                {"name": "text", "type": "string", "required": true, "description": "Text to type"},
+                {"name": "interval", "type": "number", "required": false, "description": "Delay between keystrokes in seconds (default 0.02)"}
+            ],
+            "returns_description": "Confirmation of typed text",
+            "ui_hint": "inline_text"
+        },
+        {
+            "id": "key_combo",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Press a keyboard shortcut. Use '+' to separate keys, e.g. 'cmd+c', 'ctrl+shift+t', 'alt+tab'.",
+            "params": [
+                {"name": "keys", "type": "string", "required": true, "description": "Key combination (e.g. 'cmd+c', 'ctrl+shift+t', 'alt+tab')"}
+            ],
+            "returns_description": "Confirmation of key combo pressed",
+            "ui_hint": "inline_text"
+        },
+        {
+            "id": "scroll",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Scroll at a position on screen. Direction can be 'up' or 'down'.",
+            "params": [
+                {"name": "direction", "type": "string", "required": false, "description": "'up' or 'down' (default 'down')"},
+                {"name": "amount", "type": "integer", "required": false, "description": "Number of scroll clicks (default 3)"},
+                {"name": "x", "type": "integer", "required": false, "description": "Optional X coordinate to scroll at"},
+                {"name": "y", "type": "integer", "required": false, "description": "Optional Y coordinate to scroll at"}
+            ],
+            "returns_description": "Confirmation of scroll action",
+            "ui_hint": "inline_text"
+        },
+        {
+            "id": "get_cursor_position",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Get the current cursor position and screen dimensions.",
+            "params": [],
+            "returns_description": "Current cursor x, y coordinates and screen dimensions",
+            "ui_hint": "inline_text"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": ["screen", "accessibility"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 5000
+}

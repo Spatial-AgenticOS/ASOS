@@ -100,14 +100,14 @@ export default function Dashboard() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Control Center</h1>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-asos-text-muted mt-0.5">
               THEORA Brain v{info?.version || '1.0.0'}
               {d.llm_available && <span className="ml-2 text-green-400">LLM ready</span>}
             </p>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={refresh} className="p-2 rounded-lg hover:bg-asos-card transition">
-              <RefreshCw size={16} className="text-gray-400" />
+              <RefreshCw size={16} className="text-asos-text-secondary" />
             </button>
             <button
               onClick={() => navigate('/chat')}
@@ -120,13 +120,13 @@ export default function Dashboard() {
 
         {/* Top Status Row */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <StatusCard icon={Wifi} label="Sessions" value={sessionCount} color="#00b894" />
-          <StatusCard icon={Cpu} label="Devices" value={deviceCount} color="#6c5ce7"
+          <StatusCard icon={Wifi} label="Sessions" value={sessionCount} color="#34d399" />
+          <StatusCard icon={Cpu} label="Devices" value={deviceCount} color="#8b5cf6"
             subtitle={deviceCount > 0 ? `${deviceCount} connected` : 'none connected'} />
-          <StatusCard icon={Puzzle} label="Skills" value={skillsCount} color="#fdcb6e" />
+          <StatusCard icon={Puzzle} label="Skills" value={skillsCount} color="#fbbf24" />
           <StatusCard icon={Activity} label="Audio"
             value={d.audio_available ? 'Ready' : 'Off'}
-            color={d.audio_available ? '#55efc4' : '#636e72'} />
+            color={d.audio_available ? '#34d399' : '#71717a'} />
         </div>
 
         {/* Main Grid: Devices + Health */}
@@ -146,11 +146,11 @@ export default function Dashboard() {
             {devices.length > 0 ? (
               <div className="space-y-2">
                 {devices.map(dev => (
-                  <div key={dev.node_id} className="flex items-center gap-3 bg-black bg-opacity-30 rounded-lg px-4 py-3">
+                  <div key={dev.node_id} className="flex items-center gap-3 bg-asos-bg bg-opacity-30 rounded-lg px-4 py-3">
                     <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_#22c55e]" />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-mono truncate">{dev.node_id}</div>
-                      <div className="text-xs text-gray-500 capitalize">{dev.type}</div>
+                      <div className="text-xs text-asos-text-muted capitalize">{dev.type}</div>
                     </div>
                     <Radio size={14} className="text-green-400" />
                   </div>
@@ -159,8 +159,8 @@ export default function Dashboard() {
             ) : (
               <div className="text-center py-8">
                 <Bluetooth size={28} className="mx-auto opacity-20 mb-3" />
-                <p className="text-sm text-gray-500">No devices connected</p>
-                <p className="text-xs text-gray-600 mt-1">
+                <p className="text-sm text-asos-text-muted">No devices connected</p>
+                <p className="text-xs text-asos-text-muted mt-1">
                   Use the hardware daemon or phone bridge to connect
                 </p>
                 <button onClick={() => navigate('/settings')}
@@ -180,20 +180,20 @@ export default function Dashboard() {
             {Object.keys(health).length > 0 ? (
               <div className="grid grid-cols-3 gap-4">
                 {health.heart_rate && (
-                  <HealthMetric icon={Heart} label="Heart Rate" value={`${health.heart_rate}`} unit="bpm" color="#e17055" />
+                  <HealthMetric icon={Heart} label="Heart Rate" value={`${health.heart_rate}`} unit="bpm" color="#f87171" />
                 )}
                 {health.spo2 && (
-                  <HealthMetric icon={Wind} label="SpO2" value={`${health.spo2}`} unit="%" color="#00cec9" />
+                  <HealthMetric icon={Wind} label="SpO2" value={`${health.spo2}`} unit="%" color="#22d3ee" />
                 )}
                 {health.temperature && (
-                  <HealthMetric icon={Thermometer} label="Temp" value={`${health.temperature}`} unit="°C" color="#ffeaa7" />
+                  <HealthMetric icon={Thermometer} label="Temp" value={`${health.temperature}`} unit="°C" color="#fbbf24" />
                 )}
               </div>
             ) : (
               <div className="text-center py-8">
                 <Heart size={28} className="mx-auto opacity-20 mb-3" />
-                <p className="text-sm text-gray-500">No health data</p>
-                <p className="text-xs text-gray-600 mt-1">
+                <p className="text-sm text-asos-text-muted">No health data</p>
+                <p className="text-xs text-asos-text-muted mt-1">
                   Connect a wristband or phone to stream biometrics
                 </p>
               </div>
@@ -209,49 +209,49 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="bg-black bg-opacity-30 border border-asos-border rounded-lg p-3">
-              <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">LLM Provider</div>
+            <div className="bg-asos-bg bg-opacity-30 border border-asos-border rounded-lg p-3">
+              <div className="text-xs text-asos-text-secondary uppercase tracking-wider mb-2">LLM Provider</div>
               <div className="text-sm font-semibold capitalize">
                 {llmStatus?.provider || info?.config?.llm?.provider || 'unknown'}
               </div>
-              <div className="text-xs text-gray-500 font-mono mt-1">
+              <div className="text-xs text-asos-text-muted font-mono mt-1">
                 {llmStatus?.model || info?.config?.llm?.model || 'n/a'}
               </div>
               <div className={`text-[11px] mt-2 ${llmStatus?.available ? 'text-green-400' : 'text-yellow-400'}`}>
                 {llmStatus?.available ? 'Connected' : 'Fallback / unavailable'}
               </div>
-              <div className="text-[11px] text-gray-500 mt-1">
+              <div className="text-[11px] text-asos-text-muted mt-1">
                 Presets: {llmPresets.length}
               </div>
             </div>
 
-            <div className="bg-black bg-opacity-30 border border-asos-border rounded-lg p-3">
-              <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Channels</div>
+            <div className="bg-asos-bg bg-opacity-30 border border-asos-border rounded-lg p-3">
+              <div className="text-xs text-asos-text-secondary uppercase tracking-wider mb-2">Channels</div>
               <div className="text-sm font-semibold">{channelStats.channel_count || 0} active</div>
               {(channelStats.active_channels || []).length > 0 ? (
                 <div className="mt-2 space-y-1">
                   {(channelStats.active_channels || []).map((ch) => (
-                    <div key={ch} className="text-[11px] text-gray-300 flex items-center justify-between">
+                    <div key={ch} className="text-[11px] text-asos-text-secondary flex items-center justify-between">
                       <span className="capitalize">{ch}</span>
-                      <span className="text-gray-500">
+                      <span className="text-asos-text-muted">
                         {channelStats.details?.[ch]?.known_chats || 0} chats
                       </span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-[11px] text-gray-500 mt-2">No active channels</div>
+                <div className="text-[11px] text-asos-text-muted mt-2">No active channels</div>
               )}
             </div>
 
-            <div className="bg-black bg-opacity-30 border border-asos-border rounded-lg p-3">
-              <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Providers + Devices</div>
-              <div className="text-[11px] text-gray-300">GenUI Providers: {genuiProviders.length}</div>
-              <div className="text-[11px] text-gray-300 mt-1">Connected Devices: {devices.length}</div>
+            <div className="bg-asos-bg bg-opacity-30 border border-asos-border rounded-lg p-3">
+              <div className="text-xs text-asos-text-secondary uppercase tracking-wider mb-2">Providers + Devices</div>
+              <div className="text-[11px] text-asos-text-secondary">GenUI Providers: {genuiProviders.length}</div>
+              <div className="text-[11px] text-asos-text-secondary mt-1">Connected Devices: {devices.length}</div>
               {genuiProviders.length > 0 && (
                 <div className="mt-2 space-y-1">
                   {genuiProviders.slice(0, 3).map((p) => (
-                    <div key={p.provider_id} className="text-[11px] text-gray-400 truncate">
+                    <div key={p.provider_id} className="text-[11px] text-asos-text-secondary truncate">
                       {p.name || p.provider_id} · {p.components?.length || 0} comps · {p.surface_ids?.length || 0} surfaces · {p.cache_policy?.mode || 'static'} cache
                     </div>
                   ))}
@@ -326,18 +326,18 @@ export default function Dashboard() {
           {activity.length > 0 ? (
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {activity.slice().reverse().map((entry, i) => (
-                <div key={i} className="flex items-center gap-3 text-xs bg-black bg-opacity-20 rounded-lg px-3 py-2">
+                <div key={i} className="flex items-center gap-3 text-xs bg-asos-bg bg-opacity-20 rounded-lg px-3 py-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
-                  <span className="text-gray-400 font-mono flex-shrink-0">
+                  <span className="text-asos-text-secondary font-mono flex-shrink-0">
                     {new Date(entry.timestamp * 1000).toLocaleTimeString()}
                   </span>
-                  <span className="text-gray-300 capitalize font-medium">{entry.action}</span>
-                  <span className="text-gray-500 truncate">{entry.detail}</span>
+                  <span className="text-asos-text-secondary capitalize font-medium">{entry.action}</span>
+                  <span className="text-asos-text-muted truncate">{entry.detail}</span>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-xs text-gray-500 text-center py-4">
+            <p className="text-xs text-asos-text-muted text-center py-4">
               No activity yet — start chatting or connect a device
             </p>
           )}
@@ -353,9 +353,9 @@ export default function Dashboard() {
             <div className="flex flex-wrap gap-2">
               {info.skills.map(s => (
                 <span key={s.skill_id}
-                  className="text-xs bg-black bg-opacity-30 text-gray-300 px-3 py-1.5 rounded-full">
+                  className="text-xs bg-asos-bg bg-opacity-30 text-asos-text-secondary px-3 py-1.5 rounded-full">
                   {s.name}
-                  <span className="text-gray-600 ml-1">·{s.endpoints}</span>
+                  <span className="text-asos-text-muted ml-1">·{s.endpoints}</span>
                 </span>
               ))}
             </div>
@@ -371,21 +371,21 @@ function StatusCard({ icon: Icon, label, value, subtitle, color }) {
     <div className="bg-asos-card border border-asos-border rounded-xl p-4">
       <div className="flex items-center gap-2 mb-2">
         <Icon size={14} style={{ color }} />
-        <span className="text-[10px] text-gray-400 uppercase tracking-wider">{label}</span>
+        <span className="text-[10px] text-asos-text-secondary uppercase tracking-wider">{label}</span>
       </div>
       <div className="text-2xl font-bold" style={{ color }}>{value}</div>
-      {subtitle && <div className="text-[10px] text-gray-500 mt-0.5 truncate">{subtitle}</div>}
+      {subtitle && <div className="text-[10px] text-asos-text-muted mt-0.5 truncate">{subtitle}</div>}
     </div>
   );
 }
 
 function MemoryMetric({ label, value, icon: Icon }) {
   return (
-    <div className="flex items-center gap-3 bg-black bg-opacity-20 rounded-lg px-3 py-2.5">
+    <div className="flex items-center gap-3 bg-asos-bg bg-opacity-20 rounded-lg px-3 py-2.5">
       <Icon size={14} className="opacity-40 flex-shrink-0" />
       <div>
         <div className="text-lg font-bold leading-none">{value}</div>
-        <div className="text-[10px] text-gray-400 mt-0.5">{label}</div>
+        <div className="text-[10px] text-asos-text-secondary mt-0.5">{label}</div>
       </div>
     </div>
   );
@@ -396,18 +396,18 @@ function HealthMetric({ icon: Icon, label, value, unit, color }) {
     <div className="text-center">
       <Icon size={18} className="mx-auto mb-2" style={{ color }} />
       <div className="text-2xl font-bold" style={{ color }}>{value}</div>
-      <div className="text-[10px] text-gray-400">{unit}</div>
-      <div className="text-[10px] text-gray-500 mt-0.5">{label}</div>
+      <div className="text-[10px] text-asos-text-secondary">{unit}</div>
+      <div className="text-[10px] text-asos-text-muted mt-0.5">{label}</div>
     </div>
   );
 }
 
 function FeatureRow({ label, active, detail }) {
   return (
-    <div className="flex items-center justify-between bg-black bg-opacity-20 rounded-lg px-3 py-2">
-      <span className="text-xs text-gray-300">{label}</span>
+    <div className="flex items-center justify-between bg-asos-bg bg-opacity-20 rounded-lg px-3 py-2">
+      <span className="text-xs text-asos-text-secondary">{label}</span>
       <div className="flex items-center gap-2">
-        {detail && <span className="text-[10px] text-gray-500">{detail}</span>}
+        {detail && <span className="text-[10px] text-asos-text-muted">{detail}</span>}
         <div className={`w-2 h-2 rounded-full ${active ? 'bg-green-500' : 'bg-gray-600'}`} />
       </div>
     </div>
@@ -419,14 +419,14 @@ function QuickAction({ icon: Icon, label, onClick, loading }) {
     <button
       onClick={onClick}
       disabled={loading}
-      className="flex items-center gap-2 bg-black bg-opacity-30 hover:bg-opacity-50 rounded-lg px-4 py-3 text-sm transition text-left disabled:opacity-50"
+      className="flex items-center gap-2 bg-asos-bg bg-opacity-30 hover:bg-opacity-50 rounded-lg px-4 py-3 text-sm transition text-left disabled:opacity-50"
     >
       {loading ? (
         <Loader2 size={16} className="animate-spin text-asos-accent flex-shrink-0" />
       ) : (
         <Icon size={16} className="text-asos-accent flex-shrink-0" />
       )}
-      <span className="text-xs text-gray-300">{label}</span>
+      <span className="text-xs text-asos-text-secondary">{label}</span>
     </button>
   );
 }

@@ -155,7 +155,7 @@ export default function Settings() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl lg:text-2xl font-bold">Settings</h1>
-            <p className="text-xs lg:text-sm text-gray-400 mt-1">Configure THEORA to your needs</p>
+            <p className="text-xs lg:text-sm text-asos-text-secondary mt-1">Configure THEORA to your needs</p>
           </div>
           {saved && (
             <div className="flex items-center gap-2 text-green-400 text-sm animate-pulse">
@@ -174,8 +174,8 @@ export default function Settings() {
                 onClick={() => setActiveTab(t.id)}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs lg:text-sm font-medium whitespace-nowrap transition ${
                   activeTab === t.id
-                    ? 'bg-asos-accent bg-opacity-15 text-asos-accent'
-                    : 'text-gray-400 hover:text-white hover:bg-white hover:bg-opacity-5'
+                    ? 'bg-asos-accent/15 text-asos-accent border border-asos-accent/20'
+                    : 'text-asos-text-muted hover:text-asos-text hover:bg-asos-card-hover border border-transparent'
                 }`}
               >
                 <Icon size={14} />
@@ -189,16 +189,16 @@ export default function Settings() {
         {activeTab === 'identity' && identity && (
           <div className="space-y-5">
             <Section title="Agent Identity" icon={User}>
-              <p className="text-xs text-gray-500 mb-4">
+              <p className="text-xs text-asos-text-muted mb-4">
                 Define who THEORA is. This shapes how it talks, thinks, and behaves.
-                Stored at <code className="bg-black px-1.5 py-0.5 rounded font-mono text-[10px]">~/.theora/identity.yaml</code>
+                Stored at <code className="bg-asos-bg px-1.5 py-0.5 rounded font-mono text-[10px]">~/.theora/identity.yaml</code>
               </p>
 
               <div className="space-y-4">
                 <div>
-                  <label className="text-xs text-gray-400 mb-1 block">Agent Name</label>
+                  <label className="text-xs text-asos-text-secondary mb-1 block">Agent Name</label>
                   <input
-                    className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                    className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
                     value={identity.name || ''}
                     onChange={e => setIdentity(prev => ({ ...prev, name: e.target.value }))}
                     placeholder="THEORA"
@@ -206,9 +206,9 @@ export default function Settings() {
                 </div>
 
                 <div>
-                  <label className="text-xs text-gray-400 mb-1 block">Tagline</label>
+                  <label className="text-xs text-asos-text-secondary mb-1 block">Tagline</label>
                   <input
-                    className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                    className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
                     value={identity.tagline || ''}
                     onChange={e => setIdentity(prev => ({ ...prev, tagline: e.target.value }))}
                     placeholder="Your personal AI operating system"
@@ -216,10 +216,10 @@ export default function Settings() {
                 </div>
 
                 <div>
-                  <label className="text-xs text-gray-400 mb-1 block">Personality</label>
+                  <label className="text-xs text-asos-text-secondary mb-1 block">Personality</label>
                   <textarea
                     rows={5}
-                    className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent resize-none"
+                    className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent resize-none"
                     value={identity.personality || ''}
                     onChange={e => setIdentity(prev => ({ ...prev, personality: e.target.value }))}
                     placeholder="Describe how THEORA should behave and communicate..."
@@ -227,10 +227,10 @@ export default function Settings() {
                 </div>
 
                 <div>
-                  <label className="text-xs text-gray-400 mb-1 block">Rules (one per line)</label>
+                  <label className="text-xs text-asos-text-secondary mb-1 block">Rules (one per line)</label>
                   <textarea
                     rows={4}
-                    className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent resize-none font-mono"
+                    className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent resize-none font-mono"
                     value={(identity.rules || []).join('\n')}
                     onChange={e => setIdentity(prev => ({ ...prev, rules: e.target.value.split('\n').filter(r => r.trim()) }))}
                     placeholder="Never make up sensor data&#10;Keep responses concise&#10;Always include units for health data"
@@ -238,10 +238,10 @@ export default function Settings() {
                 </div>
 
                 <div>
-                  <label className="text-xs text-gray-400 mb-1 block">Communication Style</label>
+                  <label className="text-xs text-asos-text-secondary mb-1 block">Communication Style</label>
                   <textarea
                     rows={3}
-                    className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent resize-none"
+                    className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent resize-none"
                     value={identity.greeting_style || ''}
                     onChange={e => setIdentity(prev => ({ ...prev, greeting_style: e.target.value }))}
                     placeholder="How should THEORA greet and communicate..."
@@ -250,9 +250,9 @@ export default function Settings() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="text-xs text-gray-400 mb-1 block">TTS Voice</label>
+                    <label className="text-xs text-asos-text-secondary mb-1 block">TTS Voice</label>
                     <select
-                      className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                      className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
                       value={identity.voice?.tts_voice || 'nova'}
                       onChange={e => setIdentity(prev => ({ ...prev, voice: { ...(prev.voice || {}), tts_voice: e.target.value } }))}
                     >
@@ -262,9 +262,9 @@ export default function Settings() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-xs text-gray-400 mb-1 block">Style</label>
+                    <label className="text-xs text-asos-text-secondary mb-1 block">Style</label>
                     <select
-                      className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                      className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
                       value={identity.voice?.style || 'conversational'}
                       onChange={e => setIdentity(prev => ({ ...prev, voice: { ...(prev.voice || {}), style: e.target.value } }))}
                     >
@@ -292,16 +292,16 @@ export default function Settings() {
         {activeTab === 'devices' && (
           <div className="space-y-5">
             <Section title="Connected Devices" icon={Bluetooth}>
-              <p className="text-xs text-gray-500 mb-4">
+              <p className="text-xs text-asos-text-muted mb-4">
                 Hardware nodes connected to the THEORA Brain via WebSocket.
                 Any device running a THEORA daemon can connect — phones, glasses, wristbands, robots.
               </p>
 
               {devices.length === 0 ? (
-                <div className="text-center py-8 bg-black bg-opacity-30 rounded-xl border border-dashed border-asos-border">
+                <div className="text-center py-8 bg-asos-bg bg-opacity-30 rounded-xl border border-dashed border-asos-border">
                   <Radio size={32} className="mx-auto opacity-20 mb-3" />
-                  <p className="text-sm text-gray-400">No devices connected</p>
-                  <p className="text-xs text-gray-500 mt-2 max-w-xs mx-auto">
+                  <p className="text-sm text-asos-text-secondary">No devices connected</p>
+                  <p className="text-xs text-asos-text-muted mt-2 max-w-xs mx-auto">
                     Devices connect automatically when they run a THEORA daemon.
                     Check the docs for how to set up a new node.
                   </p>
@@ -325,18 +325,18 @@ export default function Settings() {
                   { icon: Watch, name: 'Wristband / Watch', desc: 'Health sensors (HR, SpO2, temp) connect via BLE through a phone bridge or dedicated USB dongle daemon.' },
                   { icon: Bot, name: 'Robot / Custom Hardware', desc: 'Any device running Python or Kotlin can use the node SDK. Connect to ws://BRAIN_IP:9090/v1/node with your API key.' },
                 ].map(item => (
-                  <div key={item.name} className="flex gap-3 bg-black bg-opacity-30 rounded-lg p-3 border border-asos-border">
+                  <div key={item.name} className="flex gap-3 bg-asos-bg bg-opacity-30 rounded-lg p-3 border border-asos-border">
                     <item.icon size={20} className="text-asos-accent flex-shrink-0 mt-0.5" />
                     <div>
                       <div className="font-medium text-sm">{item.name}</div>
-                      <div className="text-xs text-gray-400 mt-0.5">{item.desc}</div>
+                      <div className="text-xs text-asos-text-secondary mt-0.5">{item.desc}</div>
                     </div>
                   </div>
                 ))}
               </div>
 
-              <div className="mt-4 bg-black border border-asos-border rounded-lg p-3">
-                <label className="text-xs text-gray-400 mb-1 block">Brain Address (for devices to connect)</label>
+              <div className="mt-4 bg-asos-bg border border-asos-border rounded-lg p-3">
+                <label className="text-xs text-asos-text-secondary mb-1 block">Brain Address (for devices to connect)</label>
                 <code className="text-sm text-asos-accent font-mono">
                   ws://{window.location.hostname}:9090/v1/node?api_key=dev-secret-key
                 </code>
@@ -351,7 +351,7 @@ export default function Settings() {
             <div className="space-y-4">
               {llmPresets.length > 0 && (
                 <div>
-                  <label className="text-xs text-gray-400 mb-2 block">Provider Presets</label>
+                  <label className="text-xs text-asos-text-secondary mb-2 block">Provider Presets</label>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                     {llmPresets.map(preset => {
                       const active = isPresetActive(preset);
@@ -364,7 +364,7 @@ export default function Settings() {
                           className={`text-left px-3 py-2 rounded-lg border transition ${
                             active
                               ? 'border-asos-accent bg-asos-accent bg-opacity-10'
-                              : 'border-asos-border bg-black hover:border-gray-500'
+                              : 'border-asos-border bg-asos-bg hover:border-asos-border-bright'
                           }`}
                         >
                           <div className="flex items-center justify-between">
@@ -372,8 +372,8 @@ export default function Settings() {
                             {active && <Check size={14} className="text-asos-accent" />}
                             {applying && <Loader2 size={14} className="animate-spin" />}
                           </div>
-                          <div className="text-[11px] text-gray-400 mt-1">{preset.description}</div>
-                          <div className="text-[10px] text-gray-500 mt-1 font-mono">
+                          <div className="text-[11px] text-asos-text-secondary mt-1">{preset.description}</div>
+                          <div className="text-[10px] text-asos-text-muted mt-1 font-mono">
                             {preset.provider}/{preset.model}
                           </div>
                         </button>
@@ -381,7 +381,7 @@ export default function Settings() {
                     })}
                   </div>
                   {presetFeedback && (
-                    <div className="text-xs mt-2 text-gray-300">{presetFeedback}</div>
+                    <div className="text-xs mt-2 text-asos-text-secondary">{presetFeedback}</div>
                   )}
                 </div>
               )}
@@ -394,7 +394,7 @@ export default function Settings() {
                     className={`px-4 py-3 rounded-lg border text-sm font-medium transition ${
                       config.llm?.provider === p
                         ? 'border-asos-accent bg-asos-accent bg-opacity-10 text-asos-accent'
-                        : 'border-asos-border bg-asos-card hover:border-gray-600'
+                        : 'border-asos-border bg-asos-card hover:border-asos-border-bright'
                     }`}
                   >
                     {p.charAt(0).toUpperCase() + p.slice(1)}
@@ -402,9 +402,9 @@ export default function Settings() {
                 ))}
               </div>
               <div>
-                <label className="text-xs text-gray-400 mb-1 block">Model</label>
+                <label className="text-xs text-asos-text-secondary mb-1 block">Model</label>
                 <input
-                  className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
+                  className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
                   value={config.llm?.model || ''}
                   onChange={e => updateSetting('llm', 'model', e.target.value)}
                 />
@@ -415,9 +415,9 @@ export default function Settings() {
                 )}
               </div>
               <div>
-                <label className="text-xs text-gray-400 mb-1 block">Base URL (leave blank for defaults)</label>
+                <label className="text-xs text-asos-text-secondary mb-1 block">Base URL (leave blank for defaults)</label>
                 <input
-                  className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
+                  className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
                   placeholder="https://api.openai.com/v1"
                   value={config.llm?.base_url || ''}
                   onChange={e => updateSetting('llm', 'base_url', e.target.value)}
@@ -447,9 +447,9 @@ export default function Settings() {
             <Section title="Audio" icon={Volume2}>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs text-gray-400 mb-1 block">TTS Voice</label>
+                  <label className="text-xs text-asos-text-secondary mb-1 block">TTS Voice</label>
                   <select
-                    className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                    className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
                     value={config.audio?.tts_voice || 'nova'}
                     onChange={e => updateSetting('audio', 'tts_voice', e.target.value)}
                   >
@@ -457,9 +457,9 @@ export default function Settings() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-gray-400 mb-1 block">STT Model</label>
+                  <label className="text-xs text-asos-text-secondary mb-1 block">STT Model</label>
                   <input
-                    className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
+                    className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
                     value={config.audio?.stt_model || 'whisper-1'}
                     onChange={e => updateSetting('audio', 'stt_model', e.target.value)}
                   />
@@ -474,7 +474,7 @@ export default function Settings() {
           <Section title="Generated Skill Proposals" icon={AlertCircle}>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-asos-text-muted">
                   Skills generated by the agent that are waiting for your approval.
                 </p>
                 <button
@@ -488,17 +488,17 @@ export default function Settings() {
               </div>
 
               {pendingSkills.length === 0 && !pendingLoading && (
-                <div className="text-sm text-gray-500 bg-black bg-opacity-30 rounded-lg px-4 py-4 border border-asos-border">
+                <div className="text-sm text-asos-text-muted bg-asos-bg bg-opacity-30 rounded-lg px-4 py-4 border border-asos-border">
                   No pending skill proposals.
                 </div>
               )}
 
               {pendingSkills.map((skill) => (
-                <div key={skill.skill_id} className="bg-black bg-opacity-30 rounded-lg border border-asos-border p-4 space-y-2">
+                <div key={skill.skill_id} className="bg-asos-bg bg-opacity-30 rounded-lg border border-asos-border p-4 space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="text-sm font-semibold">{skill.brand?.name || skill.skill_id}</div>
-                      <div className="text-[11px] text-gray-500 font-mono">{skill.skill_id}</div>
+                      <div className="text-[11px] text-asos-text-muted font-mono">{skill.skill_id}</div>
                     </div>
                     <div className="flex gap-2">
                       <button
@@ -517,8 +517,8 @@ export default function Settings() {
                       </button>
                     </div>
                   </div>
-                  <div className="text-xs text-gray-400">{skill.description || 'No description'}</div>
-                  <div className="text-[11px] text-gray-500">Endpoints: {skill.endpoints?.length || 0}</div>
+                  <div className="text-xs text-asos-text-secondary">{skill.description || 'No description'}</div>
+                  <div className="text-[11px] text-asos-text-muted">Endpoints: {skill.endpoints?.length || 0}</div>
                 </div>
               ))}
             </div>
@@ -530,7 +530,7 @@ export default function Settings() {
           <Section title="Skill API Keys" icon={Key}>
             <div className="space-y-3">
               {config.has_skill_keys?.map(id => (
-                <div key={id} className="flex items-center justify-between bg-black bg-opacity-30 rounded-lg px-4 py-3">
+                <div key={id} className="flex items-center justify-between bg-asos-bg bg-opacity-30 rounded-lg px-4 py-3">
                   <span className="text-sm font-mono">{id}</span>
                   <span className="text-xs text-green-400 flex items-center gap-1"><Check size={12} /> Configured</span>
                 </div>
@@ -539,23 +539,24 @@ export default function Settings() {
               <div className="flex items-center gap-2 pt-2">
                 <input
                   placeholder="skill_id"
-                  className="flex-1 bg-black border border-asos-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
+                  className="flex-1 bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
                   value={newSkillKey.id}
                   onChange={e => setNewSkillKey(prev => ({ ...prev, id: e.target.value }))}
                 />
                 <input
                   type="password"
                   placeholder="API key"
-                  className="flex-1 bg-black border border-asos-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
+                  className="flex-1 bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
                   value={newSkillKey.key}
                   onChange={e => setNewSkillKey(prev => ({ ...prev, key: e.target.value }))}
                 />
                 <button
                   onClick={saveSkillKey}
                   disabled={!newSkillKey.id || !newSkillKey.key}
-                  className="px-3 py-2 bg-asos-accent rounded-lg text-sm hover:bg-opacity-80 disabled:opacity-30 transition"
+                  className="px-4 py-2 bg-asos-accent text-white rounded-lg text-sm font-medium hover:bg-asos-accent/80 disabled:opacity-30 transition flex items-center gap-1.5 flex-shrink-0"
                 >
-                  <Plus size={16} />
+                  <Plus size={14} />
+                  Add
                 </button>
               </div>
             </div>
@@ -567,20 +568,20 @@ export default function Settings() {
           <div className="space-y-5">
             <Section title="Security" icon={Shield}>
               <div>
-                <label className="text-xs text-gray-400 mb-1 block">Node API Key</label>
+                <label className="text-xs text-asos-text-secondary mb-1 block">Node API Key</label>
                 <input
                   type="password"
-                  className="w-full bg-black border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
+                  className="w-full bg-asos-bg border border-asos-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
                   value={config.security?.node_api_key || ''}
                   onChange={e => updateSetting('security', 'node_api_key', e.target.value)}
                 />
-                <p className="text-xs text-gray-500 mt-1">Used to authenticate hardware daemon connections</p>
+                <p className="text-xs text-asos-text-muted mt-1">Used to authenticate hardware daemon connections</p>
               </div>
             </Section>
 
             <Section title="Memory" icon={Database}>
-              <p className="text-sm text-gray-400">
-                Memory data stored at <code className="text-xs bg-black px-2 py-1 rounded font-mono">~/.theora/memory.db</code>
+              <p className="text-sm text-asos-text-secondary">
+                Memory data stored at <code className="text-xs bg-asos-bg px-2 py-1 rounded font-mono">~/.theora/memory.db</code>
               </p>
               <div className="flex gap-3 mt-3">
                 <button className="flex items-center gap-2 px-4 py-2 bg-asos-card border border-asos-border rounded-lg text-sm hover:bg-opacity-80 transition">
@@ -632,7 +633,7 @@ function PhoneBridgeSection() {
 
   return (
     <Section title="Phone Bridge (Web Bluetooth)" icon={Smartphone}>
-      <p className="text-xs text-gray-500 mb-4">
+      <p className="text-xs text-asos-text-muted mb-4">
         Use your phone's browser as a bridge. Scan for nearby BLE devices and forward their data to the Brain.
       </p>
 
@@ -662,16 +663,16 @@ function PhoneBridgeSection() {
 
       {bleDevices.length > 0 && (
         <div className="mt-4 space-y-2">
-          <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Discovered Devices</div>
+          <div className="text-xs text-asos-text-secondary uppercase tracking-wider mb-2">Discovered Devices</div>
           {bleDevices.map(dev => (
             <div key={dev.id}
               className={`flex items-center gap-3 rounded-lg px-4 py-3 border ${
-                connected === dev.id ? 'bg-green-500 bg-opacity-5 border-green-500 border-opacity-30' : 'bg-black bg-opacity-30 border-asos-border'
+                connected === dev.id ? 'bg-green-500 bg-opacity-5 border-green-500 border-opacity-30' : 'bg-asos-bg bg-opacity-30 border-asos-border'
               }`}>
-              <Bluetooth size={14} className={connected === dev.id ? 'text-green-400' : 'text-gray-500'} />
+              <Bluetooth size={14} className={connected === dev.id ? 'text-green-400' : 'text-asos-text-muted'} />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{dev.name}</div>
-                <div className="text-[10px] text-gray-500 font-mono">{dev.id}</div>
+                <div className="text-[10px] text-asos-text-muted font-mono">{dev.id}</div>
               </div>
               {connected === dev.id && (
                 <span className="text-[10px] text-green-400 bg-green-500 bg-opacity-20 px-2 py-0.5 rounded-full">Paired</span>
@@ -700,11 +701,11 @@ function DeviceCard({ device }) {
       <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
         device.connected ? 'bg-green-500 bg-opacity-10' : 'bg-white bg-opacity-5'
       }`}>
-        <Icon size={20} className={device.connected ? 'text-green-400' : 'text-gray-500'} />
+        <Icon size={20} className={device.connected ? 'text-green-400' : 'text-asos-text-muted'} />
       </div>
       <div className="flex-1 min-w-0">
         <div className="font-medium text-sm truncate">{device.node_id}</div>
-        <div className="text-xs text-gray-400">{device.type || 'unknown device'}</div>
+        <div className="text-xs text-asos-text-secondary">{device.type || 'unknown device'}</div>
       </div>
       <div className={`w-2.5 h-2.5 rounded-full ${device.connected ? 'bg-green-500' : 'bg-gray-600'}`} />
     </div>
@@ -728,12 +729,12 @@ function Toggle({ label, desc, value, onChange }) {
     <div className="flex items-center justify-between py-1">
       <div>
         <div className="text-sm font-medium">{label}</div>
-        {desc && <div className="text-xs text-gray-400 mt-0.5">{desc}</div>}
+        {desc && <div className="text-xs text-asos-text-secondary mt-0.5">{desc}</div>}
       </div>
       <button
         onClick={() => onChange(!value)}
         className={`w-12 h-7 rounded-full transition-all flex items-center px-1 ${
-          value ? 'bg-asos-accent justify-end' : 'bg-gray-700 justify-start'
+          value ? 'bg-asos-accent justify-end' : 'bg-zinc-700 justify-start'
         }`}
       >
         <div className="w-5 h-5 bg-white rounded-full shadow transition-all" />

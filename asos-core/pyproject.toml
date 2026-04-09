@@ -54,6 +54,9 @@ wake = [
     "openwakeword>=0.6.0",
     "onnxruntime>=1.16.0",
 ]
+desktop = [
+    "pyautogui>=0.9.54",
+]
 all = [
     "openai>=1.50.0",
     "wasmtime>=22.0.0",
@@ -61,6 +64,7 @@ all = [
     "openwakeword>=0.6.0",
     "onnxruntime>=1.16.0",
     "rich>=13.0.0",
+    "pyautogui>=0.9.54",
 ]
 dev = [
     "pytest>=8.0.0",

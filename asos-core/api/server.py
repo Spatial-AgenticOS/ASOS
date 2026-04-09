@@ -218,6 +218,10 @@ class BrainState:
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
 
+    @property
+    def skill_executor(self):
+        return self.orchestrator.executor if self.orchestrator else None
+
     async def init(self):
         self.skill_registry.load_builtin_skills()
 
@@ -2627,6 +2631,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
             if msg.type in ("node_register", "register") and isinstance(payload, NodeRegisterPayload):
                 node_id = payload.node_id
                 state.daemons[node_id] = ws
+                if state.skill_executor:
+                    state.skill_executor.register_daemon_type(node_id, payload.node_type)
                 logger.info(f"Node registered: {node_id} ({payload.node_type}/{payload.platform}) — caps: {payload.capabilities}")
                 _log_activity("device_connected", f"{node_id} ({payload.node_type})")
 
@@ -2663,6 +2669,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
 
             elif msg.type == "vision_frame":
                 frame_payload = raw.get("payload", {})
+                if "data_b64" not in frame_payload and "image_b64" in frame_payload:
+                    frame_payload["data_b64"] = frame_payload["image_b64"]
                 frame_b64_len = len(frame_payload.get("data_b64", ""))
                 if frame_b64_len > VISION_MAX_FRAME_KB * 1024:
                     logger.warning(f"Rejecting oversized frame from {node_id}: {frame_b64_len}B")
@@ -2802,10 +2810,48 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         state.skill_gen.reject_skill(skill_id)
                         logger.info(f"Skill rejected via phone: {skill_id}")
 
+            # ── Phone/Glasses: text command from daemon node ──
+            elif msg.type == "text_command":
+                payload_dict = raw.get("payload", {})
+                text = payload_dict.get("text", "")
+                context = payload_dict.get("context", {})
+                if text and state.orchestrator and node_id:
+                    sessions = state.get_sessions_for_daemon(node_id)
+                    target_sid = next(iter(sessions), None)
+                    if not target_sid:
+                        target_sid = f"daemon-{node_id}"
+                        state.sessions[target_sid] = ws
+                        state.bind_session_to_daemon(target_sid, node_id)
+                    state.memory.working_push(target_sid, {"role": "user", "text": text})
+                    context["source_node"] = node_id
+                    await state.orchestrator.handle_command_stream(
+                        session_id=target_sid,
+                        text=text,
+                        context=context,
+                    )
+                    logger.info(f"Text command from daemon {node_id}: {text[:80]}")
+
+            # ── iOS compat: accept "frame" type as alias for "vision_frame" ──
+            elif msg.type == "frame":
+                frame_payload = raw.get("payload", {})
+                data_b64 = frame_payload.get("data_b64") or frame_payload.get("image_b64", "")
+                if data_b64:
+                    frame_payload["data_b64"] = data_b64
+                    frame_b64_len = len(data_b64)
+                    if frame_b64_len > VISION_MAX_FRAME_KB * 1024:
+                        logger.warning(f"Rejecting oversized frame from {node_id}: {frame_b64_len}B")
+                    else:
+                        effective_node = node_id or frame_payload.get("node_id", "unknown")
+                        state.vision_buffer.push(effective_node, frame_payload)
+                        for sid in state.get_sessions_for_daemon(effective_node):
+                            state.perception.update_vision(sid, state.vision_buffer, effective_node)
+
     except WebSocketDisconnect:
         if node_id:
             logger.info(f"Daemon disconnected: {node_id}")
             state.daemons.pop(node_id, None)
+            if state.skill_executor:
+                state.skill_executor.unregister_daemon(node_id)
             if state.hardware_mesh:
                 state.hardware_mesh.on_node_disconnected(node_id)
             for sid in state.get_sessions_for_daemon(node_id):
