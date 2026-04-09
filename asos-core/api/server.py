@@ -624,8 +624,19 @@ async def api_info():
 @app.get("/api/setup/status")
 async def setup_status():
     """Check if initial setup has been completed."""
+    home = theora_home()
+    user_md = home / "USER.md"
+    has_identity = False
+    if user_md.exists():
+        content = user_md.read_text().strip()
+        has_identity = (
+            bool(content)
+            and "Tell your agent about yourself" not in content
+            and ("My name is" in content or len(content) > 50)
+        )
     return {
         "setup_complete": state.config.setup_complete,
+        "has_identity": has_identity,
         "settings": state.config.to_client_safe_dict(),
     }
 
@@ -921,6 +932,37 @@ async def complete_setup(body: dict):
     state.config.discover()
 
     return {"ok": True, "setup_complete": True}
+
+
+def _build_greeting() -> str:
+    """Build a contextual greeting based on identity files."""
+    home = theora_home()
+    agent_name = "THEORA"
+    user_name = ""
+
+    identity_path = home / "IDENTITY.yaml"
+    if identity_path.exists():
+        try:
+            import yaml
+            with open(identity_path) as f:
+                data = yaml.safe_load(f) or {}
+            agent_name = data.get("name", "THEORA")
+        except Exception:
+            pass
+
+    user_md = home / "USER.md"
+    if user_md.exists():
+        try:
+            for line in user_md.read_text().splitlines():
+                if line.startswith("My name is "):
+                    user_name = line.replace("My name is ", "").rstrip(".")
+                    break
+        except Exception:
+            pass
+
+    if user_name:
+        return f"{agent_name} connected. Hey {user_name}, how can I help?"
+    return f"{agent_name} connected. How can I help?"
 
 
 def _write_identity_files(identity: dict):
@@ -2309,12 +2351,8 @@ async def client_session(ws: WebSocket):
         state.bind_session_to_daemon(session_id, node_id)
         state.perception.update_connected_nodes(session_id, list(state.daemons.keys()))
 
-    # Inject identity into greeting if available
-    greeting = "THEORA Brain connected. How can I help?"
-    if state.identity_workspace:
-        identity = state.identity_workspace.load_identity()
-        agent_name = identity.get("name", "THEORA")
-        greeting = f"{agent_name} connected. How can I help?"
+    # Build a personal greeting based on identity files
+    greeting = _build_greeting()
 
     await ws.send_json(TheoraMessage(
         session_id=session_id,

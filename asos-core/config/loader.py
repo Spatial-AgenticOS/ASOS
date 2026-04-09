@@ -212,7 +212,7 @@ class ConfigLoader:
                 self._credentials["skill_keys"][skill_id] = value
 
     def _check_setup_complete(self) -> bool:
-        """Check if the minimum setup has been done."""
+        """Check if the full setup has been done (LLM key + identity)."""
         if self._merged.get("meta", {}).get("setup_complete"):
             return True
         has_llm_key = bool(
@@ -222,7 +222,17 @@ class ConfigLoader:
             or self._credentials.get("GROQ_API_KEY")
             or self._merged.get("llm", {}).get("provider") == "ollama"
         )
-        return has_llm_key
+        if not has_llm_key:
+            return False
+        user_md = self.user_home / "USER.md"
+        if not user_md.exists():
+            return False
+        content = user_md.read_text().strip()
+        if not content or "Tell your agent about yourself" in content:
+            return False
+        if "My name is" not in content and len(content) < 50:
+            return False
+        return True
 
     @staticmethod
     def _deep_merge(base: dict, overlay: dict):
