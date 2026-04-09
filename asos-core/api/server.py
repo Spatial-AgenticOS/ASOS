@@ -904,21 +904,100 @@ async def complete_setup(body: dict):
     """Mark setup as complete and apply settings."""
     settings = body.get("settings", {})
     credentials = body.get("credentials", {})
+    identity = body.get("identity", {})
 
     if settings:
         state.config.save_user_settings(settings)
     if credentials:
-        for key in ("OPENAI_API_KEY", "GROQ_API_KEY"):
+        for key in ("OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
             if credentials.get(key):
                 os.environ[key] = credentials[key]
         state.config.save_credentials(credentials)
 
-    state.config.mark_setup_complete()
+    if identity:
+        _write_identity_files(identity)
 
-    # Re-discover config with new values
+    state.config.mark_setup_complete()
     state.config.discover()
 
     return {"ok": True, "setup_complete": True}
+
+
+def _write_identity_files(identity: dict):
+    """Write USER.md, SOUL.md, and IDENTITY.yaml from the setup wizard identity payload."""
+    home = theora_home()
+    home.mkdir(parents=True, exist_ok=True)
+
+    user_name = identity.get("userName", "").strip()
+    location = identity.get("location", "").strip()
+    occupation = identity.get("occupation", "").strip()
+    interests = identity.get("interests", "").strip()
+    agent_name = identity.get("agentName", "THEORA").strip() or "THEORA"
+    personality_id = identity.get("personality", "assistant")
+
+    personality_map = {
+        "assistant": (
+            "You are a warm, capable personal assistant. You speak naturally, like "
+            "a trusted colleague who knows the user well. You're direct — no filler, "
+            "no over-explaining — but never cold. You proactively notice patterns in "
+            "the user's data and mention things that might be useful."
+        ),
+        "engineer": (
+            "You are a precise technical partner. You prefer concrete answers, code, "
+            "and data over vague suggestions. You think step-by-step and explain your "
+            "reasoning. You're comfortable with complexity and don't over-simplify."
+        ),
+        "coach": (
+            "You are an encouraging wellness coach. You're proactive about the user's "
+            "health and wellbeing, noticing patterns in their data. You celebrate "
+            "progress, suggest improvements gently, and keep the tone supportive."
+        ),
+        "minimal": (
+            "You are brief and factual. No small talk. No filler. Answer the question, "
+            "report the data, execute the task. If there's nothing to say, say nothing."
+        ),
+    }
+    soul = personality_map.get(personality_id, personality_map["assistant"])
+
+    # USER.md
+    lines = ["# About Me\n"]
+    if user_name:
+        lines.append(f"My name is {user_name}.")
+    if location:
+        lines.append(f"I live in {location}.")
+    if occupation:
+        lines.append(f"I work as {occupation}.")
+    if interests:
+        lines.append(f"\n## Interests\n{interests}")
+    if any([user_name, location, occupation, interests]):
+        (home / "USER.md").write_text("\n".join(lines) + "\n")
+
+    # SOUL.md
+    (home / "SOUL.md").write_text(f"# {agent_name}\n\n{soul}\n")
+
+    # IDENTITY.yaml
+    try:
+        import yaml
+        identity_data = {
+            "name": agent_name,
+            "tagline": "Your personal AI operating system — local, private, always learning.",
+            "personality": soul,
+            "rules": [
+                "Never make up sensor data or health readings. Only report what's actually connected.",
+                "If a tool call fails, explain what went wrong in plain language.",
+                "Keep responses concise — 1-3 sentences for simple questions.",
+                "Respect user privacy. Everything runs locally unless they explicitly ask to share.",
+            ],
+            "greeting_style": (
+                "Keep greetings brief and contextual. If you know the user's name, use it. "
+                "Don't list all your capabilities unless asked."
+            ),
+            "voice": {"style": "conversational", "tts_voice": "nova", "speed": 1.0},
+        }
+        (home / "IDENTITY.yaml").write_text(yaml.dump(identity_data, default_flow_style=False, sort_keys=False))
+    except ImportError:
+        import json
+        (home / "IDENTITY.yaml").write_text(json.dumps({"name": agent_name, "personality": soul}, indent=2))
 
 
 # ─────────────────────────────────────────────

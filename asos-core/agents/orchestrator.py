@@ -1594,13 +1594,12 @@ class Orchestrator:
         return prompt
 
     def _load_identity(self) -> str:
-        """Load agent identity from ~/.theora/identity.yaml or use defaults."""
-        identity_paths = [
-            theora_home() / "identity.yaml",
-            theora_home() / "identity.yml",
-        ]
+        """Load agent identity from ~/.theora/ files: IDENTITY.yaml, USER.md, SOUL.md, MEMORY.md."""
+        home = theora_home()
+        parts: list[str] = []
 
-        for p in identity_paths:
+        # 1. IDENTITY.yaml — agent name, personality, rules
+        for p in (home / "identity.yaml", home / "identity.yml", home / "IDENTITY.yaml"):
             if p.exists():
                 try:
                     import yaml
@@ -1612,7 +1611,7 @@ class Orchestrator:
                     rules = data.get("rules", [])
                     greeting_style = data.get("greeting_style", "")
 
-                    parts = [f"You are {name}."]
+                    parts.append(f"You are {name}.")
                     if tagline:
                         parts.append(tagline)
                     if personality:
@@ -1621,16 +1620,46 @@ class Orchestrator:
                         parts.append("\n## Rules\n" + "\n".join(f"- {r}" for r in rules))
                     if greeting_style:
                         parts.append(f"\n## Communication Style\n{greeting_style}")
-
-                    return "\n".join(parts)
+                    break
                 except Exception as e:
                     logger.warning(f"Failed to load identity: {e}")
 
-        return (
-            "You are THEORA, a personal AI operating system.\n"
-            "You run locally on the user's devices — phone, laptop, wearables, smart home.\n"
-            "You can see through connected cameras, hear through microphones, read health sensors, "
-            "and control smart home devices.\n"
-            "You are helpful, direct, and privacy-first. Everything stays on-device unless the user says otherwise.\n"
-            "You learn the user's preferences over time and get better at anticipating their needs."
-        )
+        if not parts:
+            parts.append(
+                "You are THEORA, a personal AI operating system.\n"
+                "You run locally on the user's devices — phone, laptop, wearables, smart home.\n"
+                "You are helpful, direct, and privacy-first. Everything stays on-device unless the user says otherwise.\n"
+                "You learn the user's preferences over time and get better at anticipating their needs."
+            )
+
+        # 2. USER.md — who the user is
+        user_md = home / "USER.md"
+        if user_md.exists():
+            try:
+                content = user_md.read_text().strip()
+                if content and content != "# About Me\n\nTell your agent about yourself here.":
+                    parts.append(f"\n## About the User\n{content}")
+            except Exception:
+                pass
+
+        # 3. SOUL.md — deeper personality / behavioral notes
+        soul_md = home / "SOUL.md"
+        if soul_md.exists():
+            try:
+                content = soul_md.read_text().strip()
+                if content:
+                    parts.append(f"\n## Soul\n{content}")
+            except Exception:
+                pass
+
+        # 4. MEMORY.md — persistent long-term knowledge the user has given
+        memory_md = home / "MEMORY.md"
+        if memory_md.exists():
+            try:
+                content = memory_md.read_text().strip()
+                if content:
+                    parts.append(f"\n## Long-Term Memory\n{content}")
+            except Exception:
+                pass
+
+        return "\n".join(parts)

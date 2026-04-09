@@ -4,19 +4,27 @@ import {
   Brain, Key, Puzzle, Cpu, ChevronRight, ChevronLeft,
   Check, AlertCircle, Loader2, Eye, EyeOff, Sparkles,
   Wifi, WifiOff, Shield, Zap, Link2, Music, Home, FileText,
-  ExternalLink, Server,
+  ExternalLink, Server, User, Heart,
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
 
 const STEPS = [
   { id: 'welcome', label: 'Welcome', icon: Brain },
+  { id: 'identity', label: 'You & Your Agent', icon: User },
   { id: 'llm', label: 'LLM Provider', icon: Sparkles },
   { id: 'keys', label: 'API Keys', icon: Key },
   { id: 'skills', label: 'Skills', icon: Puzzle },
   { id: 'apps', label: 'Connect Apps', icon: Link2 },
   { id: 'features', label: 'Features', icon: Zap },
   { id: 'finish', label: 'Launch', icon: Check },
+];
+
+const PERSONALITY_PRESETS = [
+  { id: 'assistant', name: 'Personal Assistant', desc: 'Warm, direct, learns your preferences over time', icon: Heart },
+  { id: 'engineer', name: 'Technical Partner', desc: 'Precise, code-oriented, prefers concrete answers', icon: Cpu },
+  { id: 'coach', name: 'Wellness Coach', desc: 'Encouraging, health-focused, proactive about wellbeing', icon: Shield },
+  { id: 'minimal', name: 'Minimal', desc: 'Brief responses, no small talk, just the facts', icon: Zap },
 ];
 
 export default function SetupWizard({ onComplete }) {
@@ -29,6 +37,10 @@ export default function SetupWizard({ onComplete }) {
   const [validating, setValidating] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [identity, setIdentity] = useState({
+    userName: '', location: '', occupation: '', interests: '',
+    agentName: 'THEORA', personality: 'assistant',
+  });
 
   useEffect(() => {
     fetch(`${API}/api/config`).then(r => r.json()).then(setConfig).catch(() => {});
@@ -64,7 +76,7 @@ export default function SetupWizard({ onComplete }) {
       await fetch(`${API}/api/setup/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings, credentials }),
+        body: JSON.stringify({ settings, credentials, identity }),
       });
       onComplete?.();
       navigate('/');
@@ -157,6 +169,93 @@ export default function SetupWizard({ onComplete }) {
                       <span className="opacity-80">{text}</span>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* Step: Identity */}
+            {currentStep.id === 'identity' && (
+              <div className="space-y-6">
+                <h2 className="text-2xl font-bold">You & Your Agent</h2>
+                <p className="text-gray-400">Tell THEORA who you are and choose how your agent should behave.</p>
+
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-gray-300">Your Name</label>
+                      <input
+                        className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                        placeholder="Mahmoud"
+                        value={identity.userName}
+                        onChange={e => setIdentity(p => ({ ...p, userName: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-gray-300">Location</label>
+                      <input
+                        className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                        placeholder="San Francisco, US"
+                        value={identity.location}
+                        onChange={e => setIdentity(p => ({ ...p, location: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-gray-300">Occupation</label>
+                      <input
+                        className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                        placeholder="Engineer, Designer, ..."
+                        value={identity.occupation}
+                        onChange={e => setIdentity(p => ({ ...p, occupation: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-gray-300">Interests</label>
+                      <input
+                        className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                        placeholder="AI, health tech, music"
+                        value={identity.interests}
+                        onChange={e => setIdentity(p => ({ ...p, interests: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 space-y-3">
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-gray-300">Agent Name</label>
+                    <input
+                      className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                      placeholder="THEORA"
+                      value={identity.agentName}
+                      onChange={e => setIdentity(p => ({ ...p, agentName: e.target.value }))}
+                    />
+                  </div>
+
+                  <label className="text-sm font-medium text-gray-300 block pt-2">Agent Personality</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {PERSONALITY_PRESETS.map(p => {
+                      const Icon = p.icon;
+                      return (
+                        <button
+                          key={p.id}
+                          onClick={() => setIdentity(prev => ({ ...prev, personality: p.id }))}
+                          className={`text-left px-4 py-3.5 rounded-xl border transition-all ${
+                            identity.personality === p.id
+                              ? 'border-asos-accent bg-asos-accent bg-opacity-10'
+                              : 'border-asos-border bg-asos-card hover:border-gray-600'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 mb-1">
+                            <Icon size={14} className="text-asos-accent" />
+                            <span className="font-semibold text-sm">{p.name}</span>
+                          </div>
+                          <div className="text-xs text-gray-400">{p.desc}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             )}
@@ -401,6 +500,20 @@ export default function SetupWizard({ onComplete }) {
                   THEORA is configured and ready. You can always change settings later.
                 </p>
                 <div className="bg-asos-card border border-asos-border rounded-xl p-5 text-left space-y-2 text-sm">
+                  {identity.userName && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">User</span>
+                      <span>{identity.userName}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Agent</span>
+                    <span>{identity.agentName || 'THEORA'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Personality</span>
+                    <span>{PERSONALITY_PRESETS.find(p => p.id === identity.personality)?.name || 'Assistant'}</span>
+                  </div>
                   <div className="flex justify-between">
                     <span className="text-gray-400">Provider</span>
                     <span className="font-mono">{settings.llm?.provider || 'openai'}</span>
