@@ -2214,6 +2214,47 @@ async def cancel_taskflow(flow_id: str):
     return flow
 
 
+# ─────────────────────────────────────────────
+# Conversation Threads API
+# ─────────────────────────────────────────────
+
+@app.get("/api/conversations")
+async def list_conversations(limit: int = 50):
+    if not state.memory:
+        return {"conversations": []}
+    return {"conversations": state.memory.conversation_list(limit=limit)}
+
+
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str):
+    if not state.memory:
+        return {"error": "Memory not initialized"}
+    conv = state.memory.conversation_get(conversation_id)
+    if not conv:
+        return {"error": "Not found"}
+    return conv
+
+
+@app.post("/api/conversations/save")
+async def save_conversation(body: dict):
+    if not state.memory:
+        return {"error": "Memory not initialized"}
+    cid = body.get("id", "")
+    messages = body.get("messages", [])
+    title = body.get("title", "")
+    if not cid:
+        return {"error": "id is required"}
+    return state.memory.conversation_save(cid, messages, title)
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    if not state.memory:
+        return {"error": "Memory not initialized"}
+    state.memory.conversation_delete(conversation_id)
+    return {"ok": True}
+
+
 @app.post("/api/session/snapshot")
 async def create_session_snapshot(body: dict):
     if not state.memory:

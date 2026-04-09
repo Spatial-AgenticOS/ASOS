@@ -531,7 +531,7 @@ class Orchestrator:
     # Skill Routing
     # ─────────────────────────────────────────────
 
-    ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use"}
+    ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use", "browser"}
 
     async def _route_prompt(self, text: str) -> list[SkillManifest]:
         if not self.skills.skills:
@@ -1579,16 +1579,22 @@ class Orchestrator:
             "- Use tools when you need external data or to perform actions.\n"
             "- After a tool call, summarize the result in plain language.\n"
             "- Be proactive — if you notice something relevant in sensor data or context, mention it.\n"
-            "\n## CRITICAL — Local Computer Control\n"
-            "You can control the user's Mac directly. ALWAYS use these tools:\n"
-            "- **desktop_control__open_app**: To open ANY app (Music, Safari, Chrome, Notes, Spotify, Terminal, etc.).\n"
+            "\n## CRITICAL — Local Computer & Browser Control\n"
+            "You can control the user's Mac and browser directly. ALWAYS use these tools:\n"
+            "- **desktop_control__open_app**: Open ANY app (Music, Safari, Chrome, Notes, Spotify, Terminal, etc.).\n"
             "  Call with script='tell application \"AppName\" to activate'.\n"
             "  NEVER say you cannot open apps. You CAN.\n"
-            "- **desktop_control__shell_command**: To create files, read files, run commands on the user's machine.\n"
+            "- **desktop_control__shell_command**: Create files, read files, run shell commands.\n"
             "  When user says 'create a note/file on my desktop', use: echo 'content' > ~/Desktop/filename.txt\n"
             "  This creates a REAL FILE on the filesystem, not an internal memory note.\n"
-            "- **notes_memory** is for THEORA's internal memory system, NOT for creating files the user can see on their Desktop.\n"
-            "  Only use notes_memory when the user wants to save something for the agent to remember.\n"
+            "- **browser__navigate**: Navigate to a URL in the user's browser.\n"
+            "- **browser__click**: Click elements on a page by CSS selector.\n"
+            "- **browser__type_text**: Type text into browser inputs.\n"
+            "- **browser__screenshot**: Screenshot the browser page.\n"
+            "- **browser__evaluate**: Run JavaScript in the browser.\n"
+            "  Use browser tools when the user asks to search the web, fill forms, interact with websites.\n"
+            "- **notes_memory** is for THEORA's internal memory, NOT filesystem files.\n"
+            "  Only use notes_memory when the user wants the agent to remember something.\n"
         )
 
         # Perception Context

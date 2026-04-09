@@ -5,69 +5,73 @@ import { LayoutDashboard, MessageSquare, Settings, Brain, Cpu, ListChecks } from
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/chat', icon: MessageSquare, label: 'Chat' },
-  { to: '/taskflows', icon: ListChecks, label: 'TaskFlows' },
+  { to: '/taskflows', icon: ListChecks, label: 'Flows' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
 export default function AppShell() {
   return (
-    <div className="flex flex-col lg:flex-row h-screen bg-black text-white">
+    <div className="flex flex-col lg:flex-row h-screen bg-asos-bg text-asos-text">
       {/* Desktop Sidebar */}
-      <nav className="hidden lg:flex w-56 flex-shrink-0 bg-asos-card border-r border-asos-border flex-col">
-        <div className="flex items-center gap-2 px-4 py-5 border-b border-asos-border">
-          <Brain size={22} className="text-asos-accent flex-shrink-0" />
-          <span className="font-bold tracking-wider text-sm">THEORA</span>
+      <nav className="hidden lg:flex w-[220px] flex-shrink-0 bg-asos-surface border-r border-asos-border flex-col">
+        <div className="flex items-center gap-2.5 px-5 py-5 border-b border-asos-border">
+          <div className="w-8 h-8 rounded-lg bg-asos-accent-dim flex items-center justify-center">
+            <Brain size={18} className="text-asos-accent" />
+          </div>
+          <div>
+            <span className="font-semibold text-sm tracking-wide block">THEORA</span>
+            <span className="text-[10px] text-asos-text-muted">Agent OS</span>
+          </div>
         </div>
 
-        <div className="flex-1 py-4 space-y-1 px-2">
+        <div className="flex-1 py-3 px-2.5 space-y-0.5">
           {navItems.map(({ to, icon: Icon, label }) => (
             <NavLink
               key={to}
               to={to}
               end={to === '/'}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-[13px] font-medium ${
                   isActive
-                    ? 'bg-asos-accent bg-opacity-20 text-asos-accent'
-                    : 'text-gray-400 hover:text-white hover:bg-white hover:bg-opacity-5'
+                    ? 'bg-asos-accent-dim text-asos-accent'
+                    : 'text-asos-text-secondary hover:text-asos-text hover:bg-asos-card-hover'
                 }`
               }
             >
-              <Icon size={18} className="flex-shrink-0" />
+              <Icon size={17} className="flex-shrink-0" />
               <span>{label}</span>
             </NavLink>
           ))}
         </div>
 
-        <div className="px-3 py-4 border-t border-asos-border">
-          <div className="flex items-center gap-2 text-xs opacity-40">
-            <Cpu size={12} />
-            <span>v1.0.0</span>
+        <div className="px-4 py-4 border-t border-asos-border">
+          <div className="flex items-center gap-2 text-[11px] text-asos-text-muted">
+            <Cpu size={11} />
+            <span>v1.0.0 — local</span>
           </div>
         </div>
       </nav>
 
-      {/* Main Content */}
       <main className="flex-1 overflow-hidden">
         <Outlet />
       </main>
 
       {/* Mobile Bottom Tab Bar */}
-      <nav className="lg:hidden flex-shrink-0 bg-asos-card border-t border-asos-border flex items-center justify-around px-2 py-2 safe-area-bottom">
+      <nav className="lg:hidden flex-shrink-0 bg-asos-surface border-t border-asos-border flex items-center justify-around px-1 py-1.5 safe-area-bottom">
         {navItems.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
             end={to === '/'}
             className={({ isActive }) =>
-              `flex flex-col items-center gap-1 px-4 py-1.5 rounded-lg transition-all ${
+              `flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-all ${
                 isActive
                   ? 'text-asos-accent'
-                  : 'text-gray-500'
+                  : 'text-asos-text-muted'
               }`
             }
           >
-            <Icon size={20} />
+            <Icon size={19} />
             <span className="text-[10px] font-medium">{label}</span>
           </NavLink>
         ))}

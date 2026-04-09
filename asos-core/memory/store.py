@@ -295,6 +295,19 @@ class MemoryStore:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_session ON session_snapshots(session_id, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_branch ON session_snapshots(branch_name, created_at DESC)")
 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT 'New conversation',
+                preview TEXT NOT NULL DEFAULT '',
+                messages_json TEXT NOT NULL DEFAULT '[]',
+                message_count INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)")
+
         conn.commit()
         conn.close()
 
@@ -333,6 +346,76 @@ class MemoryStore:
             entry.setdefault("ts", time.time())
             buf.append(entry)
         self._working[session_id] = buf
+
+    # ─────────────────────────────────────────────
+    # Conversation Threads (persistent chat history)
+    # ─────────────────────────────────────────────
+
+    def conversation_save(self, conversation_id: str, messages: list[dict], title: str = "") -> dict:
+        """Save/update a conversation thread."""
+        now = time.time()
+        preview = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user" and msg.get("content"):
+                preview = msg["content"][:120]
+                break
+        if not title and messages:
+            for msg in messages:
+                if msg.get("role") == "user" and msg.get("content"):
+                    title = msg["content"][:80]
+                    break
+        title = title or "New conversation"
+
+        conn = self._conn()
+        conn.execute("""
+            INSERT INTO conversations (id, title, preview, messages_json, message_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                preview = excluded.preview,
+                messages_json = excluded.messages_json,
+                message_count = excluded.message_count,
+                updated_at = excluded.updated_at
+        """, (conversation_id, title, preview, json.dumps(messages[-500:]), len(messages), now, now))
+        conn.commit()
+        conn.close()
+        return {"id": conversation_id, "title": title, "message_count": len(messages), "updated_at": now}
+
+    def conversation_list(self, limit: int = 50) -> list[dict]:
+        """List recent conversations (metadata only)."""
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT id, title, preview, message_count, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
+            (min(limit, 200),),
+        ).fetchall()
+        conn.close()
+        return [
+            {"id": r[0], "title": r[1], "preview": r[2], "message_count": r[3], "created_at": r[4], "updated_at": r[5]}
+            for r in rows
+        ]
+
+    def conversation_get(self, conversation_id: str) -> dict | None:
+        """Load a full conversation with messages."""
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT id, title, preview, messages_json, message_count, created_at, updated_at FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0], "title": row[1], "preview": row[2],
+            "messages": json.loads(row[3]) if row[3] else [],
+            "message_count": row[4], "created_at": row[5], "updated_at": row[6],
+        }
+
+    def conversation_delete(self, conversation_id: str) -> bool:
+        conn = self._conn()
+        conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        conn.commit()
+        conn.close()
+        return True
 
     def snapshot_session(
         self,

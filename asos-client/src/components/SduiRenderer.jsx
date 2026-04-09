@@ -145,7 +145,7 @@ const GraphView = ({ nodes = [], links = [], height = 280 }) => {
           if (!p) return null;
           return (
             <g key={id}>
-              <circle cx={p.x} cy={p.y} r={10} fill="#6c5ce7" opacity={0.9} />
+              <circle cx={p.x} cy={p.y} r={10} fill="#8b5cf6" opacity={0.9} />
               <text
                 x={p.x}
                 y={p.y + 22}
@@ -179,7 +179,7 @@ const ChartView = ({ data, chart_type, label, color, height }) => {
     const max = Math.max(...values, 1);
     const min = Math.min(...values, 0);
     const range = max - min || 1;
-    const chartColor = color || '#6c5ce7';
+    const chartColor = color || '#8b5cf6';
 
     if (chart_type === 'bar') {
       const barW = (w - 20) / values.length;
@@ -398,7 +398,7 @@ export const SduiRenderer = ({ node, onAction }) => {
       return (
         <div className="bg-asos-card border border-asos-border backdrop-blur-md shadow-lg p-4 flex flex-col items-center gap-2"
           style={{ borderRadius: corner_radius || 16 }}>
-          {icon && <LucideDynamicIcon name={icon} size={28} color={color || '#6c5ce7'} />}
+          {icon && <LucideDynamicIcon name={icon} size={28} color={color || '#8b5cf6'} />}
           <span className="text-3xl font-bold" style={{ color: color || '#fff' }}>{value}</span>
           {unit && <span className="text-xs opacity-60 uppercase tracking-wider">{unit}</span>}
           <span className="text-sm opacity-80">{label}</span>
@@ -410,7 +410,7 @@ export const SduiRenderer = ({ node, onAction }) => {
           {label && <span className="text-xs opacity-70 mb-1 block">{label}</span>}
           <div className="w-full h-2 bg-asos-border rounded-full overflow-hidden">
             <div className="h-full rounded-full transition-all duration-500"
-              style={{ width: `${Math.max(0, Math.min(100, (node.value || 0) * 100))}%`, backgroundColor: color || '#6c5ce7' }} />
+              style={{ width: `${Math.max(0, Math.min(100, (node.value || 0) * 100))}%`, backgroundColor: color || '#8b5cf6' }} />
           </div>
         </div>
       );
