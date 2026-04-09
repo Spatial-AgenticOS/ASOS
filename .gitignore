@@ -45,3 +45,6 @@ coverage.xml
 memory_store.json
 client-tmp/
 poetry.lock
+
+# Internal agent handoff notes
+docs/NEXT_AGENT_HANDOFF.md
