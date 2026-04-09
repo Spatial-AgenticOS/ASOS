@@ -198,7 +198,7 @@ class ConfigLoader:
                 logger.warning(f"Failed to load credentials: {e}")
 
         # Also check env for API keys
-        for env_key in ("OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY"):
+        for env_key in ("OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
             value = os.environ.get(env_key)
             if value:
                 self._credentials[env_key] = value
@@ -213,8 +213,12 @@ class ConfigLoader:
 
     def _check_setup_complete(self) -> bool:
         """Check if the minimum setup has been done."""
+        if self._merged.get("meta", {}).get("setup_complete"):
+            return True
         has_llm_key = bool(
             self._credentials.get("OPENAI_API_KEY")
+            or self._credentials.get("ANTHROPIC_API_KEY")
+            or self._credentials.get("GOOGLE_API_KEY")
             or self._credentials.get("GROQ_API_KEY")
             or self._merged.get("llm", {}).get("provider") == "ollama"
         )
@@ -356,6 +360,8 @@ class ConfigLoader:
         safe["setup_complete"] = self._setup_complete
         safe["has_llm_key"] = bool(
             self._credentials.get("OPENAI_API_KEY")
+            or self._credentials.get("ANTHROPIC_API_KEY")
+            or self._credentials.get("GOOGLE_API_KEY")
             or self._credentials.get("GROQ_API_KEY")
         )
         safe["has_skill_keys"] = list(self._credentials.get("skill_keys", {}).keys())

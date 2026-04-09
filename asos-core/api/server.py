@@ -283,6 +283,15 @@ class BrainState:
         if self.notion:
             register_instance("notion", self.notion)
 
+        # TaskFlow runtime must be created before Orchestrator so the
+        # orchestrator receives a live reference.
+        try:
+            self.taskflows = TaskFlowRuntime(memory_store=self.memory)
+            await self.taskflows.start()
+            logger.info("TaskFlow runtime initialized")
+        except Exception as e:
+            logger.warning(f"TaskFlow runtime skipped: {e}")
+
         self.orchestrator = Orchestrator(
             skill_registry=self.skill_registry,
             send_to_client=self.send_to_session,
@@ -345,9 +354,11 @@ class BrainState:
         self.identity_workspace = IdentityWorkspace()
         self.identity_workspace.sync_tools_from_registry(self.skill_registry)
 
-        # GenUI engine
+        # GenUI engine — shared instance used by both the API layer and the orchestrator
         self.genui_engine = GenUIEngine(llm=_shared_llm)
         self.service_providers = ServiceProviderRegistry()
+        if self.orchestrator:
+            self.orchestrator.set_genui_engine(self.genui_engine)
 
         # Browser controller — register as a skill so the agent can invoke it
         self.browser = BrowserController()
@@ -377,14 +388,6 @@ class BrainState:
             logger.info("Cron scheduler initialized")
         except Exception as e:
             logger.debug(f"Cron scheduler skipped: {e}")
-
-        # TaskFlow runtime
-        try:
-            self.taskflows = TaskFlowRuntime(memory_store=self.memory)
-            await self.taskflows.start()
-            logger.info("TaskFlow runtime initialized")
-        except Exception as e:
-            logger.warning(f"TaskFlow runtime skipped: {e}")
 
         stats = self.memory.stats()
         logger.info(
@@ -1374,6 +1377,85 @@ async def list_genui_providers():
     return {"providers": state.service_providers.list_providers()}
 
 
+@app.get("/api/genui/providers/{provider_id}/surfaces")
+async def list_genui_provider_surfaces(provider_id: str):
+    """List provider-defined GenUI surfaces and cache status."""
+    if not state.service_providers:
+        return {"error": "Service provider registry not initialized"}
+    provider = state.service_providers.get(provider_id)
+    if not provider:
+        return {"error": "Provider not found"}
+
+    surfaces = provider.list_surfaces()
+    if state.genui_engine:
+        surfaces = state.genui_engine.list_provider_surfaces(provider_id)
+
+    return {
+        "provider_id": provider_id,
+        "brand": provider.brand,
+        "ui_rules": provider.ui_rules,
+        "cache_policy": provider.cache_policy,
+        "surfaces": surfaces,
+    }
+
+
+@app.get("/api/genui/providers/{provider_id}/surfaces/{surface_id}")
+async def get_genui_provider_surface(provider_id: str, surface_id: str):
+    """Get one provider surface contract plus cached layout, if compiled."""
+    if not state.service_providers:
+        return {"error": "Service provider registry not initialized"}
+    provider = state.service_providers.get(provider_id)
+    if not provider:
+        return {"error": "Provider not found"}
+
+    surface = provider.get_surface(surface_id)
+    if not surface:
+        return {"error": "Surface not found"}
+
+    cached = state.genui_engine.get_cached_surface(provider_id, surface_id) if state.genui_engine else None
+    return {
+        "provider_id": provider_id,
+        "surface_id": surface_id,
+        "surface": surface,
+        "cached": cached,
+    }
+
+
+@app.post("/api/genui/providers/{provider_id}/surfaces/compile")
+async def compile_genui_provider_surface(provider_id: str, body: dict):
+    """Compile a provider surface once and persist the layout."""
+    if not state.genui_engine:
+        return {"error": "GenUI engine not initialized"}
+
+    surface_id = body.get("surface_id") or body.get("id", "")
+    if not surface_id:
+        return {"error": "surface_id is required"}
+
+    return await state.genui_engine.compile_provider_surface(
+        provider_id=provider_id,
+        surface_id=surface_id,
+        force=bool(body.get("force")),
+    )
+
+
+@app.post("/api/genui/providers/{provider_id}/surfaces/render")
+async def render_genui_provider_surface(provider_id: str, body: dict):
+    """Render a provider surface from the cached fixed layout."""
+    if not state.genui_engine:
+        return {"error": "GenUI engine not initialized"}
+
+    surface_id = body.get("surface_id") or body.get("id", "")
+    if not surface_id:
+        return {"error": "surface_id is required"}
+
+    return await state.genui_engine.render_provider_surface(
+        provider_id=provider_id,
+        surface_id=surface_id,
+        data=body.get("data") or {},
+        force_compile=bool(body.get("force")),
+    )
+
+
 # ─────────────────────────────────────────────
 # Browser Control API
 # ─────────────────────────────────────────────
@@ -2196,7 +2278,8 @@ async def client_session(ws: WebSocket):
                             )
                             if manifest:
                                 await ws.send_json(TheoraMessage(
-                                    session_id=session_id, hop="brain",
+                                    session_id=session_id,
+                                    hop="brain",
                                     type="skill_proposal",
                                     payload={"manifest": manifest, "reason": need.get("capability", "")},
                                 ).model_dump())
@@ -2209,7 +2292,7 @@ async def client_session(ws: WebSocket):
                         state.voice_router.set_session_voice_mode(session_id, mode)
                         if mode == "disabled":
                             await state.voice_router.stop_session_voice(session_id)
-                    # Start Gemini session if requested
+
                     if provider == "gemini" and mode == "realtime" and state.gemini_proxy:
                         system_prompt = ""
                         if state.identity_workspace:
@@ -2218,8 +2301,15 @@ async def client_session(ws: WebSocket):
                         async def _gemini_audio_cb(sid, b64, is_done):
                             try:
                                 await ws.send_json(TheoraMessage(
-                                    session_id=sid, hop="brain", type="audio_response",
-                                    payload={"data_b64": b64, "encoding": "pcm16", "sample_rate": 24000, "is_final": is_done},
+                                    session_id=sid,
+                                    hop="brain",
+                                    type="audio_response",
+                                    payload={
+                                        "data_b64": b64,
+                                        "encoding": "pcm16",
+                                        "sample_rate": 24000,
+                                        "is_final": is_done,
+                                    },
                                 ).model_dump())
                             except Exception:
                                 pass
@@ -2227,7 +2317,9 @@ async def client_session(ws: WebSocket):
                         async def _gemini_transcript_cb(sid, text, is_partial):
                             try:
                                 await ws.send_json(TheoraMessage(
-                                    session_id=sid, hop="brain", type="transcript",
+                                    session_id=sid,
+                                    hop="brain",
+                                    type="transcript",
                                     payload={"text": text, "role": "assistant", "is_partial": is_partial},
                                 ).model_dump())
                             except Exception:
@@ -2240,14 +2332,16 @@ async def client_session(ws: WebSocket):
                             on_audio_delta=_gemini_audio_cb,
                             on_transcript=_gemini_transcript_cb,
                         )
+
                     await ws.send_json(TheoraMessage(
-                        session_id=session_id, hop="brain", type="voice_config_ack",
+                        session_id=session_id,
+                        hop="brain",
+                        type="voice_config_ack",
                         payload={"mode": mode, "provider": provider, "status": "ok"},
                     ).model_dump())
                     logger.info(f"Web client voice mode: {mode} (provider: {provider})")
 
                 elif msg.type == "audio_chunk" and isinstance(payload, AudioChunkPayload):
-                    # Route to Gemini if that session is using Gemini voice
                     if state.gemini_proxy and state.gemini_proxy.has_session(session_id):
                         await state.gemini_proxy.relay_audio(session_id, payload.data_b64)
                     elif state.voice_router:
@@ -2299,7 +2393,9 @@ async def client_session(ws: WebSocket):
 
                         data_b64 = frame_payload.get("data_b64", "")
                         change_event = state.change_detector.should_analyze(
-                            virtual_node, data_b64, frame_payload.get("encoding", "jpeg"),
+                            virtual_node,
+                            data_b64,
+                            frame_payload.get("encoding", "jpeg"),
                         )
                         if change_event and state.scene and state.scene.available:
                             mode = "tracking" if change_event.trigger_reason == "scene_change" else "general"
@@ -2455,7 +2551,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                                 session_id=sid,
                                 text=f"[GESTURE] User performed: {gesture}",
                                 context={"source": "gesture", "gesture": gesture, "node": node_id},
-                            )
+                    )
 
             elif msg.type == "telemetry":
                 telemetry_payload = raw.get("payload", {})

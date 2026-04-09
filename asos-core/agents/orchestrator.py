@@ -138,6 +138,10 @@ class Orchestrator:
         """Wire the MCP client so its tools are available to the LLM."""
         self._mcp_client = mcp_client
 
+    def set_genui_engine(self, engine):
+        """Wire the shared GenUI engine so tool-result SDUI uses the server's LLM."""
+        self._genui_engine = engine
+
     def _init_multi_agent(self):
         """Lazy-init the multi-agent orchestrator once LLM is available."""
         try:

@@ -10,7 +10,7 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [inputText, setInputText] = useState('');
-  const [hr, setHr] = useState(72);
+  const [hr, setHr] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [voiceMode, setVoiceMode] = useState('off');
   const [transcript, setTranscript] = useState('');
@@ -49,9 +49,16 @@ export default function App() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setHr(prev => Math.max(60, Math.min(130, prev + (Math.random() > 0.5 ? 1 : -1))));
-    }, 2000);
+    const fetchHealth = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/dashboard`);
+        const data = await res.json();
+        const heartRate = data?.health?.heart_rate;
+        if (heartRate) setHr(heartRate);
+      } catch { /* no health data available */ }
+    };
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -554,10 +561,12 @@ export default function App() {
               LIVE
             </span>
           )}
-          <div className="flex items-center gap-1.5 text-red-400">
-            <Activity size={16} className="animate-pulse" />
-            <span className="font-mono text-sm">{hr}</span>
-          </div>
+          {hr && (
+            <div className="flex items-center gap-1.5 text-red-400">
+              <Activity size={16} className="animate-pulse" />
+              <span className="font-mono text-sm">{hr}</span>
+            </div>
+          )}
           <button
             onClick={() => setWikiOpen(v => !v)}
             className={`p-1 transition ${wikiOpen ? 'text-asos-accent' : 'text-gray-400 hover:text-white'}`}

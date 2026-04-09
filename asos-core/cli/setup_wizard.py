@@ -521,6 +521,7 @@ class OnboardWizard:
             },
             "meta": {
                 "local_preset": self.config.get("local_preset", ""),
+                "setup_complete": True,
             },
         }
         settings_path = THEORA_HOME / "settings.json"
@@ -731,6 +732,17 @@ class OnboardWizardPlain:
         except Exception:
             pass
         (THEORA_HOME / "config.json").write_text(json.dumps(self.config, indent=2))
+
+        settings = {
+            "llm": {
+                "provider": self.config.get("provider", "openai"),
+                "model": self.config.get("model", "gpt-4o-mini"),
+            },
+            "meta": {
+                "setup_complete": True,
+            },
+        }
+        (THEORA_HOME / "settings.json").write_text(json.dumps(settings, indent=2))
 
         print("=" * 50)
         print(f"  Setup complete!")

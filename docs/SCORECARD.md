@@ -24,7 +24,7 @@ Legend:
 | Provider presets | Shipped | Yes | Yes | Backend presets API + Settings picker. |
 | Channels (Telegram/Discord/Slack/WhatsApp) | Partial | Partial | Partial | Channel manager and APIs exist; live connectivity depends on credentials/config. |
 | Hardware node plane | Partial | Partial | Partial | Device registry and node WebSocket path are active; breadth depends on adapters. |
-| GenUI renderer (cards/maps/charts/forms/media) | Shipped | Yes | Yes | Client renderer supports broad SDUI set. |
+| GenUI renderer (cards/maps/charts/forms/media) | Shipped | Yes | Yes | Client renderer supports broad SDUI set plus provider surface contracts with fixed-layout caching. |
 | Provider/channel status cards | Shipped | Yes | Yes | Dashboard now surfaces provider/channel/device status panel. |
 | MCP Server | Shipped | Yes | Yes | `/mcp` endpoint and tool exposure are available. |
 | MCP Client | Shipped | Partial | Partial | External MCP connectivity exists; demo readiness depends on remote servers. |
@@ -36,7 +36,7 @@ Legend:
 
 ## Immediate Demo Baseline
 
-Current baseline for the 8-beat platform demo:
+Current baseline for the 10-beat platform demo:
 - Setup and identity: ready
 - Voice/text conversation: ready
 - Computer/browser actions: ready (browser path is environment-dependent)
@@ -44,3 +44,5 @@ Current baseline for the 8-beat platform demo:
 - TaskFlow create/wait/resume: ready
 - Session snapshot/branch/restore: ready
 - Local vision + GenUI output: ready (requires Ollama VLM model installed)
+- Hardware daemon telemetry + control: ready (requires a running daemon)
+- Provider-defined GenUI surface: ready (no external dependencies)

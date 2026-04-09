@@ -252,7 +252,7 @@ export default function Dashboard() {
                 <div className="mt-2 space-y-1">
                   {genuiProviders.slice(0, 3).map((p) => (
                     <div key={p.provider_id} className="text-[11px] text-gray-400 truncate">
-                      {p.name || p.provider_id} · {p.components?.length || 0} comps
+                      {p.name || p.provider_id} · {p.components?.length || 0} comps · {p.surface_ids?.length || 0} surfaces · {p.cache_policy?.mode || 'static'} cache
                     </div>
                   ))}
                 </div>

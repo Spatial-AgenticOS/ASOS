@@ -12,8 +12,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Optional
 from uuid import uuid4
+
+from config.loader import theora_data_home
 
 logger = logging.getLogger("theora.genui")
 
@@ -53,12 +56,67 @@ Rules:
 """
 
 
+class ProviderSurfaceCache:
+    """Persistent cache for provider-generated GenUI layouts."""
+
+    def __init__(self, base_dir: Optional[str | Path] = None):
+        self._base_dir = Path(base_dir) if base_dir else theora_data_home() / "genui_surfaces"
+        self._base_dir.mkdir(parents=True, exist_ok=True)
+
+    def _surface_path(self, provider_id: str, surface_id: str) -> Path:
+        provider_dir = self._base_dir / provider_id
+        provider_dir.mkdir(parents=True, exist_ok=True)
+        return provider_dir / f"{surface_id}.json"
+
+    def load(self, provider_id: str, surface_id: str) -> Optional[dict]:
+        path = self._surface_path(provider_id, surface_id)
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text())
+        except Exception as e:
+            logger.warning(f"Failed to read cached GenUI surface {provider_id}/{surface_id}: {e}")
+            return None
+
+    def save(self, provider_id: str, surface_id: str, payload: dict, metadata: dict | None = None) -> dict:
+        record = {
+            "provider_id": provider_id,
+            "surface_id": surface_id,
+            "cached_at": int(time.time()),
+            "metadata": metadata or {},
+            "payload": payload,
+        }
+        path = self._surface_path(provider_id, surface_id)
+        path.write_text(json.dumps(record, indent=2))
+        return record
+
+    def list(self, provider_id: str) -> list[dict]:
+        provider_dir = self._base_dir / provider_id
+        if not provider_dir.exists():
+            return []
+
+        cached: list[dict] = []
+        for path in sorted(provider_dir.glob("*.json")):
+            try:
+                record = json.loads(path.read_text())
+            except Exception as e:
+                logger.warning(f"Failed to parse cached GenUI surface {path}: {e}")
+                continue
+            cached.append({
+                "surface_id": record.get("surface_id", path.stem),
+                "cached_at": record.get("cached_at"),
+                "metadata": record.get("metadata", {}),
+            })
+        return cached
+
+
 class GenUIEngine:
     """Production GenUI engine with LLM structured output."""
 
-    def __init__(self, llm=None):
+    def __init__(self, llm=None, cache_dir: Optional[str | Path] = None):
         self._llm = llm
         self._providers: dict[str, ServiceProvider] = {}
+        self._surface_cache = ProviderSurfaceCache(cache_dir)
 
     def set_llm(self, llm):
         self._llm = llm
@@ -115,6 +173,116 @@ class GenUIEngine:
         if not provider:
             return None
         return provider.render(component_id, data)
+
+    def get_cached_surface(self, provider_id: str, surface_id: str) -> Optional[dict]:
+        """Return a previously compiled provider surface, if any."""
+        return self._surface_cache.load(provider_id, surface_id)
+
+    def list_provider_surfaces(self, provider_id: str) -> list[dict]:
+        """List provider surfaces with cache status."""
+        provider = self._providers.get(provider_id)
+        if not provider:
+            return []
+
+        cached_by_id = {
+            item["surface_id"]: item for item in self._surface_cache.list(provider_id)
+        }
+        surfaces = []
+        for surface in provider.list_surfaces():
+            cache_info = cached_by_id.get(surface["surface_id"], {})
+            surfaces.append({
+                **surface,
+                "cached": surface["surface_id"] in cached_by_id,
+                "cached_at": cache_info.get("cached_at"),
+                "cache_metadata": cache_info.get("metadata", {}),
+            })
+        return surfaces
+
+    async def compile_provider_surface(self, provider_id: str, surface_id: str, force: bool = False) -> dict:
+        """
+        Compile a provider surface once and persist the layout.
+
+        This is the core static-caching path: providers describe a surface in JSON,
+        THEORA compiles it into SDUI once, then later opens reuse the cached layout.
+        """
+        provider = self._providers.get(provider_id)
+        if not provider:
+            return {"ok": False, "error": "Provider not registered"}
+
+        surface = provider.get_surface(surface_id)
+        if not surface:
+            return {"ok": False, "error": "Surface not found"}
+
+        cache_mode = str(provider.cache_policy.get("mode", "static")).lower()
+        if cache_mode != "disabled" and not force:
+            cached = self.get_cached_surface(provider_id, surface_id)
+            if cached:
+                return {
+                    "ok": True,
+                    "provider_id": provider_id,
+                    "surface_id": surface_id,
+                    "cache_hit": True,
+                    "payload": cached.get("payload"),
+                    "metadata": cached.get("metadata", {}),
+                }
+
+        payload = surface.get("template")
+        if not isinstance(payload, dict):
+            prompt = surface.get("prompt") or (
+                f"Generate a fixed-layout surface named '{surface.get('title', surface_id)}' "
+                f"for provider {provider.name}. Keep layout stable and brand compliant."
+            )
+            payload = await self.generate_from_prompt(
+                prompt,
+                context=provider.build_generation_context(surface_id),
+            )
+
+        if not isinstance(payload, dict) or "type" not in payload:
+            return {"ok": False, "error": "Failed to compile a valid surface"}
+
+        metadata = {
+            "title": surface.get("title", surface_id),
+            "cache_mode": cache_mode,
+            "layout_mode": provider.ui_rules.get("layout_mode", "fixed"),
+            "brand_mode": provider.ui_rules.get("brand_mode", "strict"),
+        }
+        if cache_mode != "disabled":
+            self._surface_cache.save(provider_id, surface_id, payload, metadata)
+
+        return {
+            "ok": True,
+            "provider_id": provider_id,
+            "surface_id": surface_id,
+            "cache_hit": False,
+            "payload": payload,
+            "metadata": metadata,
+        }
+
+    async def render_provider_surface(
+        self,
+        provider_id: str,
+        surface_id: str,
+        data: Optional[dict] = None,
+        force_compile: bool = False,
+    ) -> dict:
+        """
+        Render a provider surface using the cached layout.
+
+        The cached layout gives the user a stable shell while runtime data can still
+        hydrate placeholders inside the structure.
+        """
+        compiled = await self.compile_provider_surface(provider_id, surface_id, force=force_compile)
+        if not compiled.get("ok"):
+            return compiled
+
+        provider = self._providers.get(provider_id)
+        payload = compiled.get("payload") or {}
+        rendered = provider.render_surface(surface_id, payload, data or {}) if provider else payload
+        return {
+            **compiled,
+            "payload": rendered,
+            "layout": payload,
+        }
 
     @staticmethod
     def _fallback_text(text: str) -> dict:
@@ -220,12 +388,29 @@ class ServiceProvider:
         name: str,
         description: str = "",
         base_url: str = "",
+        brand: Optional[dict] = None,
+        ui_rules: Optional[dict] = None,
+        endpoints: Optional[list[dict]] = None,
+        cache_policy: Optional[dict] = None,
     ):
         self.provider_id = provider_id
         self.name = name
         self.description = description
         self.base_url = base_url
+        self.brand = brand or {}
+        self.ui_rules = {
+            "layout_mode": "fixed",
+            "brand_mode": "strict",
+            **(ui_rules or {}),
+        }
+        self.endpoints = endpoints or []
+        self.cache_policy = {
+            "mode": "static",
+            "persist": True,
+            **(cache_policy or {}),
+        }
         self.components: dict[str, dict] = {}
+        self.surfaces: dict[str, dict] = {}
         self._renderers: dict[str, callable] = {}
 
     def register_component(self, component_id: str, schema: dict, renderer: callable = None):
@@ -246,6 +431,55 @@ class ServiceProvider:
 
         template = schema.get("template", {})
         return self._fill_template(template, data)
+
+    def register_surface(self, surface_id: str, spec: dict):
+        """Register a named app surface/screen for compile-once GenUI."""
+        self.surfaces[surface_id] = spec
+
+    def get_surface(self, surface_id: str) -> Optional[dict]:
+        return self.surfaces.get(surface_id)
+
+    def list_surfaces(self) -> list[dict]:
+        return [
+            {
+                "surface_id": surface_id,
+                "title": spec.get("title", surface_id),
+                "has_template": isinstance(spec.get("template"), dict),
+                "has_prompt": bool(spec.get("prompt")),
+                "entry": bool(spec.get("entry", False)),
+            }
+            for surface_id, spec in self.surfaces.items()
+        ]
+
+    def build_generation_context(self, surface_id: str) -> dict:
+        """Build provider context for one-time surface compilation."""
+        surface = self.surfaces.get(surface_id, {})
+        surface_contract = {k: v for k, v in surface.items() if k != "template"}
+        return {
+            "provider": {
+                "provider_id": self.provider_id,
+                "name": self.name,
+                "description": self.description,
+                "base_url": self.base_url,
+                "brand": self.brand,
+                "ui_rules": self.ui_rules,
+                "cache_policy": self.cache_policy,
+                "endpoints": self.endpoints,
+            },
+            "surface": surface_contract,
+            "instructions": [
+                "Respect provider brand rules and theme tokens.",
+                "Generate a stable layout suitable for caching.",
+                "Do not shift primary navigation or action placement between renders.",
+            ],
+        }
+
+    def render_surface(self, surface_id: str, layout: Optional[dict], data: dict) -> Optional[dict]:
+        """Hydrate a cached or templated surface with runtime data."""
+        base_layout = layout or (self.surfaces.get(surface_id) or {}).get("template")
+        if not isinstance(base_layout, dict):
+            return None
+        return self._fill_template(base_layout, data)
 
     @staticmethod
     def _fill_template(template: dict, data: dict) -> dict:
@@ -280,12 +514,19 @@ class ServiceProviderRegistry:
             name=config.get("name", "Unknown"),
             description=config.get("description", ""),
             base_url=config.get("base_url", ""),
+            brand=config.get("brand"),
+            ui_rules=config.get("ui_rules"),
+            endpoints=config.get("endpoints"),
+            cache_policy=config.get("cache_policy"),
         )
         for comp in config.get("components", []):
             provider.register_component(
                 comp.get("id", ""),
                 comp.get("schema", {}),
             )
+        for surface in config.get("surfaces", []):
+            surface_id = surface.get("id") or surface.get("surface_id") or str(uuid4())[:8]
+            provider.register_surface(surface_id, surface)
         self._providers[pid] = provider
         return provider
 
@@ -296,6 +537,11 @@ class ServiceProviderRegistry:
                 "name": p.name,
                 "description": p.description,
                 "components": list(p.components.keys()),
+                "surface_ids": list(p.surfaces.keys()),
+                "brand": p.brand,
+                "ui_rules": p.ui_rules,
+                "cache_policy": p.cache_policy,
+                "endpoint_count": len(p.endpoints),
             }
             for p in self._providers.values()
         ]

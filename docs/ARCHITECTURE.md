@@ -45,15 +45,12 @@ All messages adhere to a lightweight schema, preventing packet-fragmentation iss
 **Brain to Daemon Command Execution:**
 ```json
 {
-  "msg_id": "req_881",
-  "hop": "brain",
-  "type": "execute",
-  "payload": {
-    "executor": "robot_move",
-    "args": {
-      "direction": "forward",
-      "speed": 35
-    }
+  "type": "command",
+  "request_id": "req_881",
+  "command": "robot_move",
+  "args": {
+    "direction": "forward",
+    "speed": 35
   }
 }
 ```
@@ -65,8 +62,8 @@ All messages adhere to a lightweight schema, preventing packet-fragmentation iss
   "type": "execute_result",
   "payload": {
     "request_id": "req_881",
-    "status": "success",
-    "stdout": "Robot chassis verified translation.",
+    "success": true,
+    "data": {"stdout": "Robot chassis verified translation."},
     "error": ""
   }
 }
