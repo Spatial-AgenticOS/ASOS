@@ -119,7 +119,11 @@ class SkillExecutor:
         if endpoint.method == "WS_EXECUTE":
             return await self._execute_via_daemon(tool_name, endpoint, args, skill)
 
-        # 4. Fallback to standard HTTP generic JSON runner
+        # 4. daemon:// protocol — local shell/AppleScript execution
+        if endpoint.url.startswith("daemon://"):
+            return await self._execute_local_daemon(endpoint, args)
+
+        # 5. Fallback to standard HTTP generic JSON runner
         url = endpoint.url
         method = endpoint.method.upper()
         headers = {}
@@ -176,6 +180,44 @@ class SkillExecutor:
             return {"success": False, "status_code": 0, "data": None, "error": "Request timed out"}
         except Exception as e:
             logger.error(f"Error calling {url}: {e}")
+            return {"success": False, "status_code": 0, "data": None, "error": str(e)}
+
+    async def _execute_local_daemon(self, endpoint: SkillEndpoint, args: dict) -> dict:
+        """Execute daemon:// URLs as local shell or AppleScript commands."""
+        import subprocess
+
+        path = endpoint.url.replace("daemon://local/", "")
+        command = args.get("script") or args.get("command") or ""
+        if not command:
+            return {"success": False, "status_code": 400, "data": None, "error": "No command or script provided"}
+
+        try:
+            if path == "applescript":
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    ["osascript", "-e", command],
+                    capture_output=True, text=True, timeout=15,
+                )
+            elif path == "shell":
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    command, shell=True,
+                    capture_output=True, text=True, timeout=15,
+                )
+            else:
+                return {"success": False, "status_code": 400, "data": None, "error": f"Unknown daemon path: {path}"}
+
+            output = proc.stdout.strip() or proc.stderr.strip()
+            return {
+                "success": proc.returncode == 0,
+                "status_code": 200 if proc.returncode == 0 else 500,
+                "data": {"output": output, "exit_code": proc.returncode},
+                "error": proc.stderr.strip() if proc.returncode != 0 else None,
+            }
+        except subprocess.TimeoutExpired:
+            return {"success": False, "status_code": 0, "data": None, "error": "Command timed out (15s)"}
+        except Exception as e:
+            logger.error(f"Local daemon execution failed: {e}")
             return {"success": False, "status_code": 0, "data": None, "error": str(e)}
 
     async def _execute_via_wasm(
