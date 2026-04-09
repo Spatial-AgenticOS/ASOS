@@ -279,6 +279,10 @@ def cmd_serve(host: str | None = None, port: int | None = None):
         print("uvicorn not installed. Run: pip install 'theora-asos[all]'")
         sys.exit(1)
 
+    core_root = str(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if core_root not in sys.path:
+        sys.path.insert(0, core_root)
+
     host = host or brain_bind_host()
     port = int(port or brain_port())
     public_base = os.getenv("THEORA_PUBLIC_BASE_URL", f"http://localhost:{port}")
