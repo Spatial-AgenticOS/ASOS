@@ -39,6 +39,9 @@ It can:
 - **Search the web** — real-time web search with AI summaries
 - **Talk to you** — bi-directional voice conversation via OpenAI Realtime API, with tool use mid-conversation
 - **Remember everything** — 4-tier persistent memory (notes, episodes, knowledge graph)
+- **Build durable knowledge** — compile notes/episodes/graph into Memory Wiki pages, then browse/search
+- **Run background workflows** — persistent TaskFlows that can wait, resume, and survive restarts
+- **Branch conversations safely** — snapshot, branch, and restore sessions without losing context
 - **Render rich UI** — tool results display as cards, metrics, and interactive components (GenUI)
 - **Control hardware** — smart glasses, wristbands, IoT devices connect via WebSocket
 - **Work with any LLM** — OpenAI, Anthropic Claude, Google Gemini, Groq, Ollama (local/free)
@@ -90,6 +93,7 @@ nix run .#brain    # run THEORA brain
 ```
 
 See [`docs/NIX.md`](docs/NIX.md) for package outputs and module details.
+See [`docs/SCORECARD.md`](docs/SCORECARD.md) for current capability and demo-readiness status.
 
 ---
 
@@ -104,6 +108,10 @@ See [`docs/NIX.md`](docs/NIX.md) for package outputs and module details.
 | **Multi-Provider LLM** | OpenAI, Anthropic, Gemini, Groq, Ollama — switch at runtime |
 | **Realtime Voice** | Bi-directional conversation via OpenAI Realtime API with tool use |
 | **4-Tier Memory** | Working memory, notes, episodes, knowledge graph — all in local SQLite |
+| **Memory Wiki** | Durable wiki pages compiled from notes/episodes/knowledge with browse/search APIs |
+| **Bulk Ingest** | Ingest repo/PDF/text into memory, then compile wiki pages |
+| **TaskFlows** | Persistent background workflows with waiting, resume, cancel, and restart recovery |
+| **Session Branch/Restore** | Snapshot, branch, and restore chat sessions safely |
 | **GenUI** | Tool results render as cards, metrics, lists, maps — not just raw text |
 | **Multi-Agent** | Router dispatches to specialist workers (health, home, research, creative) |
 | **CLI Agent** | REPL mode, one-shot commands, status dashboard |
@@ -234,6 +242,9 @@ THEORA uses a **4-tier local memory system** — richer than most AI agents:
 | **Knowledge Graph** | Facts and relationships | SQLite (S-P-O triples) | "User prefers dark mode" |
 
 Plus an **execution log** that tracks every tool call for routing optimization.
+On top of these tiers, THEORA also provides:
+- **Memory Wiki** (durable compiled pages with provenance)
+- **Session Snapshots** (branch and restore conversation + working memory states)
 
 ```bash
 # Everything stored locally
@@ -453,6 +464,23 @@ All config lives in `~/.theora/`:
 | `/api/llm/switch` | POST | Hot-swap LLM provider |
 | `/api/llm/presets` | GET | List named provider/model presets |
 | `/api/llm/presets/apply` | POST | Apply a preset (e.g. `ollama_vision`) |
+| `/api/wiki/compile` | POST | Compile notes/episodes/graph into Memory Wiki pages |
+| `/api/wiki/pages` | GET | List/search wiki pages |
+| `/api/wiki/pages/{page_id}` | GET | Get one wiki page |
+| `/api/wiki/stats` | GET | Wiki page counts and kind breakdown |
+| `/api/wiki/ingest` | POST | Ingest raw note into wiki pipeline |
+| `/api/wiki/ingest/text` | POST | Ingest text payload and compile wiki |
+| `/api/wiki/ingest/pdf` | POST | Ingest local PDF and compile wiki |
+| `/api/wiki/ingest/repo` | POST | Ingest local repo files and compile wiki |
+| `/api/taskflows` | POST/GET | Create or list TaskFlows |
+| `/api/taskflows/{flow_id}` | GET | Get TaskFlow details and step timeline |
+| `/api/taskflows/{flow_id}/resume` | POST | Resume waiting/failed TaskFlow |
+| `/api/taskflows/{flow_id}/cancel` | POST | Cancel TaskFlow |
+| `/api/session/snapshot` | POST | Create session snapshot |
+| `/api/session/snapshots` | GET | List session snapshots |
+| `/api/session/snapshots/{snapshot_id}` | GET | Get snapshot detail (history + working memory) |
+| `/api/session/branch` | POST | Branch from snapshot/session |
+| `/api/session/restore` | POST | Restore snapshot into current/new session |
 | `/api/voice/status` | GET | Voice subsystem status |
 | `/api/dashboard` | GET | Full dashboard data |
 | `/api/identity` | GET | Agent identity config |
@@ -473,6 +501,10 @@ All config lives in `~/.theora/`:
 ## What's New in v1.0
 
 - **PyPI package** — `pip install theora-asos[llm]` (GitHub Actions publishes on `v*` tags)
+- **Memory Wiki + ingest** — compile and browse durable wiki pages; ingest text, PDFs, and repos
+- **TaskFlows UI + runtime** — create/list/resume/cancel workflows with persistent state
+- **Session branch/restore UI** — snapshot, branch, and restore chat state from the web client
+- **Provider/channel status plane** — dashboard cards for provider/channel/device visibility
 - **Vision end-to-end** — browser webcam → VLM scene analysis, camera toggle in web UI
 - **Wake word** — `theora wake-test` CLI command for testing, `openwakeword` ML model support
 - **Android app** — fixed compilation, Gradle wrapper, buildable AAR + APK
