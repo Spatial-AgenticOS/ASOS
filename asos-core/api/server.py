@@ -45,6 +45,7 @@ from agents.skill_generator import SkillGenerator
 from agents.taskflow import TaskFlowRuntime
 from skills.registry import SkillRegistry
 from memory.store import MemoryStore
+from memory.ingest import MemoryIngestor
 from perception.fusion import PerceptionEngine
 from perception.audio_pipeline import AudioPipeline
 from perception.scene import SceneAnalyzer
@@ -1897,6 +1898,59 @@ async def wiki_ingest(body: dict):
     return {"note": note, "compile": compile_result}
 
 
+@app.post("/api/wiki/ingest/text")
+async def wiki_ingest_text(body: dict):
+    if not state.memory:
+        return {"error": "Memory store not initialized"}
+    ingestor = MemoryIngestor(state.memory)
+    try:
+        return ingestor.ingest_text(
+            content=(body or {}).get("content", ""),
+            source_label=(body or {}).get("source_label", "ui"),
+            compile_after=bool((body or {}).get("compile_after", True)),
+        )
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/wiki/ingest/pdf")
+async def wiki_ingest_pdf(body: dict):
+    if not state.memory:
+        return {"error": "Memory store not initialized"}
+    ingestor = MemoryIngestor(state.memory)
+    try:
+        return ingestor.ingest_pdf(
+            path=(body or {}).get("path", ""),
+            compile_after=bool((body or {}).get("compile_after", True)),
+        )
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/wiki/ingest/repo")
+async def wiki_ingest_repo(body: dict):
+    if not state.memory:
+        return {"error": "Memory store not initialized"}
+    raw_extensions = (body or {}).get("extensions_filter", [])
+    if isinstance(raw_extensions, str):
+        ext_list = [e.strip() for e in raw_extensions.split(",") if e.strip()]
+    elif isinstance(raw_extensions, list):
+        ext_list = [str(e).strip() for e in raw_extensions if str(e).strip()]
+    else:
+        ext_list = []
+
+    ingestor = MemoryIngestor(state.memory)
+    try:
+        return ingestor.ingest_repo(
+            path=(body or {}).get("path", ""),
+            extensions_filter=ext_list or None,
+            compile_after=bool((body or {}).get("compile_after", True)),
+            max_files=int((body or {}).get("max_files", 300)),
+        )
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/taskflows")
 async def create_taskflow(body: dict):
     """Create a persistent background TaskFlow."""
@@ -1983,6 +2037,16 @@ async def list_session_snapshots(session_id: str = "", branch_name: str = "", li
         limit=limit,
     )
     return {"snapshots": snapshots}
+
+
+@app.get("/api/session/snapshots/{snapshot_id}")
+async def get_session_snapshot(snapshot_id: str):
+    if not state.memory:
+        return {"error": "Memory store not initialized"}
+    snap = state.memory.get_snapshot(snapshot_id)
+    if not snap:
+        return {"error": f"Snapshot not found: {snapshot_id}"}
+    return snap
 
 
 @app.post("/api/session/branch")

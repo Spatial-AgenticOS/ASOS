@@ -16,6 +16,10 @@ export default function Dashboard() {
   const [dashboard, setDashboard] = useState(null);
   const [info, setInfo] = useState(null);
   const [activity, setActivity] = useState([]);
+  const [llmStatus, setLlmStatus] = useState(null);
+  const [llmPresets, setLlmPresets] = useState([]);
+  const [channelStats, setChannelStats] = useState({ active_channels: [], details: {}, channel_count: 0 });
+  const [genuiProviders, setGenuiProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [quickActionLoading, setQuickActionLoading] = useState(null);
 
@@ -24,10 +28,18 @@ export default function Dashboard() {
       fetch(`${API}/api/dashboard`).then(r => r.json()).catch(() => null),
       fetch(`${API}/api/system/info`).then(r => r.json()).catch(() => null),
       fetch(`${API}/api/activity`).then(r => r.json()).catch(() => null),
-    ]).then(([dash, sys, act]) => {
+      fetch(`${API}/api/llm/status`).then(r => r.json()).catch(() => null),
+      fetch(`${API}/api/llm/presets`).then(r => r.json()).catch(() => null),
+      fetch(`${API}/api/channels`).then(r => r.json()).catch(() => null),
+      fetch(`${API}/api/genui/providers`).then(r => r.json()).catch(() => null),
+    ]).then(([dash, sys, act, llm, presets, channels, genui]) => {
       if (dash) setDashboard(dash);
       if (sys) setInfo(sys);
       if (act) setActivity(act.entries || []);
+      if (llm && !llm.error) setLlmStatus(llm);
+      if (presets && !presets.error) setLlmPresets(presets.presets || []);
+      if (channels && !channels.error) setChannelStats(channels);
+      if (genui && !genui.error) setGenuiProviders(genui.providers || []);
       setLoading(false);
     });
   }, []);
@@ -186,6 +198,66 @@ export default function Dashboard() {
                 </p>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* Provider / Channel Plane */}
+        <div className="bg-asos-card border border-asos-border rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Sparkles size={16} className="text-asos-accent" />
+            <h2 className="font-semibold text-sm">Provider and Channel Plane</h2>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="bg-black bg-opacity-30 border border-asos-border rounded-lg p-3">
+              <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">LLM Provider</div>
+              <div className="text-sm font-semibold capitalize">
+                {llmStatus?.provider || info?.config?.llm?.provider || 'unknown'}
+              </div>
+              <div className="text-xs text-gray-500 font-mono mt-1">
+                {llmStatus?.model || info?.config?.llm?.model || 'n/a'}
+              </div>
+              <div className={`text-[11px] mt-2 ${llmStatus?.available ? 'text-green-400' : 'text-yellow-400'}`}>
+                {llmStatus?.available ? 'Connected' : 'Fallback / unavailable'}
+              </div>
+              <div className="text-[11px] text-gray-500 mt-1">
+                Presets: {llmPresets.length}
+              </div>
+            </div>
+
+            <div className="bg-black bg-opacity-30 border border-asos-border rounded-lg p-3">
+              <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Channels</div>
+              <div className="text-sm font-semibold">{channelStats.channel_count || 0} active</div>
+              {(channelStats.active_channels || []).length > 0 ? (
+                <div className="mt-2 space-y-1">
+                  {(channelStats.active_channels || []).map((ch) => (
+                    <div key={ch} className="text-[11px] text-gray-300 flex items-center justify-between">
+                      <span className="capitalize">{ch}</span>
+                      <span className="text-gray-500">
+                        {channelStats.details?.[ch]?.known_chats || 0} chats
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[11px] text-gray-500 mt-2">No active channels</div>
+              )}
+            </div>
+
+            <div className="bg-black bg-opacity-30 border border-asos-border rounded-lg p-3">
+              <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Providers + Devices</div>
+              <div className="text-[11px] text-gray-300">GenUI Providers: {genuiProviders.length}</div>
+              <div className="text-[11px] text-gray-300 mt-1">Connected Devices: {devices.length}</div>
+              {genuiProviders.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {genuiProviders.slice(0, 3).map((p) => (
+                    <div key={p.provider_id} className="text-[11px] text-gray-400 truncate">
+                      {p.name || p.provider_id} · {p.components?.length || 0} comps
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

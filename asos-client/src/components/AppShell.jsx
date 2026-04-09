@@ -1,10 +1,11 @@
 import React from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Settings, Brain, Cpu } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Settings, Brain, Cpu, ListChecks } from 'lucide-react';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/chat', icon: MessageSquare, label: 'Chat' },
+  { to: '/taskflows', icon: ListChecks, label: 'TaskFlows' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 

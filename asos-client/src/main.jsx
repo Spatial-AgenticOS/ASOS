@@ -5,6 +5,7 @@ import App from './App';
 import SetupWizard from './pages/SetupWizard';
 import Settings from './pages/Settings';
 import Dashboard from './pages/Dashboard';
+import TaskFlows from './pages/TaskFlows';
 import AppShell from './components/AppShell';
 import { API_BASE } from './config';
 import './index.css';
@@ -38,6 +39,7 @@ function Root() {
           <Route path="/" element={setupComplete ? <Dashboard /> : <Navigate to="/setup" />} />
           <Route path="/chat" element={setupComplete ? <App /> : <Navigate to="/setup" />} />
           <Route path="/settings" element={setupComplete ? <Settings /> : <Navigate to="/setup" />} />
+          <Route path="/taskflows" element={setupComplete ? <TaskFlows /> : <Navigate to="/setup" />} />
         </Route>
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
