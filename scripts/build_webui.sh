@@ -28,5 +28,10 @@ echo "Copying build output to $WEBUI..."
 rm -rf "$WEBUI"
 cp -r dist "$WEBUI"
 
+# Add __init__.py markers so setuptools includes webui as a package
+touch "$WEBUI/__init__.py"
+mkdir -p "$WEBUI/assets"
+touch "$WEBUI/assets/__init__.py"
+
 echo "Done. Web UI bundled at $WEBUI"
 echo "Start the server with: theora serve"

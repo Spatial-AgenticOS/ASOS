@@ -38,6 +38,9 @@ dependencies = [
 llm = [
     "openai>=1.50.0",
     "exa-py>=1.0.0",
+    "numpy>=1.24.0",
+    "sqlite-vec>=0.1.1",
+    "pyautogui>=0.9.54",
 ]
 groq = [
     "openai>=1.50.0",
@@ -60,12 +63,15 @@ desktop = [
 ]
 all = [
     "openai>=1.50.0",
+    "exa-py>=1.0.0",
+    "numpy>=1.24.0",
+    "sqlite-vec>=0.1.1",
+    "pyautogui>=0.9.54",
     "wasmtime>=22.0.0",
     "zeroconf>=0.131.0",
     "openwakeword>=0.6.0",
     "onnxruntime>=1.16.0",
     "rich>=13.0.0",
-    "pyautogui>=0.9.54",
 ]
 dev = [
     "pytest>=8.0.0",
@@ -82,11 +88,18 @@ Issues = "https://github.com/Spatial-AgenticOS/ASOS/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = [
+    "agents*", "api*", "channels*", "cli*", "config*", "gateway*",
+    "genui*", "hardware*", "identity*", "integrations*", "mcp*",
+    "memory*", "models*", "perception*", "security*", "skills*",
+    "voice*", "webui*", "tests*",
+]
 
 [tool.setuptools.package-data]
 "skills.manifests" = ["*.json"]
 "config" = ["*.yaml", "*.yml"]
-"webui" = ["**/*"]
+"webui" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json"]
+"webui.assets" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json", "*.map"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

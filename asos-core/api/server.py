@@ -2918,55 +2918,54 @@ async def shutdown_event():
 # Bundled Web UI (served from webui/ if present)
 # ─────────────────────────────────────────────
 
+from starlette.responses import HTMLResponse, FileResponse
+
 _webui_dir = Path(__file__).parent.parent / "webui"
-if _webui_dir.is_dir() and (_webui_dir / "index.html").exists():
+_webui_ready = _webui_dir.is_dir() and (_webui_dir / "index.html").exists()
+
+if _webui_ready and (_webui_dir / "assets").is_dir():
     from starlette.staticfiles import StaticFiles
-    from starlette.responses import FileResponse
+    app.mount("/assets", StaticFiles(directory=str(_webui_dir / "assets")), name="webui-assets")
+    logger.info(f"Web UI bundled from {_webui_dir} — open {brain_public_base_url()}")
+else:
+    logger.warning(
+        f"Web UI not found at {_webui_dir}. Dashboard will show setup instructions. "
+        "Run 'make bundle-webui' to build the dashboard."
+    )
 
-    if (_webui_dir / "assets").is_dir():
-        app.mount("/assets", StaticFiles(directory=str(_webui_dir / "assets")), name="webui-assets")
+_FALLBACK_HTML = """<!DOCTYPE html>
+<html><head><title>THEORA Brain</title>
+<style>body{font-family:system-ui;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;
+justify-content:center;min-height:100vh;margin:0;padding:2rem}
+.card{background:#141414;border:1px solid #222;border-radius:16px;padding:2.5rem;max-width:520px;text-align:center}
+h1{color:#06b6d4;margin-bottom:.5rem}code{background:#1a1a1a;padding:.2em .5em;border-radius:4px;font-size:.85em}
+a{color:#06b6d4}p{line-height:1.6}</style></head>
+<body><div class="card">
+<h1>THEORA Brain is Running</h1>
+<p>The API is active, but the web dashboard is not bundled in this install.</p>
+<p style="margin-top:1.5rem"><strong>Quick fix — reinstall with the dashboard:</strong></p>
+<ol style="text-align:left;line-height:2">
+<li>Clone: <code>git clone https://github.com/Spatial-AgenticOS/ASOS</code></li>
+<li>Build UI: <code>cd ASOS && make bundle-webui</code></li>
+<li>Install: <code>pip install -e asos-core[llm]</code></li>
+<li>Restart: <code>theora serve</code></li>
+</ol>
+<p style="margin-top:1rem;opacity:.6">Or use the CLI directly: <code>theora start</code></p>
+<p style="margin-top:1.5rem"><a href="/docs">API Docs</a> &middot;
+<a href="/api/config">Config</a> &middot;
+<a href="/skills">Skills</a> &middot;
+<a href="/health">Health</a></p>
+</div></body></html>"""
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str = ""):
+
+@app.get("/{full_path:path}")
+async def serve_webui_or_fallback(full_path: str = ""):
+    if _webui_ready:
         file_path = _webui_dir / full_path
         if full_path and file_path.is_file():
             return FileResponse(file_path)
         return FileResponse(_webui_dir / "index.html")
-
-    logger.info(f"Web UI bundled from {_webui_dir} — open {brain_public_base_url()}")
-else:
-    from starlette.responses import HTMLResponse
-
-    _FALLBACK_HTML = """<!DOCTYPE html>
-<html><head><title>THEORA Brain</title>
-<style>body{font-family:system-ui;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;
-justify-content:center;min-height:100vh;margin:0;padding:2rem}
-.card{background:#141414;border:1px solid #222;border-radius:16px;padding:2.5rem;max-width:480px;text-align:center}
-h1{color:#06b6d4;margin-bottom:.5rem}code{background:#1a1a1a;padding:.2em .5em;border-radius:4px;font-size:.85em}
-a{color:#06b6d4}</style></head>
-<body><div class="card">
-<h1>THEORA Brain is Running</h1>
-<p>The API is active at this address, but the web dashboard is not bundled.</p>
-<p style="margin-top:1.5rem"><strong>To enable the dashboard:</strong></p>
-<ol style="text-align:left;line-height:2">
-<li>Clone the repo: <code>git clone https://github.com/Spatial-AgenticOS/ASOS</code></li>
-<li>Build the UI: <code>cd ASOS && make bundle-webui</code></li>
-<li>Restart: <code>theora serve</code></li>
-</ol>
-<p style="margin-top:1rem;opacity:.5">Or use the CLI: <code>theora start</code></p>
-<p style="margin-top:1.5rem"><a href="/docs">API Docs (Swagger)</a> &middot;
-<a href="/api/config">Config</a> &middot;
-<a href="/skills">Skills</a></p>
-</div></body></html>"""
-
-    @app.get("/{full_path:path}")
-    async def serve_fallback(full_path: str = ""):
-        return HTMLResponse(_FALLBACK_HTML)
-
-    logger.warning(
-        f"Web UI not found at {_webui_dir}. Serving fallback page. "
-        "Run 'make bundle-webui' to build the dashboard."
-    )
+    return HTMLResponse(_FALLBACK_HTML)
 
 
 if __name__ == "__main__":

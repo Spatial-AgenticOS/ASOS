@@ -439,40 +439,72 @@ def cmd_doctor():
     else:
         print(f"  Brain:         RUNNING (v{data.get('version', '?')})")
 
-    # API keys
+    # API keys — check both env and credentials.json
     keys = {
         "OPENAI_API_KEY": "OpenAI",
         "ANTHROPIC_API_KEY": "Anthropic",
         "GOOGLE_API_KEY": "Gemini",
+        "OPENROUTER_API_KEY": "OpenRouter",
+        "DEEPSEEK_API_KEY": "DeepSeek",
+        "MOONSHOT_API_KEY": "Kimi/Moonshot",
+        "DASHSCOPE_API_KEY": "Qwen/Alibaba",
+        "GROQ_API_KEY": "Groq",
+        "EXA_API_KEY": "EXA Search",
         "TAVILY_API_KEY": "Tavily Search",
+        "SERPER_API_KEY": "Serper",
         "BRAVE_API_KEY": "Brave Search",
         "OPENWEATHER_API_KEY": "Weather",
+        "GITHUB_TOKEN": "GitHub",
+        "SPOTIFY_CLIENT_ID": "Spotify",
     }
+    creds_data = {}
+    creds = theora_home() / "credentials.json"
+    if creds.exists():
+        try:
+            import json as _json
+            creds_data = _json.loads(creds.read_text())
+        except Exception:
+            pass
+
     print()
     print("  API Keys:")
     any_key = False
     for env, name in keys.items():
-        val = os.environ.get(env, "")
+        val = os.environ.get(env, "") or creds_data.get(env, "")
         if val:
             masked = val[:8] + "..." + val[-4:] if len(val) > 12 else "***"
             print(f"    {name:20s} {masked}")
             any_key = True
     if not any_key:
-        creds = theora_home() / "credentials.json"
         if creds.exists():
-            print(f"    (loaded from {creds})")
+            print(f"    (credentials file found at {creds} but no keys set)")
         else:
             print("    NONE — run: theora setup")
 
     # Dependencies
     print()
+    print("  Core deps:")
+    for pkg, desc in [
+        ("openai", "OpenAI SDK"),
+        ("numpy", "NumPy (embeddings)"),
+        ("sqlite_vec", "Vector search index"),
+        ("pyautogui", "Desktop automation"),
+    ]:
+        try:
+            __import__(pkg)
+            print(f"    {desc:20s} installed")
+        except ImportError:
+            print(f"    {desc:20s} NOT INSTALLED — pip install theora-asos[llm]")
+
+    print()
     print("  Optional deps:")
     for pkg, desc in [
         ("sentence_transformers", "Local embeddings"),
         ("wasmtime", "WASM sandbox"),
+        ("zeroconf", "mDNS discovery"),
         ("duckduckgo_search", "DuckDuckGo search"),
         ("PIL", "Image processing"),
-        ("sqlite_vec", "Vector search index"),
+        ("exa", "EXA neural search"),
     ]:
         try:
             __import__(pkg)
@@ -486,6 +518,14 @@ def cmd_doctor():
         print(f"    {'Docker':20s} available")
     else:
         print(f"    {'Docker':20s} not installed (sandboxed exec disabled)")
+
+    # Web UI
+    from pathlib import Path as _Path
+    _webui = _Path(__file__).parent.parent / "webui"
+    if _webui.is_dir() and (_webui / "index.html").exists():
+        print(f"    {'Web Dashboard':20s} bundled")
+    else:
+        print(f"    {'Web Dashboard':20s} NOT BUNDLED — run: make bundle-webui")
 
     print()
 
