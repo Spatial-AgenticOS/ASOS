@@ -41,6 +41,8 @@ llm = [
     "numpy>=1.24.0",
     "sqlite-vec>=0.1.1",
     "pyautogui>=0.9.54",
+    "Pillow>=10.0.0",
+    "aiohttp>=3.9.0",
 ]
 groq = [
     "openai>=1.50.0",
@@ -61,12 +63,18 @@ wake = [
 desktop = [
     "pyautogui>=0.9.54",
 ]
+browser = [
+    "playwright>=1.40.0",
+]
 all = [
     "openai>=1.50.0",
     "exa-py>=1.0.0",
     "numpy>=1.24.0",
     "sqlite-vec>=0.1.1",
     "pyautogui>=0.9.54",
+    "Pillow>=10.0.0",
+    "aiohttp>=3.9.0",
+    "playwright>=1.40.0",
     "wasmtime>=22.0.0",
     "zeroconf>=0.131.0",
     "openwakeword>=0.6.0",
