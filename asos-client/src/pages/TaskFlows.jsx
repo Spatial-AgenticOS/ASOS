@@ -21,7 +21,7 @@ function statusClass(status) {
     case 'cancelled':
       return 'text-asos-text-secondary bg-gray-500/15 border-gray-500/30';
     default:
-      return 'text-purple-300 bg-purple-500/15 border-purple-500/30';
+      return 'text-cyan-300 bg-cyan-500/15 border-cyan-500/30';
   }
 }
 

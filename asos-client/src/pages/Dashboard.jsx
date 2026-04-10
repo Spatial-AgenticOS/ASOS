@@ -121,7 +121,7 @@ export default function Dashboard() {
         {/* Top Status Row */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatusCard icon={Wifi} label="Sessions" value={sessionCount} color="#34d399" />
-          <StatusCard icon={Cpu} label="Devices" value={deviceCount} color="#8b5cf6"
+          <StatusCard icon={Cpu} label="Devices" value={deviceCount} color="#06b6d4"
             subtitle={deviceCount > 0 ? `${deviceCount} connected` : 'none connected'} />
           <StatusCard icon={Puzzle} label="Skills" value={skillsCount} color="#fbbf24" />
           <StatusCard icon={Activity} label="Audio"

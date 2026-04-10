@@ -73,3 +73,8 @@ try:
     import skills.impl.desktop_automation
 except ImportError:
     pass
+
+try:
+    import skills.impl.system_settings
+except ImportError:
+    pass

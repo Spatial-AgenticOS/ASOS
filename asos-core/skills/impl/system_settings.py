@@ -1,0 +1,144 @@
+"""THEORA System Settings skill — read/write user identity, agent personality, and config."""
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import Any, Dict
+
+from skills.base import BaseSkill
+from skills.impl import register_skill
+from config.loader import theora_home
+
+logger = logging.getLogger("theora.skills.system_settings")
+
+
+def _home() -> Path:
+    h = theora_home()
+    h.mkdir(parents=True, exist_ok=True)
+    return h
+
+
+@register_skill
+class SystemSettingsSkill(BaseSkill):
+    name = "System Settings"
+    description = "Read and modify THEORA identity, personality, and configuration."
+    safety_level = "PRIVILEGED"
+
+    def __init__(self) -> None:
+        super().__init__(skill_id="system_settings")
+
+    async def execute(self, endpoint_id: str, args: Dict[str, Any], vault: Dict[str, str]) -> Dict[str, Any]:
+        try:
+            handler = {
+                "read_user_profile": self._read_user_profile,
+                "update_user_profile": self._update_user_profile,
+                "read_agent_personality": self._read_agent_personality,
+                "update_agent_personality": self._update_agent_personality,
+                "read_settings": self._read_settings,
+                "update_setting": self._update_setting,
+            }.get(endpoint_id)
+
+            if not handler:
+                return {"success": False, "status_code": 404, "data": None, "error": f"Unknown endpoint: {endpoint_id}"}
+            return handler(args)
+        except Exception as e:
+            logger.exception("system_settings error")
+            return {"success": False, "status_code": 500, "data": None, "error": str(e)}
+
+    def _read_user_profile(self, args: dict) -> dict:
+        user_md = _home() / "USER.md"
+        content = user_md.read_text() if user_md.exists() else ""
+        return {"success": True, "status_code": 200, "data": {"content": content}, "error": None}
+
+    def _update_user_profile(self, args: dict) -> dict:
+        home = _home()
+        raw = args.get("raw_content")
+        if raw:
+            (home / "USER.md").write_text(raw)
+        else:
+            lines = ["# About Me\n"]
+            if args.get("name"):
+                lines.append(f"My name is {args['name']}.")
+            if args.get("location"):
+                lines.append(f"I live in {args['location']}.")
+            if args.get("occupation"):
+                lines.append(f"I work as {args['occupation']}.")
+            if args.get("interests"):
+                lines.append(f"\n## Interests\n{args['interests']}")
+            (home / "USER.md").write_text("\n".join(lines) + "\n")
+
+        return {"success": True, "status_code": 200, "data": {"updated": "USER.md"}, "error": None}
+
+    def _read_agent_personality(self, args: dict) -> dict:
+        home = _home()
+        soul = (home / "SOUL.md").read_text() if (home / "SOUL.md").exists() else ""
+        identity_path = home / "IDENTITY.yaml"
+        name = "THEORA"
+        if identity_path.exists():
+            try:
+                import yaml
+                data = yaml.safe_load(identity_path.read_text()) or {}
+                name = data.get("name", "THEORA")
+            except Exception:
+                pass
+        return {
+            "success": True, "status_code": 200,
+            "data": {"name": name, "soul_content": soul},
+            "error": None,
+        }
+
+    def _update_agent_personality(self, args: dict) -> dict:
+        home = _home()
+        identity_path = home / "IDENTITY.yaml"
+        identity_data = {}
+        if identity_path.exists():
+            try:
+                import yaml
+                identity_data = yaml.safe_load(identity_path.read_text()) or {}
+            except Exception:
+                pass
+
+        agent_name = args.get("agent_name") or identity_data.get("name", "THEORA")
+        personality = args.get("personality")
+        tts_voice = args.get("tts_voice")
+
+        if personality:
+            (home / "SOUL.md").write_text(f"# {agent_name}\n\n{personality}\n")
+
+        identity_data["name"] = agent_name
+        if personality:
+            identity_data["personality"] = personality
+        if tts_voice:
+            identity_data.setdefault("voice", {})["tts_voice"] = tts_voice
+
+        try:
+            import yaml
+            identity_path.write_text(yaml.dump(identity_data, default_flow_style=False, sort_keys=False))
+        except ImportError:
+            identity_path.write_text(json.dumps(identity_data, indent=2))
+
+        return {"success": True, "status_code": 200, "data": {"updated": "IDENTITY.yaml + SOUL.md"}, "error": None}
+
+    def _read_settings(self, args: dict) -> dict:
+        from config.loader import ConfigLoader
+        loader = ConfigLoader()
+        settings = loader.discover()
+        safe = loader.to_client_safe_dict()
+        return {"success": True, "status_code": 200, "data": safe, "error": None}
+
+    def _update_setting(self, args: dict) -> dict:
+        section = args.get("section", "")
+        key = args.get("key", "")
+        value = args.get("value", "")
+        if not section or not key:
+            return {"success": False, "status_code": 400, "data": None, "error": "section and key are required"}
+
+        if value.lower() in ("true", "false"):
+            value = value.lower() == "true"
+
+        from config.loader import ConfigLoader
+        loader = ConfigLoader()
+        loader.discover()
+        loader.update_settings(section, key, value)
+        return {"success": True, "status_code": 200, "data": {"section": section, "key": key, "value": value}, "error": None}

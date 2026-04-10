@@ -531,7 +531,7 @@ class Orchestrator:
     # Skill Routing
     # ─────────────────────────────────────────────
 
-    ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use", "browser", "desktop_automation", "screen_capture"}
+    ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use", "browser", "desktop_automation", "screen_capture", "system_settings"}
 
     async def _route_prompt(self, text: str) -> list[SkillManifest]:
         if not self.skills.skills:
@@ -1520,15 +1520,20 @@ class Orchestrator:
         if not isinstance(result_data, dict):
             return
 
-        # Only generate UI for data-rich results (not simple status messages)
-        has_rich_data = any(k in result_data for k in (
+        # Unwrap the executor envelope — only pass the inner payload to GenUI
+        display_data = result_data.get("data", result_data)
+        if isinstance(display_data, str):
+            return
+        if not isinstance(display_data, dict):
+            display_data = result_data
+
+        has_rich_data = any(k in display_data for k in (
             "lat", "latitude", "lon", "longitude", "image_url", "image_b64",
             "results", "chart_data", "data", "items", "markers",
         ))
-        if not has_rich_data and len(result_data) < 3:
+        if not has_rich_data and len(display_data) < 2:
             return
 
-        # Resolve GenUI engine from state (accessible via self._genui_engine or import)
         genui = getattr(self, '_genui_engine', None)
         if not genui:
             try:
@@ -1543,14 +1548,14 @@ class Orchestrator:
         brand = getattr(skill, "brand", None) or {}
 
         ui_hint = None
-        if any(k in result_data for k in ("lat", "latitude", "longitude")):
+        if any(k in display_data for k in ("lat", "latitude", "longitude")):
             ui_hint = "map"
-        elif "chart_data" in result_data:
+        elif "chart_data" in display_data:
             ui_hint = "chart"
 
         try:
             sdui = await genui.generate_for_data(
-                data=result_data, skill_brand=brand,
+                data=display_data, skill_brand=brand,
                 ui_hint=ui_hint, endpoint_id=endpoint_id,
             )
             if sdui and "type" in sdui:
@@ -1607,6 +1612,13 @@ class Orchestrator:
             "  Use browser tools when the user asks to search the web, fill forms, interact with websites.\n"
             "- **notes_memory** is for THEORA's internal memory, NOT filesystem files.\n"
             "  Only use notes_memory when the user wants the agent to remember something.\n"
+            "- **system_settings__read_user_profile**: Read the user's identity/profile.\n"
+            "- **system_settings__update_user_profile**: Update name, location, occupation, interests.\n"
+            "- **system_settings__read_agent_personality**: Read the agent's name and personality.\n"
+            "- **system_settings__update_agent_personality**: Change agent name, personality, or voice.\n"
+            "- **system_settings__read_settings**: Read current system configuration.\n"
+            "- **system_settings__update_setting**: Change a system setting (LLM provider, model, etc.).\n"
+            "  Use system_settings when the user asks to change their identity, the agent's personality, or system config.\n"
         )
 
         # Perception Context

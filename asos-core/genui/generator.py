@@ -148,6 +148,9 @@ class GenUIEngine:
     async def generate_for_data(self, data: dict, skill_brand: dict = None,
                                 ui_hint: str = None, endpoint_id: str = "") -> dict:
         """Generate UI for API response data (deterministic + LLM fallback)."""
+        if isinstance(data, dict) and "success" in data and "data" in data and isinstance(data["data"], dict):
+            data = data["data"]
+
         if ui_hint == "map" and ("lat" in data or "latitude" in data):
             return self._build_map(data, skill_brand)
 
@@ -359,17 +362,55 @@ class GenUIEngine:
 
     @staticmethod
     def _build_card(data: dict, brand: dict = None) -> dict:
+        SKIP_KEYS = {
+            "success", "status_code", "error", "ok", "status",
+            "created_at", "updated_at", "timestamp", "_source",
+        }
         children = []
-        for k, v in data.items():
-            if k.startswith("_"):
-                continue
+
+        if brand and brand.get("name"):
             children.append({
                 "type": "HStack", "spacing": 8,
                 "children": [
-                    {"type": "Text", "value": k.replace("_", " ").title(), "style": "caption"},
-                    {"type": "Text", "value": str(v)[:200], "style": "body"},
+                    {"type": "Icon", "name": brand.get("icon", "Sparkles"), "size": 16,
+                     "color": brand.get("color", "#8b5cf6")},
+                    {"type": "Text", "value": brand["name"], "style": "subtitle"},
                 ],
             })
+
+        for k, v in data.items():
+            if k.startswith("_") or k in SKIP_KEYS:
+                continue
+            if v is None or v == "" or v == [] or v == {}:
+                continue
+            label = k.replace("_", " ").title()
+            if isinstance(v, dict):
+                for sub_k, sub_v in v.items():
+                    if sub_v is None or sub_v == "":
+                        continue
+                    children.append({
+                        "type": "HStack", "spacing": 8,
+                        "children": [
+                            {"type": "Text", "value": sub_k.replace("_", " ").title(), "style": "caption"},
+                            {"type": "Text", "value": str(sub_v)[:200], "style": "body"},
+                        ],
+                    })
+            elif isinstance(v, list):
+                children.append({"type": "Text", "value": label, "style": "caption"})
+                for item in v[:8]:
+                    children.append({"type": "Text", "value": f"  {item}" if not isinstance(item, dict) else f"  {json.dumps(item, default=str)[:150]}", "style": "body"})
+            else:
+                children.append({
+                    "type": "HStack", "spacing": 8,
+                    "children": [
+                        {"type": "Text", "value": label, "style": "caption"},
+                        {"type": "Text", "value": str(v)[:200], "style": "body"},
+                    ],
+                })
+
+        if not children:
+            children.append({"type": "Text", "value": "Done", "style": "body"})
+
         return {
             "type": "Card", "corner_radius": 12,
             "children": children[:15],

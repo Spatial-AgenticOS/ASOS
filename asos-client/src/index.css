@@ -7,14 +7,14 @@
   --color-asos-card-hover: rgba(255, 255, 255, 0.07);
   --color-asos-border: rgba(255, 255, 255, 0.08);
   --color-asos-border-bright: rgba(255, 255, 255, 0.14);
-  --color-asos-accent: #8b5cf6;
-  --color-asos-accent-dim: rgba(139, 92, 246, 0.15);
-  --color-asos-accent-glow: rgba(139, 92, 246, 0.25);
+  --color-asos-accent: #06b6d4;
+  --color-asos-accent-dim: rgba(6, 182, 212, 0.15);
+  --color-asos-accent-glow: rgba(6, 182, 212, 0.25);
   --color-asos-text: #fafafa;
   --color-asos-text-secondary: #a1a1aa;
   --color-asos-text-muted: #71717a;
   --color-asos-assistant: #18181b;
-  --color-asos-user: #7c3aed;
+  --color-asos-user: #0891b2;
 }
 
 html.light {
@@ -24,14 +24,14 @@ html.light {
   --color-asos-card-hover: rgba(0, 0, 0, 0.06);
   --color-asos-border: rgba(0, 0, 0, 0.08);
   --color-asos-border-bright: rgba(0, 0, 0, 0.15);
-  --color-asos-accent: #7c3aed;
-  --color-asos-accent-dim: rgba(124, 58, 237, 0.08);
-  --color-asos-accent-glow: rgba(124, 58, 237, 0.12);
+  --color-asos-accent: #0891b2;
+  --color-asos-accent-dim: rgba(8, 145, 178, 0.08);
+  --color-asos-accent-glow: rgba(8, 145, 178, 0.12);
   --color-asos-text: #18181b;
   --color-asos-text-secondary: #52525b;
   --color-asos-text-muted: #a1a1aa;
   --color-asos-assistant: #f4f4f5;
-  --color-asos-user: #7c3aed;
+  --color-asos-user: #0891b2;
 }
 
 html.light ::-webkit-scrollbar-thumb {
@@ -41,7 +41,7 @@ html.light ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.2);
 }
 html.light ::selection {
-  background: rgba(124, 58, 237, 0.2);
+  background: rgba(8, 145, 178, 0.2);
   color: #18181b;
 }
 
@@ -84,6 +84,6 @@ body {
 }
 
 ::selection {
-  background: rgba(139, 92, 246, 0.3);
+  background: rgba(6, 182, 212, 0.3);
   color: #fff;
 }
