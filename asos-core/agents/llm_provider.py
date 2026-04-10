@@ -87,16 +87,32 @@ class LLMProvider:
             self.model = self.model or "llama3"
             self.api_key = "ollama"
         elif self.provider == "groq":
-            self.base_url = "https://api.groq.com/openai/v1"
+            self.base_url = self.base_url or "https://api.groq.com/openai/v1"
             self.api_key = os.getenv("GROQ_API_KEY", self.api_key)
         elif self.provider == "anthropic":
-            self.base_url = "https://api.anthropic.com/v1"
+            self.base_url = self.base_url or "https://api.anthropic.com/v1"
             self.api_key = os.getenv("ANTHROPIC_API_KEY", self.api_key)
             self.model = self.model or "claude-sonnet-4-20250514"
         elif self.provider == "gemini":
-            self.base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
-            self.api_key = os.getenv("GEMINI_API_KEY", self.api_key)
-            self.model = self.model or "gemini-2.0-flash"
+            self.base_url = self.base_url or "https://generativelanguage.googleapis.com/v1beta/openai"
+            self.api_key = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", self.api_key))
+            self.model = self.model or "gemini-2.5-flash"
+        elif self.provider == "openrouter":
+            self.base_url = self.base_url or "https://openrouter.ai/api/v1"
+            self.api_key = os.getenv("OPENROUTER_API_KEY", self.api_key)
+            self.model = self.model or "openai/gpt-4.1"
+        elif self.provider == "deepseek":
+            self.base_url = self.base_url or "https://api.deepseek.com"
+            self.api_key = os.getenv("DEEPSEEK_API_KEY", self.api_key)
+            self.model = self.model or "deepseek-chat"
+        elif self.provider == "kimi":
+            self.base_url = self.base_url or "https://api.moonshot.cn/v1"
+            self.api_key = os.getenv("MOONSHOT_API_KEY", self.api_key)
+            self.model = self.model or "moonshot-v1-128k"
+        elif self.provider == "qwen":
+            self.base_url = self.base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            self.api_key = os.getenv("DASHSCOPE_API_KEY", self.api_key)
+            self.model = self.model or "qwen-max"
         else:
             self.base_url = self.base_url or "https://api.openai.com/v1"
 

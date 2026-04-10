@@ -2934,6 +2934,39 @@ if _webui_dir.is_dir() and (_webui_dir / "index.html").exists():
         return FileResponse(_webui_dir / "index.html")
 
     logger.info(f"Web UI bundled from {_webui_dir} — open {brain_public_base_url()}")
+else:
+    from starlette.responses import HTMLResponse
+
+    _FALLBACK_HTML = """<!DOCTYPE html>
+<html><head><title>THEORA Brain</title>
+<style>body{font-family:system-ui;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;
+justify-content:center;min-height:100vh;margin:0;padding:2rem}
+.card{background:#141414;border:1px solid #222;border-radius:16px;padding:2.5rem;max-width:480px;text-align:center}
+h1{color:#06b6d4;margin-bottom:.5rem}code{background:#1a1a1a;padding:.2em .5em;border-radius:4px;font-size:.85em}
+a{color:#06b6d4}</style></head>
+<body><div class="card">
+<h1>THEORA Brain is Running</h1>
+<p>The API is active at this address, but the web dashboard is not bundled.</p>
+<p style="margin-top:1.5rem"><strong>To enable the dashboard:</strong></p>
+<ol style="text-align:left;line-height:2">
+<li>Clone the repo: <code>git clone https://github.com/Spatial-AgenticOS/ASOS</code></li>
+<li>Build the UI: <code>cd ASOS && make bundle-webui</code></li>
+<li>Restart: <code>theora serve</code></li>
+</ol>
+<p style="margin-top:1rem;opacity:.5">Or use the CLI: <code>theora start</code></p>
+<p style="margin-top:1.5rem"><a href="/docs">API Docs (Swagger)</a> &middot;
+<a href="/api/config">Config</a> &middot;
+<a href="/skills">Skills</a></p>
+</div></body></html>"""
+
+    @app.get("/{full_path:path}")
+    async def serve_fallback(full_path: str = ""):
+        return HTMLResponse(_FALLBACK_HTML)
+
+    logger.warning(
+        f"Web UI not found at {_webui_dir}. Serving fallback page. "
+        "Run 'make bundle-webui' to build the dashboard."
+    )
 
 
 if __name__ == "__main__":

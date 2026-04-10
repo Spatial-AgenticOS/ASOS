@@ -37,6 +37,7 @@ dependencies = [
 [project.optional-dependencies]
 llm = [
     "openai>=1.50.0",
+    "exa-py>=1.0.0",
 ]
 groq = [
     "openai>=1.50.0",
@@ -85,6 +86,7 @@ where = ["."]
 [tool.setuptools.package-data]
 "skills.manifests" = ["*.json"]
 "config" = ["*.yaml", "*.yml"]
+"webui" = ["**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,16 +1,18 @@
 """
 THEORA Interactive Onboarding
 ==============================
-Like `openclaw onboard` — one guided flow that configures everything.
+Guided setup that configures everything: LLM provider, identity,
+agent personality, tool keys, device pairing, and more.
 
 Steps:
-  1. Welcome + what THEORA is
+  1. Welcome + THEORA mission
   2. LLM provider + API key (validated)
   3. Model selection
-  4. Tell the agent about YOU (USER.md)
+  4. Tell the agent about YOU (USER.md) — expanded identity
   5. Agent personality / SOUL.md
-  6. Optional tool keys (search, weather, image gen)
-  7. Summary + how to start
+  6. Device pairing (optional)
+  7. Tool API keys (search, weather, image gen, GitHub, etc.)
+  8. Summary + how to start
 
 All config is saved to ~/.theora/ — no env vars needed.
 """
@@ -19,9 +21,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sys
+import socket
 import textwrap
-from pathlib import Path
 
 from config.loader import theora_home
 from config.runtime import ollama_base_url
@@ -32,27 +33,32 @@ try:
     from rich.table import Table
     from rich.prompt import Prompt, Confirm
     from rich.progress import Progress, SpinnerColumn, TextColumn
-    from rich.text import Text
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
 
 THEORA_HOME = theora_home()
 
+# ═══════════════════════════════════════════════════════════
+# LLM Providers — updated April 2026
+# ═══════════════════════════════════════════════════════════
+
 PROVIDERS = {
     "openai": {
         "name": "OpenAI",
         "env_key": "OPENAI_API_KEY",
-        "desc": "GPT-4o, realtime voice, DALL-E image gen",
-        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
-        "default_model": "gpt-4o",
+        "base_url": "",
+        "desc": "GPT-4.1, GPT-4o, o3-mini, realtime voice, DALL-E",
+        "models": ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "o3-mini"],
+        "default_model": "gpt-4.1",
         "voice": True,
         "key_hint": "Starts with sk-...",
     },
     "anthropic": {
         "name": "Anthropic",
         "env_key": "ANTHROPIC_API_KEY",
-        "desc": "Claude Sonnet/Opus, strong reasoning",
+        "base_url": "",
+        "desc": "Claude Sonnet 4, Claude Opus, strong reasoning",
         "models": ["claude-sonnet-4-20250514", "claude-3.5-sonnet-20241022", "claude-3-opus-20240229"],
         "default_model": "claude-sonnet-4-20250514",
         "voice": False,
@@ -61,25 +67,74 @@ PROVIDERS = {
     "gemini": {
         "name": "Google Gemini",
         "env_key": "GOOGLE_API_KEY",
-        "desc": "Gemini 2.0 Flash, realtime voice, multimodal",
-        "models": ["gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"],
-        "default_model": "gemini-2.0-flash-exp",
+        "base_url": "",
+        "desc": "Gemini 2.5 Flash/Pro, realtime voice, multimodal",
+        "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+        "default_model": "gemini-2.5-flash",
         "voice": True,
         "key_hint": "From Google AI Studio",
+    },
+    "openrouter": {
+        "name": "OpenRouter",
+        "env_key": "OPENROUTER_API_KEY",
+        "base_url": "https://openrouter.ai/api/v1",
+        "desc": "Gateway to 300+ models (OpenAI, Claude, Gemini, DeepSeek, Llama)",
+        "models": [
+            "openai/gpt-4.1",
+            "anthropic/claude-sonnet-4",
+            "google/gemini-2.5-flash",
+            "deepseek/deepseek-chat",
+            "meta-llama/llama-3.3-70b-instruct",
+        ],
+        "default_model": "openai/gpt-4.1",
+        "voice": False,
+        "key_hint": "From openrouter.ai/keys",
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "env_key": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com",
+        "desc": "DeepSeek V3 / R1, strong reasoning, low cost",
+        "models": ["deepseek-chat", "deepseek-reasoner"],
+        "default_model": "deepseek-chat",
+        "voice": False,
+        "key_hint": "From platform.deepseek.com",
+    },
+    "kimi": {
+        "name": "Kimi (Moonshot)",
+        "env_key": "MOONSHOT_API_KEY",
+        "base_url": "https://api.moonshot.cn/v1",
+        "desc": "Moonshot v1, 128K context, strong Chinese + English",
+        "models": ["moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"],
+        "default_model": "moonshot-v1-128k",
+        "voice": False,
+        "key_hint": "From platform.moonshot.cn",
+    },
+    "qwen": {
+        "name": "Qwen (Alibaba)",
+        "env_key": "DASHSCOPE_API_KEY",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "desc": "Qwen Max/Plus/Turbo, strong multilingual",
+        "models": ["qwen-max", "qwen-plus", "qwen-turbo"],
+        "default_model": "qwen-max",
+        "voice": False,
+        "key_hint": "From dashscope.console.aliyun.com",
     },
     "groq": {
         "name": "Groq",
         "env_key": "GROQ_API_KEY",
-        "desc": "Ultra-fast inference, Llama/Mixtral models",
-        "models": ["llama-3.1-70b-versatile", "mixtral-8x7b-32768"],
-        "default_model": "llama-3.1-70b-versatile",
+        "base_url": "https://api.groq.com/openai/v1",
+        "desc": "Ultra-fast inference, Llama 3.3 / DeepSeek / Mixtral",
+        "models": ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b", "mixtral-8x7b-32768"],
+        "default_model": "llama-3.3-70b-versatile",
         "voice": False,
         "key_hint": "From console.groq.com",
     },
     "ollama": {
         "name": "Ollama (Local)",
         "env_key": "",
-        "desc": "Free, private, runs on your machine",
+        "base_url": "",
+        "desc": "Free, private, runs on your machine — no API key needed",
         "models": [],
         "default_model": "",
         "voice": False,
@@ -87,29 +142,73 @@ PROVIDERS = {
     },
 }
 
+# ═══════════════════════════════════════════════════════════
+# Tool API Keys
+# ═══════════════════════════════════════════════════════════
+
 TOOL_KEYS = [
+    {
+        "env": "EXA_API_KEY",
+        "name": "EXA Search",
+        "desc": "Neural search (best quality, understands meaning)",
+        "hint": "From exa.ai/dashboard — free tier available",
+        "optional": True,
+    },
     {
         "env": "TAVILY_API_KEY",
         "name": "Tavily",
-        "desc": "Web search (best quality)",
+        "desc": "Web search (fast, structured results)",
         "hint": "From tavily.com — free tier available",
         "optional": True,
     },
     {
-        "env": "OPENWEATHER_API_KEY",
-        "name": "OpenWeatherMap",
-        "desc": "Weather data",
-        "hint": "From openweathermap.org — free tier",
+        "env": "SERPER_API_KEY",
+        "name": "Serper",
+        "desc": "Google search results API",
+        "hint": "From serper.dev — 2500 free queries",
         "optional": True,
     },
     {
         "env": "BRAVE_API_KEY",
         "name": "Brave Search",
-        "desc": "Web search (alternative)",
+        "desc": "Web search (privacy-focused alternative)",
         "hint": "From brave.com/search/api",
         "optional": True,
     },
+    {
+        "env": "OPENWEATHER_API_KEY",
+        "name": "OpenWeatherMap",
+        "desc": "Weather data and forecasts",
+        "hint": "From openweathermap.org — free tier",
+        "optional": True,
+    },
+    {
+        "env": "GITHUB_TOKEN",
+        "name": "GitHub",
+        "desc": "Repo operations, issues, PRs",
+        "hint": "From github.com/settings/tokens (classic or fine-grained)",
+        "optional": True,
+    },
+    {
+        "env": "SPOTIFY_CLIENT_ID",
+        "name": "Spotify",
+        "desc": "Music playback and playlist control",
+        "hint": "From developer.spotify.com — also needs SPOTIFY_CLIENT_SECRET",
+        "optional": True,
+        "extra_keys": ["SPOTIFY_CLIENT_SECRET"],
+    },
+    {
+        "env": "GOOGLE_CALENDAR_CREDENTIALS",
+        "name": "Google Calendar",
+        "desc": "Scheduling, event management",
+        "hint": "From console.cloud.google.com — OAuth JSON path",
+        "optional": True,
+    },
 ]
+
+# ═══════════════════════════════════════════════════════════
+# Personality Presets
+# ═══════════════════════════════════════════════════════════
 
 PERSONALITY_PRESETS = {
     "assistant": {
@@ -169,6 +268,17 @@ def _looks_like_vision_model(model_name: str) -> bool:
     return any(token in lower for token in ("llava", "moondream", "qwen2-vl", "minicpm-v", "bakllava", "gemma3"))
 
 
+def _get_local_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "YOUR_IP"
+
+
 def run_setup():
     """Entry point — called by `theora setup` or the install script."""
     if HAS_RICH:
@@ -181,8 +291,11 @@ def run_setup():
         print("\n  Setup cancelled. Run `theora setup` anytime to continue.\n")
 
 
+# ═══════════════════════════════════════════════════════════
+# Rich-powered wizard
+# ═══════════════════════════════════════════════════════════
+
 class OnboardWizard:
-    """Rich-powered interactive onboarding."""
 
     def __init__(self, console: Console):
         self.c = console
@@ -193,22 +306,12 @@ class OnboardWizard:
         THEORA_HOME.mkdir(parents=True, exist_ok=True)
         self._load_existing_creds()
 
-        self.c.print()
-        self.c.print(Panel.fit(
-            "[bold cyan]Welcome to THEORA[/]\n\n"
-            "[dim]THEORA is an open-source AI operating system that lives on your machine.\n"
-            "It can control your computer, talk to your devices, remember everything,\n"
-            "and generate rich UI — all while keeping your data private.\n\n"
-            "This wizard will set everything up in about 2 minutes.[/]",
-            border_style="cyan",
-            padding=(1, 2),
-        ))
-        self.c.print()
-
+        self._step_welcome()
         await self._step_provider()
         await self._step_model()
         await self._step_about_you()
         await self._step_personality()
+        await self._step_device_pairing()
         await self._step_tool_keys()
         self._save_all()
         self._step_finish()
@@ -221,6 +324,30 @@ class OnboardWizard:
             except Exception:
                 self.creds = {}
 
+    # ── Welcome + Mission ─────────────────────────────────
+
+    def _step_welcome(self):
+        self.c.print()
+        self.c.print(Panel.fit(
+            "[bold cyan]Welcome to THEORA[/]\n"
+            "[bold]The Open AI Operating System[/]\n\n"
+            "[dim]THEORA is not just another computer-use agent.[/]\n\n"
+            "Unlike tools like OpenClaw that only control your screen,\n"
+            "THEORA is a [bold]full platform[/]:\n\n"
+            "  [cyan]•[/] Learns new skills on the fly — the agent teaches itself\n"
+            "  [cyan]•[/] Controls hardware — glasses, robots, sensors, home devices\n"
+            "  [cyan]•[/] Generates dynamic UI — no hardcoded apps, just data\n"
+            "  [cyan]•[/] Privacy-first memory — your data stays on YOUR machine\n"
+            "  [cyan]•[/] Multi-device — phone as bridge to glasses, wristbands, robots\n\n"
+            "[dim]Built for AI developers to extend: add skills, hardware daemons,\n"
+            "GenUI providers, and more. Our vision is a native AI OS built on NixOS\n"
+            "that runs on PCs, phones, and embedded devices.[/]\n\n"
+            "[bold green]This wizard sets everything up in about 3 minutes.[/]",
+            border_style="cyan",
+            padding=(1, 2),
+        ))
+        self.c.print()
+
     # ── Step 1: Provider ────────────────────────────────────
 
     async def _step_provider(self):
@@ -232,8 +359,8 @@ class OnboardWizard:
 
         table = Table(show_header=True, header_style="bold")
         table.add_column("#", style="dim", width=3)
-        table.add_column("Provider", style="cyan", width=18)
-        table.add_column("Description", width=45)
+        table.add_column("Provider", style="cyan", width=20)
+        table.add_column("Description", width=50)
         table.add_column("Voice", width=6)
         table.add_column("Status", width=16)
 
@@ -259,6 +386,9 @@ class OnboardWizard:
 
         provider = PROVIDERS[choice]
         self.config["provider"] = choice
+
+        if provider.get("base_url"):
+            self.config["base_url"] = provider["base_url"]
 
         if choice == "ollama":
             await self._check_ollama()
@@ -341,7 +471,7 @@ class OnboardWizard:
         self.config["model"] = model
         self.c.print()
 
-    # ── Step 3: About YOU ──────────────────────────────────
+    # ── Step 3: About YOU (expanded) ──────────────────────
 
     async def _step_about_you(self):
         self.c.print(Panel(
@@ -363,9 +493,44 @@ class OnboardWizard:
 
         name = Prompt.ask("  Your name", default="")
         location = Prompt.ask("  Where do you live (city/country)", default="")
+        language = Prompt.ask("  Preferred language", default="English")
         occupation = Prompt.ask("  What do you do (job, student, etc)", default="")
         interests = Prompt.ask("  Interests / hobbies (comma-separated)", default="")
-        health_goals = Prompt.ask("  Health goals or conditions to track (optional)", default="")
+
+        self.c.print()
+        self.c.print("  [dim]These help your agent match your style:[/]")
+        tech_levels = ["beginner", "intermediate", "advanced", "developer"]
+        tech_level = Prompt.ask(
+            "  Tech skill level",
+            choices=tech_levels,
+            default="intermediate",
+        )
+
+        use_cases = ["personal-assistant", "developer-tool", "health-monitoring", "home-automation", "research", "other"]
+        use_case = Prompt.ask(
+            "  Primary use case",
+            choices=use_cases,
+            default="personal-assistant",
+        )
+
+        comm_styles = ["detailed", "concise", "casual", "formal"]
+        comm_style = Prompt.ask(
+            "  Communication preference",
+            choices=comm_styles,
+            default="concise",
+        )
+
+        # Optional THEORA community section
+        self.c.print()
+        is_theora = Confirm.ask("  Are you part of the THEORA ecosystem? (glasses/wristband)", default=False)
+        health_goals = ""
+        glasses_model = ""
+        wristband = False
+        if is_theora:
+            health_goals = Prompt.ask("  Health goals or conditions to track", default="")
+            glasses_model = Prompt.ask("  THEORA glasses model (W300/W610/other/none)", default="none")
+            wristband = Confirm.ask("  THEORA wristband connected?", default=False)
+
         anything_else = Prompt.ask("  Anything else your agent should know", default="")
 
         lines = ["# About Me\n"]
@@ -373,12 +538,28 @@ class OnboardWizard:
             lines.append(f"My name is {name}.")
         if location:
             lines.append(f"I live in {location}.")
+        if language and language.lower() != "english":
+            lines.append(f"I prefer to communicate in {language}.")
         if occupation:
             lines.append(f"I work as {occupation}." if "student" not in occupation.lower() else f"I'm a {occupation}.")
+
+        lines.append("\n## Preferences")
+        lines.append(f"- Tech level: {tech_level}")
+        lines.append(f"- Primary use: {use_case}")
+        lines.append(f"- Communication style: {comm_style}")
+
         if interests:
             lines.append(f"\n## Interests\n{interests}")
-        if health_goals:
-            lines.append(f"\n## Health\n{health_goals}")
+
+        if is_theora:
+            lines.append("\n## THEORA Ecosystem")
+            if health_goals:
+                lines.append(f"- Health goals: {health_goals}")
+            if glasses_model and glasses_model.lower() != "none":
+                lines.append(f"- Glasses model: {glasses_model}")
+            if wristband:
+                lines.append("- Wristband: connected")
+
         if anything_else:
             lines.append(f"\n## Notes\n{anything_else}")
 
@@ -426,13 +607,11 @@ class OnboardWizard:
         agent_name = Prompt.ask("  Agent name", default="THEORA")
         self.config["agent_name"] = agent_name
 
-        # Write SOUL.md
         soul_path = THEORA_HOME / "SOUL.md"
         soul_content = f"# {agent_name}\n\n{soul_text}\n"
         soul_path.write_text(soul_content)
         self.c.print("  [green]SOUL.md saved[/]")
 
-        # Write IDENTITY.yaml
         try:
             import yaml
         except ImportError:
@@ -460,7 +639,6 @@ class OnboardWizard:
             identity_path.write_text(json.dumps(identity, indent=2))
         self.c.print("  [green]IDENTITY.yaml saved[/]")
 
-        # Write MEMORY.md (seed)
         memory_path = THEORA_HOME / "MEMORY.md"
         if not memory_path.exists():
             memory_path.write_text("# Agent Memory\n\nLong-term curated memory. The agent updates this file as it learns.\n")
@@ -468,13 +646,62 @@ class OnboardWizard:
 
         self.c.print()
 
-    # ── Step 5: Tool API Keys ──────────────────────────────
+    # ── Step 5: Device Pairing ─────────────────────────────
+
+    async def _step_device_pairing(self):
+        self.c.print(Panel(
+            "[bold]Step 5 · Connect Your Devices (Optional)[/]\n"
+            "[dim]THEORA can connect to your phone, glasses, wristband, and more.\n"
+            "Your phone acts as a bridge between wearables and this computer.[/]",
+            style="blue",
+        ))
+
+        self.c.print(
+            "  [bold]How it works:[/]\n"
+            "  ┌─────────────┐     ┌───────────┐     ┌────────────┐     ┌──────────┐\n"
+            "  │  Glasses /  │────▶│   Phone   │────▶│   Brain    │────▶│  Actions │\n"
+            "  │  Wristband  │     │  (Bridge) │     │ (This Mac) │     │ (Robot,  │\n"
+            "  │  Sensors    │     │           │     │            │     │  Apps..) │\n"
+            "  └─────────────┘     └───────────┘     └────────────┘     └──────────┘\n"
+        )
+
+        local_ip = _get_local_ip()
+        self.c.print(f"  [dim]Your local IP: {local_ip}[/]")
+        self.c.print(f"  [dim]Daemon WebSocket: ws://{local_ip}:9090/v1/daemon[/]")
+        self.c.print()
+
+        pair_phone = Confirm.ask("  Pair a phone as a bridge now?", default=False)
+        if pair_phone:
+            phone_url = Prompt.ask(
+                "  Phone bridge URL (or press Enter to use auto-discovery)",
+                default="",
+            )
+            if phone_url:
+                self.config["phone_bridge_url"] = phone_url
+                self.c.print("  [green]Phone bridge URL saved[/]")
+            else:
+                self.c.print("  [dim]Auto-discovery will find your phone when you start THEORA.[/]")
+                self.config["phone_bridge_url"] = "auto"
+
+        register_glasses = Confirm.ask("  Register THEORA glasses?", default=False)
+        if register_glasses:
+            model = Prompt.ask("  Glasses model (W300/W610/other)", default="W610")
+            self.config["glasses_model"] = model
+            self.c.print(f"  [green]Registered: {model}[/]")
+
+        if not pair_phone and not register_glasses:
+            self.c.print("  [dim]Skipped. You can pair devices later: theora devices pair[/]")
+
+        self.c.print()
+
+    # ── Step 6: Tool API Keys ──────────────────────────────
 
     async def _step_tool_keys(self):
         self.c.print(Panel(
-            "[bold]Step 5 · Tool API Keys (Optional)[/]\n"
+            "[bold]Step 6 · Tool API Keys (Optional)[/]\n"
             "[dim]These unlock extra capabilities. Skip any you don't need — \n"
-            "THEORA works without them (falls back to free alternatives).[/]",
+            "THEORA works without them (falls back to free alternatives).\n"
+            "Your LLM key (if OpenAI) already enables DALL-E image generation.[/]",
             style="blue",
         ))
 
@@ -489,6 +716,11 @@ class OnboardWizard:
                 key = Prompt.ask(f"    {tk['name']} API key", password=True)
                 if key.strip():
                     self.creds[tk["env"]] = key.strip()
+                    if "extra_keys" in tk:
+                        for ek in tk["extra_keys"]:
+                            extra_val = Prompt.ask(f"    {ek}", password=True)
+                            if extra_val.strip():
+                                self.creds[ek] = extra_val.strip()
                     self.c.print("    [green]Saved[/]")
             else:
                 self.c.print("    [dim]Skipped[/]")
@@ -498,26 +730,30 @@ class OnboardWizard:
     # ── Save & Finish ──────────────────────────────────────
 
     def _save_all(self):
-        """Persist credentials and config to disk."""
-        # Credentials
         creds_path = THEORA_HOME / "credentials.json"
         creds_path.write_text(json.dumps(self.creds, indent=2))
         creds_path.chmod(0o600)
 
-        # Config
         config_path = THEORA_HOME / "config.json"
         config_path.write_text(json.dumps(self.config, indent=2))
 
-        # Settings consumed by ConfigLoader
+        provider_id = self.config.get("provider", "openai")
+        provider_info = PROVIDERS.get(provider_id, {})
+
         settings = {
             "llm": {
-                "provider": self.config.get("provider", "openai"),
+                "provider": provider_id,
                 "model": self.config.get("model", "gpt-4o-mini"),
+                "base_url": self.config.get("base_url", provider_info.get("base_url", "")),
             },
             "vision": {
                 "enabled": bool(self.config.get("vlm_provider")),
                 "provider": self.config.get("vlm_provider", ""),
                 "model": self.config.get("vlm_model", ""),
+            },
+            "devices": {
+                "phone_bridge_url": self.config.get("phone_bridge_url", ""),
+                "glasses_model": self.config.get("glasses_model", ""),
             },
             "meta": {
                 "local_preset": self.config.get("local_preset", ""),
@@ -570,6 +806,24 @@ class OnboardWizard:
                     r = await client.get("https://api.groq.com/openai/v1/models",
                                          headers={"Authorization": f"Bearer {key}"})
                     return r.status_code == 200
+                elif provider == "openrouter":
+                    r = await client.get("https://openrouter.ai/api/v1/models",
+                                         headers={"Authorization": f"Bearer {key}"})
+                    return r.status_code == 200
+                elif provider == "deepseek":
+                    r = await client.get("https://api.deepseek.com/models",
+                                         headers={"Authorization": f"Bearer {key}"})
+                    return r.status_code == 200
+                elif provider == "kimi":
+                    r = await client.get("https://api.moonshot.cn/v1/models",
+                                         headers={"Authorization": f"Bearer {key}"})
+                    return r.status_code == 200
+                elif provider == "qwen":
+                    r = await client.get(
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
+                        headers={"Authorization": f"Bearer {key}"},
+                    )
+                    return r.status_code == 200
         except Exception:
             pass
         return False
@@ -604,10 +858,11 @@ class OnboardWizard:
         return []
 
 
-# ── Plain fallback (no rich) ───────────────────────────────
+# ═══════════════════════════════════════════════════════════
+# Plain fallback (no rich)
+# ═══════════════════════════════════════════════════════════
 
 class OnboardWizardPlain:
-    """Fallback for when rich is not installed."""
 
     def __init__(self):
         self.config: dict = {}
@@ -624,21 +879,33 @@ class OnboardWizardPlain:
                 self.creds = {}
 
         print()
-        print("=" * 50)
-        print("  THEORA Setup")
+        print("=" * 60)
+        print("  THEORA — The Open AI Operating System")
+        print()
+        print("  Not just another computer-use agent. THEORA is a full")
+        print("  platform: learns skills, controls hardware, generates UI,")
+        print("  privacy-first memory. Built for AI devs to extend.")
+        print()
         print("  (install 'rich' for a better experience: pip install rich)")
-        print("=" * 50)
+        print("=" * 60)
         print()
 
         # Provider
         print("Step 1: LLM Provider")
-        print("  1. OpenAI     2. Anthropic    3. Gemini")
-        print("  4. Groq       5. Ollama (local)")
-        choice_map = {"1": "openai", "2": "anthropic", "3": "gemini", "4": "groq", "5": "ollama"}
-        choice = input("  Choose (1-5) [1]: ").strip() or "1"
-        provider_id = choice_map.get(choice, "openai")
+        provider_keys = list(PROVIDERS.keys())
+        for i, pid in enumerate(provider_keys, 1):
+            p = PROVIDERS[pid]
+            print(f"  {i}. {p['name']:20s} {p['desc']}")
+        choice_idx = input(f"  Choose (1-{len(provider_keys)}) [1]: ").strip() or "1"
+        try:
+            provider_id = provider_keys[int(choice_idx) - 1]
+        except (ValueError, IndexError):
+            provider_id = "openai"
         provider = PROVIDERS[provider_id]
         self.config["provider"] = provider_id
+
+        if provider.get("base_url"):
+            self.config["base_url"] = provider["base_url"]
 
         if provider["env_key"]:
             existing = self.creds.get(provider["env_key"]) or os.getenv(provider["env_key"], "")
@@ -666,23 +933,57 @@ class OnboardWizardPlain:
             self.config["model"] = model_input if model_input in provider["models"] else provider["default_model"]
         print()
 
-        # About you
+        # About you (expanded)
         print("Step 3: About You")
         print("  Tell your agent about yourself (saved to ~/.theora/USER.md)")
         name = input("  Your name: ").strip()
         location = input("  City/Country: ").strip()
+        language = input("  Preferred language [English]: ").strip() or "English"
         occupation = input("  Occupation: ").strip()
         interests = input("  Interests: ").strip()
+        print("  Tech level: 1. beginner  2. intermediate  3. advanced  4. developer")
+        tech_idx = input("  Choose [2]: ").strip() or "2"
+        tech_map = {"1": "beginner", "2": "intermediate", "3": "advanced", "4": "developer"}
+        tech_level = tech_map.get(tech_idx, "intermediate")
+        print("  Use case: 1. personal-assistant  2. developer-tool  3. health-monitoring")
+        print("            4. home-automation  5. research  6. other")
+        use_idx = input("  Choose [1]: ").strip() or "1"
+        use_map = {"1": "personal-assistant", "2": "developer-tool", "3": "health-monitoring",
+                   "4": "home-automation", "5": "research", "6": "other"}
+        use_case = use_map.get(use_idx, "personal-assistant")
+        print("  Communication: 1. detailed  2. concise  3. casual  4. formal")
+        comm_idx = input("  Choose [2]: ").strip() or "2"
+        comm_map = {"1": "detailed", "2": "concise", "3": "casual", "4": "formal"}
+        comm_style = comm_map.get(comm_idx, "concise")
+
+        theora_member = input("  Part of THEORA ecosystem (glasses/wristband)? (y/N): ").strip().lower()
+        health_goals = ""
+        glasses_model = ""
+        if theora_member in ("y", "yes"):
+            health_goals = input("  Health goals: ").strip()
+            glasses_model = input("  Glasses model (W300/W610/other/none): ").strip()
 
         lines = ["# About Me\n"]
         if name:
             lines.append(f"My name is {name}.")
         if location:
             lines.append(f"I live in {location}.")
+        if language.lower() != "english":
+            lines.append(f"I prefer to communicate in {language}.")
         if occupation:
             lines.append(f"I work as {occupation}.")
+        lines.append("\n## Preferences")
+        lines.append(f"- Tech level: {tech_level}")
+        lines.append(f"- Primary use: {use_case}")
+        lines.append(f"- Communication style: {comm_style}")
         if interests:
             lines.append(f"\n## Interests\n{interests}")
+        if theora_member in ("y", "yes"):
+            lines.append("\n## THEORA Ecosystem")
+            if health_goals:
+                lines.append(f"- Health goals: {health_goals}")
+            if glasses_model and glasses_model.lower() != "none":
+                lines.append(f"- Glasses model: {glasses_model}")
         (THEORA_HOME / "USER.md").write_text("\n".join(lines) + "\n")
         print("  Saved.")
         print()
@@ -712,8 +1013,24 @@ class OnboardWizardPlain:
         print("  Saved.")
         print()
 
+        # Device pairing
+        print("Step 5: Device Pairing (optional)")
+        print("  Architecture: Glasses/Sensors -> Phone (Bridge) -> Brain (This PC) -> Actions")
+        local_ip = _get_local_ip()
+        print(f"  Your local IP: {local_ip}")
+        print(f"  Daemon WebSocket: ws://{local_ip}:9090/v1/daemon")
+        pair = input("  Pair a phone bridge now? (y/N): ").strip().lower()
+        if pair in ("y", "yes"):
+            url = input("  Phone bridge URL (Enter for auto-discovery): ").strip()
+            self.config["phone_bridge_url"] = url or "auto"
+        glasses = input("  Register THEORA glasses? (y/N): ").strip().lower()
+        if glasses in ("y", "yes"):
+            model = input("  Glasses model (W300/W610/other) [W610]: ").strip() or "W610"
+            self.config["glasses_model"] = model
+        print()
+
         # Tool keys
-        print("Step 5: Extra API Keys (optional, press Enter to skip)")
+        print("Step 6: Extra API Keys (optional, press Enter to skip)")
         for tk in TOOL_KEYS:
             existing = self.creds.get(tk["env"]) or os.getenv(tk["env"], "")
             if existing:
@@ -722,6 +1039,11 @@ class OnboardWizardPlain:
             key = input(f"  {tk['name']} ({tk['desc']}): ").strip()
             if key:
                 self.creds[tk["env"]] = key
+                if "extra_keys" in tk:
+                    for ek in tk["extra_keys"]:
+                        extra_val = input(f"  {ek}: ").strip()
+                        if extra_val:
+                            self.creds[ek] = extra_val
         print()
 
         # Save
@@ -733,10 +1055,16 @@ class OnboardWizardPlain:
             pass
         (THEORA_HOME / "config.json").write_text(json.dumps(self.config, indent=2))
 
+        provider_info = PROVIDERS.get(self.config.get("provider", "openai"), {})
         settings = {
             "llm": {
                 "provider": self.config.get("provider", "openai"),
                 "model": self.config.get("model", "gpt-4o-mini"),
+                "base_url": self.config.get("base_url", provider_info.get("base_url", "")),
+            },
+            "devices": {
+                "phone_bridge_url": self.config.get("phone_bridge_url", ""),
+                "glasses_model": self.config.get("glasses_model", ""),
             },
             "meta": {
                 "setup_complete": True,
@@ -744,14 +1072,14 @@ class OnboardWizardPlain:
         }
         (THEORA_HOME / "settings.json").write_text(json.dumps(settings, indent=2))
 
-        print("=" * 50)
+        print("=" * 60)
         print("  Setup complete!")
         print(f"  Agent: {agent_name}")
         print(f"  Config: {THEORA_HOME}")
         print()
         print("  Start your agent:")
         print("    theora start")
-        print("=" * 50)
+        print("=" * 60)
         print()
 
 

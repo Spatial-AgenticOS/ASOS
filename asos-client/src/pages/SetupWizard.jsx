@@ -4,7 +4,7 @@ import {
   Brain, Key, Puzzle, Cpu, ChevronRight, ChevronLeft,
   Check, AlertCircle, Loader2, Eye, EyeOff, Sparkles,
   Wifi, WifiOff, Shield, Zap, Link2, Music, Home, FileText,
-  ExternalLink, Server, User, Heart,
+  ExternalLink, Server, User, Heart, Smartphone, Globe, Search,
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
@@ -14,6 +14,7 @@ const STEPS = [
   { id: 'identity', label: 'You & Your Agent', icon: User },
   { id: 'llm', label: 'LLM Provider', icon: Sparkles },
   { id: 'keys', label: 'API Keys', icon: Key },
+  { id: 'devices', label: 'Devices', icon: Smartphone },
   { id: 'skills', label: 'Skills', icon: Puzzle },
   { id: 'apps', label: 'Connect Apps', icon: Link2 },
   { id: 'features', label: 'Features', icon: Zap },
@@ -27,6 +28,44 @@ const PERSONALITY_PRESETS = [
   { id: 'minimal', name: 'Minimal', desc: 'Brief responses, no small talk, just the facts', icon: Zap },
 ];
 
+const LLM_PROVIDERS = [
+  { id: 'openai', name: 'OpenAI', desc: 'GPT-4.1, GPT-4o, o3-mini, realtime voice, DALL-E', badge: 'Recommended', envKey: 'OPENAI_API_KEY',
+    models: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o', 'gpt-4o-mini', 'o3-mini'], defaultModel: 'gpt-4.1', baseUrl: '' },
+  { id: 'anthropic', name: 'Anthropic', desc: 'Claude Sonnet 4, Claude Opus — strong reasoning', envKey: 'ANTHROPIC_API_KEY',
+    models: ['claude-sonnet-4-20250514', 'claude-3.5-sonnet-20241022', 'claude-3-opus-20240229'], defaultModel: 'claude-sonnet-4-20250514', baseUrl: '' },
+  { id: 'gemini', name: 'Google Gemini', desc: 'Gemini 2.5 Flash/Pro, realtime voice, multimodal', envKey: 'GOOGLE_API_KEY',
+    models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'], defaultModel: 'gemini-2.5-flash', baseUrl: '' },
+  { id: 'openrouter', name: 'OpenRouter', desc: 'Gateway to 300+ models (OpenAI, Claude, Gemini, DeepSeek)', envKey: 'OPENROUTER_API_KEY',
+    models: ['openai/gpt-4.1', 'anthropic/claude-sonnet-4', 'google/gemini-2.5-flash', 'deepseek/deepseek-chat', 'meta-llama/llama-3.3-70b-instruct'],
+    defaultModel: 'openai/gpt-4.1', baseUrl: 'https://openrouter.ai/api/v1' },
+  { id: 'deepseek', name: 'DeepSeek', desc: 'DeepSeek V3 / R1 — strong reasoning, low cost', envKey: 'DEEPSEEK_API_KEY',
+    models: ['deepseek-chat', 'deepseek-reasoner'], defaultModel: 'deepseek-chat', baseUrl: 'https://api.deepseek.com' },
+  { id: 'kimi', name: 'Kimi (Moonshot)', desc: 'Moonshot v1, 128K context, Chinese + English', envKey: 'MOONSHOT_API_KEY',
+    models: ['moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k'], defaultModel: 'moonshot-v1-128k', baseUrl: 'https://api.moonshot.cn/v1' },
+  { id: 'qwen', name: 'Qwen (Alibaba)', desc: 'Qwen Max/Plus/Turbo — strong multilingual', envKey: 'DASHSCOPE_API_KEY',
+    models: ['qwen-max', 'qwen-plus', 'qwen-turbo'], defaultModel: 'qwen-max', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+  { id: 'groq', name: 'Groq', desc: 'Ultra-fast inference — Llama 3.3, DeepSeek, Mixtral', envKey: 'GROQ_API_KEY',
+    models: ['llama-3.3-70b-versatile', 'deepseek-r1-distill-llama-70b', 'mixtral-8x7b-32768'], defaultModel: 'llama-3.3-70b-versatile',
+    baseUrl: 'https://api.groq.com/openai/v1' },
+  { id: 'ollama', name: 'Ollama (Local)', desc: 'Free, private, runs on your machine — no API key', badge: 'Private', envKey: '',
+    models: [], defaultModel: '', baseUrl: '' },
+];
+
+const TOOL_KEYS_CONFIG = [
+  { env: 'EXA_API_KEY', name: 'EXA Search', desc: 'Neural search (best quality)', hint: 'exa.ai/dashboard' },
+  { env: 'TAVILY_API_KEY', name: 'Tavily', desc: 'Web search (fast, structured)', hint: 'tavily.com' },
+  { env: 'SERPER_API_KEY', name: 'Serper', desc: 'Google search API', hint: 'serper.dev' },
+  { env: 'BRAVE_API_KEY', name: 'Brave Search', desc: 'Privacy-focused search', hint: 'brave.com/search/api' },
+  { env: 'OPENWEATHER_API_KEY', name: 'OpenWeatherMap', desc: 'Weather data', hint: 'openweathermap.org' },
+  { env: 'GITHUB_TOKEN', name: 'GitHub', desc: 'Repo operations, PRs', hint: 'github.com/settings/tokens' },
+  { env: 'SPOTIFY_CLIENT_ID', name: 'Spotify', desc: 'Music control', hint: 'developer.spotify.com', extraKeys: ['SPOTIFY_CLIENT_SECRET'] },
+  { env: 'GOOGLE_CALENDAR_CREDENTIALS', name: 'Google Calendar', desc: 'Scheduling', hint: 'console.cloud.google.com' },
+];
+
+const TECH_LEVELS = ['beginner', 'intermediate', 'advanced', 'developer'];
+const USE_CASES = ['personal-assistant', 'developer-tool', 'health-monitoring', 'home-automation', 'research', 'other'];
+const COMM_STYLES = ['detailed', 'concise', 'casual', 'formal'];
+
 export default function SetupWizard({ onComplete }) {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
@@ -38,17 +77,25 @@ export default function SetupWizard({ onComplete }) {
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [identity, setIdentity] = useState({
-    userName: '', location: '', occupation: '', interests: '',
+    userName: '', location: '', language: 'English', occupation: '', interests: '',
+    techLevel: 'intermediate', useCase: 'personal-assistant', commStyle: 'concise',
+    isTheoraMember: false, healthGoals: '', glassesModel: '', wristband: false,
     agentName: 'THEORA', personality: 'assistant',
+  });
+  const [deviceConfig, setDeviceConfig] = useState({
+    phoneBridgeUrl: '', glassesModel: '', pairPhone: false, registerGlasses: false,
   });
 
   useEffect(() => {
     fetch(`${API}/api/config`).then(r => r.json()).then(setConfig).catch(() => {});
   }, []);
 
+  const selectedProvider = LLM_PROVIDERS.find(p => p.id === (settings.llm?.provider || 'openai')) || LLM_PROVIDERS[0];
+
   const validateKey = async () => {
     const provider = settings.llm?.provider || 'openai';
-    const key = credentials.OPENAI_API_KEY || credentials.GROQ_API_KEY || '';
+    const providerInfo = LLM_PROVIDERS.find(p => p.id === provider);
+    const key = credentials[providerInfo?.envKey] || '';
     if (!key && provider !== 'ollama') return;
 
     setValidating(true);
@@ -59,7 +106,7 @@ export default function SetupWizard({ onComplete }) {
         body: JSON.stringify({
           provider,
           api_key: key,
-          base_url: settings.llm?.base_url || '',
+          base_url: settings.llm?.base_url || providerInfo?.baseUrl || '',
         }),
       });
       const data = await resp.json();
@@ -73,10 +120,17 @@ export default function SetupWizard({ onComplete }) {
   const handleFinish = async () => {
     setSaving(true);
     try {
+      const finalSettings = {
+        ...settings,
+        devices: {
+          phone_bridge_url: deviceConfig.pairPhone ? (deviceConfig.phoneBridgeUrl || 'auto') : '',
+          glasses_model: deviceConfig.registerGlasses ? deviceConfig.glassesModel : '',
+        },
+      };
       await fetch(`${API}/api/setup/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings, credentials, identity }),
+        body: JSON.stringify({ settings: finalSettings, credentials, identity }),
       });
       onComplete?.();
       navigate('/');
@@ -97,13 +151,12 @@ export default function SetupWizard({ onComplete }) {
 
   return (
     <div className="min-h-screen bg-asos-bg flex">
-      {/* Left Panel — Steps */}
+      {/* Left Panel */}
       <div className="hidden lg:flex w-72 bg-asos-card border-r border-asos-border flex-col py-8 px-6">
         <div className="flex items-center gap-3 mb-12">
           <Brain size={28} className="text-asos-accent" />
           <span className="text-lg font-bold tracking-wider">THEORA</span>
         </div>
-
         <div className="space-y-2">
           {STEPS.map((s, i) => {
             const Icon = s.icon;
@@ -129,15 +182,11 @@ export default function SetupWizard({ onComplete }) {
             );
           })}
         </div>
-
-        <div className="mt-auto pt-8 text-xs opacity-30">
-          THEORA v1.0.0
-        </div>
+        <div className="mt-auto pt-8 text-xs opacity-30">THEORA v1.0.0</div>
       </div>
 
-      {/* Right Panel — Content */}
+      {/* Right Panel */}
       <div className="flex-1 flex flex-col">
-        {/* Mobile step indicator */}
         <div className="lg:hidden flex items-center gap-2 p-4 border-b border-asos-border">
           {STEPS.map((_, i) => (
             <div key={i} className={`h-1.5 flex-1 rounded-full ${i <= step ? 'bg-asos-accent' : 'bg-asos-border'}`} />
@@ -146,23 +195,27 @@ export default function SetupWizard({ onComplete }) {
 
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="w-full max-w-lg">
-            {/* Step: Welcome */}
+
+            {/* ── Welcome ── */}
             {currentStep.id === 'welcome' && (
               <div className="text-center space-y-6">
                 <div className="w-20 h-20 rounded-full bg-asos-accent/15 flex items-center justify-center mx-auto">
                   <Brain size={40} className="text-asos-accent" />
                 </div>
                 <h1 className="text-3xl font-bold">Welcome to THEORA</h1>
-                <p className="text-asos-text-secondary text-lg leading-relaxed max-w-md mx-auto">
-                  The Spatial Agentic Operating System. Local-first intelligence
-                  that sees, hears, learns, and acts.
+                <p className="text-lg font-medium text-asos-accent">The Open AI Operating System</p>
+                <p className="text-asos-text-secondary text-sm leading-relaxed max-w-md mx-auto">
+                  THEORA is not just another computer-use agent. Unlike tools like OpenClaw that only control your screen,
+                  THEORA is a full platform that learns, controls hardware, generates dynamic UI, and keeps your data private.
                 </p>
-                <div className="grid grid-cols-2 gap-3 pt-4 text-sm">
+                <div className="grid grid-cols-2 gap-3 pt-2 text-sm">
                   {[
-                    { icon: Sparkles, text: 'Self-Learning AI' },
-                    { icon: Eye, text: 'Vision + Scene' },
-                    { icon: Shield, text: 'Graduated Safety' },
-                    { icon: Cpu, text: 'Hardware Nodes' },
+                    { icon: Sparkles, text: 'Self-Learning Skills' },
+                    { icon: Cpu, text: 'Hardware Control' },
+                    { icon: Shield, text: 'Privacy-First Memory' },
+                    { icon: Smartphone, text: 'Multi-Device Bridge' },
+                    { icon: Globe, text: 'Dynamic GenUI' },
+                    { icon: Zap, text: 'NixOS Vision' },
                   ].map(({ icon: I, text }) => (
                     <div key={text} className="flex items-center gap-2 bg-asos-card rounded-lg p-3 border border-asos-border">
                       <I size={16} className="text-asos-accent" />
@@ -170,83 +223,73 @@ export default function SetupWizard({ onComplete }) {
                     </div>
                   ))}
                 </div>
+                <p className="text-xs text-asos-text-muted pt-2">
+                  Built for AI developers to extend. Add skills, hardware daemons, GenUI providers, and more.
+                </p>
               </div>
             )}
 
-            {/* Step: Identity */}
+            {/* ── Identity ── */}
             {currentStep.id === 'identity' && (
-              <div className="space-y-6">
+              <div className="space-y-5">
                 <h2 className="text-2xl font-bold">You & Your Agent</h2>
-                <p className="text-asos-text-secondary">Tell THEORA who you are and choose how your agent should behave.</p>
+                <p className="text-asos-text-secondary text-sm">Tell THEORA who you are. Saved locally in ~/.theora/USER.md.</p>
 
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-asos-text">Your Name</label>
-                      <input
-                        className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
-                        placeholder="Mahmoud"
-                        value={identity.userName}
-                        onChange={e => setIdentity(p => ({ ...p, userName: e.target.value }))}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-asos-text">Location</label>
-                      <input
-                        className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
-                        placeholder="San Francisco, US"
-                        value={identity.location}
-                        onChange={e => setIdentity(p => ({ ...p, location: e.target.value }))}
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-asos-text">Occupation</label>
-                      <input
-                        className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
-                        placeholder="Engineer, Designer, ..."
-                        value={identity.occupation}
-                        onChange={e => setIdentity(p => ({ ...p, occupation: e.target.value }))}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-asos-text">Interests</label>
-                      <input
-                        className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
-                        placeholder="AI, health tech, music"
-                        value={identity.interests}
-                        onChange={e => setIdentity(p => ({ ...p, interests: e.target.value }))}
-                      />
-                    </div>
-                  </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <InputField label="Your Name" placeholder="Mahmoud" value={identity.userName}
+                    onChange={v => setIdentity(p => ({ ...p, userName: v }))} />
+                  <InputField label="Location" placeholder="San Francisco, US" value={identity.location}
+                    onChange={v => setIdentity(p => ({ ...p, location: v }))} />
+                  <InputField label="Preferred Language" placeholder="English" value={identity.language}
+                    onChange={v => setIdentity(p => ({ ...p, language: v }))} />
+                  <InputField label="Occupation" placeholder="Engineer, Student, ..." value={identity.occupation}
+                    onChange={v => setIdentity(p => ({ ...p, occupation: v }))} />
                 </div>
 
-                <div className="pt-2 space-y-3">
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-asos-text">Agent Name</label>
-                    <input
-                      className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
-                      placeholder="THEORA"
-                      value={identity.agentName}
-                      onChange={e => setIdentity(p => ({ ...p, agentName: e.target.value }))}
-                    />
-                  </div>
+                <InputField label="Interests / Hobbies" placeholder="AI, health tech, music" value={identity.interests}
+                  onChange={v => setIdentity(p => ({ ...p, interests: v }))} />
 
-                  <label className="text-sm font-medium text-asos-text block pt-2">Agent Personality</label>
+                <div className="grid grid-cols-3 gap-3">
+                  <SelectField label="Tech Level" value={identity.techLevel} options={TECH_LEVELS}
+                    onChange={v => setIdentity(p => ({ ...p, techLevel: v }))} />
+                  <SelectField label="Use Case" value={identity.useCase} options={USE_CASES}
+                    onChange={v => setIdentity(p => ({ ...p, useCase: v }))} />
+                  <SelectField label="Comm. Style" value={identity.commStyle} options={COMM_STYLES}
+                    onChange={v => setIdentity(p => ({ ...p, commStyle: v }))} />
+                </div>
+
+                <div className="border-t border-asos-border pt-4 space-y-3">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={identity.isTheoraMember}
+                      onChange={e => setIdentity(p => ({ ...p, isTheoraMember: e.target.checked }))}
+                      className="accent-asos-accent" />
+                    I'm part of the THEORA ecosystem (glasses / wristband)
+                  </label>
+                  {identity.isTheoraMember && (
+                    <div className="grid grid-cols-2 gap-3 pl-6">
+                      <InputField label="Health Goals" placeholder="Better sleep, cardio..." value={identity.healthGoals}
+                        onChange={v => setIdentity(p => ({ ...p, healthGoals: v }))} />
+                      <SelectField label="Glasses Model" value={identity.glassesModel}
+                        options={['none', 'W300', 'W610', 'other']}
+                        onChange={v => setIdentity(p => ({ ...p, glassesModel: v }))} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-asos-border pt-4 space-y-3">
+                  <InputField label="Agent Name" placeholder="THEORA" value={identity.agentName}
+                    onChange={v => setIdentity(p => ({ ...p, agentName: v }))} />
+                  <label className="text-sm font-medium text-asos-text block">Agent Personality</label>
                   <div className="grid grid-cols-2 gap-3">
                     {PERSONALITY_PRESETS.map(p => {
                       const Icon = p.icon;
                       return (
-                        <button
-                          key={p.id}
+                        <button key={p.id}
                           onClick={() => setIdentity(prev => ({ ...prev, personality: p.id }))}
                           className={`text-left px-4 py-3.5 rounded-xl border transition-all ${
                             identity.personality === p.id
-                              ? 'border-asos-accent bg-asos-accent/10'
-                              : 'border-asos-border bg-asos-card hover:border-asos-border-bright'
-                          }`}
-                        >
+                              ? 'border-asos-accent bg-asos-accent/10' : 'border-asos-border bg-asos-card hover:border-asos-border-bright'
+                          }`}>
                           <div className="flex items-center gap-2 mb-1">
                             <Icon size={14} className="text-asos-accent" />
                             <span className="font-semibold text-sm">{p.name}</span>
@@ -260,138 +303,182 @@ export default function SetupWizard({ onComplete }) {
               </div>
             )}
 
-            {/* Step: LLM Provider */}
+            {/* ── LLM Provider ── */}
             {currentStep.id === 'llm' && (
-              <div className="space-y-6">
+              <div className="space-y-5">
                 <h2 className="text-2xl font-bold">Choose Your LLM</h2>
-                <p className="text-asos-text-secondary">THEORA needs a language model to think. Pick your provider.</p>
-                <div className="space-y-3">
-                  {[
-                    { id: 'openai', name: 'OpenAI', desc: 'GPT-4o, GPT-4o-mini (cloud)', badge: 'Recommended' },
-                    { id: 'groq', name: 'Groq', desc: 'LPU-accelerated Llama, Mixtral (cloud)' },
-                    { id: 'ollama', name: 'Ollama', desc: 'Local models — fully private, no API key needed', badge: 'Private' },
-                  ].map(p => (
-                    <button
-                      key={p.id}
-                      onClick={() => updateSetting('llm', 'provider', p.id)}
-                      className={`w-full text-left px-5 py-4 rounded-xl border transition-all ${
+                <p className="text-asos-text-secondary text-sm">THEORA needs a language model. Pick your provider.</p>
+                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
+                  {LLM_PROVIDERS.map(p => (
+                    <button key={p.id}
+                      onClick={() => {
+                        updateSetting('llm', 'provider', p.id);
+                        if (p.baseUrl) updateSetting('llm', 'base_url', p.baseUrl);
+                        if (p.defaultModel) updateSetting('llm', 'model', p.defaultModel);
+                        setKeyValid(null);
+                      }}
+                      className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${
                         (settings.llm?.provider || 'openai') === p.id
-                          ? 'border-asos-accent bg-asos-accent/10'
-                          : 'border-asos-border bg-asos-card hover:border-asos-border-bright'
-                      }`}
-                    >
+                          ? 'border-asos-accent bg-asos-accent/10' : 'border-asos-border bg-asos-card hover:border-asos-border-bright'
+                      }`}>
                       <div className="flex items-center justify-between">
                         <div>
-                          <div className="font-semibold">{p.name}</div>
-                          <div className="text-sm text-asos-text-secondary mt-0.5">{p.desc}</div>
+                          <div className="font-semibold text-sm">{p.name}</div>
+                          <div className="text-xs text-asos-text-secondary mt-0.5">{p.desc}</div>
                         </div>
                         {p.badge && (
-                          <span className="text-xs px-2 py-1 rounded-full bg-asos-accent/20 text-asos-accent">
-                            {p.badge}
-                          </span>
+                          <span className="text-xs px-2 py-1 rounded-full bg-asos-accent/20 text-asos-accent shrink-0">{p.badge}</span>
                         )}
                       </div>
                     </button>
                   ))}
                 </div>
 
-                {(settings.llm?.provider || 'openai') !== 'ollama' && (
+                {selectedProvider.models.length > 0 && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Model</label>
                     <select
-                      className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 focus:outline-none focus:ring-1 focus:ring-asos-accent"
-                      value={settings.llm?.model || 'gpt-4o-mini'}
+                      className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 focus:outline-none focus:ring-1 focus:ring-asos-accent text-sm"
+                      value={settings.llm?.model || selectedProvider.defaultModel}
                       onChange={e => updateSetting('llm', 'model', e.target.value)}
                     >
-                      {(settings.llm?.provider || 'openai') === 'openai'
-                        ? ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1-nano'].map(m => <option key={m} value={m}>{m}</option>)
-                        : ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768'].map(m => <option key={m} value={m}>{m}</option>)
-                      }
+                      {selectedProvider.models.map(m => <option key={m} value={m}>{m}</option>)}
                     </select>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Step: API Keys */}
+            {/* ── API Keys ── */}
             {currentStep.id === 'keys' && (
-              <div className="space-y-6">
+              <div className="space-y-5">
                 <h2 className="text-2xl font-bold">API Keys</h2>
-                <p className="text-asos-text-secondary">
-                  {(settings.llm?.provider || 'openai') === 'ollama'
-                    ? 'Ollama runs locally — no API key needed. You can add skill keys below.'
-                    : 'Enter your API key. It\'s stored locally and never leaves your machine.'
-                  }
+                <p className="text-asos-text-secondary text-sm">
+                  {selectedProvider.id === 'ollama'
+                    ? 'Ollama runs locally — no API key needed. Add tool keys below.'
+                    : 'Enter your API key. Stored locally, never leaves your machine.'}
                 </p>
 
-                {(settings.llm?.provider || 'openai') !== 'ollama' && (
+                {selectedProvider.envKey && (
                   <div className="space-y-3">
                     <label className="text-sm font-medium flex items-center gap-2">
                       <Key size={14} className="text-asos-accent" />
-                      {(settings.llm?.provider || 'openai') === 'openai' ? 'OpenAI' : 'Groq'} API Key
+                      {selectedProvider.name} API Key
                     </label>
                     <div className="relative">
                       <input
                         type={showKey ? 'text' : 'password'}
                         placeholder="sk-..."
                         className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 pr-20 focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono text-sm"
-                        value={credentials[(settings.llm?.provider || 'openai') === 'openai' ? 'OPENAI_API_KEY' : 'GROQ_API_KEY'] || ''}
+                        value={credentials[selectedProvider.envKey] || ''}
                         onChange={e => {
-                          const keyName = (settings.llm?.provider || 'openai') === 'openai' ? 'OPENAI_API_KEY' : 'GROQ_API_KEY';
-                          setCredentials(prev => ({ ...prev, [keyName]: e.target.value }));
+                          setCredentials(prev => ({ ...prev, [selectedProvider.envKey]: e.target.value }));
                           setKeyValid(null);
                         }}
                       />
-                      <button
-                        onClick={() => setShowKey(!showKey)}
-                        className="absolute right-12 top-1/2 -translate-y-1/2 p-1 opacity-40 hover:opacity-80"
-                      >
+                      <button onClick={() => setShowKey(!showKey)}
+                        className="absolute right-12 top-1/2 -translate-y-1/2 p-1 opacity-40 hover:opacity-80">
                         {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
-                      <button
-                        onClick={validateKey}
-                        disabled={validating}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-asos-accent rounded text-xs font-medium hover:bg-asos-accent/80"
-                      >
+                      <button onClick={validateKey} disabled={validating}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-asos-accent rounded text-xs font-medium hover:bg-asos-accent/80">
                         {validating ? <Loader2 size={14} className="animate-spin" /> : 'Test'}
                       </button>
                     </div>
-                    {keyValid === true && (
-                      <div className="flex items-center gap-2 text-green-400 text-sm">
-                        <Check size={14} /> Key is valid
-                      </div>
-                    )}
-                    {keyValid === false && (
-                      <div className="flex items-center gap-2 text-red-400 text-sm">
-                        <AlertCircle size={14} /> Key is invalid or expired
-                      </div>
-                    )}
+                    {keyValid === true && <div className="flex items-center gap-2 text-green-400 text-sm"><Check size={14} /> Key is valid</div>}
+                    {keyValid === false && <div className="flex items-center gap-2 text-red-400 text-sm"><AlertCircle size={14} /> Key is invalid or expired</div>}
                   </div>
                 )}
 
                 <div className="border-t border-asos-border pt-4 space-y-3">
-                  <label className="text-sm font-medium opacity-60">Skill API Keys (optional)</label>
-                  <p className="text-xs text-asos-text-muted">Add keys for external services like weather, search, etc.</p>
-                  {['web_search', 'spotify_music', 'messaging_sms', 'calendar_google'].map(skill => (
-                    <div key={skill} className="flex items-center gap-2">
-                      <span className="text-xs w-32 text-asos-text-secondary truncate">{skill}</span>
-                      <input
-                        type="password"
-                        placeholder="API key..."
-                        className="flex-1 bg-asos-card border border-asos-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
-                        value={credentials.skill_keys?.[skill] || ''}
-                        onChange={e => setCredentials(prev => ({
-                          ...prev,
-                          skill_keys: { ...(prev.skill_keys || {}), [skill]: e.target.value },
-                        }))}
-                      />
-                    </div>
-                  ))}
+                  <label className="text-sm font-medium opacity-60 flex items-center gap-2">
+                    <Search size={14} /> Tool API Keys (optional)
+                  </label>
+                  <p className="text-xs text-asos-text-muted">Unlock search, weather, GitHub, music, and more.</p>
+                  <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
+                    {TOOL_KEYS_CONFIG.map(tk => (
+                      <div key={tk.env} className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs w-36 text-asos-text-secondary truncate" title={tk.desc}>
+                            {tk.name} <span className="opacity-50">({tk.hint})</span>
+                          </span>
+                          <input type="password" placeholder="API key..."
+                            className="flex-1 bg-asos-card border border-asos-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
+                            value={credentials[tk.env] || ''}
+                            onChange={e => setCredentials(prev => ({ ...prev, [tk.env]: e.target.value }))} />
+                        </div>
+                        {tk.extraKeys?.map(ek => (
+                          <div key={ek} className="flex items-center gap-2 pl-4">
+                            <span className="text-xs w-32 text-asos-text-muted truncate">{ek}</span>
+                            <input type="password" placeholder={`${ek}...`}
+                              className="flex-1 bg-asos-card border border-asos-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
+                              value={credentials[ek] || ''}
+                              onChange={e => setCredentials(prev => ({ ...prev, [ek]: e.target.value }))} />
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
 
-            {/* Step: Skills */}
+            {/* ── Devices ── */}
+            {currentStep.id === 'devices' && (
+              <div className="space-y-5">
+                <h2 className="text-2xl font-bold">Connect Your Devices</h2>
+                <p className="text-asos-text-secondary text-sm">
+                  THEORA can connect to your phone, glasses, wristband, and more. Your phone acts as a bridge.
+                </p>
+                <div className="bg-asos-card border border-asos-border rounded-xl p-4 font-mono text-xs text-center space-y-1 text-asos-text-secondary">
+                  <div className="flex items-center justify-center gap-2 flex-wrap">
+                    <span className="px-2 py-1 rounded bg-asos-accent/10 text-asos-accent">Glasses / Sensors</span>
+                    <ChevronRight size={14} className="opacity-40" />
+                    <span className="px-2 py-1 rounded bg-asos-accent/10 text-asos-accent">Phone (Bridge)</span>
+                    <ChevronRight size={14} className="opacity-40" />
+                    <span className="px-2 py-1 rounded bg-asos-accent/10 text-asos-accent">Brain (This PC)</span>
+                    <ChevronRight size={14} className="opacity-40" />
+                    <span className="px-2 py-1 rounded bg-asos-accent/10 text-asos-accent">Actions</span>
+                  </div>
+                  <div className="text-[10px] opacity-50 pt-1">Robot, Apps, Home devices, Browser...</div>
+                </div>
+
+                <div className="space-y-4">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={deviceConfig.pairPhone}
+                      onChange={e => setDeviceConfig(p => ({ ...p, pairPhone: e.target.checked }))}
+                      className="accent-asos-accent" />
+                    Pair a phone as a bridge
+                  </label>
+                  {deviceConfig.pairPhone && (
+                    <InputField label="Phone Bridge URL (leave blank for auto-discovery)"
+                      placeholder="ws://192.168.1.100:9090/v1/daemon"
+                      value={deviceConfig.phoneBridgeUrl}
+                      onChange={v => setDeviceConfig(p => ({ ...p, phoneBridgeUrl: v }))} />
+                  )}
+
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={deviceConfig.registerGlasses}
+                      onChange={e => setDeviceConfig(p => ({ ...p, registerGlasses: e.target.checked }))}
+                      className="accent-asos-accent" />
+                    Register THEORA glasses
+                  </label>
+                  {deviceConfig.registerGlasses && (
+                    <SelectField label="Glasses Model" value={deviceConfig.glassesModel}
+                      options={['W300', 'W610', 'other']}
+                      onChange={v => setDeviceConfig(p => ({ ...p, glassesModel: v }))} />
+                  )}
+                </div>
+
+                {!deviceConfig.pairPhone && !deviceConfig.registerGlasses && (
+                  <p className="text-xs text-asos-text-muted">
+                    Skip this step if you don't have devices yet. You can pair later from Settings &gt; Devices.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* ── Skills ── */}
             {currentStep.id === 'skills' && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">Skills</h2>
@@ -402,59 +489,40 @@ export default function SetupWizard({ onComplete }) {
               </div>
             )}
 
-            {/* Step: Connect Apps */}
+            {/* ── Connect Apps ── */}
             {currentStep.id === 'apps' && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">Connect Apps</h2>
                 <p className="text-asos-text-secondary">
                   Link your favorite services. OAuth for Spotify & Notion, API token for Home Assistant.
                 </p>
-
                 <div className="space-y-3">
-                  <AppConnectCard
-                    icon={Music}
-                    name="Spotify"
-                    desc="Control music playback, search, queue tracks"
-                    providerId="spotify"
-                    authType="oauth"
-                  />
-                  <AppConnectCard
-                    icon={Home}
-                    name="Home Assistant"
-                    desc="Control lights, sensors, automations"
-                    providerId="home_assistant"
-                    authType="token"
+                  <AppConnectCard icon={Music} name="Spotify" desc="Control music playback, search, queue tracks"
+                    providerId="spotify" authType="oauth" />
+                  <AppConnectCard icon={Home} name="Home Assistant" desc="Control lights, sensors, automations"
+                    providerId="home_assistant" authType="token"
                     onTokenSave={(token) => {
                       fetch(`${API}/api/integrations/token`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ provider_id: 'home_assistant', token }),
                       });
-                    }}
-                  />
-                  <AppConnectCard
-                    icon={FileText}
-                    name="Notion"
-                    desc="Read and write pages, query databases"
-                    providerId="notion"
-                    authType="oauth"
-                  />
+                    }} />
+                  <AppConnectCard icon={FileText} name="Notion" desc="Read and write pages, query databases"
+                    providerId="notion" authType="oauth" />
                 </div>
-
                 <div className="border-t border-asos-border pt-4">
                   <h3 className="text-sm font-medium opacity-60 mb-3 flex items-center gap-2">
                     <Server size={14} /> MCP Servers (Advanced)
                   </h3>
                   <p className="text-xs text-asos-text-muted mb-3">
-                    Connect MCP-compatible tools like GitHub, Slack, databases.
-                    Configure these in Settings after setup.
+                    Connect MCP-compatible tools like GitHub, Slack, databases. Configure in Settings after setup.
                   </p>
                   <MCPServerList />
                 </div>
               </div>
             )}
 
-            {/* Step: Features */}
+            {/* ── Features ── */}
             {currentStep.id === 'features' && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">Features</h2>
@@ -479,8 +547,7 @@ export default function SetupWizard({ onComplete }) {
                         className={`w-12 h-7 rounded-full transition-all flex items-center px-1 ${
                           (settings[f.section]?.[f.key] ?? (f.key === 'self_learning'))
                             ? 'bg-asos-accent justify-end' : 'bg-zinc-700 justify-start'
-                        }`}
-                      >
+                        }`}>
                         <div className="w-5 h-5 bg-white rounded-full shadow transition-all" />
                       </button>
                     </div>
@@ -489,7 +556,7 @@ export default function SetupWizard({ onComplete }) {
               </div>
             )}
 
-            {/* Step: Finish */}
+            {/* ── Finish ── */}
             {currentStep.id === 'finish' && (
               <div className="text-center space-y-6">
                 <div className="w-20 h-20 rounded-full bg-green-500/15 flex items-center justify-center mx-auto">
@@ -500,42 +567,18 @@ export default function SetupWizard({ onComplete }) {
                   THEORA is configured and ready. You can always change settings later.
                 </p>
                 <div className="bg-asos-card border border-asos-border rounded-xl p-5 text-left space-y-2 text-sm">
-                  {identity.userName && (
-                    <div className="flex justify-between">
-                      <span className="text-asos-text-secondary">User</span>
-                      <span>{identity.userName}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span className="text-asos-text-secondary">Agent</span>
-                    <span>{identity.agentName || 'THEORA'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-asos-text-secondary">Personality</span>
-                    <span>{PERSONALITY_PRESETS.find(p => p.id === identity.personality)?.name || 'Assistant'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-asos-text-secondary">Provider</span>
-                    <span className="font-mono">{settings.llm?.provider || 'openai'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-asos-text-secondary">Model</span>
-                    <span className="font-mono">{settings.llm?.model || 'gpt-4o-mini'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-asos-text-secondary">Streaming</span>
-                    <span>{settings.features?.streaming ? 'On' : 'Off'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-asos-text-secondary">Self-Learning</span>
-                    <span>{(settings.features?.self_learning ?? true) ? 'On' : 'Off'}</span>
-                  </div>
+                  {identity.userName && <SummaryRow label="User" value={identity.userName} />}
+                  <SummaryRow label="Agent" value={identity.agentName || 'THEORA'} />
+                  <SummaryRow label="Personality" value={PERSONALITY_PRESETS.find(p => p.id === identity.personality)?.name || 'Assistant'} />
+                  <SummaryRow label="Provider" value={selectedProvider.name} mono />
+                  <SummaryRow label="Model" value={settings.llm?.model || selectedProvider.defaultModel} mono />
+                  {deviceConfig.pairPhone && <SummaryRow label="Phone Bridge" value={deviceConfig.phoneBridgeUrl || 'auto-discover'} />}
+                  {deviceConfig.registerGlasses && <SummaryRow label="Glasses" value={deviceConfig.glassesModel} />}
+                  <SummaryRow label="Streaming" value={(settings.features?.streaming) ? 'On' : 'Off'} />
+                  <SummaryRow label="Self-Learning" value={(settings.features?.self_learning ?? true) ? 'On' : 'Off'} />
                 </div>
-                <button
-                  onClick={handleFinish}
-                  disabled={saving}
-                  className="px-8 py-4 bg-asos-accent text-white rounded-xl font-bold text-lg hover:bg-asos-accent/90 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-3 mx-auto"
-                >
+                <button onClick={handleFinish} disabled={saving}
+                  className="px-8 py-4 bg-asos-accent text-white rounded-xl font-bold text-lg hover:bg-asos-accent/90 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-3 mx-auto">
                   {saving ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
                   Launch THEORA
                 </button>
@@ -546,27 +589,55 @@ export default function SetupWizard({ onComplete }) {
 
         {/* Navigation */}
         <div className="flex items-center justify-between p-6 border-t border-asos-border">
-          <button
-            onClick={() => setStep(s => Math.max(0, s - 1))}
-            disabled={step === 0}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-asos-text-secondary hover:text-white disabled:opacity-20 transition"
-          >
+          <button onClick={() => setStep(s => Math.max(0, s - 1))} disabled={step === 0}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-asos-text-secondary hover:text-white disabled:opacity-20 transition">
             <ChevronLeft size={16} /> Back
           </button>
-          <div className="text-xs opacity-30">
-            {step + 1} / {STEPS.length}
-          </div>
+          <div className="text-xs opacity-30">{step + 1} / {STEPS.length}</div>
           {step < STEPS.length - 1 && (
-            <button
-              onClick={() => setStep(s => Math.min(STEPS.length - 1, s + 1))}
-              className="flex items-center gap-2 px-5 py-2.5 bg-asos-accent text-white rounded-lg text-sm font-medium hover:bg-asos-accent/90 transition active:scale-95"
-            >
+            <button onClick={() => setStep(s => Math.min(STEPS.length - 1, s + 1))}
+              className="flex items-center gap-2 px-5 py-2.5 bg-asos-accent text-white rounded-lg text-sm font-medium hover:bg-asos-accent/90 transition active:scale-95">
               Next <ChevronRight size={16} />
             </button>
           )}
           {step === STEPS.length - 1 && <div />}
         </div>
       </div>
+    </div>
+  );
+}
+
+
+function InputField({ label, placeholder, value, onChange, type = 'text' }) {
+  return (
+    <div className="space-y-1.5">
+      <label className="text-sm font-medium text-asos-text">{label}</label>
+      <input type={type}
+        className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+        placeholder={placeholder} value={value}
+        onChange={e => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+function SelectField({ label, value, options, onChange }) {
+  return (
+    <div className="space-y-1.5">
+      <label className="text-sm font-medium text-asos-text">{label}</label>
+      <select
+        className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+        value={value} onChange={e => onChange(e.target.value)}>
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function SummaryRow({ label, value, mono }) {
+  return (
+    <div className="flex justify-between">
+      <span className="text-asos-text-secondary">{label}</span>
+      <span className={mono ? 'font-mono' : ''}>{value}</span>
     </div>
   );
 }
@@ -578,8 +649,7 @@ function AppConnectCard({ icon: Icon, name, desc, providerId, authType, onTokenS
 
   useEffect(() => {
     fetch(`${API}/api/integrations`).then(r => r.json()).then(data => {
-      const key = `${providerId}_connected`;
-      setConnected(data[key] || false);
+      setConnected(data[`${providerId}_connected`] || false);
     }).catch(() => {});
   }, [providerId]);
 
@@ -616,30 +686,19 @@ function AppConnectCard({ icon: Icon, name, desc, providerId, authType, onTokenS
         {connected ? (
           <span className="text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400">Connected</span>
         ) : authType === 'oauth' ? (
-          <button
-            onClick={handleOAuth}
-            className="flex items-center gap-1 px-3 py-1.5 bg-asos-accent/15 text-asos-accent text-xs rounded-lg hover:bg-asos-accent/25 transition"
-          >
+          <button onClick={handleOAuth}
+            className="flex items-center gap-1 px-3 py-1.5 bg-asos-accent/15 text-asos-accent text-xs rounded-lg hover:bg-asos-accent/25 transition">
             <ExternalLink size={12} /> Connect
           </button>
         ) : null}
       </div>
       {authType === 'token' && !connected && (
         <div className="mt-3 flex gap-2">
-          <input
-            type={showToken ? 'text' : 'password'}
-            placeholder="Long-lived access token..."
+          <input type={showToken ? 'text' : 'password'} placeholder="Long-lived access token..."
             className="flex-1 bg-asos-bg border border-asos-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-asos-accent"
-            value={tokenInput}
-            onChange={e => setTokenInput(e.target.value)}
-          />
-          <button
-            onClick={handleTokenSave}
-            disabled={!tokenInput}
-            className="px-3 py-2 bg-asos-accent text-white text-xs rounded hover:bg-asos-accent/90 disabled:opacity-30"
-          >
-            Save
-          </button>
+            value={tokenInput} onChange={e => setTokenInput(e.target.value)} />
+          <button onClick={handleTokenSave} disabled={!tokenInput}
+            className="px-3 py-2 bg-asos-accent text-white text-xs rounded hover:bg-asos-accent/90 disabled:opacity-30">Save</button>
         </div>
       )}
     </div>

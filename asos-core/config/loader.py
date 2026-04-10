@@ -198,7 +198,13 @@ class ConfigLoader:
                 logger.warning(f"Failed to load credentials: {e}")
 
         # Also check env for API keys
-        for env_key in ("OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+        _api_key_envs = (
+            "OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
+            "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "MOONSHOT_API_KEY", "DASHSCOPE_API_KEY",
+            "EXA_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "BRAVE_API_KEY",
+            "GITHUB_TOKEN", "SPOTIFY_CLIENT_ID",
+        )
+        for env_key in _api_key_envs:
             value = os.environ.get(env_key)
             if value:
                 self._credentials[env_key] = value
@@ -220,6 +226,10 @@ class ConfigLoader:
             or self._credentials.get("ANTHROPIC_API_KEY")
             or self._credentials.get("GOOGLE_API_KEY")
             or self._credentials.get("GROQ_API_KEY")
+            or self._credentials.get("OPENROUTER_API_KEY")
+            or self._credentials.get("DEEPSEEK_API_KEY")
+            or self._credentials.get("MOONSHOT_API_KEY")
+            or self._credentials.get("DASHSCOPE_API_KEY")
             or self._merged.get("llm", {}).get("provider") == "ollama"
         )
         if not has_llm_key:

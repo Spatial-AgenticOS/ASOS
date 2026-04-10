@@ -14,10 +14,13 @@ RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${BOLD}"
-echo "  ╔══════════════════════════════════════╗"
-echo "  ║       T H E O R A  Installer         ║"
-echo "  ╚══════════════════════════════════════╝"
+VENV_DIR="$HOME/.theora-env"
+
+echo -e "${BOLD}${CYAN}"
+echo "  ╔══════════════════════════════════════════════════╗"
+echo "  ║            T H E O R A  Installer                ║"
+echo "  ║   Open AI Operating System · Privacy-First       ║"
+echo "  ╚══════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
 # ─── Check Python ───────────────────────────────────────
@@ -47,13 +50,33 @@ fi
 
 echo -e "  ${GREEN}✓${NC} Python $($PYTHON --version 2>&1 | awk '{print $2}')"
 
+# ─── Create Virtual Environment ──────────────────────────
+
+if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/activate" ]; then
+    echo -e "  ${GREEN}✓${NC} Virtual environment exists at $VENV_DIR"
+else
+    echo -e "  ${DIM}Creating virtual environment at $VENV_DIR ...${NC}"
+    $PYTHON -m venv "$VENV_DIR" 2>/dev/null || {
+        echo -e "  ${YELLOW}⚠${NC} Could not create venv, installing globally"
+        VENV_DIR=""
+    }
+fi
+
+if [ -n "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    source "$VENV_DIR/bin/activate"
+    PYTHON="$VENV_DIR/bin/python"
+    echo -e "  ${GREEN}✓${NC} Activated virtual environment"
+fi
+
+$PYTHON -m pip install --upgrade pip --quiet 2>/dev/null || true
+
 # ─── Install ────────────────────────────────────────────
 
 echo ""
 echo -e "  Installing THEORA..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
-REPO_ROOT=""
 
 PIP_LOG=$(mktemp /tmp/theora-pip-XXXXXX.log 2>/dev/null || echo "/tmp/theora-pip-install.log")
 
@@ -62,21 +85,22 @@ install_success=false
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../asos-core/pyproject.toml" ]; then
     REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
     echo -e "  ${DIM}From local repo: $REPO_ROOT${NC}"
-    if $PYTHON -m pip install -e "$REPO_ROOT/asos-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+    if $PYTHON -m pip install --upgrade -e "$REPO_ROOT/asos-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
         install_success=true
     fi
 else
-    if $PYTHON -m pip install "theora-asos[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+    echo -e "  ${DIM}Installing from GitHub...${NC}"
+    if $PYTHON -m pip install --upgrade "theora-asos[llm] @ git+https://github.com/Spatial-AgenticOS/ASOS.git#subdirectory=asos-core" 2>&1 | tee "$PIP_LOG" | tail -5; then
         install_success=true
     else
-        echo -e "  ${DIM}PyPI install failed. Trying GitHub...${NC}"
-        if $PYTHON -m pip install "theora-asos[llm] @ git+https://github.com/Spatial-AgenticOS/ASOS.git#subdirectory=asos-core" 2>&1 | tee "$PIP_LOG" | tail -5; then
+        echo -e "  ${DIM}Git install failed. Trying PyPI...${NC}"
+        if $PYTHON -m pip install --upgrade "theora-asos[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
             install_success=true
         else
-            echo -e "  ${DIM}GitHub subdirectory install failed. Cloning repo...${NC}"
+            echo -e "  ${DIM}PyPI failed. Cloning repo...${NC}"
             TMPDIR=$(mktemp -d)
             if git clone --depth 1 https://github.com/Spatial-AgenticOS/ASOS.git "$TMPDIR/ASOS" 2>/dev/null; then
-                if $PYTHON -m pip install -e "$TMPDIR/ASOS/asos-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+                if $PYTHON -m pip install --upgrade -e "$TMPDIR/ASOS/asos-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
                     install_success=true
                 fi
             fi
@@ -91,8 +115,8 @@ if [ "$install_success" = false ]; then
     echo ""
     echo "  Common fixes:"
     echo "    1. Upgrade pip:  $PYTHON -m pip install --upgrade pip"
-    echo "    2. Use a venv:   $PYTHON -m venv ~/.theora-env && source ~/.theora-env/bin/activate"
-    echo "    3. Try manually: pip install theora-asos[llm]"
+    echo "    2. Retry:        source ~/.theora-env/bin/activate && pip install theora-asos[llm]"
+    echo "    3. Manual clone: git clone https://github.com/Spatial-AgenticOS/ASOS && cd ASOS/asos-core && pip install -e .[llm]"
     exit 1
 fi
 
@@ -105,8 +129,11 @@ if command -v theora &> /dev/null; then
     echo -e "  ${GREEN}✓${NC} theora command available"
 else
     echo -e "  ${YELLOW}⚠${NC} 'theora' not found in PATH"
-    echo -e "  ${DIM}Try: $PYTHON -m cli.main${NC}"
-    echo -e "  ${DIM}Or add pip's bin directory to your PATH.${NC}"
+    if [ -n "$VENV_DIR" ]; then
+        echo -e "  ${DIM}Activate your env first: source ~/.theora-env/bin/activate${NC}"
+    else
+        echo -e "  ${DIM}Try: $PYTHON -m cli.main${NC}"
+    fi
 fi
 
 # ─── First-Time Setup ──────────────────────────────────
@@ -149,13 +176,16 @@ fi
 
 # ─── Post-Install Summary ──────────────────────────────
 
-echo -e "  ${BOLD}┌──────────────────────────────────────┐${NC}"
-echo -e "  ${BOLD}│  Start THEORA:                       │${NC}"
-echo -e "  ${BOLD}│                                      │${NC}"
-echo -e "  ${BOLD}│    theora start                      │${NC}"
-echo -e "  ${BOLD}│                                      │${NC}"
-echo -e "  ${BOLD}│  Brain + dashboard at localhost:9090  │${NC}"
-echo -e "  ${BOLD}└──────────────────────────────────────┘${NC}"
+echo -e "  ${BOLD}┌──────────────────────────────────────────────┐${NC}"
+echo -e "  ${BOLD}│  Start THEORA:                               │${NC}"
+echo -e "  ${BOLD}│                                              │${NC}"
+if [ -n "$VENV_DIR" ]; then
+echo -e "  ${BOLD}│    source ~/.theora-env/bin/activate         │${NC}"
+fi
+echo -e "  ${BOLD}│    theora start                              │${NC}"
+echo -e "  ${BOLD}│                                              │${NC}"
+echo -e "  ${BOLD}│  Brain + dashboard at localhost:9090          │${NC}"
+echo -e "  ${BOLD}└──────────────────────────────────────────────┘${NC}"
 echo ""
 echo -e "  ${DIM}Other commands:${NC}"
 echo "    theora setup      Re-run setup wizard"
