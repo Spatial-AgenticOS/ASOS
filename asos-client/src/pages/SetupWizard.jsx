@@ -96,7 +96,7 @@ export default function SetupWizard({ onComplete }) {
   const currentStep = STEPS[step];
 
   return (
-    <div className="min-h-screen bg-black flex">
+    <div className="min-h-screen bg-asos-bg flex">
       {/* Left Panel — Steps */}
       <div className="hidden lg:flex w-72 bg-asos-card border-r border-asos-border flex-col py-8 px-6">
         <div className="flex items-center gap-3 mb-12">
@@ -113,14 +113,14 @@ export default function SetupWizard({ onComplete }) {
               <div
                 key={s.id}
                 className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-                  isActive ? 'bg-asos-accent bg-opacity-15 text-asos-accent' :
-                  isDone ? 'text-green-400 opacity-70' : 'text-gray-500'
+                  isActive ? 'bg-asos-accent/15 text-asos-accent' :
+                  isDone ? 'text-green-400 opacity-70' : 'text-asos-text-muted'
                 }`}
               >
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
                   isActive ? 'bg-asos-accent text-white' :
-                  isDone ? 'bg-green-500 bg-opacity-20 text-green-400' :
-                  'bg-white bg-opacity-5'
+                  isDone ? 'bg-green-500/20 text-green-400' :
+                  'bg-white/5'
                 }`}>
                   {isDone ? <Check size={14} /> : i + 1}
                 </div>
@@ -149,11 +149,11 @@ export default function SetupWizard({ onComplete }) {
             {/* Step: Welcome */}
             {currentStep.id === 'welcome' && (
               <div className="text-center space-y-6">
-                <div className="w-20 h-20 rounded-full bg-asos-accent bg-opacity-15 flex items-center justify-center mx-auto">
+                <div className="w-20 h-20 rounded-full bg-asos-accent/15 flex items-center justify-center mx-auto">
                   <Brain size={40} className="text-asos-accent" />
                 </div>
                 <h1 className="text-3xl font-bold">Welcome to THEORA</h1>
-                <p className="text-gray-400 text-lg leading-relaxed max-w-md mx-auto">
+                <p className="text-asos-text-secondary text-lg leading-relaxed max-w-md mx-auto">
                   The Spatial Agentic Operating System. Local-first intelligence
                   that sees, hears, learns, and acts.
                 </p>
@@ -177,12 +177,12 @@ export default function SetupWizard({ onComplete }) {
             {currentStep.id === 'identity' && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">You & Your Agent</h2>
-                <p className="text-gray-400">Tell THEORA who you are and choose how your agent should behave.</p>
+                <p className="text-asos-text-secondary">Tell THEORA who you are and choose how your agent should behave.</p>
 
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-300">Your Name</label>
+                      <label className="text-sm font-medium text-asos-text">Your Name</label>
                       <input
                         className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
                         placeholder="Mahmoud"
@@ -191,7 +191,7 @@ export default function SetupWizard({ onComplete }) {
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-300">Location</label>
+                      <label className="text-sm font-medium text-asos-text">Location</label>
                       <input
                         className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
                         placeholder="San Francisco, US"
@@ -202,7 +202,7 @@ export default function SetupWizard({ onComplete }) {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-300">Occupation</label>
+                      <label className="text-sm font-medium text-asos-text">Occupation</label>
                       <input
                         className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
                         placeholder="Engineer, Designer, ..."
@@ -211,7 +211,7 @@ export default function SetupWizard({ onComplete }) {
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-300">Interests</label>
+                      <label className="text-sm font-medium text-asos-text">Interests</label>
                       <input
                         className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
                         placeholder="AI, health tech, music"
@@ -224,7 +224,7 @@ export default function SetupWizard({ onComplete }) {
 
                 <div className="pt-2 space-y-3">
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-gray-300">Agent Name</label>
+                    <label className="text-sm font-medium text-asos-text">Agent Name</label>
                     <input
                       className="w-full bg-asos-card border border-asos-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
                       placeholder="THEORA"
@@ -233,7 +233,7 @@ export default function SetupWizard({ onComplete }) {
                     />
                   </div>
 
-                  <label className="text-sm font-medium text-gray-300 block pt-2">Agent Personality</label>
+                  <label className="text-sm font-medium text-asos-text block pt-2">Agent Personality</label>
                   <div className="grid grid-cols-2 gap-3">
                     {PERSONALITY_PRESETS.map(p => {
                       const Icon = p.icon;
@@ -243,15 +243,15 @@ export default function SetupWizard({ onComplete }) {
                           onClick={() => setIdentity(prev => ({ ...prev, personality: p.id }))}
                           className={`text-left px-4 py-3.5 rounded-xl border transition-all ${
                             identity.personality === p.id
-                              ? 'border-asos-accent bg-asos-accent bg-opacity-10'
-                              : 'border-asos-border bg-asos-card hover:border-gray-600'
+                              ? 'border-asos-accent bg-asos-accent/10'
+                              : 'border-asos-border bg-asos-card hover:border-asos-border-bright'
                           }`}
                         >
                           <div className="flex items-center gap-2 mb-1">
                             <Icon size={14} className="text-asos-accent" />
                             <span className="font-semibold text-sm">{p.name}</span>
                           </div>
-                          <div className="text-xs text-gray-400">{p.desc}</div>
+                          <div className="text-xs text-asos-text-secondary">{p.desc}</div>
                         </button>
                       );
                     })}
@@ -264,7 +264,7 @@ export default function SetupWizard({ onComplete }) {
             {currentStep.id === 'llm' && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">Choose Your LLM</h2>
-                <p className="text-gray-400">THEORA needs a language model to think. Pick your provider.</p>
+                <p className="text-asos-text-secondary">THEORA needs a language model to think. Pick your provider.</p>
                 <div className="space-y-3">
                   {[
                     { id: 'openai', name: 'OpenAI', desc: 'GPT-4o, GPT-4o-mini (cloud)', badge: 'Recommended' },
@@ -276,17 +276,17 @@ export default function SetupWizard({ onComplete }) {
                       onClick={() => updateSetting('llm', 'provider', p.id)}
                       className={`w-full text-left px-5 py-4 rounded-xl border transition-all ${
                         (settings.llm?.provider || 'openai') === p.id
-                          ? 'border-asos-accent bg-asos-accent bg-opacity-10'
-                          : 'border-asos-border bg-asos-card hover:border-gray-600'
+                          ? 'border-asos-accent bg-asos-accent/10'
+                          : 'border-asos-border bg-asos-card hover:border-asos-border-bright'
                       }`}
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="font-semibold">{p.name}</div>
-                          <div className="text-sm text-gray-400 mt-0.5">{p.desc}</div>
+                          <div className="text-sm text-asos-text-secondary mt-0.5">{p.desc}</div>
                         </div>
                         {p.badge && (
-                          <span className="text-xs px-2 py-1 rounded-full bg-asos-accent bg-opacity-20 text-asos-accent">
+                          <span className="text-xs px-2 py-1 rounded-full bg-asos-accent/20 text-asos-accent">
                             {p.badge}
                           </span>
                         )}
@@ -317,7 +317,7 @@ export default function SetupWizard({ onComplete }) {
             {currentStep.id === 'keys' && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">API Keys</h2>
-                <p className="text-gray-400">
+                <p className="text-asos-text-secondary">
                   {(settings.llm?.provider || 'openai') === 'ollama'
                     ? 'Ollama runs locally — no API key needed. You can add skill keys below.'
                     : 'Enter your API key. It\'s stored locally and never leaves your machine.'
@@ -351,7 +351,7 @@ export default function SetupWizard({ onComplete }) {
                       <button
                         onClick={validateKey}
                         disabled={validating}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-asos-accent rounded text-xs font-medium hover:bg-opacity-80"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-asos-accent rounded text-xs font-medium hover:bg-asos-accent/80"
                       >
                         {validating ? <Loader2 size={14} className="animate-spin" /> : 'Test'}
                       </button>
@@ -371,10 +371,10 @@ export default function SetupWizard({ onComplete }) {
 
                 <div className="border-t border-asos-border pt-4 space-y-3">
                   <label className="text-sm font-medium opacity-60">Skill API Keys (optional)</label>
-                  <p className="text-xs text-gray-500">Add keys for external services like weather, search, etc.</p>
+                  <p className="text-xs text-asos-text-muted">Add keys for external services like weather, search, etc.</p>
                   {['web_search', 'spotify_music', 'messaging_sms', 'calendar_google'].map(skill => (
                     <div key={skill} className="flex items-center gap-2">
-                      <span className="text-xs w-32 text-gray-400 truncate">{skill}</span>
+                      <span className="text-xs w-32 text-asos-text-secondary truncate">{skill}</span>
                       <input
                         type="password"
                         placeholder="API key..."
@@ -395,7 +395,7 @@ export default function SetupWizard({ onComplete }) {
             {currentStep.id === 'skills' && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">Skills</h2>
-                <p className="text-gray-400">
+                <p className="text-asos-text-secondary">
                   Skills are API-backed capabilities THEORA can use. Toggle which ones to enable.
                 </p>
                 <SkillsList />
@@ -406,7 +406,7 @@ export default function SetupWizard({ onComplete }) {
             {currentStep.id === 'apps' && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">Connect Apps</h2>
-                <p className="text-gray-400">
+                <p className="text-asos-text-secondary">
                   Link your favorite services. OAuth for Spotify & Notion, API token for Home Assistant.
                 </p>
 
@@ -445,7 +445,7 @@ export default function SetupWizard({ onComplete }) {
                   <h3 className="text-sm font-medium opacity-60 mb-3 flex items-center gap-2">
                     <Server size={14} /> MCP Servers (Advanced)
                   </h3>
-                  <p className="text-xs text-gray-500 mb-3">
+                  <p className="text-xs text-asos-text-muted mb-3">
                     Connect MCP-compatible tools like GitHub, Slack, databases.
                     Configure these in Settings after setup.
                   </p>
@@ -458,7 +458,7 @@ export default function SetupWizard({ onComplete }) {
             {currentStep.id === 'features' && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">Features</h2>
-                <p className="text-gray-400">Enable or disable advanced capabilities.</p>
+                <p className="text-asos-text-secondary">Enable or disable advanced capabilities.</p>
                 <div className="space-y-4">
                   {[
                     { key: 'streaming', label: 'Streaming Responses', desc: 'See LLM output token-by-token in real-time', section: 'features' },
@@ -469,7 +469,7 @@ export default function SetupWizard({ onComplete }) {
                     <div key={f.key} className="flex items-center justify-between bg-asos-card border border-asos-border rounded-xl px-5 py-4">
                       <div>
                         <div className="font-medium text-sm">{f.label}</div>
-                        <div className="text-xs text-gray-400 mt-0.5">{f.desc}</div>
+                        <div className="text-xs text-asos-text-secondary mt-0.5">{f.desc}</div>
                       </div>
                       <button
                         onClick={() => {
@@ -478,7 +478,7 @@ export default function SetupWizard({ onComplete }) {
                         }}
                         className={`w-12 h-7 rounded-full transition-all flex items-center px-1 ${
                           (settings[f.section]?.[f.key] ?? (f.key === 'self_learning'))
-                            ? 'bg-asos-accent justify-end' : 'bg-gray-700 justify-start'
+                            ? 'bg-asos-accent justify-end' : 'bg-zinc-700 justify-start'
                         }`}
                       >
                         <div className="w-5 h-5 bg-white rounded-full shadow transition-all" />
@@ -492,49 +492,49 @@ export default function SetupWizard({ onComplete }) {
             {/* Step: Finish */}
             {currentStep.id === 'finish' && (
               <div className="text-center space-y-6">
-                <div className="w-20 h-20 rounded-full bg-green-500 bg-opacity-15 flex items-center justify-center mx-auto">
+                <div className="w-20 h-20 rounded-full bg-green-500/15 flex items-center justify-center mx-auto">
                   <Check size={40} className="text-green-400" />
                 </div>
                 <h2 className="text-3xl font-bold">Ready to Launch</h2>
-                <p className="text-gray-400 text-lg max-w-md mx-auto">
+                <p className="text-asos-text-secondary text-lg max-w-md mx-auto">
                   THEORA is configured and ready. You can always change settings later.
                 </p>
                 <div className="bg-asos-card border border-asos-border rounded-xl p-5 text-left space-y-2 text-sm">
                   {identity.userName && (
                     <div className="flex justify-between">
-                      <span className="text-gray-400">User</span>
+                      <span className="text-asos-text-secondary">User</span>
                       <span>{identity.userName}</span>
                     </div>
                   )}
                   <div className="flex justify-between">
-                    <span className="text-gray-400">Agent</span>
+                    <span className="text-asos-text-secondary">Agent</span>
                     <span>{identity.agentName || 'THEORA'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-400">Personality</span>
+                    <span className="text-asos-text-secondary">Personality</span>
                     <span>{PERSONALITY_PRESETS.find(p => p.id === identity.personality)?.name || 'Assistant'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-400">Provider</span>
+                    <span className="text-asos-text-secondary">Provider</span>
                     <span className="font-mono">{settings.llm?.provider || 'openai'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-400">Model</span>
+                    <span className="text-asos-text-secondary">Model</span>
                     <span className="font-mono">{settings.llm?.model || 'gpt-4o-mini'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-400">Streaming</span>
+                    <span className="text-asos-text-secondary">Streaming</span>
                     <span>{settings.features?.streaming ? 'On' : 'Off'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-400">Self-Learning</span>
+                    <span className="text-asos-text-secondary">Self-Learning</span>
                     <span>{(settings.features?.self_learning ?? true) ? 'On' : 'Off'}</span>
                   </div>
                 </div>
                 <button
                   onClick={handleFinish}
                   disabled={saving}
-                  className="px-8 py-4 bg-asos-accent text-white rounded-xl font-bold text-lg hover:bg-opacity-90 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-3 mx-auto"
+                  className="px-8 py-4 bg-asos-accent text-white rounded-xl font-bold text-lg hover:bg-asos-accent/90 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-3 mx-auto"
                 >
                   {saving ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
                   Launch THEORA
@@ -549,7 +549,7 @@ export default function SetupWizard({ onComplete }) {
           <button
             onClick={() => setStep(s => Math.max(0, s - 1))}
             disabled={step === 0}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-gray-400 hover:text-white disabled:opacity-20 transition"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-asos-text-secondary hover:text-white disabled:opacity-20 transition"
           >
             <ChevronLeft size={16} /> Back
           </button>
@@ -559,7 +559,7 @@ export default function SetupWizard({ onComplete }) {
           {step < STEPS.length - 1 && (
             <button
               onClick={() => setStep(s => Math.min(STEPS.length - 1, s + 1))}
-              className="flex items-center gap-2 px-5 py-2.5 bg-asos-accent text-white rounded-lg text-sm font-medium hover:bg-opacity-90 transition active:scale-95"
+              className="flex items-center gap-2 px-5 py-2.5 bg-asos-accent text-white rounded-lg text-sm font-medium hover:bg-asos-accent/90 transition active:scale-95"
             >
               Next <ChevronRight size={16} />
             </button>
@@ -599,26 +599,26 @@ function AppConnectCard({ icon: Icon, name, desc, providerId, authType, onTokenS
 
   return (
     <div className={`bg-asos-card border rounded-xl px-5 py-4 transition-all ${
-      connected ? 'border-green-500 border-opacity-40' : 'border-asos-border'
+      connected ? 'border-green-500/40' : 'border-asos-border'
     }`}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-            connected ? 'bg-green-500 bg-opacity-15' : 'bg-white bg-opacity-5'
+            connected ? 'bg-green-500/15' : 'bg-white/5'
           }`}>
-            <Icon size={20} className={connected ? 'text-green-400' : 'text-gray-400'} />
+            <Icon size={20} className={connected ? 'text-green-400' : 'text-asos-text-secondary'} />
           </div>
           <div>
             <div className="font-medium text-sm">{name}</div>
-            <div className="text-xs text-gray-400">{desc}</div>
+            <div className="text-xs text-asos-text-secondary">{desc}</div>
           </div>
         </div>
         {connected ? (
-          <span className="text-xs px-2 py-1 rounded-full bg-green-500 bg-opacity-20 text-green-400">Connected</span>
+          <span className="text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400">Connected</span>
         ) : authType === 'oauth' ? (
           <button
             onClick={handleOAuth}
-            className="flex items-center gap-1 px-3 py-1.5 bg-asos-accent bg-opacity-15 text-asos-accent text-xs rounded-lg hover:bg-opacity-25 transition"
+            className="flex items-center gap-1 px-3 py-1.5 bg-asos-accent/15 text-asos-accent text-xs rounded-lg hover:bg-asos-accent/25 transition"
           >
             <ExternalLink size={12} /> Connect
           </button>
@@ -629,14 +629,14 @@ function AppConnectCard({ icon: Icon, name, desc, providerId, authType, onTokenS
           <input
             type={showToken ? 'text' : 'password'}
             placeholder="Long-lived access token..."
-            className="flex-1 bg-black border border-asos-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-asos-accent"
+            className="flex-1 bg-asos-bg border border-asos-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-asos-accent"
             value={tokenInput}
             onChange={e => setTokenInput(e.target.value)}
           />
           <button
             onClick={handleTokenSave}
             disabled={!tokenInput}
-            className="px-3 py-2 bg-asos-accent text-white text-xs rounded hover:bg-opacity-90 disabled:opacity-30"
+            className="px-3 py-2 bg-asos-accent text-white text-xs rounded hover:bg-asos-accent/90 disabled:opacity-30"
           >
             Save
           </button>
@@ -656,7 +656,7 @@ function MCPServerList() {
 
   if (!servers.length) {
     return (
-      <div className="text-xs text-gray-500 bg-asos-card border border-asos-border rounded-lg p-4">
+      <div className="text-xs text-asos-text-muted bg-asos-card border border-asos-border rounded-lg p-4">
         MCP servers will be available after setup. Common servers: GitHub, Slack, PostgreSQL, Browser.
       </div>
     );
@@ -668,7 +668,7 @@ function MCPServerList() {
         <div key={s.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs ${
           s.installed ? 'border-asos-border' : 'border-asos-border opacity-50'
         }`}>
-          <Server size={12} className={s.installed ? 'text-asos-accent' : 'text-gray-500'} />
+          <Server size={12} className={s.installed ? 'text-asos-accent' : 'text-asos-text-muted'} />
           <span>{s.name}</span>
           {s.installed && <Check size={10} className="text-green-400 ml-auto" />}
         </div>
@@ -699,8 +699,8 @@ function SkillsList() {
         <div key={s.skill_id} className="flex items-center justify-between bg-asos-card border border-asos-border rounded-xl px-5 py-4">
           <div>
             <div className="font-medium text-sm">{s.name}</div>
-            <div className="text-xs text-gray-400">{s.description}</div>
-            <div className="text-xs text-gray-500 mt-1">{s.endpoints} endpoint{s.endpoints !== 1 ? 's' : ''}</div>
+            <div className="text-xs text-asos-text-secondary">{s.description}</div>
+            <div className="text-xs text-asos-text-muted mt-1">{s.endpoints} endpoint{s.endpoints !== 1 ? 's' : ''}</div>
           </div>
           <div className="w-12 h-7 rounded-full bg-asos-accent flex items-center justify-end px-1">
             <div className="w-5 h-5 bg-white rounded-full shadow" />

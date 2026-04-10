@@ -1,6 +1,7 @@
 import React from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Settings, Brain, Cpu, ListChecks } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Settings, Brain, Cpu, ListChecks, Sun, Moon } from 'lucide-react';
+import { useTheme } from '../hooks/useTheme';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -10,6 +11,8 @@ const navItems = [
 ];
 
 export default function AppShell() {
+  const { theme, toggle: toggleTheme } = useTheme();
+
   return (
     <div className="flex flex-col lg:flex-row h-screen bg-asos-bg text-asos-text">
       {/* Desktop Sidebar */}
@@ -44,11 +47,18 @@ export default function AppShell() {
           ))}
         </div>
 
-        <div className="px-4 py-4 border-t border-asos-border">
+        <div className="px-4 py-4 border-t border-asos-border flex items-center justify-between">
           <div className="flex items-center gap-2 text-[11px] text-asos-text-muted">
             <Cpu size={11} />
-            <span>v1.0.0 — local</span>
+            <span>v1.0.0</span>
           </div>
+          <button
+            onClick={toggleTheme}
+            className="p-1.5 rounded-lg text-asos-text-muted hover:text-asos-text hover:bg-asos-card-hover transition"
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+          </button>
         </div>
       </nav>
 

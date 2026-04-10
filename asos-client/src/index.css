@@ -17,6 +17,34 @@
   --color-asos-user: #7c3aed;
 }
 
+html.light {
+  --color-asos-bg: #ffffff;
+  --color-asos-surface: #f4f4f5;
+  --color-asos-card: rgba(0, 0, 0, 0.03);
+  --color-asos-card-hover: rgba(0, 0, 0, 0.06);
+  --color-asos-border: rgba(0, 0, 0, 0.08);
+  --color-asos-border-bright: rgba(0, 0, 0, 0.15);
+  --color-asos-accent: #7c3aed;
+  --color-asos-accent-dim: rgba(124, 58, 237, 0.08);
+  --color-asos-accent-glow: rgba(124, 58, 237, 0.12);
+  --color-asos-text: #18181b;
+  --color-asos-text-secondary: #52525b;
+  --color-asos-text-muted: #a1a1aa;
+  --color-asos-assistant: #f4f4f5;
+  --color-asos-user: #7c3aed;
+}
+
+html.light ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+}
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+html.light ::selection {
+  background: rgba(124, 58, 237, 0.2);
+  color: #18181b;
+}
+
 html {
   height: 100%;
   -webkit-text-size-adjust: 100%;

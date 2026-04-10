@@ -757,7 +757,7 @@ export default function App() {
                   <select
                     value={wikiIngestType}
                     onChange={(e) => setWikiIngestType(e.target.value)}
-                    className="bg-black border border-asos-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                    className="bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-asos-accent"
                   >
                     <option value="repo">Repo</option>
                     <option value="pdf">PDF</option>
@@ -769,7 +769,7 @@ export default function App() {
                       value={wikiIngestPath}
                       onChange={(e) => setWikiIngestPath(e.target.value)}
                       placeholder={wikiIngestType === 'repo' ? '/path/to/repo' : '/path/to/file.pdf'}
-                      className="flex-1 bg-black border border-asos-border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-asos-accent"
+                      className="flex-1 bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-asos-accent"
                     />
                   )}
                 </div>
@@ -779,18 +779,18 @@ export default function App() {
                     value={wikiIngestContent}
                     onChange={(e) => setWikiIngestContent(e.target.value)}
                     placeholder="Paste text to ingest into memory wiki..."
-                    className="w-full bg-black border border-asos-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-asos-accent resize-y"
+                    className="w-full bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-asos-accent resize-y"
                   />
                 )}
                 <div className="flex items-center justify-between">
                   <button
                     onClick={ingestWiki}
                     disabled={wikiIngestBusy}
-                    className="text-xs px-3 py-1.5 rounded bg-asos-accent text-white hover:bg-opacity-90 disabled:opacity-60"
+                    className="text-xs px-3 py-1.5 rounded bg-asos-accent text-white hover:bg-asos-accent/90 disabled:opacity-60"
                   >
                     {wikiIngestBusy ? 'Ingesting...' : 'Run Ingest'}
                   </button>
-                  {wikiIngestResult && <span className="text-[11px] text-gray-300">{wikiIngestResult}</span>}
+                  {wikiIngestResult && <span className="text-[11px] text-asos-text-secondary">{wikiIngestResult}</span>}
                 </div>
               </div>
             )}

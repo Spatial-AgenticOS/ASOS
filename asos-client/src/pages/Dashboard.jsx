@@ -78,7 +78,7 @@ export default function Dashboard() {
       <div className="flex flex-col items-center justify-center h-full gap-4">
         <WifiOff size={40} className="opacity-30" />
         <p className="text-sm opacity-50">Cannot connect to THEORA Brain</p>
-        <button onClick={refresh} className="px-4 py-2 bg-asos-card border border-asos-border rounded-lg text-sm hover:bg-opacity-80">
+        <button onClick={refresh} className="px-4 py-2 bg-asos-card border border-asos-border rounded-lg text-sm hover:bg-asos-card-hover">
           Retry
         </button>
       </div>
@@ -111,7 +111,7 @@ export default function Dashboard() {
             </button>
             <button
               onClick={() => navigate('/chat')}
-              className="flex items-center gap-2 px-4 py-2 bg-asos-accent text-white rounded-lg text-sm font-medium hover:bg-opacity-90 transition active:scale-95"
+              className="flex items-center gap-2 px-4 py-2 bg-asos-accent text-white rounded-lg text-sm font-medium hover:bg-asos-accent/90 transition active:scale-95"
             >
               <MessageSquare size={14} /> Chat
             </button>
@@ -146,7 +146,7 @@ export default function Dashboard() {
             {devices.length > 0 ? (
               <div className="space-y-2">
                 {devices.map(dev => (
-                  <div key={dev.node_id} className="flex items-center gap-3 bg-asos-bg bg-opacity-30 rounded-lg px-4 py-3">
+                  <div key={dev.node_id} className="flex items-center gap-3 bg-asos-bg/30 rounded-lg px-4 py-3">
                     <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_#22c55e]" />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-mono truncate">{dev.node_id}</div>
@@ -209,7 +209,7 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="bg-asos-bg bg-opacity-30 border border-asos-border rounded-lg p-3">
+            <div className="bg-asos-bg/30 border border-asos-border rounded-lg p-3">
               <div className="text-xs text-asos-text-secondary uppercase tracking-wider mb-2">LLM Provider</div>
               <div className="text-sm font-semibold capitalize">
                 {llmStatus?.provider || info?.config?.llm?.provider || 'unknown'}
@@ -225,7 +225,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="bg-asos-bg bg-opacity-30 border border-asos-border rounded-lg p-3">
+            <div className="bg-asos-bg/30 border border-asos-border rounded-lg p-3">
               <div className="text-xs text-asos-text-secondary uppercase tracking-wider mb-2">Channels</div>
               <div className="text-sm font-semibold">{channelStats.channel_count || 0} active</div>
               {(channelStats.active_channels || []).length > 0 ? (
@@ -244,7 +244,7 @@ export default function Dashboard() {
               )}
             </div>
 
-            <div className="bg-asos-bg bg-opacity-30 border border-asos-border rounded-lg p-3">
+            <div className="bg-asos-bg/30 border border-asos-border rounded-lg p-3">
               <div className="text-xs text-asos-text-secondary uppercase tracking-wider mb-2">Providers + Devices</div>
               <div className="text-[11px] text-asos-text-secondary">GenUI Providers: {genuiProviders.length}</div>
               <div className="text-[11px] text-asos-text-secondary mt-1">Connected Devices: {devices.length}</div>
@@ -326,7 +326,7 @@ export default function Dashboard() {
           {activity.length > 0 ? (
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {activity.slice().reverse().map((entry, i) => (
-                <div key={i} className="flex items-center gap-3 text-xs bg-asos-bg bg-opacity-20 rounded-lg px-3 py-2">
+                <div key={i} className="flex items-center gap-3 text-xs bg-asos-bg/20 rounded-lg px-3 py-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
                   <span className="text-asos-text-secondary font-mono flex-shrink-0">
                     {new Date(entry.timestamp * 1000).toLocaleTimeString()}
@@ -353,7 +353,7 @@ export default function Dashboard() {
             <div className="flex flex-wrap gap-2">
               {info.skills.map(s => (
                 <span key={s.skill_id}
-                  className="text-xs bg-asos-bg bg-opacity-30 text-asos-text-secondary px-3 py-1.5 rounded-full">
+                  className="text-xs bg-asos-bg/30 text-asos-text-secondary px-3 py-1.5 rounded-full">
                   {s.name}
                   <span className="text-asos-text-muted ml-1">·{s.endpoints}</span>
                 </span>
@@ -381,7 +381,7 @@ function StatusCard({ icon: Icon, label, value, subtitle, color }) {
 
 function MemoryMetric({ label, value, icon: Icon }) {
   return (
-    <div className="flex items-center gap-3 bg-asos-bg bg-opacity-20 rounded-lg px-3 py-2.5">
+    <div className="flex items-center gap-3 bg-asos-bg/20 rounded-lg px-3 py-2.5">
       <Icon size={14} className="opacity-40 flex-shrink-0" />
       <div>
         <div className="text-lg font-bold leading-none">{value}</div>
@@ -404,11 +404,11 @@ function HealthMetric({ icon: Icon, label, value, unit, color }) {
 
 function FeatureRow({ label, active, detail }) {
   return (
-    <div className="flex items-center justify-between bg-asos-bg bg-opacity-20 rounded-lg px-3 py-2">
+    <div className="flex items-center justify-between bg-asos-bg/20 rounded-lg px-3 py-2">
       <span className="text-xs text-asos-text-secondary">{label}</span>
       <div className="flex items-center gap-2">
         {detail && <span className="text-[10px] text-asos-text-muted">{detail}</span>}
-        <div className={`w-2 h-2 rounded-full ${active ? 'bg-green-500' : 'bg-gray-600'}`} />
+        <div className={`w-2 h-2 rounded-full ${active ? 'bg-green-500' : 'bg-zinc-600'}`} />
       </div>
     </div>
   );
@@ -419,7 +419,7 @@ function QuickAction({ icon: Icon, label, onClick, loading }) {
     <button
       onClick={onClick}
       disabled={loading}
-      className="flex items-center gap-2 bg-asos-bg bg-opacity-30 hover:bg-opacity-50 rounded-lg px-4 py-3 text-sm transition text-left disabled:opacity-50"
+      className="flex items-center gap-2 bg-asos-bg/30 hover:bg-asos-bg/50 rounded-lg px-4 py-3 text-sm transition text-left disabled:opacity-50"
     >
       {loading ? (
         <Loader2 size={16} className="animate-spin text-asos-accent flex-shrink-0" />

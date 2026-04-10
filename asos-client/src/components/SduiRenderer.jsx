@@ -225,7 +225,7 @@ const FormView = ({ fields, action_id, submit_label, onAction }) => {
           <label className="text-xs opacity-70">{field.label || field.name}</label>
           {field.type === 'select' ? (
             <select
-              className="bg-black border border-asos-border rounded-lg px-3 py-2 text-sm"
+              className="bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-sm"
               value={values[field.name] || ''}
               onChange={e => setValues(prev => ({ ...prev, [field.name]: e.target.value }))}
             >
@@ -236,7 +236,7 @@ const FormView = ({ fields, action_id, submit_label, onAction }) => {
             </select>
           ) : field.type === 'textarea' ? (
             <textarea
-              className="bg-black border border-asos-border rounded-lg px-3 py-2 text-sm resize-none"
+              className="bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-sm resize-none"
               rows={3}
               placeholder={field.placeholder || ''}
               value={values[field.name] || ''}
@@ -245,7 +245,7 @@ const FormView = ({ fields, action_id, submit_label, onAction }) => {
           ) : (
             <input
               type={field.type || 'text'}
-              className="bg-black border border-asos-border rounded-lg px-3 py-2 text-sm"
+              className="bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-sm"
               placeholder={field.placeholder || ''}
               value={values[field.name] || ''}
               onChange={e => setValues(prev => ({ ...prev, [field.name]: e.target.value }))}
@@ -253,7 +253,7 @@ const FormView = ({ fields, action_id, submit_label, onAction }) => {
           )}
         </div>
       ))}
-      <button type="submit" className="px-4 py-2 bg-asos-accent text-white rounded-lg font-medium hover:bg-opacity-90 transition">
+      <button type="submit" className="px-4 py-2 bg-asos-accent text-white rounded-lg font-medium hover:bg-asos-accent/90 transition">
         {submit_label || 'Submit'}
       </button>
     </form>
@@ -296,7 +296,7 @@ const TableView = ({ headers, rows, color }) => (
 );
 
 const CodeBlock = ({ code, language }) => (
-  <pre className="w-full bg-black border border-asos-border rounded-xl p-4 overflow-x-auto text-sm font-mono">
+  <pre className="w-full bg-asos-bg border border-asos-border rounded-xl p-4 overflow-x-auto text-sm font-mono">
     <code>{code}</code>
   </pre>
 );
@@ -369,9 +369,9 @@ export const SduiRenderer = ({ node, onAction }) => {
         <button
           onClick={() => onAction && onAction(action_id)}
           className={`px-4 py-2 rounded-lg font-medium transition-all hover:scale-105 active:scale-95 ${
-            style === 'primary' ? 'bg-asos-accent text-white hover:bg-opacity-90'
+            style === 'primary' ? 'bg-asos-accent text-white hover:bg-asos-accent/90'
             : style === 'danger' ? 'bg-red-600 text-white hover:bg-red-500'
-            : 'bg-asos-card border border-asos-border hover:bg-white hover:bg-opacity-10'
+            : 'bg-asos-card border border-asos-border hover:bg-white/10'
           }`}>
           {label}
         </button>

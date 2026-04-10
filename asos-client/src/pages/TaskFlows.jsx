@@ -19,7 +19,7 @@ function statusClass(status) {
     case 'failed':
       return 'text-red-300 bg-red-500/15 border-red-500/30';
     case 'cancelled':
-      return 'text-gray-300 bg-gray-500/15 border-gray-500/30';
+      return 'text-asos-text-secondary bg-gray-500/15 border-gray-500/30';
     default:
       return 'text-purple-300 bg-purple-500/15 border-purple-500/30';
   }
@@ -148,7 +148,7 @@ export default function TaskFlows() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">TaskFlows</h1>
-            <p className="text-xs text-gray-500 mt-1">Persistent background workflows with resume and cancel controls.</p>
+            <p className="text-xs text-asos-text-muted mt-1">Persistent background workflows with resume and cancel controls.</p>
           </div>
           <button
             onClick={() => fetchFlows({ withSpinner: true })}
@@ -162,7 +162,7 @@ export default function TaskFlows() {
         <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
           {Object.entries(stats).map(([status, count]) => (
             <div key={status} className="bg-asos-card border border-asos-border rounded-lg px-3 py-2">
-              <div className="text-[10px] uppercase tracking-wider text-gray-400">{status}</div>
+              <div className="text-[10px] uppercase tracking-wider text-asos-text-secondary">{status}</div>
               <div className="text-lg font-semibold">{count}</div>
             </div>
           ))}
@@ -178,15 +178,15 @@ export default function TaskFlows() {
           <div className="bg-asos-card border border-asos-border rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-asos-border flex items-center justify-between">
               <span className="text-sm font-medium">Flows</span>
-              <span className="text-xs text-gray-500">{flows.length} total</span>
+              <span className="text-xs text-asos-text-muted">{flows.length} total</span>
             </div>
             <div className="max-h-[440px] overflow-y-auto">
               {flows.map((flow) => (
                 <button
                   key={flow.id}
                   onClick={() => loadFlow(flow.id)}
-                  className={`w-full text-left px-4 py-3 border-b border-asos-border/30 hover:bg-black/20 ${
-                    selectedId === flow.id ? 'bg-black/30' : ''
+                  className={`w-full text-left px-4 py-3 border-b border-asos-border/30 hover:bg-asos-bg/20 ${
+                    selectedId === flow.id ? 'bg-asos-bg/30' : ''
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -195,11 +195,11 @@ export default function TaskFlows() {
                       {flow.status}
                     </span>
                   </div>
-                  <div className="text-[11px] text-gray-500 mt-1 font-mono">{flow.id}</div>
+                  <div className="text-[11px] text-asos-text-muted mt-1 font-mono">{flow.id}</div>
                 </button>
               ))}
               {flows.length === 0 && (
-                <div className="p-4 text-sm text-gray-500">No taskflows yet.</div>
+                <div className="p-4 text-sm text-asos-text-muted">No taskflows yet.</div>
               )}
             </div>
           </div>
@@ -208,7 +208,7 @@ export default function TaskFlows() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold">{selectedFlow?.title || 'Select a flow'}</div>
-                {selectedFlow?.id && <div className="text-[11px] text-gray-500 font-mono">{selectedFlow.id}</div>}
+                {selectedFlow?.id && <div className="text-[11px] text-asos-text-muted font-mono">{selectedFlow.id}</div>}
               </div>
               {selectedFlow && (
                 <div className="flex items-center gap-2">
@@ -235,7 +235,7 @@ export default function TaskFlows() {
             {selectedFlow?.steps?.length ? (
               <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                 {selectedFlow.steps.map((step) => (
-                  <div key={step.id} className="border border-asos-border rounded-lg p-3 bg-black/20">
+                  <div key={step.id} className="border border-asos-border rounded-lg p-3 bg-asos-bg/20">
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-sm font-medium flex items-center gap-2">
                         <ListChecks size={13} className="text-asos-accent" />
@@ -247,7 +247,7 @@ export default function TaskFlows() {
                     </div>
                     {step.error && <div className="text-xs text-red-300 mt-2">{step.error}</div>}
                     {step.result && (
-                      <pre className="mt-2 text-[11px] text-gray-300 whitespace-pre-wrap bg-black/30 rounded p-2 overflow-x-auto">
+                      <pre className="mt-2 text-[11px] text-asos-text-secondary whitespace-pre-wrap bg-asos-bg/30 rounded p-2 overflow-x-auto">
                         {JSON.stringify(step.result, null, 2)}
                       </pre>
                     )}
@@ -255,7 +255,7 @@ export default function TaskFlows() {
                 ))}
               </div>
             ) : (
-              <div className="text-sm text-gray-500">Choose a flow to inspect step timeline and outputs.</div>
+              <div className="text-sm text-asos-text-muted">Choose a flow to inspect step timeline and outputs.</div>
             )}
           </div>
         </div>
@@ -266,13 +266,13 @@ export default function TaskFlows() {
             <input
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
-              className="bg-black border border-asos-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
+              className="bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent"
               placeholder="Flow title"
             />
             <input
               value={newSessionId}
               onChange={(e) => setNewSessionId(e.target.value)}
-              className="bg-black border border-asos-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
+              className="bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-asos-accent font-mono"
               placeholder="session_id (optional)"
             />
           </div>
@@ -280,13 +280,13 @@ export default function TaskFlows() {
             rows={8}
             value={newStepsJson}
             onChange={(e) => setNewStepsJson(e.target.value)}
-            className="w-full bg-black border border-asos-border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-asos-accent resize-y"
+            className="w-full bg-asos-bg border border-asos-border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-asos-accent resize-y"
             placeholder='[{"type":"sleep","seconds":5}]'
           />
           <button
             onClick={createFlow}
             disabled={createBusy}
-            className="px-4 py-2 rounded-lg bg-asos-accent text-white text-sm font-medium flex items-center gap-2 hover:bg-opacity-90 disabled:opacity-60"
+            className="px-4 py-2 rounded-lg bg-asos-accent text-white text-sm font-medium flex items-center gap-2 hover:bg-asos-accent/90 disabled:opacity-60"
           >
             {createBusy ? <Pause size={14} className="animate-pulse" /> : <Plus size={14} />}
             Create Flow

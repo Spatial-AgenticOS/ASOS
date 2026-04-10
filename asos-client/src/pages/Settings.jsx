@@ -3,11 +3,14 @@ import {
   Key, Sparkles, Eye, EyeOff, Shield, Zap, Database, Cpu, Volume2, User,
   Check, AlertCircle, Loader2, Save, RefreshCw, Trash2, Plus,
   Bluetooth, Wifi, WifiOff, Radio, Smartphone, Glasses, Watch, Bot,
+  Sun, Moon,
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
+import { useTheme } from '../hooks/useTheme';
 
 export default function Settings() {
+  const { theme, toggle: toggleTheme } = useTheme();
   const [config, setConfig] = useState(null);
   const [identity, setIdentity] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -278,7 +281,7 @@ export default function Settings() {
                 <button
                   onClick={saveIdentity}
                   disabled={saving}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-asos-accent text-white rounded-lg font-medium hover:bg-opacity-90 transition active:scale-[0.98] disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-asos-accent text-white rounded-lg font-medium hover:bg-asos-accent/90 transition active:scale-[0.98] disabled:opacity-50"
                 >
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   Save Identity
@@ -298,7 +301,7 @@ export default function Settings() {
               </p>
 
               {devices.length === 0 ? (
-                <div className="text-center py-8 bg-asos-bg bg-opacity-30 rounded-xl border border-dashed border-asos-border">
+                <div className="text-center py-8 bg-asos-bg/30 rounded-xl border border-dashed border-asos-border">
                   <Radio size={32} className="mx-auto opacity-20 mb-3" />
                   <p className="text-sm text-asos-text-secondary">No devices connected</p>
                   <p className="text-xs text-asos-text-muted mt-2 max-w-xs mx-auto">
@@ -325,7 +328,7 @@ export default function Settings() {
                   { icon: Watch, name: 'Wristband / Watch', desc: 'Health sensors (HR, SpO2, temp) connect via BLE through a phone bridge or dedicated USB dongle daemon.' },
                   { icon: Bot, name: 'Robot / Custom Hardware', desc: 'Any device running Python or Kotlin can use the node SDK. Connect to ws://BRAIN_IP:9090/v1/node with your API key.' },
                 ].map(item => (
-                  <div key={item.name} className="flex gap-3 bg-asos-bg bg-opacity-30 rounded-lg p-3 border border-asos-border">
+                  <div key={item.name} className="flex gap-3 bg-asos-bg/30 rounded-lg p-3 border border-asos-border">
                     <item.icon size={20} className="text-asos-accent flex-shrink-0 mt-0.5" />
                     <div>
                       <div className="font-medium text-sm">{item.name}</div>
@@ -363,7 +366,7 @@ export default function Settings() {
                           disabled={applyingPreset !== '' && !applying}
                           className={`text-left px-3 py-2 rounded-lg border transition ${
                             active
-                              ? 'border-asos-accent bg-asos-accent bg-opacity-10'
+                              ? 'border-asos-accent bg-asos-accent/10'
                               : 'border-asos-border bg-asos-bg hover:border-asos-border-bright'
                           }`}
                         >
@@ -393,7 +396,7 @@ export default function Settings() {
                     onClick={() => updateSetting('llm', 'provider', p)}
                     className={`px-4 py-3 rounded-lg border text-sm font-medium transition ${
                       config.llm?.provider === p
-                        ? 'border-asos-accent bg-asos-accent bg-opacity-10 text-asos-accent'
+                        ? 'border-asos-accent bg-asos-accent/10 text-asos-accent'
                         : 'border-asos-border bg-asos-card hover:border-asos-border-bright'
                     }`}
                   >
@@ -430,6 +433,26 @@ export default function Settings() {
         {/* Features Tab */}
         {activeTab === 'features' && (
           <div className="space-y-5">
+            <Section title="Appearance" icon={theme === 'dark' ? Moon : Sun}>
+              <div className="flex items-center justify-between py-1">
+                <div>
+                  <div className="text-sm font-medium">Theme</div>
+                  <div className="text-xs text-asos-text-secondary mt-0.5">Switch between light and dark mode</div>
+                </div>
+                <button
+                  onClick={toggleTheme}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition ${
+                    theme === 'dark'
+                      ? 'border-asos-border bg-asos-card text-asos-text hover:border-asos-border-bright'
+                      : 'border-asos-accent/30 bg-asos-accent/10 text-asos-accent'
+                  }`}
+                >
+                  {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+                  {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+                </button>
+              </div>
+            </Section>
+
             <Section title="Features" icon={Zap}>
               <div className="space-y-3">
                 <Toggle label="Streaming Responses" desc="Token-by-token LLM output in real-time" value={config.features?.streaming} onChange={v => updateSetting('features', 'streaming', v)} />
@@ -488,13 +511,13 @@ export default function Settings() {
               </div>
 
               {pendingSkills.length === 0 && !pendingLoading && (
-                <div className="text-sm text-asos-text-muted bg-asos-bg bg-opacity-30 rounded-lg px-4 py-4 border border-asos-border">
+                <div className="text-sm text-asos-text-muted bg-asos-bg/30 rounded-lg px-4 py-4 border border-asos-border">
                   No pending skill proposals.
                 </div>
               )}
 
               {pendingSkills.map((skill) => (
-                <div key={skill.skill_id} className="bg-asos-bg bg-opacity-30 rounded-lg border border-asos-border p-4 space-y-2">
+                <div key={skill.skill_id} className="bg-asos-bg/30 rounded-lg border border-asos-border p-4 space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="text-sm font-semibold">{skill.brand?.name || skill.skill_id}</div>
@@ -530,7 +553,7 @@ export default function Settings() {
           <Section title="Skill API Keys" icon={Key}>
             <div className="space-y-3">
               {config.has_skill_keys?.map(id => (
-                <div key={id} className="flex items-center justify-between bg-asos-bg bg-opacity-30 rounded-lg px-4 py-3">
+                <div key={id} className="flex items-center justify-between bg-asos-bg/30 rounded-lg px-4 py-3">
                   <span className="text-sm font-mono">{id}</span>
                   <span className="text-xs text-green-400 flex items-center gap-1"><Check size={12} /> Configured</span>
                 </div>
@@ -584,10 +607,10 @@ export default function Settings() {
                 Memory data stored at <code className="text-xs bg-asos-bg px-2 py-1 rounded font-mono">~/.theora/memory.db</code>
               </p>
               <div className="flex gap-3 mt-3">
-                <button className="flex items-center gap-2 px-4 py-2 bg-asos-card border border-asos-border rounded-lg text-sm hover:bg-opacity-80 transition">
+                <button className="flex items-center gap-2 px-4 py-2 bg-asos-card border border-asos-border rounded-lg text-sm hover:bg-asos-card-hover transition">
                   <Database size={14} /> Export
                 </button>
-                <button className="flex items-center gap-2 px-4 py-2 bg-red-900 bg-opacity-30 border border-red-800 rounded-lg text-sm text-red-400 hover:bg-opacity-50 transition">
+                <button className="flex items-center gap-2 px-4 py-2 bg-red-900/30 border border-red-800 rounded-lg text-sm text-red-400 hover:bg-red-900/50 transition">
                   <Trash2 size={14} /> Clear All
                 </button>
               </div>
@@ -640,7 +663,7 @@ function PhoneBridgeSection() {
       <button
         onClick={startScan}
         disabled={scanning}
-        className="flex items-center gap-2 px-4 py-2.5 bg-asos-accent text-white rounded-lg text-sm font-medium hover:bg-opacity-90 transition disabled:opacity-50 w-full justify-center"
+        className="flex items-center gap-2 px-4 py-2.5 bg-asos-accent text-white rounded-lg text-sm font-medium hover:bg-asos-accent/90 transition disabled:opacity-50 w-full justify-center"
       >
         {scanning ? (
           <><Loader2 size={14} className="animate-spin" /> Scanning...</>
@@ -650,13 +673,13 @@ function PhoneBridgeSection() {
       </button>
 
       {error && (
-        <div className="mt-3 text-xs text-red-400 bg-red-500 bg-opacity-10 rounded-lg px-3 py-2">
+        <div className="mt-3 text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
           {error}
         </div>
       )}
 
       {!btAvailable && (
-        <div className="mt-3 text-xs text-yellow-400 bg-yellow-500 bg-opacity-10 rounded-lg px-3 py-2">
+        <div className="mt-3 text-xs text-yellow-400 bg-yellow-500/10 rounded-lg px-3 py-2">
           Web Bluetooth requires Chrome/Edge on Android or a Chromium-based desktop browser with the flag enabled.
         </div>
       )}
@@ -667,7 +690,7 @@ function PhoneBridgeSection() {
           {bleDevices.map(dev => (
             <div key={dev.id}
               className={`flex items-center gap-3 rounded-lg px-4 py-3 border ${
-                connected === dev.id ? 'bg-green-500 bg-opacity-5 border-green-500 border-opacity-30' : 'bg-asos-bg bg-opacity-30 border-asos-border'
+                connected === dev.id ? 'bg-green-500/5 border-green-500/30' : 'bg-asos-bg/30 border-asos-border'
               }`}>
               <Bluetooth size={14} className={connected === dev.id ? 'text-green-400' : 'text-asos-text-muted'} />
               <div className="flex-1 min-w-0">
@@ -675,7 +698,7 @@ function PhoneBridgeSection() {
                 <div className="text-[10px] text-asos-text-muted font-mono">{dev.id}</div>
               </div>
               {connected === dev.id && (
-                <span className="text-[10px] text-green-400 bg-green-500 bg-opacity-20 px-2 py-0.5 rounded-full">Paired</span>
+                <span className="text-[10px] text-green-400 bg-green-500/20 px-2 py-0.5 rounded-full">Paired</span>
               )}
             </div>
           ))}
@@ -696,10 +719,10 @@ function DeviceCard({ device }) {
 
   return (
     <div className={`flex items-center gap-3 bg-asos-card border rounded-xl px-4 py-3 ${
-      device.connected ? 'border-green-500 border-opacity-30' : 'border-asos-border'
+      device.connected ? 'border-green-500/30' : 'border-asos-border'
     }`}>
       <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-        device.connected ? 'bg-green-500 bg-opacity-10' : 'bg-white bg-opacity-5'
+        device.connected ? 'bg-green-500/10' : 'bg-white/5'
       }`}>
         <Icon size={20} className={device.connected ? 'text-green-400' : 'text-asos-text-muted'} />
       </div>
@@ -707,7 +730,7 @@ function DeviceCard({ device }) {
         <div className="font-medium text-sm truncate">{device.node_id}</div>
         <div className="text-xs text-asos-text-secondary">{device.type || 'unknown device'}</div>
       </div>
-      <div className={`w-2.5 h-2.5 rounded-full ${device.connected ? 'bg-green-500' : 'bg-gray-600'}`} />
+      <div className={`w-2.5 h-2.5 rounded-full ${device.connected ? 'bg-green-500' : 'bg-zinc-600'}`} />
     </div>
   );
 }
