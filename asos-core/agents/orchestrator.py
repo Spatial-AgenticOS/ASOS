@@ -531,7 +531,7 @@ class Orchestrator:
     # Skill Routing
     # ─────────────────────────────────────────────
 
-    ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use", "browser", "desktop_automation", "screen_capture", "system_settings"}
+    ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use", "browser", "desktop_automation", "screen_capture", "system_settings", "agentic_computer_use"}
 
     async def _route_prompt(self, text: str) -> list[SkillManifest]:
         if not self.skills.skills:
@@ -554,8 +554,10 @@ class Orchestrator:
             text_content, _ = self.llm.extract_response(response)
 
             cleaned = text_content.strip()
-            if cleaned.startswith("```json"): cleaned = cleaned[7:-3].strip()
-            elif cleaned.startswith("```"): cleaned = cleaned[3:-3].strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:-3].strip()
+            elif cleaned.startswith("```"):
+                cleaned = cleaned[3:-3].strip()
 
             skill_ids = json.loads(cleaned)
 
@@ -1587,6 +1589,14 @@ class Orchestrator:
             "- **system_settings__read_user_profile / update_user_profile**: Read/write user identity.\n"
             "- **system_settings__read_agent_personality / update_agent_personality**: Change agent name/personality/voice.\n"
             "- **system_settings__read_settings / update_setting**: Read/write system config (LLM, features, etc.).\n"
+            "- **system_settings__create_skill**: Create a NEW skill on-the-fly from a capability description.\n"
+            "  When user asks you to 'learn' something, 'add a skill', or do something you lack a skill for,\n"
+            "  call this with a description and it generates + registers the skill immediately.\n"
+            "- **agentic_computer_use__execute_task**: Autonomous vision-action loop for complex GUI tasks.\n"
+            "  Takes screenshots, analyzes with AI vision, clicks/types/scrolls iteratively.\n"
+            "  Use for multi-step GUI workflows: filling forms, navigating apps, multi-click sequences.\n"
+            "  For simple single actions (open app, click one thing), use desktop_control or desktop_automation.\n"
+            "  For complex workflows that require SEEING the screen, use agentic_computer_use.\n"
         )
 
         # Perception Context

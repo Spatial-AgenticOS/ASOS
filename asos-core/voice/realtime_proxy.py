@@ -240,7 +240,7 @@ class RealtimeSession:
         event_type = event.get("type", "")
 
         if event_type == "session.created":
-            logger.info(f"Realtime session.created — configuring...")
+            logger.info("Realtime session.created — configuring...")
             await self.configure()
 
         elif event_type == "response.audio.delta":

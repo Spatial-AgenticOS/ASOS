@@ -253,7 +253,6 @@ class WebSocketNodeAdapter:
         self._pending[request_id] = future
 
         command = action.capability_id
-        cmd_info = NODE_COMMANDS.get(command, {})
 
         msg = {
             "type": "command",

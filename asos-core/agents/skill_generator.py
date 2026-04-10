@@ -76,7 +76,13 @@ Rules:
 - If the API requires auth, set the auth type correctly
 - Make trigger_phrases natural and varied
 - Keep endpoint descriptions clear — the LLM uses them for routing
-- If unsure of the exact URL, use a reasonable placeholder with a comment
+- If the capability can be done LOCALLY (shell commands, Python scripts, file operations,
+  audio generation, etc.) instead of via an external API, add a "python_impl" field with
+  a complete Python class that extends BaseSkill. Format:
+
+  "python_impl": "from skills.base import BaseSkill\\nimport subprocess\\n\\nclass MySkill(BaseSkill):\\n    def __init__(self):\\n        super().__init__(skill_id='my_skill')\\n\\n    async def execute(self, endpoint_id, args, vault):\\n        # implementation\\n        return {'success': True, 'status_code': 200, 'data': {...}, 'error': None}"
+
+  For local skills, set endpoint URLs to "internal://skill_id/endpoint_id" and method to "PYTHON".
 
 Return ONLY the JSON. No markdown, no explanation."""
 
@@ -228,6 +234,8 @@ class SkillGenerator:
     async def approve_skill(self, skill_id: str) -> bool:
         """
         User approved a pending skill. Register it live and persist to disk.
+        Writes to {skills_dir}/{skill_id}/manifest.json so _load_marketplace_skills()
+        can reload it on restart.
         """
         manifest = self._pending_skills.pop(skill_id, None)
         if not manifest:
@@ -239,12 +247,19 @@ class SkillGenerator:
             skill = SkillManifest(**manifest)
             self._registry.register_skill(skill)
 
-            self._skills_dir.mkdir(parents=True, exist_ok=True)
-            path = self._skills_dir / f"{skill_id}.json"
-            with open(path, "w") as f:
+            skill_dir = self._skills_dir / skill_id
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            manifest_path = skill_dir / "manifest.json"
+            with open(manifest_path, "w") as f:
                 json.dump(manifest, f, indent=2)
 
-            logger.info(f"Skill approved and registered: {skill_id} → {path}")
+            python_impl = manifest.pop("python_impl", None)
+            if python_impl:
+                impl_path = skill_dir / "impl.py"
+                impl_path.write_text(python_impl)
+                logger.info(f"Wrote Python implementation: {impl_path}")
+
+            logger.info(f"Skill approved and registered: {skill_id} → {skill_dir}")
             return True
 
         except Exception as e:

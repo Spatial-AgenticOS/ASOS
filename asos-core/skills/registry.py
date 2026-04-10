@@ -53,12 +53,39 @@ class SkillRegistry:
                     pkg = SkillPackage(d)
                     if pkg.load() and pkg.manifest:
                         self.register(pkg.manifest)
+                        self._try_load_dynamic_impl(d, pkg.manifest.skill_id)
                         count += 1
                 except Exception as e:
                     logger.warning(f"Failed to load marketplace skill from {d}: {e}")
 
         if count:
             logger.info(f"Loaded {count} marketplace skills from {skills_dir}")
+
+    @staticmethod
+    def _try_load_dynamic_impl(skill_dir: Path, skill_id: str):
+        """Dynamically load impl.py from a skill directory and register the implementation."""
+        impl_path = skill_dir / "impl.py"
+        if not impl_path.exists():
+            return
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(f"theora_skill_{skill_id}", str(impl_path))
+            if not spec or not spec.loader:
+                return
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+
+            from skills.base import BaseSkill
+            from skills.impl import register_instance
+            for attr_name in dir(mod):
+                obj = getattr(mod, attr_name)
+                if isinstance(obj, type) and issubclass(obj, BaseSkill) and obj is not BaseSkill:
+                    instance = obj()
+                    register_instance(skill_id, instance)
+                    logger.info(f"Loaded dynamic implementation for {skill_id} from {impl_path}")
+                    return
+        except Exception as e:
+            logger.warning(f"Failed to load impl.py for {skill_id}: {e}")
 
     def register(self, manifest: SkillManifest):
         """Register a skill manifest."""

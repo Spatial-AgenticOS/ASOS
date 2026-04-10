@@ -138,7 +138,7 @@ def cmd_identity():
     print(f"  Personality: {data.get('personality', '?')}")
     rules = data.get("rules", [])
     if rules:
-        print(f"  Rules:")
+        print("  Rules:")
         for r in rules:
             print(f"    - {r}")
     style = data.get("communication_style", {})
@@ -227,7 +227,7 @@ async def repl():
 
     except ConnectionRefusedError:
         print(f"  Cannot connect to THEORA Brain at {uri}")
-        print(f"  Make sure the Brain is running: python api/server.py")
+        print("  Make sure the Brain is running: python api/server.py")
         sys.exit(1)
     except Exception as e:
         print(f"  Connection error: {e}")
@@ -401,7 +401,7 @@ def cmd_start(port: int | None = None, no_browser: bool = False):
     skills_count = data.get("skills_count", "?")
     llm_ok = "ready" if data.get("llm_available") else "no key"
     mem = data.get("memory", {})
-    print(f"\n  Brain ready!")
+    print("\n  Brain ready!")
     print(f"  LLM: {llm_ok} | Skills: {skills_count} | Memory: {mem.get('notes', 0)} notes")
     print(f"  Dashboard: {os.getenv('THEORA_PUBLIC_BASE_URL', f'http://localhost:{port}')}")
 
@@ -434,8 +434,8 @@ def cmd_doctor():
     # Brain connection
     data = _http_get("/health")
     if "error" in data:
-        print(f"  Brain:         NOT RUNNING")
-        print(f"                 Start with: theora start")
+        print("  Brain:         NOT RUNNING")
+        print("                 Start with: theora start")
     else:
         print(f"  Brain:         RUNNING (v{data.get('version', '?')})")
 
@@ -462,7 +462,7 @@ def cmd_doctor():
         if creds.exists():
             print(f"    (loaded from {creds})")
         else:
-            print(f"    NONE — run: theora setup")
+            print("    NONE — run: theora setup")
 
     # Dependencies
     print()
@@ -520,7 +520,7 @@ def cmd_wake_test():
     print(f"  Phrase: {detector._config.phrase}")
     model_name = os.environ.get("THEORA_WAKE_MODEL", "hey_jarvis_v0.1")
     print(f"  Model:  {model_name}")
-    print(f"\n  Listening for 10 seconds... Say the wake phrase!\n")
+    print("\n  Listening for 10 seconds... Say the wake phrase!\n")
 
     try:
         import pyaudio
@@ -529,7 +529,8 @@ def cmd_wake_test():
         print("  Install: pip install pyaudio")
         sys.exit(1)
 
-    import struct, time
+    import struct
+    import time
 
     pa = pyaudio.PyAudio()
     stream = pa.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1280)

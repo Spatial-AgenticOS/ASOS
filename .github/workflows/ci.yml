@@ -7,8 +7,28 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    name: Brain — ruff lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: asos-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff
+        run: ruff check --output-format=github --select=E,F,W --ignore=E501,E402,F401,W291,W293 .
+
   brain-tests:
     name: Brain — pytest
+    needs: lint
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -68,5 +88,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Check Python syntax
-        run: python -m py_compile api/server.py agents/orchestrator.py agents/llm_provider.py
+      - name: Check Python syntax (all .py files)
+        run: |
+          find . -name '*.py' -not -path './.git/*' -not -path './venv/*' \
+            | xargs python -m py_compile

@@ -76,7 +76,7 @@ class WASMSandbox:
         start = time.time()
 
         try:
-            result = await asyncio.wait_for(
+            await asyncio.wait_for(
                 self._run_wasm(wasm_path, entry_point),
                 timeout=self._timeout_seconds,
             )

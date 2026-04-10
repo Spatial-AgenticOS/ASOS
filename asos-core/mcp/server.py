@@ -23,7 +23,7 @@ import sys
 from typing import Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from hardware.protocol import DeviceRegistry
+    from hardware.protocol import DeviceCapability, DeviceRegistry
     from memory.store import MemoryStore
     from perception.fusion import PerceptionEngine
 

@@ -132,7 +132,7 @@ class TestSemanticMemory:
 
 class TestExecutionLog:
     def test_log_and_retrieve(self, store):
-        eid = store.log_execution("s1", "web_search", "web_search", {"q": "test"}, "success", "Found 5 results", 120.5)
+        store.log_execution("s1", "web_search", "web_search", {"q": "test"}, "success", "Found 5 results", 120.5)
         logs = store.log_recent(skill_id="web_search")
         assert len(logs) == 1
         assert logs[0]["result_status"] == "success"

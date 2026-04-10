@@ -100,6 +100,18 @@
             ],
             "returns_description": "{ok: true}",
             "ui_hint": "detail_card"
+        },
+        {
+            "id": "create_skill",
+            "method": "POST",
+            "url": "internal://system_settings/create_skill",
+            "description": "Create and register a brand new skill from a capability description. Use when the user asks you to learn something new, add a capability, or integrate with a service you don't currently support.",
+            "params": [
+                {"name": "capability", "type": "string", "required": true, "description": "What the skill should do, in plain language (e.g. 'check my Notion pages', 'control Spotify playback')"},
+                {"name": "service", "type": "string", "required": false, "description": "The service or API to integrate with (e.g. 'Notion API', 'Spotify Web API')"}
+            ],
+            "returns_description": "{skill_id, name, endpoints, message}",
+            "ui_hint": "detail_card"
         }
     ],
     "flows": [],

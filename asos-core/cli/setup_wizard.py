@@ -385,7 +385,7 @@ class OnboardWizard:
         user_md = "\n".join(lines) + "\n"
         user_path.write_text(user_md)
         self.c.print(f"  [green]Saved to {user_path}[/]")
-        self.c.print(f"  [dim]You can edit this file anytime to update your agent's knowledge about you.[/]")
+        self.c.print("  [dim]You can edit this file anytime to update your agent's knowledge about you.[/]")
         self.c.print()
 
     # ── Step 4: Agent Personality ───────────────────────────
@@ -430,7 +430,7 @@ class OnboardWizard:
         soul_path = THEORA_HOME / "SOUL.md"
         soul_content = f"# {agent_name}\n\n{soul_text}\n"
         soul_path.write_text(soul_content)
-        self.c.print(f"  [green]SOUL.md saved[/]")
+        self.c.print("  [green]SOUL.md saved[/]")
 
         # Write IDENTITY.yaml
         try:
@@ -458,13 +458,13 @@ class OnboardWizard:
             identity_path.write_text(yaml.dump(identity, default_flow_style=False, allow_unicode=True, sort_keys=False))
         else:
             identity_path.write_text(json.dumps(identity, indent=2))
-        self.c.print(f"  [green]IDENTITY.yaml saved[/]")
+        self.c.print("  [green]IDENTITY.yaml saved[/]")
 
         # Write MEMORY.md (seed)
         memory_path = THEORA_HOME / "MEMORY.md"
         if not memory_path.exists():
             memory_path.write_text("# Agent Memory\n\nLong-term curated memory. The agent updates this file as it learns.\n")
-            self.c.print(f"  [green]MEMORY.md created[/]")
+            self.c.print("  [green]MEMORY.md created[/]")
 
         self.c.print()
 
@@ -489,9 +489,9 @@ class OnboardWizard:
                 key = Prompt.ask(f"    {tk['name']} API key", password=True)
                 if key.strip():
                     self.creds[tk["env"]] = key.strip()
-                    self.c.print(f"    [green]Saved[/]")
+                    self.c.print("    [green]Saved[/]")
             else:
-                self.c.print(f"    [dim]Skipped[/]")
+                self.c.print("    [dim]Skipped[/]")
 
         self.c.print()
 
@@ -745,7 +745,7 @@ class OnboardWizardPlain:
         (THEORA_HOME / "settings.json").write_text(json.dumps(settings, indent=2))
 
         print("=" * 50)
-        print(f"  Setup complete!")
+        print("  Setup complete!")
         print(f"  Agent: {agent_name}")
         print(f"  Config: {THEORA_HOME}")
         print()

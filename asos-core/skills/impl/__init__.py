@@ -78,3 +78,8 @@ try:
     import skills.impl.system_settings
 except ImportError:
     pass
+
+try:
+    import skills.impl.agentic_computer_use
+except ImportError:
+    pass

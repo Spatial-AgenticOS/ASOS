@@ -934,7 +934,7 @@ class MemoryStore:
             knowledge = self.knowledge_search(query, limit=5)
             if knowledge:
                 k_lines = [f"- {k['subject']} {k['predicate']} {k['object']}" for k in knowledge]
-                sections.append(f"## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
+                sections.append("## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
 
         if query:
             episodes = await self.episode_search_hybrid(query, limit=3)
@@ -942,12 +942,12 @@ class MemoryStore:
             episodes = self.episode_recent(limit=3, session_id=session_id)
         if episodes:
             ep_lines = [f"- [{e['event_type']}] {e['summary']}" for e in episodes]
-            sections.append(f"## Past Events\n" + "\n".join(ep_lines)[:budget_per_section])
+            sections.append("## Past Events\n" + "\n".join(ep_lines)[:budget_per_section])
 
         recent_execs = self.log_recent(limit=5)
         if recent_execs:
             ex_lines = [f"- {ex.get('skill_id', '?')}: {ex.get('result_status', '?')}" for ex in recent_execs]
-            sections.append(f"## Recent Actions\n" + "\n".join(ex_lines)[:budget_per_section])
+            sections.append("## Recent Actions\n" + "\n".join(ex_lines)[:budget_per_section])
 
         return "\n\n".join(sections) if sections else ""
 
@@ -964,7 +964,7 @@ class MemoryStore:
             knowledge = self.knowledge_search(query, limit=5)
             if knowledge:
                 k_lines = [f"- {k['subject']} {k['predicate']} {k['object']}" for k in knowledge]
-                sections.append(f"## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
+                sections.append("## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
 
         if query:
             episodes = self.episode_search(query, limit=3)
@@ -972,12 +972,12 @@ class MemoryStore:
             episodes = self.episode_recent(limit=3, session_id=session_id)
         if episodes:
             ep_lines = [f"- [{e['event_type']}] {e['summary']}" for e in episodes]
-            sections.append(f"## Past Events\n" + "\n".join(ep_lines)[:budget_per_section])
+            sections.append("## Past Events\n" + "\n".join(ep_lines)[:budget_per_section])
 
         recent_execs = self.log_recent(limit=5)
         if recent_execs:
             ex_lines = [f"- {ex.get('skill_id', '?')}: {ex.get('result_status', '?')}" for ex in recent_execs]
-            sections.append(f"## Recent Actions\n" + "\n".join(ex_lines)[:budget_per_section])
+            sections.append("## Recent Actions\n" + "\n".join(ex_lines)[:budget_per_section])
 
         return "\n\n".join(sections) if sections else ""
 

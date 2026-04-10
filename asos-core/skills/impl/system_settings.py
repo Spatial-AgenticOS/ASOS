@@ -29,6 +29,9 @@ class SystemSettingsSkill(BaseSkill):
         super().__init__(skill_id="system_settings")
 
     async def execute(self, endpoint_id: str, args: Dict[str, Any], vault: Dict[str, str]) -> Dict[str, Any]:
+        if endpoint_id == "create_skill":
+            return await self._create_skill(args)
+
         try:
             handler = {
                 "read_user_profile": self._read_user_profile,
@@ -123,7 +126,7 @@ class SystemSettingsSkill(BaseSkill):
     def _read_settings(self, args: dict) -> dict:
         from config.loader import ConfigLoader
         loader = ConfigLoader()
-        settings = loader.discover()
+        loader.discover()
         safe = loader.to_client_safe_dict()
         return {"success": True, "status_code": 200, "data": safe, "error": None}
 
@@ -142,3 +145,38 @@ class SystemSettingsSkill(BaseSkill):
         loader.discover()
         loader.update_settings(section, key, value)
         return {"success": True, "status_code": 200, "data": {"section": section, "key": key, "value": value}, "error": None}
+
+    async def _create_skill(self, args: dict) -> dict:
+        """Generate a new skill from a capability description and auto-approve it."""
+        capability = args.get("capability", "").strip()
+        if not capability:
+            return {"success": False, "status_code": 400, "data": None, "error": "capability description is required"}
+
+        try:
+            from api.server import state
+            if not state.skill_gen:
+                return {"success": False, "status_code": 503, "data": None, "error": "Skill generator not initialized"}
+
+            service = args.get("service", "")
+            manifest = await state.skill_gen.generate_skill(capability, service)
+            if not manifest:
+                return {"success": False, "status_code": 500, "data": None, "error": "Failed to generate skill manifest"}
+
+            skill_id = manifest.get("skill_id", "")
+            approved = await state.skill_gen.approve_skill(skill_id)
+            if not approved:
+                return {"success": False, "status_code": 500, "data": None, "error": f"Failed to register skill: {skill_id}"}
+
+            return {
+                "success": True, "status_code": 200,
+                "data": {
+                    "skill_id": skill_id,
+                    "name": manifest.get("brand", {}).get("name", skill_id),
+                    "endpoints": len(manifest.get("endpoints", [])),
+                    "message": f"Skill '{skill_id}' created and ready to use.",
+                },
+                "error": None,
+            }
+        except Exception as e:
+            logger.exception("create_skill failed")
+            return {"success": False, "status_code": 500, "data": None, "error": str(e)}

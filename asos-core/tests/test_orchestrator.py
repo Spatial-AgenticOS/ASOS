@@ -99,19 +99,23 @@ class TestGenUIAndHistory:
     async def test_try_genui_for_result_location_data_mocks_engine(
         self, orchestrator: Orchestrator
     ) -> None:
-        """Rich location results trigger GenUI generation when engine succeeds."""
+        """Rich location results trigger GenUI generation via self.genui.generate()."""
         orchestrator.skills.skills = {"weather_current": WEATHER_SKILL}
         tool_call = {"name": "weather_current__current", "id": "tc1"}
-        result_data = {"lat": 40.7, "lon": -74.0, "label": "NYC"}
+        result_data = {
+            "success": True, "status_code": 200,
+            "data": {"lat": 40.7, "lon": -74.0, "label": "NYC"},
+            "error": None,
+        }
 
-        mock_engine = MagicMock()
-        mock_engine.generate_for_data = AsyncMock(
-            return_value={"type": "map_view", "props": {"center": [0, 0]}}
+        orchestrator.genui.generate = MagicMock(
+            return_value={"type": "VStack", "children": [{"type": "MapView"}]}
         )
-        with patch("genui.generator.GenUIEngine", return_value=mock_engine):
-            await orchestrator._try_genui_for_result("sess-1", tool_call, result_data)
+        await orchestrator._try_genui_for_result("sess-1", tool_call, result_data)
 
-        mock_engine.generate_for_data.assert_awaited_once()
+        orchestrator.genui.generate.assert_called_once()
+        call_kwargs = orchestrator.genui.generate.call_args
+        assert call_kwargs[1]["data"]["lat"] == 40.7
         orchestrator.send.assert_awaited()
         sent = orchestrator.send.call_args[0]
         assert isinstance(sent[1], TheoraMessage)

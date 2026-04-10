@@ -825,7 +825,7 @@ async def list_devices():
     """List all connected hardware nodes / daemons."""
     nodes = []
     for node_id, info in state.daemons.items():
-        ws = info if not isinstance(info, dict) else None
+        _ = info if not isinstance(info, dict) else None
         nodes.append({
             "node_id": node_id,
             "connected": True,
@@ -2615,7 +2615,7 @@ NODE_API_KEY = os.environ.get("NODE_API_KEY", "dev-secret-key")
 @app.websocket("/v1/node")
 async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
     if api_key != NODE_API_KEY:
-        logger.warning(f"Unauthorized daemon connection attempt rejected")
+        logger.warning("Unauthorized daemon connection attempt rejected")
         await ws.close(code=1008, reason="Unauthorized Edge Node API Key")
         return
 

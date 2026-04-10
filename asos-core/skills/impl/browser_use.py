@@ -173,12 +173,16 @@ class BrowserController:
         return self._cdp.connected
 
     async def initialize(self) -> bool:
-        """Connect to Chrome CDP and optionally Playwright."""
+        """Connect to Chrome CDP and optionally Playwright. Auto-launches Chrome if needed."""
         cdp_ok = await self._cdp.connect()
         if not cdp_ok:
-            logger.warning("CDP not available — browser control disabled. "
-                           "Start Chrome with: google-chrome --remote-debugging-port=9222")
-            return False
+            launched = await self._auto_launch_chrome()
+            if launched:
+                await asyncio.sleep(2.0)
+                cdp_ok = await self._cdp.connect()
+            if not cdp_ok:
+                logger.warning("CDP not available — browser control disabled.")
+                return False
 
         if not self._console_listener_attached:
             self._cdp.add_event_listener(self._on_cdp_event)
@@ -208,6 +212,113 @@ class BrowserController:
             logger.info(f"Playwright not available (CDP-only mode): {e}")
 
         return True
+
+    async def _auto_launch_chrome(self) -> bool:
+        """Try to launch Chrome/Chromium with remote debugging enabled."""
+        import platform
+        import shutil
+        system = platform.system()
+
+        candidates = []
+        if system == "Darwin":
+            candidates = [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+            ]
+        elif system == "Linux":
+            for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+                p = shutil.which(name)
+                if p:
+                    candidates.append(p)
+        else:
+            for name in ("chrome.exe", "chromium.exe"):
+                p = shutil.which(name)
+                if p:
+                    candidates.append(p)
+
+        chrome_bin = None
+        for c in candidates:
+            if os.path.isfile(c):
+                chrome_bin = c
+                break
+
+        if not chrome_bin:
+            logger.warning("No Chrome/Chromium binary found for auto-launch")
+            return False
+
+        from config.loader import theora_home
+        profile_dir = str(theora_home() / "chrome-profile")
+
+        args = [
+            chrome_bin,
+            f"--remote-debugging-port={CDP_PORT}",
+            f"--user-data-dir={profile_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ]
+
+        try:
+            import subprocess
+            self._chrome_proc = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info(f"Auto-launched Chrome (pid={self._chrome_proc.pid}) on port {CDP_PORT}")
+            return True
+        except Exception as e:
+            logger.error(f"Chrome auto-launch failed: {e}")
+            return False
+
+    async def list_tabs(self) -> list[dict]:
+        """List all open browser tabs via CDP HTTP API."""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"http://{CDP_HOST}:{CDP_PORT}/json/list") as resp:
+                    tabs = await resp.json()
+                    return [
+                        {"id": t.get("id"), "title": t.get("title", ""), "url": t.get("url", "")}
+                        for t in tabs if t.get("type") == "page"
+                    ]
+        except Exception as e:
+            logger.warning(f"Failed to list tabs: {e}")
+            return []
+
+    async def switch_tab(self, tab_id: str) -> bool:
+        """Activate a tab by its CDP target id."""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"http://{CDP_HOST}:{CDP_PORT}/json/activate/{tab_id}") as resp:
+                    return resp.status == 200
+        except Exception as e:
+            logger.warning(f"Failed to switch tab: {e}")
+            return False
+
+    async def new_tab(self, url: str = "about:blank") -> Optional[str]:
+        """Open a new browser tab."""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"http://{CDP_HOST}:{CDP_PORT}/json/new?{url}") as resp:
+                    data = await resp.json()
+                    return data.get("id")
+        except Exception as e:
+            logger.warning(f"Failed to open new tab: {e}")
+            return None
+
+    async def close_tab(self, tab_id: str) -> bool:
+        """Close a browser tab by its CDP target id."""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"http://{CDP_HOST}:{CDP_PORT}/json/close/{tab_id}") as resp:
+                    return resp.status == 200
+        except Exception as e:
+            logger.warning(f"Failed to close tab: {e}")
+            return False
 
     def _on_cdp_event(self, event: dict):
         """Capture console/log events so the agent can inspect browser errors."""
@@ -658,5 +769,15 @@ def get_browser_skill_manifest() -> dict:
                 {"name": "landscape", "type": "boolean", "required": False},
             ]},
             {"id": "get_page_info", "description": "Get current page URL and title", "params": []},
+            {"id": "list_tabs", "description": "List all open browser tabs", "params": []},
+            {"id": "switch_tab", "description": "Activate a browser tab by its id", "params": [
+                {"name": "tab_id", "type": "string", "required": True, "description": "Tab id from list_tabs"},
+            ]},
+            {"id": "new_tab", "description": "Open a new browser tab", "params": [
+                {"name": "url", "type": "string", "required": False, "description": "URL to open (default: blank)"},
+            ]},
+            {"id": "close_tab", "description": "Close a browser tab", "params": [
+                {"name": "tab_id", "type": "string", "required": True, "description": "Tab id to close"},
+            ]},
         ],
     }
