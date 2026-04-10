@@ -85,22 +85,22 @@ install_success=false
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../asos-core/pyproject.toml" ]; then
     REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
     echo -e "  ${DIM}From local repo: $REPO_ROOT${NC}"
-    if $PYTHON -m pip install --upgrade -e "$REPO_ROOT/asos-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+    if $PYTHON -m pip install --upgrade --force-reinstall -e "$REPO_ROOT/asos-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
         install_success=true
     fi
 else
     echo -e "  ${DIM}Installing from GitHub...${NC}"
-    if $PYTHON -m pip install --upgrade "theora-asos[llm] @ git+https://github.com/Spatial-AgenticOS/ASOS.git#subdirectory=asos-core" 2>&1 | tee "$PIP_LOG" | tail -5; then
+    if $PYTHON -m pip install --upgrade --force-reinstall "theora-asos[llm] @ git+https://github.com/Spatial-AgenticOS/ASOS.git#subdirectory=asos-core" 2>&1 | tee "$PIP_LOG" | tail -5; then
         install_success=true
     else
         echo -e "  ${DIM}Git install failed. Trying PyPI...${NC}"
-        if $PYTHON -m pip install --upgrade "theora-asos[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+        if $PYTHON -m pip install --upgrade --force-reinstall "theora-asos[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
             install_success=true
         else
             echo -e "  ${DIM}PyPI failed. Cloning repo...${NC}"
             TMPDIR=$(mktemp -d)
             if git clone --depth 1 https://github.com/Spatial-AgenticOS/ASOS.git "$TMPDIR/ASOS" 2>/dev/null; then
-                if $PYTHON -m pip install --upgrade -e "$TMPDIR/ASOS/asos-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+                if $PYTHON -m pip install --upgrade --force-reinstall -e "$TMPDIR/ASOS/asos-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
                     install_success=true
                 fi
             fi
@@ -121,6 +121,10 @@ if [ "$install_success" = false ]; then
 fi
 
 rm -f "$PIP_LOG" 2>/dev/null || true
+
+# ─── Browser Runtime (best effort) ─────────────────────
+echo -e "  ${DIM}Installing Playwright Chromium runtime (best effort)...${NC}"
+$PYTHON -m playwright install chromium --with-deps >/dev/null 2>&1 || true
 
 # ─── Verify CLI ─────────────────────────────────────────
 

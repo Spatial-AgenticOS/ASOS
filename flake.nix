@@ -8,31 +8,41 @@
 
   outputs = { self, nixpkgs, flake-utils }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
     in
     (flake-utils.lib.eachSystem systems
       (system:
         let
           pkgs = import nixpkgs { inherit system; };
           python = pkgs.python311;
+          pyPkgs = pkgs.python311Packages;
           node = pkgs.nodejs_20;
+          theoraPythonPackage = pyPkgs.buildPythonPackage rec {
+            pname = "theora-asos";
+            version = "1.1.0";
+            src = ./asos-core;
+            pyproject = true;
+            nativeBuildInputs = with pyPkgs; [ setuptools wheel ];
+            propagatedBuildInputs = with pyPkgs; [
+              fastapi
+              uvicorn
+              pydantic
+              websockets
+              httpx
+              pyyaml
+              rich
+              html2text
+              openai
+              numpy
+              pillow
+              aiohttp
+            ];
+            doCheck = false;
+          };
         in
         {
           packages = rec {
-            theora-brain = pkgs.writeShellApplication {
-              name = "theora-brain";
-              runtimeInputs = [ python node pkgs.git ];
-              text = ''
-                export THEORA_HOME="${THEORA_HOME:-$HOME/.theora}"
-                export THEORA_HOST="${THEORA_HOST:-0.0.0.0}"
-                export THEORA_PORT="${THEORA_PORT:-9090}"
-                if [ -z "${THEORA_PUBLIC_BASE_URL:-}" ]; then
-                  export THEORA_PUBLIC_BASE_URL="http://localhost:$THEORA_PORT"
-                fi
-                cd ${self}/asos-core
-                exec ${python}/bin/python -m cli.main serve --bind "$THEORA_HOST" --serve-port "$THEORA_PORT"
-              '';
-            };
+            theora-brain = theoraPythonPackage;
 
             theora-client = pkgs.writeShellApplication {
               name = "theora-client";
@@ -53,7 +63,15 @@
           apps = {
             brain = {
               type = "app";
-              program = "${self.packages.${system}.theora-brain}/bin/theora-brain";
+              program = "${pkgs.writeShellScript "theora-brain-app" ''
+                export THEORA_HOME="${THEORA_HOME:-$HOME/.theora}"
+                export THEORA_HOST="${THEORA_HOST:-0.0.0.0}"
+                export THEORA_PORT="${THEORA_PORT:-9090}"
+                if [ -z "${THEORA_PUBLIC_BASE_URL:-}" ]; then
+                  export THEORA_PUBLIC_BASE_URL="http://localhost:$THEORA_PORT"
+                fi
+                exec ${self.packages.${system}.theora-brain}/bin/theora serve --bind "$THEORA_HOST" --serve-port "$THEORA_PORT"
+              ''}";
             };
             client = {
               type = "app";
@@ -61,7 +79,15 @@
             };
             default = {
               type = "app";
-              program = "${self.packages.${system}.theora-brain}/bin/theora-brain";
+              program = "${pkgs.writeShellScript "theora-brain-default-app" ''
+                export THEORA_HOME="${THEORA_HOME:-$HOME/.theora}"
+                export THEORA_HOST="${THEORA_HOST:-0.0.0.0}"
+                export THEORA_PORT="${THEORA_PORT:-9090}"
+                if [ -z "${THEORA_PUBLIC_BASE_URL:-}" ]; then
+                  export THEORA_PUBLIC_BASE_URL="http://localhost:$THEORA_PORT"
+                fi
+                exec ${self.packages.${system}.theora-brain}/bin/theora serve --bind "$THEORA_HOST" --serve-port "$THEORA_PORT"
+              ''}";
             };
           };
 
@@ -132,7 +158,7 @@
                 THEORA_PUBLIC_BASE_URL = "http://localhost:${toString cfg.port}";
               };
               serviceConfig = {
-                ExecStart = "${cfg.package}/bin/theora-brain";
+                ExecStart = "${cfg.package}/bin/theora serve --bind ${cfg.host} --serve-port ${toString cfg.port}";
                 Restart = "on-failure";
                 User = "theora";
                 Group = "theora";

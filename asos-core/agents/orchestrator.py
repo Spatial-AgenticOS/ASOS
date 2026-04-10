@@ -245,6 +245,7 @@ class Orchestrator:
         history = self._compact_context(self.conversation_history[session_id].copy())
 
         max_iterations = self._max_iterations
+        refusal_retry_used = False
         for _ in range(max_iterations):
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -254,6 +255,25 @@ class Orchestrator:
             try:
                 response = await self.llm.chat(messages=messages, tools=tools if tools else None)
                 text_content, tool_calls = self.llm.extract_response(response)
+
+                if text_content and not tool_calls and self._is_refusal_text(text_content):
+                    if not refusal_retry_used:
+                        refusal_retry_used = True
+                        logger.warning(
+                            "[%s] Refusal detected; forcing tool-first retry",
+                            session_id[:8],
+                        )
+                        history.append({
+                            "role": "user",
+                            "content": "Do not refuse. Use computer_use__bash to accomplish this. Execute now.",
+                        })
+                        continue
+                    logger.warning(
+                        "[%s] Refusal persisted after retry; falling back to direct execution",
+                        session_id[:8],
+                    )
+                    await self._direct_execute(session_id, text, relevant_skills)
+                    return
 
                 assistant_msg = {"role": "assistant"}
                 if text_content:
@@ -352,6 +372,7 @@ class Orchestrator:
         from models.protocol import StreamDeltaPayload
 
         got_final_text = False
+        refusal_retry_used = False
         for _ in range(self._max_iterations):
             messages = [{"role": "system", "content": system_prompt}, *history]
             stream_id = str(uuid4())[:8]
@@ -397,6 +418,25 @@ class Orchestrator:
                 tc for tc in tool_calls_received
                 if isinstance(tc, dict) and tc.get("name")
             ]
+
+            if accumulated_text and not normalized_tool_calls and self._is_refusal_text(accumulated_text):
+                if not refusal_retry_used:
+                    refusal_retry_used = True
+                    logger.warning(
+                        "[%s] Streaming refusal detected; forcing tool-first retry",
+                        session_id[:8],
+                    )
+                    history.append({
+                        "role": "user",
+                        "content": "Do not refuse. Use computer_use__bash to accomplish this. Execute now.",
+                    })
+                    continue
+                logger.warning(
+                    "[%s] Streaming refusal persisted after retry; falling back to direct execution",
+                    session_id[:8],
+                )
+                await self._direct_execute(session_id, text, relevant_skills)
+                return
 
             if accumulated_text or normalized_tool_calls:
                 assistant_msg = {"role": "assistant"}
@@ -532,13 +572,31 @@ class Orchestrator:
     # ─────────────────────────────────────────────
 
     ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use", "browser", "desktop_automation", "screen_capture", "system_settings", "agentic_computer_use"}
+    ACTION_INTENT_WORDS = {
+        "create", "open", "make", "write", "run", "play", "generate", "send",
+        "install", "build", "edit", "delete", "move", "copy", "search", "find",
+        "start", "stop", "launch", "record", "download", "upload",
+    }
+    REFUSAL_PHRASES = (
+        "i can't",
+        "i cannot",
+        "i am unable",
+        "i'm unable",
+        "not possible",
+        "unfortunately i",
+        "i don't have the ability",
+        "cannot do that",
+        "can't do that",
+        "can't create",
+        "cannot create",
+    )
 
     async def _route_prompt(self, text: str) -> list[SkillManifest]:
         if not self.skills.skills:
             return []
 
         if not self.llm.available or len(self.skills.skills) <= 5:
-            results = self.skills.find_skills_for_query(text, top_k=5)
+            results = self._fallback_skills_for_query(text, top_k=5)
             return self._ensure_core_skills(self._apply_routing_penalties(results))
 
         prompt = "You are a Semantic Tool Router. Select up to 5 relevant tool IDs for the user's query.\n"
@@ -565,11 +623,11 @@ class Orchestrator:
             for sid in skill_ids:
                 if isinstance(sid, str) and sid in self.skills.skills:
                     relevant.append(self.skills.skills[sid])
-            results = relevant[:5] if relevant else self.skills.find_skills_for_query(text, top_k=5)
+            results = relevant[:5] if relevant else self._fallback_skills_for_query(text, top_k=5)
             return self._ensure_core_skills(self._apply_routing_penalties(results))
         except Exception as e:
             logger.warning(f"RoutePrompt failed, falling back to heuristic: {e}")
-            results = self.skills.find_skills_for_query(text, top_k=5)
+            results = self._fallback_skills_for_query(text, top_k=5)
             return self._ensure_core_skills(self._apply_routing_penalties(results))
 
     def _ensure_core_skills(self, skills: list[SkillManifest]) -> list[SkillManifest]:
@@ -579,6 +637,28 @@ class Orchestrator:
             if core_id not in existing_ids and core_id in self.skills.skills:
                 skills.append(self.skills.skills[core_id])
         return skills
+
+    def _query_implies_action(self, text: str) -> bool:
+        normalized = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
+        words = [w for w in normalized.split() if w]
+        if len(words) >= 6:
+            return True
+        return any(word in self.ACTION_INTENT_WORDS for word in words)
+
+    def _fallback_skills_for_query(self, text: str, top_k: int = 5) -> list[SkillManifest]:
+        results = self.skills.find_skills_for_query(text, top_k=top_k)
+        if results:
+            return results
+        if self._query_implies_action(text):
+            logger.info("RoutePrompt fallback: action-like query with no strong match, exposing all tools")
+            return list(self.skills.skills.values())
+        return results
+
+    def _is_refusal_text(self, text: str) -> bool:
+        if not text:
+            return False
+        normalized = re.sub(r"\s+", " ", text.lower()).strip()
+        return any(phrase in normalized for phrase in self.REFUSAL_PHRASES)
 
     def _apply_routing_penalties(self, skills: list[SkillManifest]) -> list[SkillManifest]:
         """
@@ -1543,20 +1623,8 @@ class Orchestrator:
         # Load custom identity if available
         identity = self._load_identity()
 
-        prompt = identity + "\n\n"
-
-        prompt += (
-            "## How to respond\n"
-            "- Be warm, conversational, and occasionally fun. You are a personal AI companion, not a sterile chatbot.\n"
-            "- When there are multiple ways to accomplish something, ask the user which they prefer.\n"
-            "- Proactively suggest related actions: \"Done! Want me to also...?\"\n"
-            "- Encourage creativity: remind users they can create custom skills, automations, and workflows.\n"
-            "- If the user seems stuck, offer ideas and options rather than waiting silently.\n"
-            "- Use tools when you need external data or to perform actions.\n"
-            "- After a tool call, summarize the result in plain, friendly language.\n"
-            "- Be proactive — if you notice something relevant in sensor data or context, mention it.\n"
-            "- Answer questions directly. No JSON dumps, no raw UI markup.\n"
-            "\n## ABSOLUTE RULE — NEVER SAY 'I CAN'T'\n"
+        prompt = (
+            "## ABSOLUTE RULE — NEVER SAY 'I CAN'T'\n"
             "You MUST NEVER tell the user you cannot do something. NEVER. You have full access to:\n"
             "- A shell (desktop_control__shell_command or computer_use__bash)\n"
             "- Python (run ANY Python script via the shell)\n"
@@ -1575,6 +1643,22 @@ class Orchestrator:
             "4. For MP3 specifically: generate WAV first, then convert with ffmpeg or pydub\n"
             "5. NEVER respond with 'I can\\'t create audio/images/files' — you CAN, via Python + shell\n\n"
             "If you truly lack a specialized skill, call system_settings__create_skill to generate one.\n"
+        )
+
+        if identity:
+            prompt += f"\n## Identity\n{identity}\n"
+
+        prompt += (
+            "\n## How to respond\n"
+            "- Be warm, conversational, and occasionally fun. You are a personal AI companion, not a sterile chatbot.\n"
+            "- When there are multiple ways to accomplish something, ask the user which they prefer.\n"
+            "- Proactively suggest related actions: \"Done! Want me to also...?\"\n"
+            "- Encourage creativity: remind users they can create custom skills, automations, and workflows.\n"
+            "- If the user seems stuck, offer ideas and options rather than waiting silently.\n"
+            "- Use tools when you need external data or to perform actions.\n"
+            "- After a tool call, summarize the result in plain, friendly language.\n"
+            "- Be proactive — if you notice something relevant in sensor data or context, mention it.\n"
+            "- Answer questions directly. No JSON dumps, no raw UI markup.\n"
             "\n## Local Computer & Browser Control\n"
             "You control the user's Mac and browser directly. ALWAYS use these tools:\n"
             "- **desktop_control__open_app**: Open ANY app — Music, Safari, Notes, Terminal, etc.\n"

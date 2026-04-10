@@ -2972,7 +2972,7 @@ if __name__ == "__main__":
     import uvicorn
     print("""
     ╔══════════════════════════════════════╗
-    ║        THEORA v1.0.0                ║
+    ║        THEORA v1.1.0                ║
     ║   Open AI Agent · Computer Use      ║
     ║   Voice · GenUI · Hardware          ║
     ╚══════════════════════════════════════╝
