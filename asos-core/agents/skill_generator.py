@@ -95,10 +95,10 @@ Conversation:
 {conversation}
 
 If the user is asking for something no existing skill can handle, respond with:
-{{"needs_skill": true, "capability": "brief description of what's needed", "service": "the service/API that could provide it"}}
+{{"needs_skill": true, "capability": "brief description of what's needed", "service": "the service/API that could provide it", "confidence": 0.0-1.0}}
 
 If existing skills can handle it, respond with:
-{{"needs_skill": false}}
+{{"needs_skill": false, "confidence": 0.0-1.0}}
 
 Return ONLY JSON."""
 
@@ -121,10 +121,21 @@ class SkillGenerator:
         self._generation_count = 0
         self._last_detection_time = 0
         self._detection_cooldown = 30  # seconds between detection attempts
+        self._confidence_threshold = 0.72
+        self._need_debounce_seconds = 600
+        self._need_min_hits = 2
+        self._proposal_cooldown_seconds = 1800
+        self._need_hits: dict[str, dict] = {}
+        self._last_proposal_at: dict[str, float] = {}
 
     @staticmethod
     def _default_skills_dir() -> Path:
         return theora_home() / "skills"
+
+    @staticmethod
+    def _normalize_capability_key(capability: str) -> str:
+        normalized = "".join(ch.lower() if ch.isalnum() else " " for ch in (capability or ""))
+        return " ".join(normalized.split())[:160]
 
     async def detect_unmet_need(self, conversation: list[dict]) -> Optional[dict]:
         """
@@ -170,7 +181,41 @@ class SkillGenerator:
                     cleaned = cleaned[4:]
             result = json.loads(cleaned)
             if result.get("needs_skill"):
-                logger.info(f"Detected unmet need: {result.get('capability')}")
+                capability = str(result.get("capability", "")).strip()
+                try:
+                    confidence = float(result.get("confidence", 0.5) or 0.5)
+                except (TypeError, ValueError):
+                    confidence = 0.5
+                if not capability:
+                    return None
+                if confidence < self._confidence_threshold:
+                    logger.debug(
+                        "Skipping unmet need due to low confidence %.2f < %.2f for '%s'",
+                        confidence,
+                        self._confidence_threshold,
+                        capability,
+                    )
+                    return None
+
+                key = self._normalize_capability_key(capability)
+                last = self._need_hits.get(key, {"count": 0, "last_seen": 0.0})
+                if now - float(last.get("last_seen", 0.0)) <= self._need_debounce_seconds:
+                    count = int(last.get("count", 0)) + 1
+                else:
+                    count = 1
+                self._need_hits[key] = {"count": count, "last_seen": now}
+                if count < self._need_min_hits:
+                    logger.debug("Debounced unmet need '%s' (hit %s/%s)", capability, count, self._need_min_hits)
+                    return None
+
+                last_proposal = self._last_proposal_at.get(key, 0.0)
+                if now - last_proposal < self._proposal_cooldown_seconds:
+                    logger.debug("Skipping unmet need '%s' due to proposal cooldown", capability)
+                    return None
+
+                self._last_proposal_at[key] = now
+                result["confidence"] = confidence
+                result["capability_key"] = key
                 return result
             return None
 
@@ -283,4 +328,7 @@ class SkillGenerator:
             "generated_count": self._generation_count,
             "pending_count": len(self._pending_skills),
             "skills_dir": str(self._skills_dir),
+            "confidence_threshold": self._confidence_threshold,
+            "debounce_seconds": self._need_debounce_seconds,
+            "proposal_cooldown_seconds": self._proposal_cooldown_seconds,
         }

@@ -1,10 +1,62 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SduiRenderer } from './components/SduiRenderer';
-import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle, Phone, Camera, CameraOff, BookOpen, RefreshCw, Search, ListChecks, GitBranch, RotateCcw, BookmarkPlus, MessageSquarePlus, History, Trash2, ChevronLeft } from 'lucide-react';
+import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle, Phone, Camera, CameraOff, BookOpen, RefreshCw, Search, ListChecks, GitBranch, RotateCcw, BookmarkPlus, MessageSquarePlus, History, Trash2, ChevronLeft, Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 import { WS_URL, API_BASE } from './config';
 import { RealtimeVoiceEngine } from './lib/voiceRealtime';
 import { VisionCapture } from './lib/visionCapture';
+
+function SkillProposalCard({ msg, onDecision, busy }) {
+  const [expanded, setExpanded] = useState(false);
+  const resolved = msg.proposalStatus !== 'pending' && msg.proposalStatus !== 'busy';
+  const name = msg.manifest?.brand?.name || msg.manifest?.skill_id || 'Generated Skill';
+  const epCount = msg.manifest?.endpoints?.length || 0;
+
+  return (
+    <div className="bg-asos-assistant border border-asos-border rounded-xl px-3 py-2">
+      <div className="flex items-center gap-2">
+        <Zap size={12} className="text-asos-accent flex-shrink-0" />
+        <span className="text-[12px] font-semibold text-asos-text truncate flex-1">{name}</span>
+        <span className="text-[10px] text-asos-text-muted font-mono flex-shrink-0">{epCount} ep</span>
+        {!resolved && (
+          <>
+            <button
+              onClick={() => onDecision(msg.proposal_id, msg.manifest?.skill_id, 'approve')}
+              disabled={busy !== ''}
+              className="px-2 py-0.5 text-[10px] font-medium rounded bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25 disabled:opacity-40 transition"
+            >
+              Approve
+            </button>
+            <button
+              onClick={() => onDecision(msg.proposal_id, msg.manifest?.skill_id, 'reject')}
+              disabled={busy !== ''}
+              className="px-2 py-0.5 text-[10px] font-medium rounded bg-rose-500/15 border border-rose-500/25 text-rose-400 hover:bg-rose-500/25 disabled:opacity-40 transition"
+            >
+              Reject
+            </button>
+          </>
+        )}
+        {resolved && (
+          <span className={`text-[10px] font-medium ${
+            msg.proposalStatus === 'approved' ? 'text-emerald-400' : msg.proposalStatus === 'rejected' ? 'text-rose-400' : 'text-amber-400'
+          }`}>
+            {msg.proposalStatus === 'approved' ? 'Registered' : msg.proposalStatus === 'rejected' ? 'Rejected' : msg.proposalError || 'Error'}
+          </span>
+        )}
+        <button onClick={() => setExpanded(v => !v)} className="p-0.5 text-asos-text-muted hover:text-asos-text transition">
+          {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        </button>
+      </div>
+      {expanded && (
+        <div className="mt-1.5 pt-1.5 border-t border-asos-border/50 space-y-1">
+          {msg.reason && <div className="text-[11px] text-asos-text-muted">Reason: {msg.reason}</div>}
+          <div className="text-[11px] text-asos-text-secondary">{msg.manifest?.description || 'No description'}</div>
+          <div className="text-[10px] text-asos-text-muted font-mono">{msg.manifest?.skill_id || 'unknown'}</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function App() {
   const [messages, setMessages] = useState([]);
@@ -31,6 +83,12 @@ export default function App() {
   const [wikiIngestBusy, setWikiIngestBusy] = useState(false);
   const [wikiIngestResult, setWikiIngestResult] = useState('');
   const [activeFlowCount, setActiveFlowCount] = useState(0);
+  const [agentRuntime, setAgentRuntime] = useState({
+    multi_agent_enabled: false,
+    multi_agent_ready: false,
+    active_subagents: 0,
+    pending_confirmations: 0,
+  });
   const [skillProposalBusy, setSkillProposalBusy] = useState('');
   const [sessionId, setSessionId] = useState('');
   const [sessionSnapshots, setSessionSnapshots] = useState([]);
@@ -42,6 +100,8 @@ export default function App() {
   const [threads, setThreads] = useState([]);
   const [currentThreadId, setCurrentThreadId] = useState('');
   const [threadsDirty, setThreadsDirty] = useState(false);
+  const [learnedNotice, setLearnedNotice] = useState(null);
+  const [permissionRequest, setPermissionRequest] = useState(null);
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -50,6 +110,7 @@ export default function App() {
   const chunkIndexRef = useRef(0);
   const streamBufferRef = useRef('');
   const greetingReceivedRef = useRef(false);
+  const suppressDirtyRef = useRef(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -98,10 +159,40 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const fetchRuntimeStatus = async () => {
+      try {
+        const data = await fetch(`${API_BASE}/api/system/info`).then(r => r.json());
+        setAgentRuntime(data.orchestrator || {
+          multi_agent_enabled: false,
+          multi_agent_ready: false,
+          active_subagents: 0,
+          pending_confirmations: 0,
+        });
+      } catch {
+        setAgentRuntime({
+          multi_agent_enabled: false,
+          multi_agent_ready: false,
+          active_subagents: 0,
+          pending_confirmations: 0,
+        });
+      }
+    };
+    fetchRuntimeStatus();
+    const iv = setInterval(fetchRuntimeStatus, 4000);
+    return () => clearInterval(iv);
+  }, []);
+
+  useEffect(() => {
     if (wikiOpen) {
       fetchWikiPages(wikiQuery);
     }
   }, [wikiOpen, wikiQuery]);
+
+  useEffect(() => {
+    if (!learnedNotice) return undefined;
+    const timer = setTimeout(() => setLearnedNotice(null), 7000);
+    return () => clearTimeout(timer);
+  }, [learnedNotice]);
 
   useEffect(() => {
     if (sessionPanelOpen && sessionId) {
@@ -195,6 +286,21 @@ export default function App() {
               manifest,
             },
           ]);
+        } else if (msg.type === 'capability_learned') {
+          const payload = msg.payload || {};
+          setLearnedNotice({
+            name: payload.name || payload.skill_id || 'New capability',
+            mode: payload.mode || 'ready',
+            message: payload.message || 'New capability learned.',
+          });
+        } else if (msg.type === 'permission_request') {
+          const payload = msg.payload || {};
+          setPermissionRequest({
+            request_id: payload.request_id,
+            path: payload.path,
+            operation: payload.operation || 'read',
+            reason: payload.reason || '',
+          });
         }
       } catch (e) {
         console.error("Message error:", e);
@@ -407,6 +513,18 @@ export default function App() {
     } catch { /* ignore */ }
   };
 
+  const createConversationThread = async () => {
+    try {
+      const data = await fetch(`${API_BASE}/api/conversations/new`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }).then(r => r.json());
+      if (data.id) return data.id;
+    } catch { /* ignore */ }
+    return `thread-${Date.now()}`;
+  };
+
   const saveCurrentThread = useCallback(async (msgs) => {
     if (!currentThreadId || !msgs || msgs.length < 2) return;
     try {
@@ -420,14 +538,17 @@ export default function App() {
     } catch { /* ignore */ }
   }, [currentThreadId]);
 
-  const restoreLastThread = async () => {
+  const restoreLastThread = async ({ force = false } = {}) => {
     try {
+      if (!force && messages.length > 0) return;
       const lastId = localStorage.getItem('theora-last-thread');
       if (lastId) {
         const data = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(lastId)}`).then(r => r.json());
         if (data.messages && data.messages.length > 0) {
+          suppressDirtyRef.current = true;
           setMessages(data.messages);
           setCurrentThreadId(lastId);
+          setThreadsDirty(false);
           return;
         }
       }
@@ -436,12 +557,25 @@ export default function App() {
       if (recent?.id) {
         const data = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(recent.id)}`).then(r => r.json());
         if (data.messages && data.messages.length > 0) {
+          suppressDirtyRef.current = true;
           setMessages(data.messages);
           setCurrentThreadId(recent.id);
+          setThreadsDirty(false);
         }
       }
     } catch { /* fresh start */ }
   };
+
+  useEffect(() => {
+    const handleStorage = (event) => {
+      if (event.key !== 'theora-last-thread') return;
+      if (!event.newValue || event.newValue === currentThreadId) return;
+      if (messages.length > 0 || threadsDirty) return;
+      restoreLastThread({ force: false });
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [currentThreadId, messages.length, threadsDirty]);
 
   useEffect(() => {
     if (threadsDirty && messages.length >= 2) {
@@ -451,10 +585,15 @@ export default function App() {
   }, [threadsDirty, messages, saveCurrentThread]);
 
   useEffect(() => {
-    if (messages.length > 0 && currentThreadId) {
+    if (!currentThreadId) return;
+    if (suppressDirtyRef.current) {
+      suppressDirtyRef.current = false;
+      return;
+    }
+    if (messages.length > 0) {
       setThreadsDirty(true);
     }
-  }, [messages.length]);
+  }, [messages.length, currentThreadId]);
 
   useEffect(() => {
     if (!currentThreadId && sessionId) {
@@ -475,22 +614,33 @@ export default function App() {
 
   const loadThread = async (threadId) => {
     try {
+      if (threadId !== currentThreadId && currentThreadId && threadsDirty && messages.length >= 2) {
+        await saveCurrentThread(messages);
+      }
       const data = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(threadId)}`).then(r => r.json());
       if (data.messages) {
+        suppressDirtyRef.current = true;
         setMessages(data.messages);
         setCurrentThreadId(threadId);
+        setThreadsDirty(false);
         setThreadsOpen(false);
+        try { localStorage.setItem('theora-last-thread', threadId); } catch {}
       }
     } catch { /* ignore */ }
   };
 
-  const startNewThread = () => {
+  const startNewThread = async () => {
     if (messages.length >= 2 && currentThreadId) {
-      saveCurrentThread(messages);
+      await saveCurrentThread(messages);
     }
+    const threadId = await createConversationThread();
+    suppressDirtyRef.current = true;
     setMessages([]);
-    setCurrentThreadId('');
+    setCurrentThreadId(threadId);
+    setThreadsDirty(false);
+    try { localStorage.setItem('theora-last-thread', threadId); } catch {}
     setThreadsOpen(false);
+    await fetchThreads();
   };
 
   const deleteThread = async (threadId) => {
@@ -606,6 +756,17 @@ export default function App() {
     wsRef.current.send(JSON.stringify(evt));
   };
 
+  const handlePermissionDecision = (reqId, granted) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const actionPrefix = granted ? 'perm_grant_' : 'perm_deny_';
+    wsRef.current.send(JSON.stringify({
+      hop: 'client',
+      type: 'ui_event',
+      payload: { screen_id: 'main', action_id: `${actionPrefix}${reqId}`, event: 'tap' },
+    }));
+    setPermissionRequest(null);
+  };
+
   const handleSkillProposalDecision = async (proposalId, skillId, action) => {
     if (!skillId) return;
     const busyKey = `${proposalId}:${action}`;
@@ -665,6 +826,20 @@ export default function App() {
         <div className="flex items-center gap-2.5">
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-red-400'}`} />
           <span className="font-semibold text-sm text-asos-text">THEORA</span>
+          {agentRuntime.multi_agent_enabled && (
+            <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+              agentRuntime.multi_agent_ready
+                ? 'text-cyan-300 border-cyan-500/40 bg-cyan-500/10'
+                : 'text-amber-300 border-amber-500/40 bg-amber-500/10'
+            }`}>
+              MA {agentRuntime.multi_agent_ready ? 'ON' : 'INIT'}
+            </span>
+          )}
+          {agentRuntime.active_subagents > 0 && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full border text-violet-300 border-violet-500/40 bg-violet-500/10">
+              SUB {agentRuntime.active_subagents}
+            </span>
+          )}
           {isRecording && (
             <span className="ml-2 text-emerald-400 text-[11px] font-medium animate-pulse flex items-center gap-1">
               <Phone size={11} />
@@ -679,6 +854,13 @@ export default function App() {
               <span className="font-mono text-xs">{hr}</span>
             </div>
           )}
+          <button
+            onClick={() => { void startNewThread(); }}
+            className="p-2 rounded-lg text-asos-text-muted hover:text-asos-accent hover:bg-asos-accent-dim transition"
+            title="Start New Chat"
+          >
+            <MessageSquarePlus size={15} />
+          </button>
           <button
             onClick={() => { setThreadsOpen(v => !v); if (!threadsOpen) fetchThreads(); }}
             className={`p-2 rounded-lg transition ${threadsOpen ? 'text-asos-accent bg-asos-accent-dim' : 'text-asos-text-muted hover:text-asos-text hover:bg-asos-card-hover'}`}
@@ -730,6 +912,43 @@ export default function App() {
       {transcript && (
         <div className="flex-shrink-0 px-4 py-2 bg-asos-accent-dim border-b border-asos-accent/20">
           <span className="text-sm italic text-asos-text-secondary">{transcript}</span>
+        </div>
+      )}
+
+      {learnedNotice && (
+        <div className="flex-shrink-0 px-4 py-2 border-b border-emerald-500/20 bg-emerald-500/10 text-emerald-300 flex items-center gap-2 text-xs">
+          <Sparkles size={13} />
+          <span className="font-medium">{learnedNotice.name}</span>
+          <span className="opacity-80">
+            {learnedNotice.mode === 'ready' ? 'is ready to use.' : 'was generated and is pending approval.'}
+          </span>
+        </div>
+      )}
+
+      {permissionRequest && (
+        <div className="flex-shrink-0 px-4 py-3 border-b border-amber-500/20 bg-amber-500/10">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={14} className="text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-medium text-amber-300">Permission Request</div>
+              <div className="text-[11px] text-asos-text-secondary mt-0.5 break-all font-mono">{permissionRequest.path}</div>
+              <div className="text-[11px] text-asos-text-muted mt-0.5">{permissionRequest.reason}</div>
+              <div className="flex gap-2 mt-2">
+                <button
+                  onClick={() => handlePermissionDecision(permissionRequest.request_id, true)}
+                  className="px-3 py-1 text-[11px] font-medium rounded bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25 transition"
+                >
+                  Grant Access
+                </button>
+                <button
+                  onClick={() => handlePermissionDecision(permissionRequest.request_id, false)}
+                  className="px-3 py-1 text-[11px] font-medium rounded bg-rose-500/15 border border-rose-500/25 text-rose-400 hover:bg-rose-500/25 transition"
+                >
+                  Deny
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -970,91 +1189,55 @@ export default function App() {
       )}
 
       {/* Messages View */}
-      <div className="flex-1 overflow-y-auto px-4 lg:px-6 py-6 space-y-4">
+      <div className="flex-1 overflow-y-auto px-3 lg:px-5 py-4 space-y-2.5">
         {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-asos-accent-dim flex items-center justify-center">
-              <Brain size={32} className="text-asos-accent" />
+          <div className="flex flex-col items-center justify-center h-full gap-3">
+            <div className="w-12 h-12 rounded-xl bg-asos-accent-dim flex items-center justify-center">
+              <Brain size={24} className="text-asos-accent" />
             </div>
             <div className="text-center">
               <p className="text-sm font-medium text-asos-text-secondary">What can I help you with?</p>
-              <p className="text-xs text-asos-text-muted mt-1">Type a message or start a voice conversation</p>
+              <p className="text-[11px] text-asos-text-muted mt-0.5">Type a message or start a voice conversation</p>
             </div>
           </div>
         )}
         {messages.map((msg, idx) => (
           <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             {msg.role === 'user' ? (
-              <div className="max-w-[80%] bg-asos-user text-white rounded-2xl rounded-br-md px-4 py-2.5 shadow-lg shadow-asos-user/10">
+              <div className="max-w-[78%] bg-asos-user text-white rounded-2xl rounded-br-sm px-3.5 py-2 shadow-md shadow-asos-user/10">
                 {msg.type === 'text' && (
-                  <span className="text-[14px] leading-relaxed">
-                    {msg.source === 'voice' && <Mic size={12} className="inline mr-1.5 opacity-60" />}
+                  <span className="text-[13px] leading-snug">
+                    {msg.source === 'voice' && <Mic size={11} className="inline mr-1 opacity-60" />}
                     {msg.content}
                   </span>
                 )}
-                {msg.type === 'action' && <span className="text-xs italic opacity-80">{msg.content}</span>}
+                {msg.type === 'action' && <span className="text-[11px] italic opacity-80">{msg.content}</span>}
               </div>
             ) : msg.role === 'system' ? (
               <div className="w-full flex justify-center">
-                <span className="text-[11px] text-asos-text-muted bg-asos-card px-3 py-1 rounded-full border border-asos-border">{msg.content}</span>
+                <span className="text-[10px] text-asos-text-muted bg-asos-card px-2.5 py-0.5 rounded-full border border-asos-border">{msg.content}</span>
               </div>
             ) : (
-              <div className="max-w-[85%]">
+              <div className="max-w-[75%]">
                 {msg.type === 'text' && (
-                  <div className="bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-md px-4 py-3">
-                    <span className="text-[14px] leading-relaxed text-asos-text">
-                      {msg.source === 'voice' && <Mic size={12} className="inline mr-1.5 text-asos-text-muted" />}
+                  <div className="bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-sm px-3.5 py-2">
+                    <span className="text-[13px] leading-snug text-asos-text">
+                      {msg.source === 'voice' && <Mic size={11} className="inline mr-1 text-asos-text-muted" />}
                       {msg.content}
                     </span>
                   </div>
                 )}
                 {msg.type === 'sdui' && (
-                  <div className="rounded-2xl overflow-hidden">
-                    <SduiRenderer node={msg.payload} onAction={handleUIAction} />
+                  <div className="rounded-xl overflow-hidden">
+                    <SduiRenderer node={msg.payload} onAction={handleUIAction} compact />
                   </div>
                 )}
                 {msg.type === 'skill_proposal' && (
-                  <div className="bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-md p-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Zap size={14} className="text-asos-accent" />
-                      <span className="text-xs font-semibold uppercase tracking-wider text-asos-accent">Skill Proposal</span>
-                    </div>
-                    <div className="text-sm font-semibold text-asos-text">{msg.manifest?.brand?.name || msg.manifest?.skill_id || 'Generated Skill'}</div>
-                    {msg.reason && <div className="text-xs text-asos-text-muted mt-1">Reason: {msg.reason}</div>}
-                    <div className="text-xs text-asos-text-secondary mt-2">{msg.manifest?.description || 'No description'}</div>
-                    <div className="text-[11px] text-asos-text-muted mt-2 font-mono">
-                      {msg.manifest?.skill_id || 'unknown'} · {msg.manifest?.endpoints?.length || 0} endpoints
-                    </div>
-
-                    {msg.proposalStatus === 'pending' || msg.proposalStatus === 'busy' ? (
-                      <div className="flex items-center gap-2 mt-3">
-                        <button
-                          onClick={() => handleSkillProposalDecision(msg.proposal_id, msg.manifest?.skill_id, 'approve')}
-                          disabled={skillProposalBusy !== ''}
-                          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25 disabled:opacity-40 transition"
-                        >
-                          Approve
-                        </button>
-                        <button
-                          onClick={() => handleSkillProposalDecision(msg.proposal_id, msg.manifest?.skill_id, 'reject')}
-                          disabled={skillProposalBusy !== ''}
-                          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-rose-500/15 border border-rose-500/25 text-rose-400 hover:bg-rose-500/25 disabled:opacity-40 transition"
-                        >
-                          Reject
-                        </button>
-                      </div>
-                    ) : (
-                      <div className={`mt-3 text-xs font-medium ${
-                        msg.proposalStatus === 'approved' ? 'text-emerald-400'
-                        : msg.proposalStatus === 'rejected' ? 'text-rose-400'
-                        : 'text-amber-400'
-                      }`}>
-                        {msg.proposalStatus === 'approved' && 'Approved and registered'}
-                        {msg.proposalStatus === 'rejected' && 'Rejected'}
-                        {msg.proposalStatus === 'error' && (msg.proposalError || 'Request failed')}
-                      </div>
-                    )}
-                  </div>
+                  <SkillProposalCard
+                    msg={msg}
+                    onDecision={handleSkillProposalDecision}
+                    busy={skillProposalBusy}
+                  />
                 )}
               </div>
             )}
@@ -1062,21 +1245,21 @@ export default function App() {
         ))}
         {isStreaming && streamingText && (
           <div className="flex justify-start">
-            <div className="max-w-[85%] bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-md px-4 py-3">
-              <span className="text-[14px] leading-relaxed text-asos-text">{streamingText}</span>
-              <span className="inline-block w-1.5 h-4 bg-asos-accent rounded-sm animate-pulse ml-0.5 align-middle" />
+            <div className="max-w-[75%] bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-sm px-3.5 py-2">
+              <span className="text-[13px] leading-snug text-asos-text">{streamingText}</span>
+              <span className="inline-block w-1 h-3.5 bg-asos-accent rounded-sm animate-pulse ml-0.5 align-middle" />
             </div>
           </div>
         )}
         {isThinking && !isStreaming && (
           <div className="flex justify-start">
-            <div className="flex items-center gap-2.5 px-4 py-3 bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-md">
-              <div className="flex gap-1">
+            <div className="flex items-center gap-2 px-3.5 py-2 bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-sm">
+              <div className="flex gap-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-asos-accent animate-bounce" style={{ animationDelay: '0ms' }} />
                 <span className="w-1.5 h-1.5 rounded-full bg-asos-accent animate-bounce" style={{ animationDelay: '150ms' }} />
                 <span className="w-1.5 h-1.5 rounded-full bg-asos-accent animate-bounce" style={{ animationDelay: '300ms' }} />
               </div>
-              <span className="text-xs text-asos-text-muted">thinking...</span>
+              <span className="text-[11px] text-asos-text-muted">thinking...</span>
             </div>
           </div>
         )}
@@ -1085,6 +1268,19 @@ export default function App() {
 
       {/* Bottom Composer */}
       <div className="flex-shrink-0 p-3 lg:p-4 bg-asos-surface/80 backdrop-blur-xl border-t border-asos-border">
+        <div className="mb-2 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => { void startNewThread(); }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-asos-accent/15 border border-asos-accent/25 text-asos-accent hover:bg-asos-accent/25 transition"
+          >
+            <MessageSquarePlus size={12} />
+            Start New Chat
+          </button>
+          <span className="text-[10px] text-asos-text-muted font-mono">
+            {currentThreadId ? `thread:${currentThreadId.slice(0, 10)}` : 'thread:pending'}
+          </span>
+        </div>
         <form onSubmit={handleSend} className="flex items-center gap-2">
           <button
             type="button"

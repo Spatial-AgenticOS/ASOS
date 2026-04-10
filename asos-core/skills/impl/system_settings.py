@@ -146,11 +146,24 @@ class SystemSettingsSkill(BaseSkill):
         loader.update_settings(section, key, value)
         return {"success": True, "status_code": 200, "data": {"section": section, "key": key, "value": value}, "error": None}
 
+    @staticmethod
+    def _is_high_risk_capability(text: str) -> bool:
+        lowered = (text or "").lower()
+        risky_tokens = (
+            "rm -rf", "delete all", "erase disk", "factory reset", "format disk",
+            "shutdown", "reboot", "self destruct", "credential dump",
+        )
+        return any(token in lowered for token in risky_tokens)
+
     async def _create_skill(self, args: dict) -> dict:
         """Generate a new skill from a capability description and auto-approve it."""
         capability = args.get("capability", "").strip()
         if not capability:
             return {"success": False, "status_code": 400, "data": None, "error": "capability description is required"}
+        if len(capability) < 8:
+            return {"success": False, "status_code": 400, "data": None, "error": "capability description is too short"}
+        if self._is_high_risk_capability(capability):
+            return {"success": False, "status_code": 403, "data": None, "error": "capability blocked by safety policy"}
 
         try:
             from api.server import state
@@ -163,9 +176,14 @@ class SystemSettingsSkill(BaseSkill):
                 return {"success": False, "status_code": 500, "data": None, "error": "Failed to generate skill manifest"}
 
             skill_id = manifest.get("skill_id", "")
-            approved = await state.skill_gen.approve_skill(skill_id)
-            if not approved:
-                return {"success": False, "status_code": 500, "data": None, "error": f"Failed to register skill: {skill_id}"}
+            auto_raw = args.get("auto_approve", True)
+            auto_approve = auto_raw if isinstance(auto_raw, bool) else str(auto_raw).lower() in ("true", "1", "yes", "on")
+            if auto_approve:
+                approved = await state.skill_gen.approve_skill(skill_id)
+                if not approved:
+                    return {"success": False, "status_code": 500, "data": None, "error": f"Failed to register skill: {skill_id}"}
+            else:
+                approved = False
 
             return {
                 "success": True, "status_code": 200,
@@ -173,7 +191,13 @@ class SystemSettingsSkill(BaseSkill):
                     "skill_id": skill_id,
                     "name": manifest.get("brand", {}).get("name", skill_id),
                     "endpoints": len(manifest.get("endpoints", [])),
-                    "message": f"Skill '{skill_id}' created and ready to use.",
+                    "auto_approved": approved,
+                    "needs_approval": not approved,
+                    "message": (
+                        f"Skill '{skill_id}' created and ready to use."
+                        if approved
+                        else f"Skill '{skill_id}' generated and pending approval."
+                    ),
                 },
                 "error": None,
             }

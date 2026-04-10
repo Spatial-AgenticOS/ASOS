@@ -92,8 +92,43 @@ class SkillRegistry:
         self.skills[manifest.skill_id] = manifest
         self._tool_cache[manifest.skill_id] = self._manifest_to_tools(manifest)
         logger.info(f"Registered skill: {manifest.brand.name} ({manifest.skill_id})")
+        self._auto_create_routines(manifest)
 
     register_skill = register  # Alias for the skill generator
+
+    def _auto_create_routines(self, manifest: SkillManifest):
+        try:
+            from agents.scheduler import CronService, JobType
+            svc = getattr(self, '_cron_service', None)
+            if svc is None:
+                return
+            for cdef in (manifest.crons or []):
+                expr = getattr(cdef, 'expression', '') or getattr(cdef, 'cron_expr', '')
+                if not expr:
+                    continue
+                desc = f"[auto] {manifest.skill_id}: {getattr(cdef, 'description', expr)}"
+                payload = {
+                    "skill": manifest.skill_id,
+                    "endpoint": getattr(cdef, 'endpoint', '') or (manifest.endpoints[0].id if manifest.endpoints else ''),
+                    "args": getattr(cdef, 'args', {}) or {},
+                }
+                svc.create_job(JobType.SCHEDULED, expr, desc, payload, "")
+                logger.info("Auto-created routine for cron: %s in skill %s", expr, manifest.skill_id)
+            for tdef in (manifest.triggers or []):
+                event = getattr(tdef, 'event', '') or getattr(tdef, 'trigger', '')
+                if not event:
+                    continue
+                desc = f"[auto] {manifest.skill_id}: trigger on {event}"
+                payload = {
+                    "skill": manifest.skill_id,
+                    "endpoint": getattr(tdef, 'endpoint', '') or (manifest.endpoints[0].id if manifest.endpoints else ''),
+                    "trigger_event": event,
+                    "condition": getattr(tdef, 'condition', None),
+                }
+                svc.create_job(JobType.TRIGGERED, f"every 1m", desc, payload, "")
+                logger.info("Auto-created routine for trigger: %s in skill %s", event, manifest.skill_id)
+        except Exception as e:
+            logger.debug("Skip auto-routine creation for %s: %s", manifest.skill_id, e)
 
     def load_from_file(self, path: str | Path):
         """Load a skill manifest from a JSON file."""

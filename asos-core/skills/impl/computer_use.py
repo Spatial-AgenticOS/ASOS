@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from security.fetch_guard import html_to_markdown, safe_fetch
+from security.sandbox_policy import SandboxPolicy
 from skills.base import BaseSkill
 from skills.impl import register_skill
 
@@ -25,12 +26,37 @@ DANGEROUS_COMMANDS = re.compile(
 )
 
 
+def _check_shell_quotes(command: str) -> str | None:
+    """Return an error string if shell quotes are unbalanced, else None."""
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if ch == '\\' and not in_single:
+            i += 2
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        i += 1
+    if in_single or in_double:
+        return (
+            "Shell syntax error: unbalanced quotes in command. "
+            "Tip: use computer_use__write_file to create files with "
+            "arbitrary content instead of shell echo/printf."
+        )
+    return None
+
+
 @register_skill
 class ComputerUseSkill(BaseSkill):
     def __init__(self):
         super().__init__(skill_id="computer_use")
         self._sandbox_bash_enabled = os.getenv("THEORA_SANDBOX_BASH", "false").lower() in ("true", "1", "yes")
         self._docker_sandbox = None
+        self._policy: SandboxPolicy | None = None
         if self._sandbox_bash_enabled:
             try:
                 from security.docker_sandbox import get_sandbox
@@ -38,6 +64,31 @@ class ComputerUseSkill(BaseSkill):
                 self._docker_sandbox = get_sandbox()
             except Exception:
                 self._docker_sandbox = None
+
+    def _get_policy(self) -> SandboxPolicy:
+        if self._policy is None:
+            self._policy = SandboxPolicy.load_default()
+        return self._policy
+
+    def _check_read(self, path_str: str) -> dict | None:
+        policy = self._get_policy()
+        if not policy.can_read_path(path_str):
+            return {
+                "success": False, "status_code": 403,
+                "data": {"permission_needed": True, "path": path_str, "operation": "read"},
+                "error": f"Permission denied: no read access to {path_str}. Grant access first.",
+            }
+        return None
+
+    def _check_write(self, path_str: str) -> dict | None:
+        policy = self._get_policy()
+        if not policy.can_write_path(path_str):
+            return {
+                "success": False, "status_code": 403,
+                "data": {"permission_needed": True, "path": path_str, "operation": "write"},
+                "error": f"Permission denied: no write access to {path_str}. Grant access first.",
+            }
+        return None
 
     async def execute(self, endpoint_id: str, args: Dict[str, Any], vault: Dict[str, str]) -> Dict[str, Any]:
         dispatch = {
@@ -48,6 +99,7 @@ class ComputerUseSkill(BaseSkill):
             "grep_search": self._grep_search,
             "glob_search": self._glob_search,
             "web_fetch": self._web_fetch,
+            "index_folder": self._index_folder,
         }
         handler = dispatch.get(endpoint_id)
         if not handler:
@@ -69,6 +121,10 @@ class ComputerUseSkill(BaseSkill):
                 "success": False, "status_code": 403, "data": None,
                 "error": f"Blocked potentially destructive command: {command}",
             }
+
+        quote_err = _check_shell_quotes(command)
+        if quote_err:
+            return {"success": False, "status_code": 400, "data": None, "error": quote_err}
 
         timeout = min(int(args.get("timeout", BASH_TIMEOUT)), 120)
 
@@ -134,6 +190,9 @@ class ComputerUseSkill(BaseSkill):
 
     async def _read_file(self, args: dict) -> dict:
         path = Path(args.get("path", "")).expanduser()
+        denied = self._check_read(str(path))
+        if denied:
+            return denied
         if not path.exists():
             return {"success": False, "status_code": 404, "data": None, "error": f"File not found: {path}"}
         if not path.is_file():
@@ -164,6 +223,9 @@ class ComputerUseSkill(BaseSkill):
         content = args.get("content", "")
         if not str(path):
             return {"success": False, "status_code": 400, "data": None, "error": "No path provided"}
+        denied = self._check_write(str(path))
+        if denied:
+            return denied
 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
@@ -182,6 +244,9 @@ class ComputerUseSkill(BaseSkill):
         old_text = args.get("old_text", "")
         new_text = args.get("new_text", "")
 
+        denied = self._check_write(str(path))
+        if denied:
+            return denied
         if not path.exists():
             return {"success": False, "status_code": 404, "data": None, "error": f"File not found: {path}"}
         if not old_text:
@@ -213,6 +278,9 @@ class ComputerUseSkill(BaseSkill):
 
         if not pattern:
             return {"success": False, "status_code": 400, "data": None, "error": "No search pattern"}
+        denied = self._check_read(search_path)
+        if denied:
+            return denied
 
         cmd = ["rg", "--line-number", "--no-heading", "--color=never", "-m", "50"]
         if include:
@@ -282,6 +350,9 @@ class ComputerUseSkill(BaseSkill):
 
         if not pattern:
             return {"success": False, "status_code": 400, "data": None, "error": "No glob pattern"}
+        denied = self._check_read(str(root))
+        if denied:
+            return denied
 
         files = []
         for fp in root.glob(pattern):
@@ -320,5 +391,96 @@ class ComputerUseSkill(BaseSkill):
             "success": True,
             "status_code": 200,
             "data": {"url": url, "content": text[:max_length], "length": len(text)},
+            "error": None,
+        }
+
+    # ── index_folder ──────────────────────────────────────────────
+
+    _GITIGNORE_DIRS = frozenset({
+        ".git", "__pycache__", "node_modules", ".tox", ".mypy_cache",
+        ".pytest_cache", "dist", "build", ".next", ".nuxt", "venv", ".venv",
+    })
+    _MAX_INDEX_FILES = 500
+    _MAX_INDEX_BYTES = 50 * 1024 * 1024
+
+    async def _index_folder(self, args: dict) -> dict:
+        root = Path(args.get("path", "")).expanduser().resolve()
+        if not root.is_dir():
+            return {"success": False, "status_code": 404, "data": None, "error": f"Not a directory: {root}"}
+        denied = self._check_read(str(root))
+        if denied:
+            return denied
+
+        tree_lines: list[str] = []
+        summaries: list[str] = []
+        total_bytes = 0
+        file_count = 0
+
+        gitignore_patterns: list[str] = []
+        gi_path = root / ".gitignore"
+        if gi_path.is_file():
+            for line in gi_path.read_text(errors="replace").splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    gitignore_patterns.append(stripped)
+
+        def _should_skip(p: Path) -> bool:
+            if p.name.startswith(".") and p.is_dir() and p.name != ".github":
+                return True
+            if p.name in self._GITIGNORE_DIRS:
+                return True
+            for pat in gitignore_patterns:
+                try:
+                    if p.match(pat):
+                        return True
+                except ValueError:
+                    pass
+            return False
+
+        for dirpath, dirnames, filenames in os.walk(root):
+            dp = Path(dirpath)
+            dirnames[:] = [d for d in dirnames if not _should_skip(dp / d)]
+            rel = dp.relative_to(root)
+            indent = "  " * len(rel.parts)
+
+            for fname in sorted(filenames):
+                if file_count >= self._MAX_INDEX_FILES or total_bytes >= self._MAX_INDEX_BYTES:
+                    break
+                fp = dp / fname
+                if _should_skip(fp) or not fp.is_file():
+                    continue
+                fsize = fp.stat().st_size
+                total_bytes += fsize
+                file_count += 1
+                tree_lines.append(f"{indent}{fname} ({fsize:,}B)")
+
+                if fsize < 8192 and fsize > 0:
+                    ext = fp.suffix.lower()
+                    if ext in (".py", ".js", ".jsx", ".ts", ".tsx", ".swift", ".rs", ".go",
+                               ".md", ".txt", ".yaml", ".yml", ".toml", ".json", ".cfg", ".ini",
+                               ".html", ".css", ".sh", ".sql"):
+                        try:
+                            head = fp.read_text(errors="replace")[:500]
+                            summaries.append(f"--- {rel / fname} ---\n{head}")
+                        except (PermissionError, OSError):
+                            pass
+
+            if file_count >= self._MAX_INDEX_FILES or total_bytes >= self._MAX_INDEX_BYTES:
+                tree_lines.append("... (truncated)")
+                break
+
+        tree_text = f"Folder: {root}\nFiles: {file_count} | Size: {total_bytes:,}B\n\n" + "\n".join(tree_lines)
+        summary_text = "\n\n".join(summaries[:60])
+
+        return {
+            "success": True,
+            "status_code": 200,
+            "data": {
+                "path": str(root),
+                "file_count": file_count,
+                "total_bytes": total_bytes,
+                "tree": tree_text,
+                "file_previews": summary_text[:30_000],
+            },
             "error": None,
         }

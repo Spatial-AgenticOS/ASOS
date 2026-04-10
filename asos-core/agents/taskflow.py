@@ -36,11 +36,14 @@ class TaskFlowStatus(str, Enum):
 class TaskFlowRuntime:
     """SQLite-backed taskflow runner with resumable state."""
 
-    def __init__(self, db_path: Optional[str] = None, memory_store=None):
+    def __init__(self, db_path: Optional[str] = None, memory_store=None,
+                 skill_registry=None, orchestrator=None):
         base = theora_data_home()
         base.mkdir(parents=True, exist_ok=True)
         self._db_path = db_path or str(base / "taskflows.db")
         self._memory = memory_store
+        self._skill_registry = skill_registry
+        self._orchestrator = orchestrator
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
@@ -490,6 +493,71 @@ class TaskFlowRuntime:
                 "status": "completed",
                 "status_code": resp.status_code,
                 "body_preview": (resp.text or "")[:preview_chars],
+            }
+
+        if step_type == "skill.invoke":
+            skill_id = str(payload.get("skill_id", "")).strip()
+            endpoint = str(payload.get("endpoint", "")).strip()
+            if not skill_id or not endpoint:
+                return {"status": "failed", "error": "skill.invoke requires skill_id and endpoint"}
+            if not self._skill_registry:
+                return {"status": "failed", "error": "No skill registry available"}
+            skill = self._skill_registry.get_skill(skill_id)
+            if not skill:
+                return {"status": "failed", "error": f"Skill '{skill_id}' not found"}
+            args = payload.get("args", {})
+            result = await skill.execute(endpoint, args, {})
+            ok = result.get("success", False)
+            return {
+                "status": "completed" if ok else "failed",
+                "result": result,
+                "error": result.get("error") if not ok else None,
+            }
+
+        if step_type == "llm.chat":
+            prompt = str(payload.get("prompt", "")).strip()
+            if not prompt:
+                return {"status": "failed", "error": "llm.chat requires prompt"}
+            if not self._orchestrator:
+                return {"status": "failed", "error": "No orchestrator available"}
+            session_id = flow.get("session_id") or f"taskflow-{flow['id']}"
+            try:
+                await self._orchestrator.handle_command(session_id, prompt)
+                return {"status": "completed", "prompt": prompt}
+            except Exception as exc:
+                return {"status": "failed", "error": str(exc)}
+
+        if step_type == "condition":
+            field = str(payload.get("field", "")).strip()
+            op = str(payload.get("op", "eq")).strip()
+            expected = payload.get("value")
+            then_step = payload.get("then")
+            else_step = payload.get("else")
+
+            context = flow.get("context", {})
+            actual = context.get(field)
+
+            match = False
+            if op == "eq":
+                match = actual == expected
+            elif op == "ne":
+                match = actual != expected
+            elif op == "gt":
+                match = (actual or 0) > (expected or 0)
+            elif op == "lt":
+                match = (actual or 0) < (expected or 0)
+            elif op == "contains":
+                match = str(expected) in str(actual)
+            elif op == "truthy":
+                match = bool(actual)
+
+            branch = then_step if match else else_step
+            return {
+                "status": "completed",
+                "match": match,
+                "branch": branch,
+                "field": field,
+                "op": op,
             }
 
         return {"status": "failed", "error": f"Unsupported step type: {step_type}"}

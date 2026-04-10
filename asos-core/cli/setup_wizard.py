@@ -644,6 +644,12 @@ class OnboardWizard:
             memory_path.write_text("# Agent Memory\n\nLong-term curated memory. The agent updates this file as it learns.\n")
             self.c.print("  [green]MEMORY.md created[/]")
 
+        self.config["multi_agent"] = Confirm.ask(
+            "  Enable Multi-Agent mode (subagents + parallel workers)?",
+            default=True,
+        )
+        mode_label = "enabled" if self.config["multi_agent"] else "disabled"
+        self.c.print(f"  [green]Multi-Agent {mode_label}[/]")
         self.c.print()
 
     # ── Step 5: Device Pairing ─────────────────────────────
@@ -754,6 +760,9 @@ class OnboardWizard:
             "devices": {
                 "phone_bridge_url": self.config.get("phone_bridge_url", ""),
                 "glasses_model": self.config.get("glasses_model", ""),
+            },
+            "features": {
+                "multi_agent": bool(self.config.get("multi_agent", True)),
             },
             "meta": {
                 "local_preset": self.config.get("local_preset", ""),
@@ -1010,6 +1019,8 @@ class OnboardWizardPlain:
             )
         except ImportError:
             (THEORA_HOME / "IDENTITY.yaml").write_text(json.dumps(identity, indent=2))
+        multi_agent_choice = input("  Enable Multi-Agent mode? (Y/n): ").strip().lower()
+        self.config["multi_agent"] = multi_agent_choice not in ("n", "no")
         print("  Saved.")
         print()
 
@@ -1065,6 +1076,9 @@ class OnboardWizardPlain:
             "devices": {
                 "phone_bridge_url": self.config.get("phone_bridge_url", ""),
                 "glasses_model": self.config.get("glasses_model", ""),
+            },
+            "features": {
+                "multi_agent": bool(self.config.get("multi_agent", True)),
             },
             "meta": {
                 "setup_complete": True,

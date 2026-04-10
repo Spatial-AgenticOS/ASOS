@@ -6,7 +6,7 @@ Clients (phone, web, daemon, glasses, robots) connect via WebSocket.
 MCP clients (Claude, Cursor) connect via JSON-RPC.
 Channels (Telegram, Discord, Slack) bridge messaging platforms.
 
-v1.0.0 — HUP, MCP server/client, sandbox policies, channels, federated sync.
+v1.2.0 — HUP, MCP server/client, sandbox policies, channels, federated sync, routines, permissions.
 """
 
 import asyncio
@@ -87,7 +87,7 @@ logger = logging.getLogger("theora.brain")
 app = FastAPI(
     title="THEORA Brain",
     description="THEORA — Open AI agent with computer use, GenUI, voice, and hardware control",
-    version="1.0.0",
+    version="1.2.0",
 )
 
 CORS_ORIGINS = os.getenv("THEORA_CORS_ORIGINS", "*").split(",")
@@ -170,6 +170,8 @@ class BrainState:
         self._load_stored_credentials()
         self.config = ConfigLoader()
         self.config.discover()
+        for env_key, env_value in self.config.export_as_env().items():
+            os.environ[env_key] = env_value
         self.sessions: dict[str, WebSocket] = {}
         self.daemons: dict[str, WebSocket] = {}
         self.devices: dict[str, dict] = {}
@@ -212,6 +214,7 @@ class BrainState:
         self.browser: Optional[BrowserController] = None
         self.approval_manager = None
         self.cron_service = None
+        self.scheduler = None
         self.docker_sandbox = None
         self.taskflows: Optional[TaskFlowRuntime] = None
 
@@ -389,13 +392,15 @@ class BrainState:
         try:
             from agents.scheduler import CronService
             self.cron_service = CronService()
+            self.scheduler = self.cron_service
+            self.skill_registry._cron_service = self.cron_service
             logger.info("Cron scheduler initialized")
         except Exception as e:
             logger.debug(f"Cron scheduler skipped: {e}")
 
         stats = self.memory.stats()
         logger.info(
-            f"Brain v1.0.0 initialized — {len(self.skill_registry.skills)} skills, "
+            f"Brain v1.2.0 initialized — {len(self.skill_registry.skills)} skills, "
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
             f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
         )
@@ -589,9 +594,54 @@ async def startup():
     if state.memory:
         state.memory.start_background_tasks()
     if state.cron_service:
-        async def _cron_callback(job):
-            logger.info(f"Cron job fired: {job.description} (type={job.job_type})")
-        state.cron_service.start(_cron_callback)
+        def _routine_executor(job):
+            import asyncio as _aio
+            logger.info("Routine fired: id=%s type=%s desc=%s", job.id, job.job_type, job.description)
+            run_id = state.cron_service.record_run_start(job.id)
+            try:
+                payload = job.payload or {}
+                skill_id = payload.get("skill")
+                endpoint = payload.get("endpoint")
+                prompt = payload.get("prompt")
+
+                if skill_id and endpoint and state.skill_registry:
+                    skill = state.skill_registry.get_skill(skill_id)
+                    if skill:
+                        loop = _aio.new_event_loop()
+                        try:
+                            result = loop.run_until_complete(
+                                skill.execute(endpoint, payload.get("args", {}), {})
+                            )
+                        finally:
+                            loop.close()
+                        state.cron_service.record_run_finish(
+                            run_id, "success" if result.get("success") else "error",
+                            result, result.get("error"),
+                        )
+                        return
+
+                if prompt and state.orchestrator:
+                    session_id = job.session_id or f"routine-{job.id}"
+                    loop = _aio.new_event_loop()
+                    try:
+                        loop.run_until_complete(
+                            state.orchestrator.handle_command(session_id, prompt)
+                        )
+                    finally:
+                        loop.close()
+                    state.cron_service.record_run_finish(run_id, "success", {"prompt": prompt}, None)
+                    return
+
+                state.cron_service.record_run_finish(
+                    run_id, "success",
+                    {"message": "No skill or prompt configured; routine logged."},
+                    None,
+                )
+            except Exception as exc:
+                logger.exception("Routine execution error for job %s", job.id)
+                state.cron_service.record_run_finish(run_id, "error", {}, str(exc))
+
+        state.cron_service.start(_routine_executor)
 
 
 # ─────────────────────────────────────────────
@@ -601,7 +651,7 @@ async def startup():
 @app.get("/health")
 async def health():
     """Health check endpoint for Docker HEALTHCHECK and load balancers."""
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "1.2.0"}
 
 
 @app.get("/api/info")
@@ -609,7 +659,7 @@ async def api_info():
     stats = state.memory.stats()
     return {
         "name": "THEORA Brain",
-        "version": "1.0.0",
+        "version": "1.2.0",
         "status": "running",
         "sessions": len(state.sessions),
         "daemons": list(state.daemons.keys()),
@@ -852,6 +902,14 @@ async def update_config(body: dict):
     if not section or not key:
         return {"error": "section and key are required"}
     state.config.update_settings(section, key, value)
+    if section == "features" and key == "multi_agent" and state.orchestrator:
+        enabled = value if isinstance(value, bool) else str(value).lower() in ("true", "1", "yes", "on")
+        os.environ["THEORA_MULTI_AGENT"] = str(enabled).lower()
+        state.orchestrator._multi_agent_enabled = enabled
+        if enabled and state.orchestrator._multi_agent is None:
+            state.orchestrator._init_multi_agent()
+        if not enabled:
+            state.orchestrator._multi_agent = None
     return {"ok": True, "section": section, "key": key, "value": value}
 
 
@@ -1729,7 +1787,7 @@ async def system_info():
     channel_stats = state.channel_manager.stats if state.channel_manager else {}
     skill_gen_stats = state.skill_gen.stats if state.skill_gen else {}
     return {
-        "version": "1.0.0",
+        "version": "1.2.0",
         "config": state.config.to_client_safe_dict(),
         "memory": stats,
         "sessions": len(state.sessions),
@@ -1773,6 +1831,7 @@ async def system_info():
             "installed_skills": len(state.marketplace.list_installed()) if state.marketplace else 0,
         },
         "multi_agent": state.orchestrator._multi_agent.stats if state.orchestrator and state.orchestrator._multi_agent else {},
+        "orchestrator": state.orchestrator.runtime_status if state.orchestrator else {},
     }
 
 
@@ -2219,6 +2278,101 @@ async def cancel_taskflow(flow_id: str):
 
 
 # ─────────────────────────────────────────────
+# Routines API
+# ─────────────────────────────────────────────
+
+def _job_to_dict(job) -> dict:
+    return {
+        "id": job.id,
+        "job_type": job.job_type.value if hasattr(job.job_type, 'value') else str(job.job_type),
+        "cron_expr": job.cron_expr,
+        "description": job.description,
+        "payload": job.payload,
+        "session_id": job.session_id,
+        "created_at": job.created_at,
+        "last_run": job.last_run,
+        "next_run": job.next_run,
+        "enabled": job.enabled,
+        "run_count": job.run_count,
+    }
+
+
+@app.post("/api/routines")
+async def create_routine(body: dict):
+    if not state.scheduler:
+        return {"error": "Scheduler not initialized"}
+    from agents.scheduler import JobType
+    job_type = body.get("job_type", "scheduled")
+    try:
+        jt = JobType(job_type)
+    except ValueError:
+        jt = JobType.CUSTOM
+    cron_expr = body.get("cron_expr", body.get("schedule", "every 60m"))
+    description = body.get("description", "")
+    payload = body.get("payload", {})
+    if body.get("skill"):
+        payload["skill"] = body["skill"]
+    if body.get("endpoint"):
+        payload["endpoint"] = body["endpoint"]
+    if body.get("prompt"):
+        payload["prompt"] = body["prompt"]
+    session_id = body.get("session_id", "")
+    job = state.scheduler.create_job(jt, cron_expr, description, payload, session_id)
+    return {"ok": True, "routine": _job_to_dict(job)}
+
+
+@app.get("/api/routines")
+async def list_routines(session_id: str = ""):
+    if not state.scheduler:
+        return {"routines": []}
+    sid = session_id or None
+    jobs = state.scheduler.list_jobs(sid)
+    return {"routines": [_job_to_dict(j) for j in jobs]}
+
+
+@app.get("/api/routines/{routine_id}")
+async def get_routine(routine_id: int):
+    if not state.scheduler:
+        return {"error": "Scheduler not initialized"}
+    job = state.scheduler.get_job(routine_id)
+    if not job:
+        return {"error": "Routine not found"}
+    runs = state.scheduler.get_runs(routine_id, limit=20)
+    return {"routine": _job_to_dict(job), "runs": runs}
+
+
+@app.post("/api/routines/{routine_id}/pause")
+async def pause_routine(routine_id: int):
+    if not state.scheduler:
+        return {"error": "Scheduler not initialized"}
+    ok = state.scheduler.pause_job(routine_id)
+    return {"ok": ok}
+
+
+@app.post("/api/routines/{routine_id}/resume")
+async def resume_routine(routine_id: int):
+    if not state.scheduler:
+        return {"error": "Scheduler not initialized"}
+    ok = state.scheduler.resume_job(routine_id)
+    return {"ok": ok}
+
+
+@app.delete("/api/routines/{routine_id}")
+async def delete_routine(routine_id: int):
+    if not state.scheduler:
+        return {"error": "Scheduler not initialized"}
+    ok = state.scheduler.delete_job(routine_id)
+    return {"ok": ok}
+
+
+@app.get("/api/routines/{routine_id}/runs")
+async def get_routine_runs(routine_id: int, limit: int = 20):
+    if not state.scheduler:
+        return {"runs": []}
+    return {"runs": state.scheduler.get_runs(routine_id, limit=limit)}
+
+
+# ─────────────────────────────────────────────
 # Conversation Threads API
 # ─────────────────────────────────────────────
 
@@ -2227,6 +2381,17 @@ async def list_conversations(limit: int = 50):
     if not state.memory:
         return {"conversations": []}
     return {"conversations": state.memory.conversation_list(limit=limit)}
+
+
+@app.post("/api/conversations/new")
+async def create_conversation(body: dict | None = None):
+    if not state.memory:
+        return {"error": "Memory not initialized"}
+    payload = body or {}
+    conversation_id = payload.get("id") or f"thread-{str(uuid4())[:10]}"
+    title = payload.get("title", "New conversation")
+    created = state.memory.conversation_save(conversation_id, [], title=title)
+    return {"ok": True, **created}
 
 
 @app.get("/api/conversations/{conversation_id}")
@@ -2922,6 +3087,8 @@ from starlette.responses import HTMLResponse, FileResponse
 
 _webui_dir = Path(__file__).parent.parent / "webui"
 _webui_ready = _webui_dir.is_dir() and (_webui_dir / "index.html").exists()
+_webui_route_mode = "spa" if _webui_ready else "fallback"
+logger.info("Web UI routing mode=%s path=%s", _webui_route_mode, _webui_dir)
 
 if _webui_ready and (_webui_dir / "assets").is_dir():
     from starlette.staticfiles import StaticFiles
@@ -2972,7 +3139,7 @@ if __name__ == "__main__":
     import uvicorn
     print("""
     ╔══════════════════════════════════════╗
-    ║        THEORA v1.1.0                ║
+    ║        THEORA v1.2.0                ║
     ║   Open AI Agent · Computer Use      ║
     ║   Voice · GenUI · Hardware          ║
     ╚══════════════════════════════════════╝

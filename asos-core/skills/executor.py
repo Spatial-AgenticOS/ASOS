@@ -13,6 +13,30 @@ import json
 import logging
 import uuid
 from typing import Optional
+
+
+def _check_shell_quotes(command: str) -> str | None:
+    """Return an error string if shell quotes are unbalanced, else None."""
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if ch == '\\' and not in_single:
+            i += 2
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        i += 1
+    if in_single or in_double:
+        return (
+            "Shell syntax error: unbalanced quotes in command. "
+            "Tip: use computer_use__write_file to create files with "
+            "arbitrary content instead of shell echo/printf."
+        )
+    return None
 import httpx
 
 from config.loader import theora_home
@@ -200,6 +224,9 @@ class SkillExecutor:
                     capture_output=True, text=True, timeout=15,
                 )
             elif path == "shell":
+                quote_err = _check_shell_quotes(command)
+                if quote_err:
+                    return {"success": False, "status_code": 400, "data": None, "error": quote_err}
                 proc = await asyncio.to_thread(
                     subprocess.run,
                     command, shell=True,

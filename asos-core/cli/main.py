@@ -17,7 +17,9 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import sys
+from importlib import metadata as importlib_metadata
 from urllib.parse import urlparse
 
 try:
@@ -59,7 +61,7 @@ HTTP_BASE = _runtime_http_base()
 BANNER = """
 ╔══════════════════════════════════════╗
 ║          T H E O R A                 ║
-║   Spatial Agentic OS  v1.0.0        ║
+║   Spatial Agentic OS  v1.2.0        ║
 ╚══════════════════════════════════════╝
   Type a message to chat. Commands:
     /status   — system health
@@ -85,6 +87,17 @@ def _http_get(path: str) -> dict:
             return json.loads(resp.read())
     except Exception as e:
         return {"error": str(e)}
+
+
+def _installed_pkg_info() -> tuple[str, str]:
+    """Return installed package version and location."""
+    try:
+        version = importlib_metadata.version("theora-asos")
+        dist = importlib_metadata.distribution("theora-asos")
+        location = str(dist.locate_file(""))
+        return version, location
+    except Exception:
+        return "unknown", "unknown"
 
 
 def cmd_status():
@@ -430,6 +443,11 @@ def cmd_doctor():
 
     # Python
     print(f"  Python:        {sys.version.split()[0]}")
+    pkg_version, pkg_location = _installed_pkg_info()
+    print(f"  Package:       theora-asos {pkg_version}")
+    print(f"  Package path:  {pkg_location}")
+    print(f"  Python bin:    {sys.executable}")
+    print(f"  THEORA bin:    {shutil.which('theora') or 'not found'}")
 
     # Brain connection
     data = _http_get("/health")
@@ -513,7 +531,6 @@ def cmd_doctor():
             print(f"    {desc:20s} not installed")
 
     # Docker
-    import shutil
     if shutil.which("docker"):
         print(f"    {'Docker':20s} available")
     else:

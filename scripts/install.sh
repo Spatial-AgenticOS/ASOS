@@ -126,6 +126,19 @@ rm -f "$PIP_LOG" 2>/dev/null || true
 echo -e "  ${DIM}Installing Playwright Chromium runtime (best effort)...${NC}"
 $PYTHON -m playwright install chromium --with-deps >/dev/null 2>&1 || true
 
+# ─── Installed Package Diagnostics ──────────────────────
+PKG_INFO="$($PYTHON -m pip show theora-asos 2>/dev/null || true)"
+if [ -n "$PKG_INFO" ]; then
+    PKG_VERSION="$(printf '%s\n' "$PKG_INFO" | awk -F': ' '/^Version:/{print $2}')"
+    PKG_LOCATION="$(printf '%s\n' "$PKG_INFO" | awk -F': ' '/^Location:/{print $2}')"
+    if [ -n "${PKG_VERSION:-}" ]; then
+        echo -e "  ${GREEN}✓${NC} Installed package: theora-asos ${PKG_VERSION}"
+    fi
+    if [ -n "${PKG_LOCATION:-}" ]; then
+        echo -e "  ${DIM}Location: ${PKG_LOCATION}${NC}"
+    fi
+fi
+
 # ─── Verify CLI ─────────────────────────────────────────
 
 echo ""

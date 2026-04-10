@@ -14,14 +14,18 @@ Policy file: ~/.theora/policies/default.yaml (or per-device)
 """
 
 from __future__ import annotations
+import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Optional, Any
 
 from config.loader import theora_home
 
 logger = logging.getLogger("theora.sandbox_policy")
+
+_GRANTS_FILE = "workspace_grants.json"
 
 
 class SandboxPolicy:
@@ -205,6 +209,103 @@ class SandboxPolicy:
         from security.vault import PermissionTier
         threshold = self._data.get("permissions", {}).get("require_confirmation_above", "active")
         return PermissionTier.tier_level(tier) > PermissionTier.tier_level(threshold)
+
+    # ─────────────────────────────────────────
+    # Filesystem Path Enforcement
+    # ─────────────────────────────────────────
+
+    def _resolve(self, raw_path: str) -> Path:
+        return Path(raw_path).expanduser().resolve()
+
+    def _path_in_list(self, target: Path, patterns: list[str]) -> bool:
+        for pat in patterns:
+            p = self._resolve(pat)
+            try:
+                target.relative_to(p)
+                return True
+            except ValueError:
+                continue
+        return False
+
+    def _load_grants(self) -> dict:
+        gf = theora_home() / _GRANTS_FILE
+        if gf.exists():
+            try:
+                return json.loads(gf.read_text())
+            except Exception:
+                return {}
+        return {}
+
+    def _save_grants(self, grants: dict) -> None:
+        gf = theora_home() / _GRANTS_FILE
+        gf.parent.mkdir(parents=True, exist_ok=True)
+        gf.write_text(json.dumps(grants, indent=2))
+
+    def can_read_path(self, raw_path: str) -> bool:
+        target = self._resolve(raw_path)
+        fs = self._data.get("filesystem", {})
+        if self._path_in_list(target, fs.get("blocked_paths", [])):
+            return False
+        if self._path_in_list(target, fs.get("read_paths", [])):
+            return True
+        if self._path_in_list(target, fs.get("write_paths", [])):
+            return True
+        grants = self._load_grants()
+        for folder, info in grants.items():
+            try:
+                target.relative_to(self._resolve(folder))
+                return True
+            except ValueError:
+                continue
+        return False
+
+    def can_write_path(self, raw_path: str) -> bool:
+        target = self._resolve(raw_path)
+        fs = self._data.get("filesystem", {})
+        if self._path_in_list(target, fs.get("blocked_paths", [])):
+            return False
+        if self._path_in_list(target, fs.get("write_paths", [])):
+            return True
+        grants = self._load_grants()
+        for folder, info in grants.items():
+            try:
+                target.relative_to(self._resolve(folder))
+                if info.get("mode") in ("readwrite", "write"):
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    def grant_folder(self, raw_path: str, mode: str = "read") -> dict:
+        target = self._resolve(raw_path)
+        fs = self._data.get("filesystem", {})
+        if self._path_in_list(target, fs.get("blocked_paths", [])):
+            return {"ok": False, "error": "Path is in blocked list"}
+        grants = self._load_grants()
+        grants[str(target)] = {
+            "mode": mode,
+            "granted_at": time.time(),
+        }
+        self._save_grants(grants)
+        logger.info("Folder grant: %s mode=%s", target, mode)
+        return {"ok": True, "path": str(target), "mode": mode}
+
+    def revoke_folder(self, raw_path: str) -> bool:
+        target = self._resolve(raw_path)
+        grants = self._load_grants()
+        key = str(target)
+        if key in grants:
+            del grants[key]
+            self._save_grants(grants)
+            return True
+        return False
+
+    def list_grants(self) -> list[dict]:
+        grants = self._load_grants()
+        return [
+            {"path": k, "mode": v.get("mode", "read"), "granted_at": v.get("granted_at")}
+            for k, v in grants.items()
+        ]
 
     # ─────────────────────────────────────────
     # Network Checks

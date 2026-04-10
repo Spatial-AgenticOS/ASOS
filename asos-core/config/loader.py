@@ -52,6 +52,7 @@ DEFAULT_SETTINGS = {
         "streaming": False,
         "proactive": False,
         "self_learning": True,
+        "multi_agent": True,
     },
     "security": {
         "node_api_key": "dev-secret-key",
@@ -162,6 +163,7 @@ class ConfigLoader:
             "THEORA_VISION_MAX_FRAME_KB": ("vision", "max_frame_kb"),
             "THEORA_STREAMING": ("features", "streaming"),
             "THEORA_PROACTIVE": ("features", "proactive"),
+            "THEORA_MULTI_AGENT": ("features", "multi_agent"),
             "THEORA_SCENE_COOLDOWN": ("vision", "scene_cooldown"),
             "THEORA_STT_PROVIDER": ("audio", "stt_provider"),
             "THEORA_TTS_PROVIDER": ("audio", "tts_provider"),
@@ -363,6 +365,7 @@ class ConfigLoader:
         features = self._merged.get("features", {})
         env["THEORA_STREAMING"] = str(features.get("streaming", False)).lower()
         env["THEORA_PROACTIVE"] = str(features.get("proactive", False)).lower()
+        env["THEORA_MULTI_AGENT"] = str(features.get("multi_agent", True)).lower()
 
         env["NODE_API_KEY"] = self._merged.get("security", {}).get("node_api_key", "dev-secret-key")
 

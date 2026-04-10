@@ -3,7 +3,7 @@ import {
   Key, Sparkles, Eye, EyeOff, Shield, Zap, Database, Cpu, Volume2, User,
   Check, AlertCircle, Loader2, Save, RefreshCw, Trash2, Plus,
   Bluetooth, Wifi, WifiOff, Radio, Smartphone, Glasses, Watch, Bot,
-  Sun, Moon,
+  Sun, Moon, Clock, Play, Pause, ChevronDown, ChevronUp,
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
@@ -24,6 +24,17 @@ export default function Settings() {
   const [pendingSkills, setPendingSkills] = useState([]);
   const [pendingLoading, setPendingLoading] = useState(false);
   const [pendingActionBusy, setPendingActionBusy] = useState('');
+  const [routines, setRoutines] = useState([]);
+  const [routinesLoading, setRoutinesLoading] = useState(false);
+  const [expandedRoutine, setExpandedRoutine] = useState(null);
+  const [routineRuns, setRoutineRuns] = useState({});
+  const [newRoutine, setNewRoutine] = useState({ description: '', cron_expr: 'every 60m', prompt: '' });
+
+  const fetchRoutines = () => {
+    setRoutinesLoading(true);
+    fetch(`${API}/api/routines`).then(r => r.json()).then(d => setRoutines(d.routines || []))
+      .catch(() => {}).finally(() => setRoutinesLoading(false));
+  };
 
   useEffect(() => {
     fetch(`${API}/api/config`).then(r => r.json()).then(setConfig).catch(() => {});
@@ -31,6 +42,7 @@ export default function Settings() {
     fetch(`${API}/api/devices`).then(r => r.json()).then(d => setDevices(d.devices || [])).catch(() => {});
     fetch(`${API}/api/llm/presets`).then(r => r.json()).then(d => setLlmPresets(d.presets || [])).catch(() => {});
     fetchPendingSkills();
+    fetchRoutines();
   }, []);
 
   const updateSetting = async (section, key, value) => {
@@ -147,6 +159,7 @@ export default function Settings() {
     { id: 'devices', label: 'Devices', icon: Bluetooth },
     { id: 'llm', label: 'AI Model', icon: Sparkles },
     { id: 'features', label: 'Features', icon: Zap },
+    { id: 'routines', label: 'Routines', icon: Clock },
     { id: 'proposals', label: 'Proposals', icon: AlertCircle },
     { id: 'keys', label: 'API Keys', icon: Key },
     { id: 'security', label: 'Security', icon: Shield },
@@ -458,6 +471,7 @@ export default function Settings() {
                 <Toggle label="Streaming Responses" desc="Token-by-token LLM output in real-time" value={config.features?.streaming} onChange={v => updateSetting('features', 'streaming', v)} />
                 <Toggle label="Proactive Agent" desc="Autonomous health and device alerts" value={config.features?.proactive} onChange={v => updateSetting('features', 'proactive', v)} />
                 <Toggle label="Self-Learning" desc="Extract knowledge from conversations" value={config.features?.self_learning ?? true} onChange={v => updateSetting('features', 'self_learning', v)} />
+                <Toggle label="Multi-Agent Mode" desc="Enable worker routing and subagent collaboration by default" value={config.features?.multi_agent ?? true} onChange={v => updateSetting('features', 'multi_agent', v)} />
               </div>
             </Section>
 
@@ -492,7 +506,144 @@ export default function Settings() {
           </div>
         )}
 
-        {/* API Keys Tab */}
+        {/* Routines Tab */}
+        {activeTab === 'routines' && (
+          <Section title="Routines" icon={Clock}>
+            <div className="space-y-4">
+              <p className="text-xs text-asos-text-muted">
+                Automated tasks that run on a schedule, trigger, or chain. Create routines to let THEORA work in the background.
+              </p>
+
+              {/* Create routine */}
+              <div className="bg-asos-card border border-asos-border rounded-lg p-3 space-y-2">
+                <div className="text-xs font-medium text-asos-text-secondary">New Routine</div>
+                <input
+                  className="w-full bg-asos-bg border border-asos-border rounded px-2.5 py-1.5 text-xs text-asos-text placeholder-asos-text-muted"
+                  placeholder="Description (e.g. Check weather every morning)"
+                  value={newRoutine.description}
+                  onChange={e => setNewRoutine(p => ({ ...p, description: e.target.value }))}
+                />
+                <div className="flex gap-2">
+                  <input
+                    className="flex-1 bg-asos-bg border border-asos-border rounded px-2.5 py-1.5 text-xs text-asos-text placeholder-asos-text-muted font-mono"
+                    placeholder="Schedule (every 60m, daily 08:00)"
+                    value={newRoutine.cron_expr}
+                    onChange={e => setNewRoutine(p => ({ ...p, cron_expr: e.target.value }))}
+                  />
+                </div>
+                <input
+                  className="w-full bg-asos-bg border border-asos-border rounded px-2.5 py-1.5 text-xs text-asos-text placeholder-asos-text-muted"
+                  placeholder="Prompt or action (e.g. Summarize my calendar for today)"
+                  value={newRoutine.prompt}
+                  onChange={e => setNewRoutine(p => ({ ...p, prompt: e.target.value }))}
+                />
+                <button
+                  className="px-3 py-1.5 text-xs font-medium rounded bg-asos-accent/15 border border-asos-accent/25 text-asos-accent hover:bg-asos-accent/25 transition"
+                  onClick={async () => {
+                    if (!newRoutine.description) return;
+                    await fetch(`${API}/api/routines`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        job_type: 'scheduled',
+                        cron_expr: newRoutine.cron_expr || 'every 60m',
+                        description: newRoutine.description,
+                        payload: { prompt: newRoutine.prompt },
+                        prompt: newRoutine.prompt,
+                      }),
+                    });
+                    setNewRoutine({ description: '', cron_expr: 'every 60m', prompt: '' });
+                    fetchRoutines();
+                  }}
+                >
+                  <Plus size={11} className="inline mr-1" />
+                  Create Routine
+                </button>
+              </div>
+
+              {/* Routines list */}
+              {routinesLoading && <Loader2 size={16} className="animate-spin text-asos-text-muted" />}
+              {!routinesLoading && routines.length === 0 && (
+                <div className="text-xs text-asos-text-muted text-center py-4">No routines yet.</div>
+              )}
+              {routines.map(r => {
+                const isExpanded = expandedRoutine === r.id;
+                const runs = routineRuns[r.id] || [];
+                return (
+                  <div key={r.id} className="bg-asos-card border border-asos-border rounded-lg overflow-hidden">
+                    <div className="flex items-center gap-2 px-3 py-2">
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${r.enabled ? 'bg-emerald-400' : 'bg-zinc-500'}`} />
+                      <span className="text-xs font-medium text-asos-text flex-1 truncate">{r.description || `Routine #${r.id}`}</span>
+                      <span className="text-[10px] text-asos-text-muted font-mono flex-shrink-0">{r.cron_expr}</span>
+                      <span className="text-[10px] text-asos-text-muted flex-shrink-0">{r.run_count} runs</span>
+                      <button
+                        className="p-1 text-asos-text-muted hover:text-asos-text transition"
+                        title={r.enabled ? 'Pause' : 'Resume'}
+                        onClick={async () => {
+                          const ep = r.enabled ? 'pause' : 'resume';
+                          await fetch(`${API}/api/routines/${r.id}/${ep}`, { method: 'POST' });
+                          fetchRoutines();
+                        }}
+                      >
+                        {r.enabled ? <Pause size={12} /> : <Play size={12} />}
+                      </button>
+                      <button
+                        className="p-1 text-asos-text-muted hover:text-rose-400 transition"
+                        title="Delete"
+                        onClick={async () => {
+                          await fetch(`${API}/api/routines/${r.id}`, { method: 'DELETE' });
+                          fetchRoutines();
+                        }}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                      <button
+                        className="p-1 text-asos-text-muted hover:text-asos-text transition"
+                        onClick={async () => {
+                          if (isExpanded) {
+                            setExpandedRoutine(null);
+                          } else {
+                            setExpandedRoutine(r.id);
+                            const res = await fetch(`${API}/api/routines/${r.id}/runs?limit=10`);
+                            const data = await res.json();
+                            setRoutineRuns(prev => ({ ...prev, [r.id]: data.runs || [] }));
+                          }
+                        }}
+                      >
+                        {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                      </button>
+                    </div>
+                    {isExpanded && (
+                      <div className="border-t border-asos-border/50 px-3 py-2 space-y-1">
+                        <div className="text-[10px] text-asos-text-muted">
+                          Type: {r.job_type} | Created: {new Date(r.created_at * 1000).toLocaleString()}
+                          {r.last_run && ` | Last: ${new Date(r.last_run * 1000).toLocaleString()}`}
+                        </div>
+                        {runs.length > 0 ? (
+                          <div className="space-y-0.5 mt-1">
+                            <div className="text-[10px] font-medium text-asos-text-secondary">Recent Runs</div>
+                            {runs.map(run => (
+                              <div key={run.id} className="flex items-center gap-2 text-[10px]">
+                                <span className={`w-1 h-1 rounded-full ${run.status === 'success' ? 'bg-emerald-400' : run.status === 'error' ? 'bg-rose-400' : 'bg-amber-400'}`} />
+                                <span className="text-asos-text-muted">{new Date(run.started_at * 1000).toLocaleString()}</span>
+                                <span className={`${run.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>{run.status}</span>
+                                {run.error && <span className="text-rose-400/70 truncate flex-1">{run.error}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-[10px] text-asos-text-muted">No runs yet.</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </Section>
+        )}
+
+        {/* Proposals Tab */}
         {activeTab === 'proposals' && (
           <Section title="Generated Skill Proposals" icon={AlertCircle}>
             <div className="space-y-3">

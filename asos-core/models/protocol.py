@@ -234,6 +234,21 @@ class ConfirmationResponsePayload(BaseModel):
     approved: bool = False
 
 
+class PermissionRequestPayload(BaseModel):
+    """Agent requests folder access from the user."""
+    request_id: str = Field(default_factory=lambda: str(uuid4())[:8])
+    path: str
+    operation: Literal["read", "write", "readwrite"] = "read"
+    reason: str = ""
+
+
+class PermissionResponsePayload(BaseModel):
+    """User grants or denies folder access."""
+    request_id: str
+    granted: bool = False
+    mode: str = "read"
+
+
 # ─────────────────────────────────────────────
 # Payload Models — Voice Pipeline
 # ─────────────────────────────────────────────
@@ -299,6 +314,8 @@ MESSAGE_TYPES = {
     "glasses_status": GlassesStatusPayload,
     "skill_approval": SkillApprovalPayload,
     "confirmation_response": ConfirmationResponsePayload,
+    "permission_request": PermissionRequestPayload,
+    "permission_response": PermissionResponsePayload,
 
     # Voice Pipeline
     "voice_config": VoiceConfigPayload,

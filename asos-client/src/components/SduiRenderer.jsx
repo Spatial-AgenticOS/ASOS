@@ -305,8 +305,69 @@ const MarkdownView = ({ content }) => (
   <div className="prose prose-invert prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: content }} />
 );
 
-export const SduiRenderer = ({ node, onAction }) => {
+const isShellResult = (node) => {
+  if (!node || node.type !== 'VStack' || !node.children) return false;
+  const keys = new Set();
+  for (const ch of node.children) {
+    if (ch.type === 'HStack' && ch.children) {
+      for (const gc of ch.children) {
+        if (gc.type === 'Text' && gc.style === 'caption') keys.add((gc.value || '').toLowerCase().trim());
+      }
+    }
+  }
+  return keys.has('stdout') || keys.has('exit_code') || keys.has('exit code');
+};
+
+const extractShellFields = (node) => {
+  const fields = {};
+  for (const ch of (node.children || [])) {
+    if (ch.type === 'HStack' && ch.children && ch.children.length >= 2) {
+      const label = (ch.children[0]?.value || '').trim().toLowerCase().replace(/\s+/g, '_');
+      const val = ch.children[1]?.value ?? '';
+      if (label) fields[label] = String(val);
+    }
+  }
+  return fields;
+};
+
+const TerminalBlock = ({ fields }) => {
+  const stdout = (fields.stdout || '').trim();
+  const stderr = (fields.stderr || '').trim();
+  const exitCode = fields.exit_code ?? fields.exitcode ?? '';
+  const lines = stdout ? stdout.split('\n').slice(0, 6) : [];
+  const truncated = stdout.split('\n').length > 6;
+
+  return (
+    <div className="bg-[#0d0d0d] border border-asos-border rounded-lg overflow-hidden text-[11px] font-mono">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 border-b border-asos-border/50 bg-asos-card/60">
+        <span className={`w-1.5 h-1.5 rounded-full ${exitCode === '0' || exitCode === '' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+        <span className="text-asos-text-muted text-[10px]">
+          {exitCode !== '' ? `exit ${exitCode}` : 'shell'}
+        </span>
+      </div>
+      {lines.length > 0 && (
+        <pre className="px-2.5 py-1.5 text-asos-text whitespace-pre-wrap break-words leading-relaxed max-h-32 overflow-y-auto">
+          {lines.join('\n')}{truncated ? '\n…' : ''}
+        </pre>
+      )}
+      {!stdout && !stderr && (
+        <div className="px-2.5 py-1.5 text-asos-text-muted italic">Done.</div>
+      )}
+      {stderr && (
+        <pre className="px-2.5 py-1.5 text-rose-400/80 whitespace-pre-wrap break-words leading-relaxed border-t border-asos-border/50 max-h-20 overflow-y-auto">
+          {stderr.slice(0, 300)}
+        </pre>
+      )}
+    </div>
+  );
+};
+
+export const SduiRenderer = ({ node, onAction, compact = false }) => {
   if (!node || typeof node !== 'object') return null;
+
+  if (compact && isShellResult(node)) {
+    return <TerminalBlock fields={extractShellFields(node)} />;
+  }
 
   const {
     type, children, spacing, padding, value, style, color,
@@ -316,41 +377,49 @@ export const SduiRenderer = ({ node, onAction }) => {
 
   const sp = (sp) => {
     if (!sp) return '';
-    const m = { 4: 'gap-1', 8: 'gap-2', 10: 'gap-2.5', 12: 'gap-3', 16: 'gap-4', 20: 'gap-5', 24: 'gap-6' };
-    return m[sp] || 'gap-2';
+    const base = { 4: 'gap-1', 8: 'gap-2', 10: 'gap-2.5', 12: 'gap-3', 16: 'gap-4', 20: 'gap-5', 24: 'gap-6' };
+    if (compact) {
+      const compactMap = { 4: 'gap-0.5', 8: 'gap-1', 10: 'gap-1.5', 12: 'gap-2', 16: 'gap-2.5', 20: 'gap-3', 24: 'gap-4' };
+      return compactMap[sp] || 'gap-1';
+    }
+    return base[sp] || 'gap-2';
   };
   const pd = (p) => {
     if (!p) return '';
-    const m = { 8: 'p-2', 12: 'p-3', 16: 'p-4', 20: 'p-5', 24: 'p-6' };
-    return m[p] || 'p-4';
+    const base = { 8: 'p-2', 12: 'p-3', 16: 'p-4', 20: 'p-5', 24: 'p-6' };
+    if (compact) {
+      const compactMap = { 8: 'p-1.5', 12: 'p-2', 16: 'p-3', 20: 'p-3', 24: 'p-4' };
+      return compactMap[p] || 'p-2';
+    }
+    return base[p] || 'p-4';
   };
 
   switch (type) {
     case 'VStack':
       return (
         <div className={`flex flex-col ${sp(spacing)} ${pd(padding)} w-full`}>
-          {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} />)}
+          {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} compact={compact} />)}
         </div>
       );
     case 'HStack':
       return (
         <div className={`flex flex-row items-center ${sp(spacing)} ${pd(padding)} w-full`}>
-          {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} />)}
+          {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} compact={compact} />)}
         </div>
       );
     case 'Text': {
-      let cls = 'text-base';
-      if (style === 'headline') cls = 'text-xl font-bold tracking-wide';
-      else if (style === 'subtitle') cls = 'text-lg font-semibold';
-      else if (style === 'caption') cls = 'text-sm opacity-70';
-      else if (style === 'body') cls = 'text-base leading-relaxed';
+      let cls = compact ? 'text-sm' : 'text-base';
+      if (style === 'headline') cls = compact ? 'text-base font-bold' : 'text-lg font-bold tracking-wide';
+      else if (style === 'subtitle') cls = compact ? 'text-sm font-semibold' : 'text-base font-semibold';
+      else if (style === 'caption') cls = compact ? 'text-[11px] opacity-70' : 'text-xs opacity-70';
+      else if (style === 'body') cls = compact ? 'text-[13px] leading-snug' : 'text-sm leading-relaxed';
       return <span className={cls} style={{ color: color || 'inherit' }}>{value}</span>;
     }
     case 'Card':
       return (
-        <div className={`bg-asos-card border border-asos-border backdrop-blur-md shadow-lg flex flex-col ${sp(spacing || 12)} p-4`}
-          style={{ borderRadius: corner_radius || 12 }}>
-          {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} />)}
+        <div className={`bg-asos-card border border-asos-border backdrop-blur-md shadow-md flex flex-col ${sp(spacing || 12)} ${compact ? 'p-2.5' : 'p-3'}`}
+          style={{ borderRadius: corner_radius || 10 }}>
+          {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} compact={compact} />)}
         </div>
       );
     case 'Icon':
@@ -368,7 +437,7 @@ export const SduiRenderer = ({ node, onAction }) => {
       return (
         <button
           onClick={() => onAction && onAction(action_id)}
-          className={`px-4 py-2 rounded-lg font-medium transition-all hover:scale-105 active:scale-95 ${
+          className={`${compact ? 'px-3 py-1.5 text-xs' : 'px-4 py-2 text-sm'} rounded-lg font-medium transition-all hover:scale-[1.02] active:scale-95 ${
             style === 'primary' ? 'bg-asos-accent text-white hover:bg-asos-accent/90'
             : style === 'danger' ? 'bg-red-600 text-white hover:bg-red-500'
             : 'bg-asos-card border border-asos-border hover:bg-white/10'
@@ -383,25 +452,25 @@ export const SduiRenderer = ({ node, onAction }) => {
       return (
         <div className={`grid ${pd(padding)} ${sp(spacing || 12)} w-full`}
           style={{ gridTemplateColumns: `repeat(${columns || 2}, minmax(0, 1fr))` }}>
-          {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} />)}
+          {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} compact={compact} />)}
         </div>
       );
     case 'ScrollView':
       return (
-        <div className={`overflow-y-auto ${pd(padding)} w-full`} style={{ maxHeight: max_height || 400 }}>
+        <div className={`overflow-y-auto ${pd(padding)} w-full`} style={{ maxHeight: max_height || (compact ? 200 : 320) }}>
           <div className={`flex flex-col ${sp(spacing || 12)}`}>
-            {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} />)}
+            {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} compact={compact} />)}
           </div>
         </div>
       );
     case 'MetricCard':
       return (
-        <div className="bg-asos-card border border-asos-border backdrop-blur-md shadow-lg p-4 flex flex-col items-center gap-2"
-          style={{ borderRadius: corner_radius || 16 }}>
-          {icon && <LucideDynamicIcon name={icon} size={28} color={color || '#06b6d4'} />}
-          <span className="text-3xl font-bold" style={{ color: color || '#fff' }}>{value}</span>
-          {unit && <span className="text-xs opacity-60 uppercase tracking-wider">{unit}</span>}
-          <span className="text-sm opacity-80">{label}</span>
+        <div className={`bg-asos-card border border-asos-border backdrop-blur-md shadow-md ${compact ? 'p-2.5' : 'p-3'} flex flex-col items-center gap-1.5`}
+          style={{ borderRadius: corner_radius || 12 }}>
+          {icon && <LucideDynamicIcon name={icon} size={compact ? 20 : 24} color={color || '#06b6d4'} />}
+          <span className={`${compact ? 'text-xl' : 'text-2xl'} font-bold`} style={{ color: color || '#fff' }}>{value}</span>
+          {unit && <span className="text-[10px] opacity-60 uppercase tracking-wider">{unit}</span>}
+          <span className={`${compact ? 'text-[11px]' : 'text-xs'} opacity-80`}>{label}</span>
         </div>
       );
     case 'ProgressBar':
@@ -422,7 +491,7 @@ export const SduiRenderer = ({ node, onAction }) => {
       return <RealAudioPlayer url={node.url || node.audio_url} label={label} action_id={action_id} onAction={onAction} />;
     case 'Chart':
     case 'ChartView':
-      return <ChartView data={node.data} chart_type={node.chart_type} label={label} color={color} height={node.height} />;
+      return <ChartView data={node.data} chart_type={node.chart_type} label={label} color={color} height={node.height || (compact ? 100 : 150)} />;
     case 'Form':
     case 'FormView':
       return <FormView fields={node.fields} action_id={action_id} submit_label={node.submit_label} onAction={onAction} />;

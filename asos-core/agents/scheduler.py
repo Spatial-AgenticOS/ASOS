@@ -24,6 +24,10 @@ class JobType(str, Enum):
     DATA_SYNC = "data_sync"
     PROACTIVE_INSIGHT = "proactive_insight"
     CUSTOM = "custom"
+    SCHEDULED = "scheduled"
+    TRIGGERED = "triggered"
+    CHAIN = "chain"
+    WATCHER = "watcher"
 
 
 @dataclass
@@ -174,6 +178,23 @@ class CronService:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sched_next ON scheduled_jobs (next_run)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS routine_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id INTEGER NOT NULL,
+                    started_at REAL NOT NULL,
+                    finished_at REAL,
+                    status TEXT NOT NULL DEFAULT 'running',
+                    result TEXT NOT NULL DEFAULT '{}',
+                    error TEXT,
+                    FOREIGN KEY (job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_runs_job ON routine_runs (job_id, started_at DESC)"
+            )
 
     def close(self) -> None:
         self.stop()
@@ -294,6 +315,77 @@ class CronService:
                 (now, nxt, job_id),
             )
             conn.commit()
+
+    def pause_job(self, job_id: int) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE scheduled_jobs SET enabled = 0 WHERE id = ?", (job_id,)
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def resume_job(self, job_id: int) -> bool:
+        now = time.time()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT cron_expr FROM scheduled_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if not row:
+                return False
+            nxt = CronService._compute_next_run(row["cron_expr"], now)
+            self._conn.execute(
+                "UPDATE scheduled_jobs SET enabled = 1, next_run = ? WHERE id = ?",
+                (nxt, job_id),
+            )
+            self._conn.commit()
+            return True
+
+    def get_job(self, job_id: int) -> Optional[ScheduledJob]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM scheduled_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_job(row)
+
+    def record_run_start(self, job_id: int) -> int:
+        now = time.time()
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO routine_runs (job_id, started_at, status) VALUES (?, ?, 'running')",
+                (job_id, now),
+            )
+            self._conn.commit()
+            return cur.lastrowid
+
+    def record_run_finish(self, run_id: int, status: str, result: dict, error: str | None = None) -> None:
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE routine_runs SET finished_at = ?, status = ?, result = ?, error = ? WHERE id = ?",
+                (now, status, json.dumps(result), error, run_id),
+            )
+            self._conn.commit()
+
+    def get_runs(self, job_id: int, limit: int = 20) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM routine_runs WHERE job_id = ? ORDER BY started_at DESC LIMIT ?",
+                (job_id, limit),
+            ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "job_id": r["job_id"],
+                "started_at": r["started_at"],
+                "finished_at": r["finished_at"],
+                "status": r["status"],
+                "result": json.loads(r["result"] or "{}"),
+                "error": r["error"],
+            }
+            for r in rows
+        ]
 
     def _loop(self) -> None:
         while not self._stop.wait(30.0):
