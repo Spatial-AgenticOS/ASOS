@@ -149,6 +149,7 @@ class TestSetupStatus:
     def test_setup_complete_with_key(self, temp_dirs):
         _, user_home, _ = temp_dirs
         (user_home / "credentials.json").write_text(json.dumps({"OPENAI_API_KEY": "sk-valid"}))
+        (user_home / "USER.md").write_text("My name is Test User. I work on AI projects and health technology.")
 
         loader = ConfigLoader()
         loader.user_home = user_home
@@ -158,6 +159,7 @@ class TestSetupStatus:
     def test_setup_complete_with_ollama(self, temp_dirs):
         _, user_home, _ = temp_dirs
         (user_home / "settings.json").write_text(json.dumps({"llm": {"provider": "ollama"}}))
+        (user_home / "USER.md").write_text("My name is Test User. I prefer local models for privacy.")
 
         loader = ConfigLoader()
         loader.user_home = user_home
