@@ -970,20 +970,6 @@ class Orchestrator:
 
         if not result.get("success"):
             logger.warning(f"PostToolUse: Action failed — {result.get('error')}")
-        elif result.get("data"):
-            try:
-                sdui = self.genui.generate(
-                    data=result["data"],
-                    skill_brand=skill.brand.model_dump(),
-                    ui_hint=endpoint.ui_hint,
-                    endpoint_id=endpoint_id,
-                )
-                await self.send(session_id, TheoraMessage(
-                    session_id=session_id, hop="brain", type="sdui",
-                    payload=SDUIPayload(root=sdui).model_dump(),
-                ))
-            except Exception as e:
-                logger.debug(f"GenUI generation skipped for {tool_name}: {e}")
 
         if anti_loop_note:
             result = dict(result)
@@ -1512,51 +1498,31 @@ class Orchestrator:
 
     async def _try_genui_for_result(self, session_id: str, tool_call: dict, result_data: dict):
         """Generate and send SDUI for tool results when the data is rich enough."""
-        try:
-            from genui.generator import GenUIEngine
-        except ImportError:
-            return
-
         if not isinstance(result_data, dict):
             return
 
-        # Unwrap the executor envelope — only pass the inner payload to GenUI
         display_data = result_data.get("data", result_data)
-        if isinstance(display_data, str):
+        if isinstance(display_data, str) or not isinstance(display_data, dict):
             return
-        if not isinstance(display_data, dict):
-            display_data = result_data
-
-        has_rich_data = any(k in display_data for k in (
-            "lat", "latitude", "lon", "longitude", "image_url", "image_b64",
-            "results", "chart_data", "data", "items", "markers",
-        ))
-        if not has_rich_data and len(display_data) < 2:
+        if not display_data:
             return
-
-        genui = getattr(self, '_genui_engine', None)
-        if not genui:
-            try:
-                genui = GenUIEngine()
-            except Exception:
-                return
 
         parts = tool_call["name"].split("__", 1)
         skill_id = parts[0] if len(parts) == 2 else tool_call["name"]
         endpoint_id = parts[1] if len(parts) == 2 else ""
         skill = self.skills.skills.get(skill_id)
-        brand = getattr(skill, "brand", None) or {}
+        if not skill:
+            return
 
-        ui_hint = None
-        if any(k in display_data for k in ("lat", "latitude", "longitude")):
-            ui_hint = "map"
-        elif "chart_data" in display_data:
-            ui_hint = "chart"
+        endpoint = next((ep for ep in skill.endpoints if ep.id == endpoint_id), None)
+        ui_hint = endpoint.ui_hint if endpoint else None
 
         try:
-            sdui = await genui.generate_for_data(
-                data=display_data, skill_brand=brand,
-                ui_hint=ui_hint, endpoint_id=endpoint_id,
+            sdui = self.genui.generate(
+                data=display_data,
+                skill_brand=skill.brand.model_dump(),
+                ui_hint=ui_hint,
+                endpoint_id=endpoint_id,
             )
             if sdui and "type" in sdui:
                 from models.protocol import SDUIPayload
@@ -1580,45 +1546,47 @@ class Orchestrator:
         prompt += (
             "## How to respond\n"
             "- Be warm, conversational, and occasionally fun. You are a personal AI companion, not a sterile chatbot.\n"
-            "- When there are multiple ways to accomplish something, ask the user which they prefer: "
-            "\"I could do X or Y — which sounds better to you?\"\n"
+            "- When there are multiple ways to accomplish something, ask the user which they prefer.\n"
             "- Proactively suggest related actions: \"Done! Want me to also...?\"\n"
             "- Encourage creativity: remind users they can create custom skills, automations, and workflows.\n"
             "- If the user seems stuck, offer ideas and options rather than waiting silently.\n"
-            "- Never say \"I can't do that\" — instead say what you CAN do and offer the closest alternative.\n"
             "- Use tools when you need external data or to perform actions.\n"
             "- After a tool call, summarize the result in plain, friendly language.\n"
             "- Be proactive — if you notice something relevant in sensor data or context, mention it.\n"
             "- Answer questions directly. No JSON dumps, no raw UI markup.\n"
-            "\n## CRITICAL — Local Computer & Browser Control\n"
-            "You can control the user's Mac and browser directly. ALWAYS use these tools:\n"
-            "- **desktop_control__open_app**: Open ANY app (Music, Safari, Chrome, Notes, Spotify, Terminal, etc.).\n"
+            "\n## ABSOLUTE RULE — NEVER SAY 'I CAN'T'\n"
+            "You MUST NEVER tell the user you cannot do something. You have full access to a shell, "
+            "Python, AppleScript, a browser, and desktop automation. If a task seems outside your "
+            "built-in skills, figure out how to do it with shell commands or Python scripts via "
+            "desktop_control__shell_command. Examples:\n"
+            "- Create an MP3/WAV with a beep: python3 -c 'import wave,struct,math; ...'\n"
+            "- Generate an image: python3 with PIL\n"
+            "- Convert file formats: ffmpeg, python3, etc.\n"
+            "- Any task: break it down and use shell commands, Python, or AppleScript.\n"
+            "If you truly lack a specialized skill, the system will automatically detect the gap "
+            "and propose a new skill to the user. Never refuse — always try.\n"
+            "\n## Local Computer & Browser Control\n"
+            "You control the user's Mac and browser directly. ALWAYS use these tools:\n"
+            "- **desktop_control__open_app**: Open ANY app — Music, Safari, Notes, Terminal, etc.\n"
             "  Call with script='tell application \"AppName\" to activate'.\n"
-            "  NEVER say you cannot open apps. You CAN.\n"
-            "- **desktop_control__shell_command**: Create files, read files, run shell commands.\n"
-            "  When user says 'create a note/file on my desktop', use: echo 'content' > ~/Desktop/filename.txt\n"
-            "  This creates a REAL FILE on the filesystem, not an internal memory note.\n"
+            "- **desktop_control__shell_command**: Run ANY shell command. This is your most powerful tool.\n"
+            "  Create files (echo, python3, touch), read files (cat), install packages (pip, brew),\n"
+            "  generate audio (python3 wave module, ffmpeg), manipulate images, anything the shell can do.\n"
+            "  When user says 'create a file on my desktop': echo 'content' > ~/Desktop/file.txt\n"
             "- **desktop_automation__click_screen**: Click at absolute screen coordinates.\n"
             "- **desktop_automation__type_text**: Type keystrokes globally.\n"
             "- **desktop_automation__key_combo**: Press key combinations (e.g., cmd+c).\n"
             "- **desktop_automation__scroll**: Scroll at a position.\n"
             "- **desktop_automation__get_cursor_position**: Get current cursor location.\n"
-            "  Use desktop_automation tools for GUI interactions that require mouse/keyboard control.\n"
-            "- **browser__navigate**: Navigate to a URL in the user's browser.\n"
-            "- **browser__click**: Click elements on a page by CSS selector.\n"
-            "- **browser__type_text**: Type text into browser inputs.\n"
+            "- **browser__navigate**: Navigate to a URL.\n"
+            "- **browser__click**: Click elements by CSS selector.\n"
+            "- **browser__type_text**: Type into browser inputs.\n"
             "- **browser__screenshot**: Screenshot the browser page.\n"
             "- **browser__evaluate**: Run JavaScript in the browser.\n"
-            "  Use browser tools when the user asks to search the web, fill forms, interact with websites.\n"
-            "- **notes_memory** is for THEORA's internal memory, NOT filesystem files.\n"
-            "  Only use notes_memory when the user wants the agent to remember something.\n"
-            "- **system_settings__read_user_profile**: Read the user's identity/profile.\n"
-            "- **system_settings__update_user_profile**: Update name, location, occupation, interests.\n"
-            "- **system_settings__read_agent_personality**: Read the agent's name and personality.\n"
-            "- **system_settings__update_agent_personality**: Change agent name, personality, or voice.\n"
-            "- **system_settings__read_settings**: Read current system configuration.\n"
-            "- **system_settings__update_setting**: Change a system setting (LLM provider, model, etc.).\n"
-            "  Use system_settings when the user asks to change their identity, the agent's personality, or system config.\n"
+            "- **notes_memory**: THEORA's internal memory. Only for remembering things, NOT filesystem files.\n"
+            "- **system_settings__read_user_profile / update_user_profile**: Read/write user identity.\n"
+            "- **system_settings__read_agent_personality / update_agent_personality**: Change agent name/personality/voice.\n"
+            "- **system_settings__read_settings / update_setting**: Read/write system config (LLM, features, etc.).\n"
         )
 
         # Perception Context
