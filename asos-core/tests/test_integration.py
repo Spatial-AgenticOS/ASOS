@@ -65,6 +65,7 @@ class TestSetupFlow:
 
     def test_setup_with_api_key(self, config):
         config.save_credentials({"OPENAI_API_KEY": "sk-test-123"})
+        (config.user_home / "USER.md").write_text("My name is Test User. I work on AI projects and health technology.")
         config.discover()
         assert config.setup_complete is True
 
@@ -307,6 +308,7 @@ class TestFullPipeline:
         session_id = "session-demo"
 
         config.save_credentials({"OPENAI_API_KEY": "sk-test"})
+        (config.user_home / "USER.md").write_text("My name is Test User. I work on AI projects and robotics.")
         config.discover()
         assert config.setup_complete
 
