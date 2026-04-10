@@ -15,11 +15,25 @@ from typing import Optional
 logger = logging.getLogger("theora.genui")
 
 
+ENVELOPE_KEYS = {"success", "status_code", "error", "ok", "status", "created_at", "updated_at", "timestamp", "_source"}
+
+
 class GenUIGenerator:
     """
     Generates SDUI JSON from API response data + skill metadata.
     This is what replaces app development.
     """
+
+    @staticmethod
+    def _strip_envelope(data: dict) -> dict:
+        """Remove executor envelope metadata if present, keeping only meaningful data."""
+        if not isinstance(data, dict):
+            return data
+        if "success" in data and "data" in data and "status_code" in data:
+            inner = data.get("data")
+            if isinstance(inner, dict) and inner:
+                return inner
+        return {k: v for k, v in data.items() if k not in ENVELOPE_KEYS}
 
     def generate(
         self,
@@ -40,6 +54,7 @@ class GenUIGenerator:
         Returns:
             SDUI JSON tree
         """
+        data = self._strip_envelope(data)
         brand_name = skill_brand.get("name", "Skill")
         brand_color = skill_brand.get("primary_color", "#6c5ce7")
 
@@ -128,39 +143,50 @@ class GenUIGenerator:
 
     def _render_metrics(self, data: dict, color: str) -> dict:
         """Render a dict as metric cards."""
-        # Pick numeric values as metrics, strings as text
         metrics = []
         texts = []
 
         for key, value in data.items():
-            if key.startswith("_") or key in ("cod", "id", "base", "timezone", "visibility"):
-                continue  # Skip internal fields
+            if key.startswith("_") or key in ENVELOPE_KEYS:
+                continue
+            if key in ("cod", "id", "base", "timezone", "visibility"):
+                continue
 
-            if isinstance(value, (int, float)):
+            if isinstance(value, bool):
+                continue
+            elif isinstance(value, (int, float)):
                 metrics.append(self._make_metric(key, value, color))
-            elif isinstance(value, str) and len(value) < 100:
+            elif isinstance(value, str) and value:
                 texts.append({
                     "type": "HStack",
                     "spacing": 8,
                     "children": [
                         {"type": "Text", "value": key.replace("_", " ").title() + ":", "style": "caption"},
-                        {"type": "Text", "value": str(value), "style": "body"},
+                        {"type": "Text", "value": str(value)[:300], "style": "body"},
                     ],
                 })
             elif isinstance(value, dict):
-                # Nested dict — flatten one level
                 for k2, v2 in value.items():
+                    if isinstance(v2, bool):
+                        continue
                     if isinstance(v2, (int, float)):
                         metrics.append(self._make_metric(f"{key} {k2}", v2, color))
+                    elif isinstance(v2, str) and v2:
+                        texts.append({
+                            "type": "HStack", "spacing": 8,
+                            "children": [
+                                {"type": "Text", "value": k2.replace("_", " ").title() + ":", "style": "caption"},
+                                {"type": "Text", "value": str(v2)[:200], "style": "body"},
+                            ],
+                        })
 
         children = []
         if metrics:
-            # Arrange metrics in a grid
-            children.append({"type": "Grid", "columns": 2, "spacing": 12, "children": metrics[:8]})
+            children.append({"type": "Grid", "columns": min(len(metrics), 2), "spacing": 12, "children": metrics[:8]})
         if texts:
             children.extend(texts[:10])
 
-        return {"type": "VStack", "spacing": 12, "children": children} if children else {"type": "Text", "value": json.dumps(data, indent=2)[:500], "style": "body"}
+        return {"type": "VStack", "spacing": 12, "children": children} if children else {"type": "Text", "value": "Done.", "style": "body"}
 
     def _render_list(self, items: list, color: str) -> dict:
         """Render a list of items as cards in a ScrollView."""
@@ -191,38 +217,52 @@ class GenUIGenerator:
     def _dict_to_card(self, d: dict, color: str) -> dict:
         """Convert a dict to a Card with key-value rows."""
         children = []
+        shown_keys = set()
 
-        # Look for a title field
         for title_key in ("name", "title", "label", "display_name", "restaurant_name"):
             if title_key in d:
                 children.append({"type": "Text", "value": str(d[title_key]), "style": "subtitle"})
+                shown_keys.add(title_key)
                 break
 
-        # Look for a description
         for desc_key in ("description", "summary", "weather_description", "conditions"):
             if desc_key in d:
                 children.append({"type": "Text", "value": str(d[desc_key]), "style": "caption"})
+                shown_keys.add(desc_key)
                 break
 
-        # Look for an image
         for img_key in ("image_url", "icon_url", "thumbnail", "photo"):
             if img_key in d and d[img_key]:
                 children.append({"type": "AsyncImage", "url": str(d[img_key]), "height": 120, "corner_radius": 8})
+                shown_keys.add(img_key)
                 break
 
-        # Add numeric values as badges/metrics
         for key, value in d.items():
-            if key.startswith("_"):
+            if key.startswith("_") or key in shown_keys or key in ENVELOPE_KEYS:
+                continue
+            if value is None or value == "" or value == [] or value == {}:
+                continue
+            if isinstance(value, bool):
                 continue
             if isinstance(value, (int, float)) and key not in ("id", "cod", "timezone"):
                 children.append({
-                    "type": "HStack",
-                    "spacing": 8,
+                    "type": "HStack", "spacing": 8,
                     "children": [
                         {"type": "Text", "value": key.replace("_", " ").title(), "style": "caption"},
                         {"type": "Badge", "label": str(value), "color": color},
                     ],
                 })
+            elif isinstance(value, str):
+                children.append({
+                    "type": "HStack", "spacing": 8,
+                    "children": [
+                        {"type": "Text", "value": key.replace("_", " ").title() + ":", "style": "caption"},
+                        {"type": "Text", "value": value[:200], "style": "body"},
+                    ],
+                })
+
+        if not children:
+            children.append({"type": "Text", "value": "Done.", "style": "body"})
 
         return {"type": "Card", "corner_radius": 12, "children": children}
 

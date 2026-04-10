@@ -366,6 +366,10 @@ class GenUIEngine:
             "success", "status_code", "error", "ok", "status",
             "created_at", "updated_at", "timestamp", "_source",
         }
+
+        if isinstance(data, dict) and "success" in data and "data" in data and isinstance(data.get("data"), dict):
+            data = data["data"]
+
         children = []
 
         if brand and brand.get("name"):
@@ -373,7 +377,7 @@ class GenUIEngine:
                 "type": "HStack", "spacing": 8,
                 "children": [
                     {"type": "Icon", "name": brand.get("icon", "Sparkles"), "size": 16,
-                     "color": brand.get("color", "#8b5cf6")},
+                     "color": brand.get("color", "#06b6d4")},
                     {"type": "Text", "value": brand["name"], "style": "subtitle"},
                 ],
             })
@@ -382,6 +386,8 @@ class GenUIEngine:
             if k.startswith("_") or k in SKIP_KEYS:
                 continue
             if v is None or v == "" or v == [] or v == {}:
+                continue
+            if isinstance(v, bool):
                 continue
             label = k.replace("_", " ").title()
             if isinstance(v, dict):

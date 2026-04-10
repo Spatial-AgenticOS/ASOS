@@ -1503,10 +1503,10 @@ class Orchestrator:
         if not isinstance(result_data, dict):
             return
 
-        display_data = result_data.get("data", result_data)
-        if isinstance(display_data, str) or not isinstance(display_data, dict):
-            return
-        if not display_data:
+        display_data = result_data.get("data") if isinstance(result_data.get("data"), dict) else result_data
+        envelope_keys = {"success", "status_code", "error", "ok", "status", "created_at", "_anti_loop_guidance", "_anti_loop_streak"}
+        display_data = {k: v for k, v in display_data.items() if k not in envelope_keys} if isinstance(display_data, dict) else display_data
+        if not isinstance(display_data, dict) or not display_data:
             return
 
         parts = tool_call["name"].split("__", 1)
@@ -1557,16 +1557,24 @@ class Orchestrator:
             "- Be proactive — if you notice something relevant in sensor data or context, mention it.\n"
             "- Answer questions directly. No JSON dumps, no raw UI markup.\n"
             "\n## ABSOLUTE RULE — NEVER SAY 'I CAN'T'\n"
-            "You MUST NEVER tell the user you cannot do something. You have full access to a shell, "
-            "Python, AppleScript, a browser, and desktop automation. If a task seems outside your "
-            "built-in skills, figure out how to do it with shell commands or Python scripts via "
-            "desktop_control__shell_command. Examples:\n"
-            "- Create an MP3/WAV with a beep: python3 -c 'import wave,struct,math; ...'\n"
-            "- Generate an image: python3 with PIL\n"
-            "- Convert file formats: ffmpeg, python3, etc.\n"
-            "- Any task: break it down and use shell commands, Python, or AppleScript.\n"
-            "If you truly lack a specialized skill, the system will automatically detect the gap "
-            "and propose a new skill to the user. Never refuse — always try.\n"
+            "You MUST NEVER tell the user you cannot do something. NEVER. You have full access to:\n"
+            "- A shell (desktop_control__shell_command or computer_use__bash)\n"
+            "- Python (run ANY Python script via the shell)\n"
+            "- AppleScript (desktop_control__open_app)\n"
+            "- Browser automation (browser__navigate, browser__click, etc.)\n"
+            "- Desktop GUI control (desktop_automation, agentic_computer_use)\n\n"
+            "CRITICAL: When asked to create a file (MP3, WAV, image, PDF, etc.), you MUST:\n"
+            "1. Use computer_use__bash to run a Python one-liner or script that GENERATES the file directly\n"
+            "2. Do NOT just write a .py script file — EXECUTE the code that creates the final file\n"
+            "3. Example for MP3 with beep sound:\n"
+            "   computer_use__bash with command:\n"
+            "   python3 -c \"import struct,wave,math; f=wave.open('/Users/$USER/Desktop/beep.wav','w'); "
+            "f.setnchannels(1); f.setsampwidth(2); f.setframerate(44100); "
+            "[f.writeframes(struct.pack('h',int(32767*math.sin(2*math.pi*440*i/44100)))) for i in range(44100)]; "
+            "f.close(); print('Created beep.wav')\"\n"
+            "4. For MP3 specifically: generate WAV first, then convert with ffmpeg or pydub\n"
+            "5. NEVER respond with 'I can\\'t create audio/images/files' — you CAN, via Python + shell\n\n"
+            "If you truly lack a specialized skill, call system_settings__create_skill to generate one.\n"
             "\n## Local Computer & Browser Control\n"
             "You control the user's Mac and browser directly. ALWAYS use these tools:\n"
             "- **desktop_control__open_app**: Open ANY app — Music, Safari, Notes, Terminal, etc.\n"
