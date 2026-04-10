@@ -73,6 +73,7 @@ export default function App() {
   useEffect(() => {
     connect();
     fetch(`${API_BASE}/api/llm/status`).then(r => r.json()).then(setLlmStatus).catch(() => {});
+    restoreLastThread();
     return () => {
       if (wsRef.current) wsRef.current.close();
     };
@@ -415,8 +416,32 @@ export default function App() {
         body: JSON.stringify({ id: currentThreadId, messages: msgs }),
       });
       setThreadsDirty(false);
+      try { localStorage.setItem('theora-last-thread', currentThreadId); } catch {}
     } catch { /* ignore */ }
   }, [currentThreadId]);
+
+  const restoreLastThread = async () => {
+    try {
+      const lastId = localStorage.getItem('theora-last-thread');
+      if (lastId) {
+        const data = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(lastId)}`).then(r => r.json());
+        if (data.messages && data.messages.length > 0) {
+          setMessages(data.messages);
+          setCurrentThreadId(lastId);
+          return;
+        }
+      }
+      const list = await fetch(`${API_BASE}/api/conversations?limit=1`).then(r => r.json());
+      const recent = (list.conversations || [])[0];
+      if (recent?.id) {
+        const data = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(recent.id)}`).then(r => r.json());
+        if (data.messages && data.messages.length > 0) {
+          setMessages(data.messages);
+          setCurrentThreadId(recent.id);
+        }
+      }
+    } catch { /* fresh start */ }
+  };
 
   useEffect(() => {
     if (threadsDirty && messages.length >= 2) {
@@ -436,6 +461,17 @@ export default function App() {
       setCurrentThreadId(sessionId);
     }
   }, [sessionId]);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (currentThreadId && messages.length >= 2) {
+        const payload = JSON.stringify({ id: currentThreadId, messages });
+        navigator.sendBeacon(`${API_BASE}/api/conversations/save`, new Blob([payload], { type: 'application/json' }));
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [currentThreadId, messages]);
 
   const loadThread = async (threadId) => {
     try {
