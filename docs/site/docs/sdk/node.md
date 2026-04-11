@@ -7,18 +7,18 @@ slug: /sdk/node
 
 # Node / TypeScript SDK
 
-The `@theora/sdk` package provides a TypeScript client for the THEORA Brain API, plugin helpers, and a hardware node class.
+The `@feral/sdk` package provides a TypeScript client for the FERAL Brain API, plugin helpers, and a hardware node class.
 
 ```bash
-npm install @theora/sdk
+npm install @feral/sdk
 ```
 
-## TheoraClient
+## FeralClient
 
 ```typescript
-import { TheoraClient } from '@theora/sdk';
+import { FeralClient } from '@feral/sdk';
 
-const client = new TheoraClient('http://localhost:9090');
+const client = new FeralClient('http://localhost:9090');
 
 // Health check
 const health = await client.health();
@@ -46,7 +46,7 @@ await client.createNote('Ship v1.3 by Friday', ['work']);
 ### Constructor
 
 ```typescript
-new TheoraClient(baseUrl?: string)  // default: 'http://localhost:9090'
+new FeralClient(baseUrl?: string)  // default: 'http://localhost:9090'
 ```
 
 ### Methods
@@ -66,7 +66,7 @@ new TheoraClient(baseUrl?: string)  // default: 'http://localhost:9090'
 Create plugins using the `definePlugin` helper:
 
 ```typescript
-import { definePlugin } from '@theora/sdk';
+import { definePlugin } from '@feral/sdk';
 
 const weatherPlugin = definePlugin({
   name: 'weather',
@@ -109,14 +109,14 @@ interface ToolDefinition {
 }
 ```
 
-## TheoraNode
+## FeralNode
 
 Connect hardware or virtual devices to the Brain:
 
 ```typescript
-import { TheoraNode } from '@theora/sdk';
+import { FeralNode } from '@feral/sdk';
 
-const node = new TheoraNode({
+const node = new FeralNode({
   nodeId: 'my-sensor',
   nodeType: 'sensor',
   capabilities: ['temperature', 'humidity'],
@@ -158,7 +158,7 @@ The SDK exports the full set of wire-protocol types:
 
 ```typescript
 import type {
-  TheoraMessage,
+  FeralMessage,
   TextCommand,
   TextResponse,
   StreamDelta,
@@ -168,7 +168,7 @@ import type {
   HUPTelemetry,
   DashboardData,
   SystemInfo,
-} from '@theora/sdk';
+} from '@feral/sdk';
 ```
 
 See the [Python SDK](./python.md) for the equivalent Python API.

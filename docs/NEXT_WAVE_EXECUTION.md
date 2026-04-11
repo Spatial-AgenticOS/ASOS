@@ -1,4 +1,4 @@
-# THEORA Second-Wave Execution Sequence
+# FERAL Second-Wave Execution Sequence
 
 This document sequences the second major wave after first-wave gates pass.
 
@@ -35,11 +35,11 @@ Wave 2 starts only when all first-wave validation gates are green:
 
 ### Phase A - Linux Node Core (foundation for all later phases)
 
-Goal: make Linux host a first-class THEORA node with stable telemetry and command lanes.
+Goal: make Linux host a first-class FERAL node with stable telemetry and command lanes.
 
 Implementation:
 
-- Add `linux-node` service in `asos-core` with adapters for:
+- Add `linux-node` service in `feral-core` with adapters for:
   - network state
   - battery/power
   - active app/window
@@ -48,7 +48,7 @@ Implementation:
 - Standardize node payload schema:
   - `node_id`, `capabilities`, `telemetry`, `event_ts`, `session_hint`
 - Add heartbeat and reconnect strategy with exponential backoff.
-- Add persisted node state cache under `theora_data_home()/nodes`.
+- Add persisted node state cache under `feral_data_home()/nodes`.
 
 Exit criteria:
 
@@ -102,7 +102,7 @@ Implementation:
 
 Exit criteria:
 
-- Browser sessions are launched and managed by THEORA, not user manual setup.
+- Browser sessions are launched and managed by FERAL, not user manual setup.
 - Crash/restart recovers active automation session state where possible.
 - Skill layer surfaces precise operator errors for unavailable browser capabilities.
 

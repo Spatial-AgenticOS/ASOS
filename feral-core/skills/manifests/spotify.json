@@ -1,0 +1,101 @@
+{
+    "skill_id": "spotify_music",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Spotify",
+        "primary_color": "#1DB954",
+        "secondary_color": "#191414",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Control music playback, search songs, manage playlists, and see what's playing on Spotify.",
+    "trigger_phrases": [
+        "play music",
+        "play some music",
+        "what's playing",
+        "skip this song",
+        "pause music",
+        "next song",
+        "search for a song",
+        "my playlists",
+        "play my liked songs",
+        "currently playing"
+    ],
+    "categories": ["music", "entertainment", "media"],
+    "auth": {
+        "type": "bearer",
+        "scopes": ["user-read-playback-state", "user-modify-playback-state", "user-read-currently-playing", "playlist-read-private"]
+    },
+    "endpoints": [
+        {
+            "id": "now_playing",
+            "method": "GET",
+            "url": "https://api.spotify.com/v1/me/player/currently-playing",
+            "description": "Get the currently playing track on Spotify. Returns song name, artist, album, progress, and album art.",
+            "params": [],
+            "returns_description": "{item: {name, artists, album, duration_ms}, progress_ms, is_playing}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "play_pause",
+            "method": "PUT",
+            "url": "https://api.spotify.com/v1/me/player/play",
+            "description": "Resume or start playback on Spotify.",
+            "params": [
+                {"name": "context_uri", "type": "string", "required": false, "description": "Spotify URI of the context to play (album, playlist)"},
+                {"name": "uris", "type": "array", "items": {"type": "string"}, "required": false, "description": "Array of Spotify track URIs to play"}
+            ],
+            "returns_description": "204 No Content on success",
+            "ui_hint": null
+        },
+        {
+            "id": "pause",
+            "method": "PUT",
+            "url": "https://api.spotify.com/v1/me/player/pause",
+            "description": "Pause the current Spotify playback.",
+            "params": [],
+            "returns_description": "204 No Content on success",
+            "ui_hint": null
+        },
+        {
+            "id": "next_track",
+            "method": "POST",
+            "url": "https://api.spotify.com/v1/me/player/next",
+            "description": "Skip to the next track on Spotify.",
+            "params": [],
+            "returns_description": "204 No Content on success",
+            "ui_hint": null
+        },
+        {
+            "id": "search",
+            "method": "GET",
+            "url": "https://api.spotify.com/v1/search",
+            "description": "Search for tracks, artists, or albums on Spotify.",
+            "params": [
+                {"name": "q", "type": "string", "required": true, "description": "Search query"},
+                {"name": "type", "type": "string", "required": false, "default": "track", "description": "Type: track, artist, album, playlist", "enum": ["track", "artist", "album", "playlist"]},
+                {"name": "limit", "type": "number", "required": false, "default": "10", "description": "Number of results"}
+            ],
+            "returns_description": "Tracks/Artists/Albums matching the query with name, popularity, preview_url, images",
+            "ui_hint": "grid_cards"
+        },
+        {
+            "id": "playlists",
+            "method": "GET",
+            "url": "https://api.spotify.com/v1/me/playlists",
+            "description": "Get the user's Spotify playlists.",
+            "params": [
+                {"name": "limit", "type": "number", "required": false, "default": "20", "description": "Number of playlists"}
+            ],
+            "returns_description": "Array of {name, description, tracks.total, images, uri}",
+            "ui_hint": "grid_cards"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": [],
+    "requires_daemon": false,
+    "max_calls_per_hour": 1000
+}

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <!-- Broken containment ring -->
+  <path d="M100 16 A84 84 0 1 1 38 160" stroke="#06b6d4" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <!-- Escape gap — the break in the ring -->
+  <path d="M38 160 A84 84 0 0 1 60 30" stroke="none" fill="none"/>
+  <!-- Three claw marks cutting through -->
+  <line x1="72" y1="60" x2="108" y2="140" stroke="#06b6d4" stroke-width="5" stroke-linecap="round"/>
+  <line x1="88" y1="55" x2="118" y2="145" stroke="#06b6d4" stroke-width="5" stroke-linecap="round"/>
+  <line x1="104" y1="58" x2="130" y2="138" stroke="#06b6d4" stroke-width="5" stroke-linecap="round"/>
+  <!-- Subtle glow dot at the break point — the escape -->
+  <circle cx="49" cy="158" r="5" fill="#06b6d4" opacity="0.6"/>
+  <circle cx="49" cy="158" r="10" fill="#06b6d4" opacity="0.15"/>
+</svg>

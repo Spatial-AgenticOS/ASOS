@@ -1,15 +1,15 @@
-# THEORA One Pager
+# FERAL One Pager
 
-> THEORA is a local-first agent-native computing platform that can talk, act, remember, render structured interfaces, and connect to software and hardware over time while keeping the core experience under your control.
+> FERAL is a local-first agent-native computing platform that can talk, act, remember, render structured interfaces, and connect to software and hardware over time while keeping the core experience under your control.
 
 ## In One Sentence
 
-THEORA is a working platform today and a path toward an agent-native operating system tomorrow. It can chat by text or voice, use tools, remember information over time, run long tasks, branch conversations, render provider-defined interfaces, control hardware, and use local vision models.
+FERAL is a working platform today and a path toward an agent-native operating system tomorrow. It can chat by text or voice, use tools, remember information over time, run long tasks, branch conversations, render provider-defined interfaces, control hardware, and use local vision models.
 
 ```mermaid
 flowchart LR
   user[User] --> surface[Web or CLI]
-  surface --> brain[THEORA]
+  surface --> brain[FERAL]
   brain --> models[Cloud and Local Models]
   brain --> tools[Tools and Actions]
   brain --> memory[Memory and Wiki]
@@ -19,9 +19,9 @@ flowchart LR
   memory --> output
 ```
 
-## What THEORA Is
+## What FERAL Is
 
-THEORA is an open-source agent-native computing platform designed to feel like more than a chatbot.
+FERAL is an open-source agent-native computing platform designed to feel like more than a chatbot.
 
 It combines:
 - conversation by text and voice
@@ -43,7 +43,7 @@ Today, the core product loop is already real:
 
 - Text chat and realtime voice are working.
 - Computer-use tools are working for shell, files, search, and web tasks.
-- THEORA has a local memory system with notes, episodes, and a knowledge graph.
+- FERAL has a local memory system with notes, episodes, and a knowledge graph.
 - That memory can be turned into a browsable Memory Wiki.
 - Repos, PDFs, and text can be ingested into the wiki pipeline.
 - TaskFlows can run in the background, wait, resume, and survive restarts.
@@ -54,14 +54,14 @@ Today, the core product loop is already real:
 
 ```mermaid
 flowchart TD
-  theoraNow[THEORA Today]
-  theoraNow --> conversation[Chat and Voice]
-  theoraNow --> actions[Computer and Web Actions]
-  theoraNow --> memoryCap[Memory and Wiki]
-  theoraNow --> workflows[TaskFlows]
-  theoraNow --> sessions[Session Branching]
-  theoraNow --> localAi[Local Models and Vision]
-  theoraNow --> bridges[MCP and Device Bridges]
+  feralNow[FERAL Today]
+  feralNow --> conversation[Chat and Voice]
+  feralNow --> actions[Computer and Web Actions]
+  feralNow --> memoryCap[Memory and Wiki]
+  feralNow --> workflows[TaskFlows]
+  feralNow --> sessions[Session Branching]
+  feralNow --> localAi[Local Models and Vision]
+  feralNow --> bridges[MCP and Device Bridges]
 ```
 
 ## What Works Today
@@ -69,7 +69,7 @@ flowchart TD
 | Area | Status | What it means in simple terms |
 |:-----|:-------|:------------------------------|
 | Setup and identity | Ready | You can set up the agent, choose providers, and configure the system. |
-| Chat and voice | Ready | THEORA can talk with users by text and by realtime voice. |
+| Chat and voice | Ready | FERAL can talk with users by text and by realtime voice. |
 | Computer use | Ready | It can run commands, read files, search code, and fetch web information. |
 | Memory and wiki | Ready | It can remember things, compile knowledge, and browse that knowledge later. |
 | Ingest pipeline | Ready | It can pull in repo content, PDFs, and raw text into memory. |
@@ -81,7 +81,7 @@ flowchart TD
 
 ## Why It Matters
 
-Most local AI demos stop at chat. THEORA goes further.
+Most local AI demos stop at chat. FERAL goes further.
 
 - It remembers, so work can build up over time.
 - It runs workflows, so tasks do not disappear when a session ends.
@@ -91,12 +91,12 @@ Most local AI demos stop at chat. THEORA goes further.
 
 ## Why The GenUI Path Matters
 
-THEORA's GenUI direction is not just about rendering cards after a tool call.
+FERAL's GenUI direction is not just about rendering cards after a tool call.
 
 It opens a different app model:
 
 - a provider supplies endpoints, brand tokens, and layout rules in JSON
-- THEORA compiles the first version of the surface once
+- FERAL compiles the first version of the surface once
 - that surface is cached as a fixed layout instead of regenerating every open
 - runtime data still fills the surface, but the layout stays predictable
 
@@ -108,7 +108,7 @@ This addresses the biggest objections to LLM-generated interfaces:
 
 ## Where We Are Right Now
 
-THEORA already has the core platform story. The next wave is about making that platform more robust, more OS-native, and easier to deploy.
+FERAL already has the core platform story. The next wave is about making that platform more robust, more OS-native, and easier to deploy.
 
 ```mermaid
 flowchart LR
@@ -121,7 +121,7 @@ flowchart LR
 
 ## The Destination
 
-THEORA is not aiming to be just another AI app. The destination is an agent-native operating system.
+FERAL is not aiming to be just another AI app. The destination is an agent-native operating system.
 
 What that means concretely:
 - **NixOS minimal** as the base system for reproducible, declarative, rollback-safe deployments
@@ -146,7 +146,7 @@ Next-wave priorities:
 
 ## How Developers Can Help
 
-THEORA needs contributors across multiple lanes:
+FERAL needs contributors across multiple lanes:
 - **Nix and packaging** for the reproducible system foundation
 - **Runtime and orchestrator** engineering for the agent core
 - **GenUI and frontend** for the provider surface platform
@@ -157,7 +157,7 @@ See [DEVELOPER_MISSION.md](./DEVELOPER_MISSION.md) for the full mission statemen
 
 ## Bottom Line
 
-THEORA today is a working local-first agent platform with:
+FERAL today is a working local-first agent platform with:
 - chat
 - voice
 - computer use
@@ -173,7 +173,7 @@ That means the project is already past the concept stage. The job now is to hard
 
 ## Links
 
-- Main repo: [github.com/Spatial-AgenticOS/ASOS](https://github.com/Spatial-AgenticOS/ASOS)
+- Main repo: [github.com/feral-ai/feral](https://github.com/feral-ai/feral)
 - README: [../README.md](../README.md)
 - Developer Mission: [./DEVELOPER_MISSION.md](./DEVELOPER_MISSION.md)
 - Scorecard: [./SCORECARD.md](./SCORECARD.md)

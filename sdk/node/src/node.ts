@@ -1,9 +1,9 @@
 /**
- * TheoraNode — Register as a hardware/device node on the THEORA mesh.
+ * FeralNode — Register as a hardware/device node on the FERAL mesh.
  *
  * @example
  * ```ts
- * const node = new TheoraNode({
+ * const node = new FeralNode({
  *   nodeId: 'my-sensor',
  *   nodeType: 'sensor',
  *   capabilities: ['temperature', 'humidity'],
@@ -28,7 +28,7 @@ export interface NodeConfig {
 
 type InvokeHandler = (action: string, params: Record<string, unknown>) => Promise<unknown>;
 
-export class TheoraNode {
+export class FeralNode {
   private config: Required<NodeConfig>;
   private ws: WebSocket | null = null;
   private invokeHandler: InvokeHandler | null = null;

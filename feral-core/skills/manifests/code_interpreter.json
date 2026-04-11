@@ -1,0 +1,76 @@
+{
+    "skill_id": "code_interpreter",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Code Interpreter",
+        "primary_color": "#059669",
+        "secondary_color": "#065F46",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Execute Python/Node code and return outputs plus generated artifacts (CSV, images, files).",
+    "trigger_phrases": [
+        "run this python code",
+        "execute code",
+        "analyze csv with code",
+        "create chart from data",
+        "code interpreter"
+    ],
+    "categories": ["development", "analysis", "automation"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "run_python",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Execute Python code in an isolated run directory and capture generated artifacts.",
+            "params": [
+                {
+                    "name": "code",
+                    "type": "string",
+                    "required": true,
+                    "description": "Python source code to execute"
+                },
+                {
+                    "name": "timeout",
+                    "type": "integer",
+                    "required": false,
+                    "description": "Execution timeout in seconds (default 45, max 300)"
+                }
+            ],
+            "returns_description": "stdout, stderr, exit code, and artifact list",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "run_node",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Execute Node.js code in an isolated run directory and capture generated artifacts.",
+            "params": [
+                {
+                    "name": "code",
+                    "type": "string",
+                    "required": true,
+                    "description": "Node.js source code to execute"
+                },
+                {
+                    "name": "timeout",
+                    "type": "integer",
+                    "required": false,
+                    "description": "Execution timeout in seconds (default 45, max 300)"
+                }
+            ],
+            "returns_description": "stdout, stderr, exit code, and artifact list",
+            "ui_hint": "detail_card"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": ["filesystem", "execution"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 1000
+}

@@ -1,6 +1,6 @@
-# THEORA Capability Scorecard
+# FERAL Capability Scorecard
 
-This scorecard tracks parity and demo readiness across THEORA capability planes.
+This scorecard tracks parity and demo readiness across FERAL capability planes.
 
 Legend:
 - **Status**: `Shipped`, `Partial`, `Planned`

@@ -1,5 +1,5 @@
 /**
- * definePlugin — Declare a THEORA plugin with tools, UI components, and device adapters.
+ * definePlugin — Declare a FERAL plugin with tools, UI components, and device adapters.
  *
  * @example
  * ```ts

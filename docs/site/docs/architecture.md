@@ -7,7 +7,7 @@ slug: /architecture
 
 # Architecture
 
-THEORA is structured as a layered system. The **Brain** is the central runtime — a FastAPI Python server that orchestrates reasoning, memory, tools, voice, hardware, and UI generation. Clients (web, CLI, hardware daemons, messaging channels) connect over HTTP and WebSocket.
+FERAL is structured as a layered system. The **Brain** is the central runtime — a FastAPI Python server that orchestrates reasoning, memory, tools, voice, hardware, and UI generation. Clients (web, CLI, hardware daemons, messaging channels) connect over HTTP and WebSocket.
 
 ## System Diagram
 
@@ -15,13 +15,13 @@ THEORA is structured as a layered system. The **Brain** is the central runtime �
 flowchart TD
   subgraph Clients
     web["Web UI — React / Vite"]
-    cli["CLI — theora"]
+    cli["CLI — feral"]
     hw["Hardware Daemons"]
     channels["Telegram / Discord / Slack / WhatsApp"]
     mcp_c["MCP Clients — Claude Desktop / Cursor"]
   end
 
-  subgraph Brain["THEORA Brain — FastAPI"]
+  subgraph Brain["FERAL Brain — FastAPI"]
     orch["Orchestrator + Multi-Agent Router"]
     genui["GenUI / SDUI Engine"]
     voice["Voice Router"]
@@ -68,7 +68,7 @@ flowchart TD
 
 ### Reasoning Plane
 
-The **Orchestrator** (`asos-core/agents/orchestrator.py`) runs the main agent loop:
+The **Orchestrator** (`feral-core/agents/orchestrator.py`) runs the main agent loop:
 
 1. Receive user intent (text, voice, or hardware event).
 2. Load context: memory tiers, identity, session state.
@@ -93,11 +93,11 @@ On top of these tiers:
 - **Memory Wiki** — compiles notes, episodes, and graph entries into durable wiki pages with provenance tracking.
 - **Session Snapshots** — snapshot, branch, and restore full conversation + working memory state.
 
-All data is stored locally in `~/.theora/memory.db`.
+All data is stored locally in `~/.feral/memory.db`.
 
 ### Workflow Plane
 
-**TaskFlows** (`asos-core/agents/taskflow.py`) are durable background workflows backed by SQLite:
+**TaskFlows** (`feral-core/agents/taskflow.py`) are durable background workflows backed by SQLite:
 
 - Persist through restarts.
 - Support `wait` (pause until a condition), `resume`, and `cancel`.
@@ -112,12 +112,12 @@ The GenUI engine generates **Server-Driven UI** payloads from tool results and p
 2. The GenUI engine selects an appropriate SDUI template (card, chart, map, form, list).
 3. The payload is sent to the client, which renders it without knowing the tool's internals.
 
-For provider surfaces, a JSON contract defines layout, brand tokens, and endpoints. THEORA compiles the surface once, caches it, and reuses the fixed layout on subsequent opens.
+For provider surfaces, a JSON contract defines layout, brand tokens, and endpoints. FERAL compiles the surface once, caches it, and reuses the fixed layout on subsequent opens.
 
 ### Execution Plane
 
 - **Tools & Skills** — computer use (shell, files, grep), web search, browser automation, custom JSON manifests, Python plugins, WASM sandboxed skills.
-- **MCP** — dual-role: expose THEORA's tools as an MCP server, and consume external MCP servers.
+- **MCP** — dual-role: expose FERAL's tools as an MCP server, and consume external MCP servers.
 - **Channels** — bridge to Telegram, Discord, Slack, WhatsApp.
 - **HUP (Hardware Use Protocol)** — devices connect via WebSocket, register with a declarative manifest, stream telemetry, and receive commands.
 
@@ -129,7 +129,7 @@ For provider surfaces, a JSON contract defines layout, brand tokens, and endpoin
 
 ## Wire Protocol
 
-All client↔brain communication uses the `TheoraMessage` envelope defined in `asos-core/models/protocol.py`:
+All client↔brain communication uses the `FeralMessage` envelope defined in `feral-core/models/protocol.py`:
 
 ```json
 {
@@ -151,13 +151,13 @@ WebSocket endpoints:
 
 | Path | Contents |
 |:-----|:---------|
-| `~/.theora/config.yaml` | Feature flags, LLM provider, voice mode |
-| `~/.theora/credentials.json` | API keys (chmod 600) |
-| `~/.theora/identity.yaml` | Agent name, personality, rules |
-| `~/.theora/memory.db` | Memory tiers + knowledge graph (SQLite) |
-| `~/.theora/genui_surfaces/` | Cached compiled GenUI provider surfaces |
-| `~/.theora/skills/` | User-installed skill manifests |
-| `~/.theora/mcp_servers.json` | External MCP server connections |
+| `~/.feral/config.yaml` | Feature flags, LLM provider, voice mode |
+| `~/.feral/credentials.json` | API keys (chmod 600) |
+| `~/.feral/identity.yaml` | Agent name, personality, rules |
+| `~/.feral/memory.db` | Memory tiers + knowledge graph (SQLite) |
+| `~/.feral/genui_surfaces/` | Cached compiled GenUI provider surfaces |
+| `~/.feral/skills/` | User-installed skill manifests |
+| `~/.feral/mcp_servers.json` | External MCP server connections |
 
 ## Tech Stack
 
@@ -169,4 +169,4 @@ WebSocket endpoints:
 | Web UI | React 18, Vite 5, Tailwind CSS 4, React Router 7 |
 | Desktop | Tauri 2 (Rust + React) |
 | Hardware | WebSocket mesh, HUP protocol |
-| Packaging | PyPI (`theora-asos`), npm (`@theora/sdk`), Nix flake, Docker Compose |
+| Packaging | PyPI (`feral-ai`), npm (`@feral/sdk`), Nix flake, Docker Compose |

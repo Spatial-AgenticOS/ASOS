@@ -3,14 +3,14 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "theora-sdk"
+name = "feral-sdk"
 version = "0.1.0"
-description = "THEORA SDK — Build plugins, tools, device adapters, and GenUI components for the THEORA AI operating system."
+description = "FERAL SDK — Build plugins, tools, device adapters, and GenUI components for the FERAL AI operating system."
 readme = "README.md"
 license = {text = "Apache-2.0"}
-authors = [{name = "THEORA Team"}]
+authors = [{name = "FERAL Team"}]
 requires-python = ">=3.11"
-keywords = ["theora", "agent", "sdk", "plugin", "hardware", "genui"]
+keywords = ["feral", "agent", "sdk", "plugin", "hardware", "genui"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: Apache Software License",
@@ -24,9 +24,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Spatial-AgenticOS/ASOS"
-Documentation = "https://docs.theora.io"
+Homepage = "https://github.com/feral-ai/feral"
+Documentation = "https://docs.feral.io"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["theora_sdk*"]
+include = ["feral_sdk*"]

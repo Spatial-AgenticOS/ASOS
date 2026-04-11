@@ -1,7 +1,7 @@
 [package]
-name = "theora-desktop"
+name = "feral-desktop"
 version = "1.0.0"
-description = "THEORA Desktop — Local-First Agentic OS"
+description = "FERAL Desktop — Local-First Agentic OS"
 edition = "2021"
 
 [build-dependencies]

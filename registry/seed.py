@@ -6,13 +6,13 @@ import hashlib
 import os
 from pathlib import Path
 
-DB_PATH = os.getenv("REGISTRY_DB", str(Path.home() / ".theora" / "registry.db"))
+DB_PATH = os.getenv("REGISTRY_DB", str(Path.home() / ".feral" / "registry.db"))
 
 SEED_SKILLS = [
     {
         "skill_id": "web_search",
         "version": "1.0.0",
-        "author": "theora-team",
+        "author": "feral-team",
         "brand": {"name": "Web Search", "icon": "search"},
         "description": "Search the web using Tavily, DuckDuckGo, or Brave Search API.",
         "categories": ["search", "web"],
@@ -24,7 +24,7 @@ SEED_SKILLS = [
     {
         "skill_id": "weather_forecast",
         "version": "1.0.0",
-        "author": "theora-team",
+        "author": "feral-team",
         "brand": {"name": "Weather", "icon": "cloud-sun"},
         "description": "Get current weather and forecasts using Open-Meteo (free, no API key).",
         "categories": ["weather", "utility"],
@@ -39,7 +39,7 @@ SEED_SKILLS = [
     {
         "skill_id": "hacker_news",
         "version": "1.0.0",
-        "author": "theora-team",
+        "author": "feral-team",
         "brand": {"name": "Hacker News", "icon": "newspaper"},
         "description": "Fetch top stories, new stories, and comments from Hacker News.",
         "categories": ["news", "tech"],
@@ -54,7 +54,7 @@ SEED_SKILLS = [
     {
         "skill_id": "github_repos",
         "version": "1.0.0",
-        "author": "theora-team",
+        "author": "feral-team",
         "brand": {"name": "GitHub", "icon": "github"},
         "description": "Search GitHub repositories, list issues, and check repo stats.",
         "categories": ["development", "github"],
@@ -66,7 +66,7 @@ SEED_SKILLS = [
     {
         "skill_id": "calculator",
         "version": "1.0.0",
-        "author": "theora-team",
+        "author": "feral-team",
         "brand": {"name": "Calculator", "icon": "calculator"},
         "description": "Evaluate mathematical expressions safely using Python ast.",
         "categories": ["utility", "math"],

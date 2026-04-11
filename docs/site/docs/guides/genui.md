@@ -7,7 +7,7 @@ slug: /guides/genui
 
 # Creating GenUI Components
 
-THEORA's **GenUI** layer generates server-driven UI (SDUI) from tool results and provider contracts. Instead of hardcoding frontend components for every tool, the backend decides what to render and sends a declarative payload to the client.
+FERAL's **GenUI** layer generates server-driven UI (SDUI) from tool results and provider contracts. Instead of hardcoding frontend components for every tool, the backend decides what to render and sends a declarative payload to the client.
 
 ## How It Works
 
@@ -51,7 +51,7 @@ No client-side code changes required when you add a new tool.
 
 ## Provider Surfaces
 
-For richer experiences, a **provider** can register a full JSON contract that defines branded, multi-screen surfaces. Think of it as a mini-app inside THEORA.
+For richer experiences, a **provider** can register a full JSON contract that defines branded, multi-screen surfaces. Think of it as a mini-app inside FERAL.
 
 ### Registering a Provider
 
@@ -122,7 +122,7 @@ curl -X POST http://localhost:9090/api/genui/providers/register \
 ### Surface Lifecycle
 
 1. **Register** — provider posts its contract via the API.
-2. **Compile** — THEORA compiles each named surface into SDUI JSON and caches it locally in `~/.theora/genui_surfaces/`.
+2. **Compile** — FERAL compiles each named surface into SDUI JSON and caches it locally in `~/.feral/genui_surfaces/`.
 3. **Serve** — subsequent opens reuse the cached layout shell; only runtime data (prefixed with `$`) is hydrated.
 4. **Update** — if the provider pushes a new contract version, the cache is invalidated and recompiled.
 
@@ -163,7 +163,7 @@ curl -X POST http://localhost:9090/api/genui/providers/rideos/surfaces/render \
 
 ## Client-Side Rendering
 
-The web UI's `SduiRenderer` component (`asos-client/src/components/SduiRenderer.jsx`) recursively renders SDUI payloads. When adding a new component type:
+The web UI's `SduiRenderer` component (`feral-client/src/components/SduiRenderer.jsx`) recursively renders SDUI payloads. When adding a new component type:
 
 1. Define the component in the renderer's component map.
 2. Handle the `props` passed from the SDUI payload.

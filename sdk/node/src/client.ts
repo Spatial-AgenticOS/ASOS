@@ -1,17 +1,17 @@
 /**
- * TheoraClient — HTTP + WebSocket client for the THEORA Brain API.
+ * FeralClient — HTTP + WebSocket client for the FERAL Brain API.
  *
  * @example
  * ```ts
- * const client = new TheoraClient('http://localhost:9090');
+ * const client = new FeralClient('http://localhost:9090');
  * const health = await client.health();
  * const response = await client.chat('What can you do?');
  * ```
  */
 
-import type { DashboardData, SystemInfo, TheoraMessage } from './types';
+import type { DashboardData, SystemInfo, FeralMessage } from './types';
 
-export class TheoraClient {
+export class FeralClient {
   private baseUrl: string;
   private wsUrl: string;
 
@@ -73,7 +73,7 @@ export class TheoraClient {
       ws.onopen = () => {
         ws.onmessage = (event) => {
           try {
-            const msg: TheoraMessage = JSON.parse(event.data as string);
+            const msg: FeralMessage = JSON.parse(event.data as string);
             if (msg.type === 'greeting' || (msg.type === 'text_response' && (msg.payload as Record<string, string>)?.text?.includes('connected'))) {
               ws.send(JSON.stringify({
                 type: 'text_command',

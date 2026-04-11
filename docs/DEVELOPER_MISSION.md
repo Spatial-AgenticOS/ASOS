@@ -1,18 +1,18 @@
-# THEORA Developer Mission
+# FERAL Developer Mission
 
 ## What We Are Building
 
-THEORA is an open-source agent-native computing platform. The goal is not another AI chatbot. The goal is a system where intelligence is the operating layer, not a feature inside one app.
+FERAL is an open-source agent-native computing platform. The goal is not another AI chatbot. The goal is a system where intelligence is the operating layer, not a feature inside one app.
 
 Today, most AI products are chat windows. They forget between sessions. They cannot act beyond their sandbox. They render plain text. They do not bridge software and hardware. They are stateless and disposable.
 
-THEORA is different because it is building the foundations of a persistent, capable, extensible agent system:
+FERAL is different because it is building the foundations of a persistent, capable, extensible agent system:
 
 - **Memory is a system service.** Notes, episodes, knowledge graph, and Memory Wiki persist locally across sessions and reboots.
 - **Workflows are durable.** TaskFlows can pause, wait, resume, and survive server restarts.
-- **Interfaces are generated from contracts.** Service providers describe surfaces in JSON. THEORA compiles, caches, and hydrates them. No separate app binary needed.
+- **Interfaces are generated from contracts.** Service providers describe surfaces in JSON. FERAL compiles, caches, and hydrates them. No separate app binary needed.
 - **Hardware devices are first-class nodes.** Wearables, robotics, home appliances, and IoT devices connect through one authenticated WebSocket protocol.
-- **The user controls everything.** Data, keys, runtime, and identity stay local under `~/.theora/`.
+- **The user controls everything.** Data, keys, runtime, and identity stay local under `~/.feral/`.
 
 ## The Destination
 
@@ -45,9 +45,9 @@ For an agent-native OS, these properties are not nice-to-haves. They are require
 
 Traditional operating systems ship apps as separate compiled binaries. Each app has its own UI framework, its own update cycle, and its own data silo.
 
-THEORA takes a different path:
+FERAL takes a different path:
 1. A service provider submits a JSON contract describing endpoints, brand rules, layout rules, and named surfaces.
-2. THEORA compiles the surface once into SDUI (Server-Driven UI) JSON.
+2. FERAL compiles the surface once into SDUI (Server-Driven UI) JSON.
 3. The compiled layout is cached locally and reused on every subsequent open.
 4. Runtime data hydrates placeholders in the cached layout.
 
@@ -61,7 +61,7 @@ See [`GENUI_PROVIDER_SPEC.md`](./GENUI_PROVIDER_SPEC.md) for the full contract f
 
 ## Why the Hardware Daemon Model
 
-Instead of building drivers for every device, THEORA defines one protocol:
+Instead of building drivers for every device, FERAL defines one protocol:
 1. A device connects as a daemon over authenticated WebSocket.
 2. It registers its identity, type, and capabilities.
 3. The brain can send commands; the daemon returns results.
@@ -103,16 +103,16 @@ Pick a lane and start building.
 
 | Lane | Scope | Entry points |
 |:-----|:------|:-------------|
-| Runtime / Orchestrator | Agent loop, LLM routing, TaskFlows, sessions, security | `asos-core/agents/`, `asos-core/api/server.py` |
-| Memory / Knowledge | 4-tier store, wiki, ingest, sync | `asos-core/memory/` |
-| GenUI / Surfaces | SDUI engine, provider contracts, surface caching, renderer | `asos-core/genui/`, `asos-client/src/components/` |
-| Hardware / Daemons | Node protocol, daemon SDKs, device profiles, edge bridges | `asos-core/hardware/`, `asos-nodes/` |
-| Voice / Perception | Realtime voice, wake word, vision, sensor fusion | `asos-core/voice/`, `asos-core/perception/` |
+| Runtime / Orchestrator | Agent loop, LLM routing, TaskFlows, sessions, security | `feral-core/agents/`, `feral-core/api/server.py` |
+| Memory / Knowledge | 4-tier store, wiki, ingest, sync | `feral-core/memory/` |
+| GenUI / Surfaces | SDUI engine, provider contracts, surface caching, renderer | `feral-core/genui/`, `feral-client/src/components/` |
+| Hardware / Daemons | Node protocol, daemon SDKs, device profiles, edge bridges | `feral-core/hardware/`, `feral-nodes/` |
+| Voice / Perception | Realtime voice, wake word, vision, sensor fusion | `feral-core/voice/`, `feral-core/perception/` |
 | Nix / Packaging | Flake, NixOS modules, reproducible builds | `flake.nix` |
-| Frontend / Shell | Web UI, dashboard, desktop app, mobile bridges | `asos-client/`, `desktop/` |
+| Frontend / Shell | Web UI, dashboard, desktop app, mobile bridges | `feral-client/`, `desktop/` |
 
 See [`../CONTRIBUTING.md`](../CONTRIBUTING.md) for development setup and PR guidelines.
 
 ## The Mission In One Paragraph
 
-THEORA is building an open-source agent-native computing platform. The system can talk, act, remember, render structured interfaces, and connect to hardware. Instead of shipping separate apps, service providers describe their surfaces in JSON and the platform handles the rest. Instead of forgetting between sessions, the system persists memory, workflows, and knowledge locally. Instead of relying on a single cloud provider, the system supports multiple LLMs including fully local inference. The destination is a NixOS-native operating system where intelligence is the computing layer, not a feature inside one app. We are building the foundations now.
+FERAL is building an open-source agent-native computing platform. The system can talk, act, remember, render structured interfaces, and connect to hardware. Instead of shipping separate apps, service providers describe their surfaces in JSON and the platform handles the rest. Instead of forgetting between sessions, the system persists memory, workflows, and knowledge locally. Instead of relying on a single cloud provider, the system supports multiple LLMs including fully local inference. The destination is a NixOS-native operating system where intelligence is the computing layer, not a feature inside one app. We are building the foundations now.

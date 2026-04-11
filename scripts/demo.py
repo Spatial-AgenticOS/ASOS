@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-THEORA Demo — Shows every working feature in sequence.
-Run: cd asos-core && PYTHONPATH=. python ../scripts/demo.py
+FERAL Demo — Shows every working feature in sequence.
+Run: cd feral-core && PYTHONPATH=. python ../scripts/demo.py
 
 This works WITHOUT an LLM key — it directly tests the tools.
 With an LLM key, it also demos the full agent chat loop.
@@ -12,7 +12,7 @@ import sys
 import os
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "asos-core"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "feral-core"))
 
 BOLD = "\033[1m"
 GREEN = "\033[92m"
@@ -46,11 +46,11 @@ async def demo_computer_use():
     skill = ComputerUseSkill()
 
     # bash
-    r = await skill.execute("bash", {"command": "echo 'Hello from THEORA!' && date && whoami"}, {})
+    r = await skill.execute("bash", {"command": "echo 'Hello from FERAL!' && date && whoami"}, {})
     ok(f"bash: {r['data']['stdout'].strip()}")
 
     # write_file
-    demo_file = "/tmp/theora_demo.py"
+    demo_file = "/tmp/feral_demo.py"
     code = 'def greet(name):\n    return f"Hello, {name}!"\n\nprint(greet("World"))\n'
     r = await skill.execute("write_file", {"path": demo_file, "content": code}, {})
     ok(f"write_file: Created {demo_file} ({r['data']['bytes_written']} bytes)")
@@ -65,7 +65,7 @@ async def demo_computer_use():
     r = await skill.execute("edit_file", {
         "path": demo_file,
         "old_text": 'print(greet("World"))',
-        "new_text": 'print(greet("THEORA User"))',
+        "new_text": 'print(greet("FERAL User"))',
     }, {})
     ok(f"edit_file: Replaced text in {demo_file}")
 
@@ -97,7 +97,7 @@ async def demo_web_search():
     from skills.impl.web_search import WebSearchSkill
     skill = WebSearchSkill()
 
-    tavily_key = os.environ.get("TAVILY_API_KEY", os.environ.get("THEORA_KEY_web_search", ""))
+    tavily_key = os.environ.get("TAVILY_API_KEY", os.environ.get("FERAL_KEY_web_search", ""))
     if not tavily_key:
         warn("No TAVILY_API_KEY set — skipping web search demo")
         info("Get a free key at https://tavily.com")
@@ -119,7 +119,7 @@ async def demo_memory():
     from memory.store import MemoryStore
     store = MemoryStore()
 
-    store.save("THEORA demo ran successfully", source="demo_script")
+    store.save("FERAL demo ran successfully", source="demo_script")
     store.save("User prefers dark mode interfaces", source="demo_script")
     ok("Added 2 notes to memory")
 
@@ -156,7 +156,7 @@ async def demo_genui():
     search_data = {
         "results": [
             {"title": "AI Agents in 2026", "url": "https://example.com/1", "snippet": "Overview of the latest..."},
-            {"title": "THEORA Framework", "url": "https://example.com/2", "snippet": "Open source agent..."},
+            {"title": "FERAL Framework", "url": "https://example.com/2", "snippet": "Open source agent..."},
         ]
     }
     sdui = gen.generate(data=search_data, skill_brand={"name": "Search", "primary_color": "#3498DB"}, ui_hint="list")
@@ -193,7 +193,7 @@ async def demo_server_api():
         else:
             warn("Brain returned non-200")
     except Exception:
-        warn("Brain not running — start with: theora serve")
+        warn("Brain not running — start with: feral serve")
         info("Server API demo skipped")
 
 
@@ -220,16 +220,16 @@ async def main():
     ok(f"All features demonstrated in {elapsed:.1f}s")
     print(f"""
   {BOLD}To try the full agent:{NC}
-    theora setup          # Configure provider + keys
-    theora serve          # Start the brain
-    theora                # Chat with the agent
-    theora "read this file and explain it"
+    feral setup          # Configure provider + keys
+    feral serve          # Start the brain
+    feral                # Chat with the agent
+    feral "read this file and explain it"
 
   {BOLD}Supported LLM providers:{NC}
     OpenAI, Anthropic (Claude), Google Gemini, Groq, Ollama (local)
 
   {BOLD}Web UI:{NC}
-    Open http://localhost:9090 after running 'theora serve'
+    Open http://localhost:9090 after running 'feral serve'
 """)
 
 

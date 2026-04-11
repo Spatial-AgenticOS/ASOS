@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-THEORA vs OpenHands vs OpenClaw — Reproducible Comparison Benchmark Suite
+FERAL vs OpenHands vs OpenClaw — Reproducible Comparison Benchmark Suite
 ==========================================================================
 Run:
     python -m benchmarks.run              # default: quick mode
@@ -30,9 +30,9 @@ from typing import Optional
 
 import httpx
 
-logger = logging.getLogger("theora.benchmarks")
+logger = logging.getLogger("feral.benchmarks")
 
-BRAIN_BASE = os.environ.get("THEORA_BRAIN_URL", "http://127.0.0.1:8000")
+BRAIN_BASE = os.environ.get("FERAL_BRAIN_URL", "http://127.0.0.1:8000")
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -41,7 +41,7 @@ BRAIN_BASE = os.environ.get("THEORA_BRAIN_URL", "http://127.0.0.1:8000")
 @dataclass
 class BenchmarkResult:
     metric: str
-    theora: float
+    feral: float
     openhands: float
     openclaw: float
     unit: str
@@ -59,7 +59,7 @@ class SuiteResults:
 
 
 # ---------------------------------------------------------------------------
-# Utility: talk to a running THEORA brain
+# Utility: talk to a running FERAL brain
 # ---------------------------------------------------------------------------
 
 async def _brain_health(client: httpx.AsyncClient) -> bool:
@@ -91,7 +91,7 @@ AGENT_TASKS = [
     {"id": "code_edit", "prompt": "Add a docstring to the main function in api/server.py", "type": "edit"},
     {"id": "web_search", "prompt": "Search the web for 'latest Python 3.13 release notes'", "type": "web"},
     {"id": "summarize", "prompt": "Summarize the README.md of this project in 3 bullet points", "type": "analysis"},
-    {"id": "create_file", "prompt": "Create a file called hello.txt with the text 'Hello from THEORA'", "type": "edit"},
+    {"id": "create_file", "prompt": "Create a file called hello.txt with the text 'Hello from FERAL'", "type": "edit"},
     {"id": "memory_store", "prompt": "Remember that my favorite color is blue", "type": "memory"},
     {"id": "memory_recall", "prompt": "What is my favorite color?", "type": "memory"},
     {"id": "math", "prompt": "Calculate the factorial of 20", "type": "compute"},
@@ -100,8 +100,8 @@ AGENT_TASKS = [
 ]
 
 
-async def run_theora_task_completion(client: httpx.AsyncClient, quick: bool = False) -> BenchmarkResult:
-    """Run agent tasks against a live THEORA brain and measure success rate."""
+async def run_feral_task_completion(client: httpx.AsyncClient, quick: bool = False) -> BenchmarkResult:
+    """Run agent tasks against a live FERAL brain and measure success rate."""
     tasks = AGENT_TASKS[:5] if quick else AGENT_TASKS
     passed = 0
     total = len(tasks)
@@ -126,7 +126,7 @@ async def run_theora_task_completion(client: httpx.AsyncClient, quick: bool = Fa
     comparison = get_task_completion_comparison()
     return BenchmarkResult(
         metric="Task Completion Rate",
-        theora=round(rate, 1),
+        feral=round(rate, 1),
         openhands=comparison["openhands"],
         openclaw=comparison["openclaw"],
         unit="%",
@@ -169,14 +169,14 @@ MEMORY_FACTS = [
     {"text": "The user prefers dark mode in all applications", "key": "pref_dark", "query": "Does the user prefer dark or light mode?"},
     {"text": "The user's resting heart rate averages 62 bpm", "key": "hr", "query": "What is the user's resting heart rate?"},
     {"text": "The user takes 10mg of melatonin before bed", "key": "meds", "query": "What supplements does the user take?"},
-    {"text": "The user works at a startup called THEORA", "key": "work", "query": "Where does the user work?"},
+    {"text": "The user works at a startup called FERAL", "key": "work", "query": "Where does the user work?"},
     {"text": "The user's dog is named Apollo", "key": "dog", "query": "What is the user's pet's name?"},
     {"text": "The user runs 5k every Tuesday morning", "key": "exercise", "query": "When does the user exercise?"},
     {"text": "The user's emergency contact is Sarah at 555-0142", "key": "emergency", "query": "Who is the user's emergency contact?"},
 ]
 
 
-async def run_theora_memory_retrieval(client: httpx.AsyncClient, quick: bool = False) -> list[BenchmarkResult]:
+async def run_feral_memory_retrieval(client: httpx.AsyncClient, quick: bool = False) -> list[BenchmarkResult]:
     """Store facts, then measure retrieval precision@5 and recall@10."""
     facts = MEMORY_FACTS[:5] if quick else MEMORY_FACTS
 
@@ -223,7 +223,7 @@ async def run_theora_memory_retrieval(client: httpx.AsyncClient, quick: bool = F
     return [
         BenchmarkResult(
             metric="Memory Precision@5",
-            theora=round(precision_5, 1),
+            feral=round(precision_5, 1),
             openhands=comp["openhands_p5"],
             openclaw=comp["openclaw_p5"],
             unit="%",
@@ -231,7 +231,7 @@ async def run_theora_memory_retrieval(client: httpx.AsyncClient, quick: bool = F
         ),
         BenchmarkResult(
             metric="Memory Recall@10",
-            theora=round(recall_10, 1),
+            feral=round(recall_10, 1),
             openhands=comp["openhands_r10"],
             openclaw=comp["openclaw_r10"],
             unit="%",
@@ -248,7 +248,7 @@ def get_memory_comparison() -> dict:
       on long-horizon fact retrieval.
     - OpenClaw: has basic memory module but no multi-tier architecture.
       Estimated ~55% precision@5.
-    - THEORA: 4-tier (working/episodic/semantic/execution) with hybrid FTS+vector
+    - FERAL: 4-tier (working/episodic/semantic/execution) with hybrid FTS+vector
       search, temporal decay, and knowledge graph. Designed for high recall.
     """
     return {
@@ -263,7 +263,7 @@ def get_memory_comparison() -> dict:
 # 3. VOICE RESPONSE LATENCY
 # ===================================================================
 
-async def run_theora_voice_latency(client: httpx.AsyncClient, quick: bool = False) -> BenchmarkResult:
+async def run_feral_voice_latency(client: httpx.AsyncClient, quick: bool = False) -> BenchmarkResult:
     """
     Measure round-trip latency: POST a text prompt to the voice endpoint,
     time until first audio chunk or text response arrives.
@@ -289,7 +289,7 @@ async def run_theora_voice_latency(client: httpx.AsyncClient, quick: bool = Fals
 
     return BenchmarkResult(
         metric="Voice Response Latency (p50)",
-        theora=round(avg_ms, 0),
+        feral=round(avg_ms, 0),
         openhands=comp["openhands"],
         openclaw=comp["openclaw"],
         unit="ms",
@@ -304,7 +304,7 @@ def get_voice_latency_comparison() -> dict:
     - OpenHands: text-only agent, no native voice pipeline. Estimated 3000ms+
       for text round-trip (API call + LLM inference + response parsing).
     - OpenClaw: no documented voice support. Estimated 4000ms+ (text fallback).
-    - THEORA: direct OpenAI Realtime API / Gemini Live bridge with audio relay,
+    - FERAL: direct OpenAI Realtime API / Gemini Live bridge with audio relay,
       typical first-token ~320ms, full response ~800ms.
     """
     return {"openhands": 3200.0, "openclaw": 4500.0}
@@ -314,7 +314,7 @@ def get_voice_latency_comparison() -> dict:
 # 4. HARDWARE MESH THROUGHPUT
 # ===================================================================
 
-async def run_theora_mesh_throughput(client: httpx.AsyncClient, quick: bool = False) -> BenchmarkResult:
+async def run_feral_mesh_throughput(client: httpx.AsyncClient, quick: bool = False) -> BenchmarkResult:
     """
     Measure message throughput by sending rapid-fire commands to the mesh
     and counting successful round-trips per second.
@@ -352,7 +352,7 @@ async def run_theora_mesh_throughput(client: httpx.AsyncClient, quick: bool = Fa
     comp = get_mesh_comparison()
     return BenchmarkResult(
         metric="Mesh Throughput",
-        theora=round(msgs_per_sec, 1),
+        feral=round(msgs_per_sec, 1),
         openhands=comp["openhands"],
         openclaw=comp["openclaw"],
         unit="msg/s",
@@ -366,7 +366,7 @@ def _simulated_mesh_result() -> BenchmarkResult:
     comp = get_mesh_comparison()
     return BenchmarkResult(
         metric="Mesh Throughput",
-        theora=850.0,
+        feral=850.0,
         openhands=comp["openhands"],
         openclaw=comp["openclaw"],
         unit="msg/s",
@@ -387,7 +387,7 @@ def get_mesh_comparison() -> dict:
 # 5. INSTALL TIME
 # ===================================================================
 
-async def run_theora_install_time(client: httpx.AsyncClient, quick: bool = False) -> BenchmarkResult:
+async def run_feral_install_time(client: httpx.AsyncClient, quick: bool = False) -> BenchmarkResult:
     """
     Measure time from brain startup check to first successful agent response.
     This proxies "time to first value" rather than full pip install (which
@@ -410,7 +410,7 @@ async def run_theora_install_time(client: httpx.AsyncClient, quick: bool = False
 
     return BenchmarkResult(
         metric="Time to First Response",
-        theora=round(elapsed_s, 1),
+        feral=round(elapsed_s, 1),
         openhands=comp["openhands"],
         openclaw=comp["openclaw"],
         unit="s",
@@ -423,7 +423,7 @@ def _estimated_install_result() -> BenchmarkResult:
     comp = get_install_time_comparison()
     return BenchmarkResult(
         metric="Time to First Response (estimated)",
-        theora=12.0,
+        feral=12.0,
         openhands=comp["openhands"],
         openclaw=comp["openclaw"],
         unit="s",
@@ -438,7 +438,7 @@ def get_install_time_comparison() -> dict:
     - OpenHands: Docker-based, requires pulling image (~2-5 min first time),
       then container boot. Subsequent starts ~30s.
     - OpenClaw: pip install + config, ~45s to first response.
-    - THEORA: single `pip install theora-asos && theora start`, ~12s cold.
+    - FERAL: single `pip install feral-ai && feral start`, ~12s cold.
     """
     return {"openhands": 35.0, "openclaw": 45.0}
 
@@ -449,12 +449,12 @@ def get_install_time_comparison() -> dict:
 
 def generate_markdown_table(results: list[BenchmarkResult]) -> str:
     lines = [
-        "| Metric | THEORA | OpenHands | OpenClaw | Unit | Notes |",
+        "| Metric | FERAL | OpenHands | OpenClaw | Unit | Notes |",
         "|--------|--------|-----------|----------|------|-------|",
     ]
     for r in results:
         lines.append(
-            f"| {r.metric} | **{r.theora}** | {r.openhands} | {r.openclaw} | {r.unit} | {r.notes} |"
+            f"| {r.metric} | **{r.feral}** | {r.openhands} | {r.openclaw} | {r.unit} | {r.notes} |"
         )
     return "\n".join(lines)
 
@@ -465,7 +465,7 @@ def generate_ascii_chart(results: list[BenchmarkResult]) -> str:
     lines = ["\n  BENCHMARK RESULTS — ASCII BAR CHART", "  " + "=" * 56]
 
     for r in results:
-        max_val = max(r.theora, r.openhands, r.openclaw, 0.001)
+        max_val = max(r.feral, r.openhands, r.openclaw, 0.001)
 
         higher_better = r.unit in ("%", "msg/s")
         label_suffix = " (higher=better)" if higher_better else " (lower=better)"
@@ -473,7 +473,7 @@ def generate_ascii_chart(results: list[BenchmarkResult]) -> str:
         lines.append(f"\n  {r.metric} [{r.unit}]{label_suffix}")
         lines.append("  " + "-" * 56)
 
-        for name, val in [("THEORA   ", r.theora), ("OpenHands", r.openhands), ("OpenClaw ", r.openclaw)]:
+        for name, val in [("FERAL   ", r.feral), ("OpenHands", r.openhands), ("OpenClaw ", r.openclaw)]:
             bar_len = int((val / max_val) * BAR_WIDTH) if max_val > 0 else 0
             bar = "█" * bar_len
             lines.append(f"  {name} │{bar} {val}")
@@ -487,7 +487,7 @@ def generate_report(results: list[BenchmarkResult], run_ts: float) -> str:
     table = generate_markdown_table(results)
     chart = generate_ascii_chart(results)
 
-    return f"""# THEORA Benchmark Results
+    return f"""# FERAL Benchmark Results
 
 **Run:** {ts_str}
 **Brain URL:** {BRAIN_BASE}
@@ -516,7 +516,7 @@ def generate_report(results: list[BenchmarkResult], run_ts: float) -> str:
 |--------|--------|
 | OpenHands | [GitHub](https://github.com/All-Hands-AI/OpenHands), SWE-bench leaderboard, docs |
 | OpenClaw | [GitHub](https://github.com/openclaw), project documentation |
-| THEORA | Live benchmark against local brain instance |
+| FERAL | Live benchmark against local brain instance |
 """
 
 
@@ -534,7 +534,7 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
     )
 
     print("\n" + "=" * 60)
-    print("  THEORA vs OpenHands vs OpenClaw — Benchmark Suite")
+    print("  FERAL vs OpenHands vs OpenClaw — Benchmark Suite")
     print("  Mode:", "QUICK" if quick else "FULL")
     print("=" * 60)
 
@@ -544,13 +544,13 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
             print(f"\n  ✓ Brain is running at {BRAIN_BASE}")
         else:
             print(f"\n  ✗ Brain not reachable at {BRAIN_BASE}")
-            print("    Using estimated/simulated values for THEORA metrics.")
-            print("    Start the brain with `theora start` for live benchmarks.\n")
+            print("    Using estimated/simulated values for FERAL metrics.")
+            print("    Start the brain with `feral start` for live benchmarks.\n")
 
         # --- 1. Task Completion ---
         print("\n▸ [1/5] Task Completion")
         if brain_up:
-            r = await run_theora_task_completion(client, quick)
+            r = await run_feral_task_completion(client, quick)
         else:
             comp = get_task_completion_comparison()
             r = BenchmarkResult("Task Completion Rate", 78.0, comp["openhands"], comp["openclaw"], "%", "task_completion",
@@ -560,7 +560,7 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
         # --- 2. Memory Retrieval ---
         print("\n▸ [2/5] Memory Retrieval")
         if brain_up:
-            mem_results = await run_theora_memory_retrieval(client, quick)
+            mem_results = await run_feral_memory_retrieval(client, quick)
         else:
             comp = get_memory_comparison()
             mem_results = [
@@ -574,7 +574,7 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
         # --- 3. Voice Latency ---
         print("\n▸ [3/5] Voice Response Latency")
         if brain_up:
-            r = await run_theora_voice_latency(client, quick)
+            r = await run_feral_voice_latency(client, quick)
         else:
             comp = get_voice_latency_comparison()
             r = BenchmarkResult("Voice Response Latency (p50)", 820.0, comp["openhands"], comp["openclaw"], "ms", "voice",
@@ -584,7 +584,7 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
         # --- 4. Hardware Mesh ---
         print("\n▸ [4/5] Hardware Mesh Throughput")
         if brain_up:
-            r = await run_theora_mesh_throughput(client, quick)
+            r = await run_feral_mesh_throughput(client, quick)
         else:
             r = _simulated_mesh_result()
         suite.results.append(r)
@@ -592,7 +592,7 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
         # --- 5. Install Time ---
         print("\n▸ [5/5] Install Time / Time to First Response")
         if brain_up:
-            r = await run_theora_install_time(client, quick)
+            r = await run_feral_install_time(client, quick)
         else:
             r = _estimated_install_result()
         suite.results.append(r)
@@ -622,7 +622,7 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="THEORA vs OpenHands vs OpenClaw benchmark suite",
+        description="FERAL vs OpenHands vs OpenClaw benchmark suite",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

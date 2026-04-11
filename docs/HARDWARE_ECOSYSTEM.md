@@ -1,6 +1,6 @@
-# THEORA Hardware Ecosystem
+# FERAL Hardware Ecosystem
 
-This document defines the contract for connecting hardware devices to THEORA. Any device class -- wearables, robotics, home appliances, IoT sensors, phone bridges -- uses the same protocol.
+This document defines the contract for connecting hardware devices to FERAL. Any device class -- wearables, robotics, home appliances, IoT sensors, phone bridges -- uses the same protocol.
 
 ## Architecture
 
@@ -8,13 +8,13 @@ This document defines the contract for connecting hardware devices to THEORA. An
 flowchart TD
   device[Physical Device] --> adapter[Edge Adapter]
   adapter --> daemon[Hardware Daemon]
-  daemon -->|"wss /v1/node"| brain[THEORA Brain]
+  daemon -->|"wss /v1/node"| brain[FERAL Brain]
   brain --> registry[Device Registry]
   brain --> mesh[Hardware Mesh]
   brain --> orchestrator[Orchestrator]
 ```
 
-Devices connect to the THEORA Brain as **hardware daemons** over an authenticated WebSocket channel. The Brain auto-registers each daemon into the HUP (Hardware Use Protocol) device registry. The agent can then discover, query, and command any connected device through a universal abstraction.
+Devices connect to the FERAL Brain as **hardware daemons** over an authenticated WebSocket channel. The Brain auto-registers each daemon into the HUP (Hardware Use Protocol) device registry. The agent can then discover, query, and command any connected device through a universal abstraction.
 
 ## The Three-Layer Contract
 
@@ -130,7 +130,7 @@ For advanced integrations, daemons can declare a full HUP manifest:
 device_id: "robot-arm-01"
 device_type: "robot"
 name: "6-DOF Robot Arm"
-manufacturer: "THEORA"
+manufacturer: "FERAL"
 model: "ARM-600"
 firmware_version: "1.2.0"
 connection_type: "websocket"
@@ -195,7 +195,7 @@ A wristband or smart glasses that streams health and motion data.
 - Type: `glasses` / `wristband`
 - Capabilities: `heart_rate`, `spo2`, `temperature`, `steps`, `uv`, `accelerometer`
 - Category: `sensor` (passive)
-- Example: THEORA W300 glasses, health wristband
+- Example: FERAL W300 glasses, health wristband
 
 ### Home Automation Bridge
 A bridge to smart home devices (lights, HVAC, locks, appliances).
@@ -216,7 +216,7 @@ A smartphone that bridges BLE peripherals and provides camera/GPS/health.
 - Type: `phone`
 - Capabilities: `camera`, `gps`, `health_sensors`, `notification`, `haptic`
 - Category: mixed
-- SDKs: `asos-nodes/ios-bridge/`, `asos-nodes/android-bridge/`
+- SDKs: `feral-nodes/ios-bridge/`, `feral-nodes/android-bridge/`
 
 ## Building a Hardware Daemon
 
@@ -299,9 +299,9 @@ The edge adapter translates the device's native protocol into the daemon WebSock
 
 ## Implementation Reference
 
-- Protocol: `asos-core/hardware/protocol.py` (`DeviceManifest`, `DeviceCapability`, `HUPAction`, `HUPResult`)
-- Mesh: `asos-core/hardware/mesh.py` (`HardwareMesh`, `WebSocketNodeAdapter`)
-- Server handler: `asos-core/api/server.py` (`/v1/node` WebSocket)
-- Python SDK: `asos-nodes/python-node-sdk/`
-- iOS bridge: `asos-nodes/ios-bridge/`
-- Android bridge: `asos-nodes/android-bridge/`
+- Protocol: `feral-core/hardware/protocol.py` (`DeviceManifest`, `DeviceCapability`, `HUPAction`, `HUPResult`)
+- Mesh: `feral-core/hardware/mesh.py` (`HardwareMesh`, `WebSocketNodeAdapter`)
+- Server handler: `feral-core/api/server.py` (`/v1/node` WebSocket)
+- Python SDK: `feral-nodes/python-node-sdk/`
+- iOS bridge: `feral-nodes/ios-bridge/`
+- Android bridge: `feral-nodes/android-bridge/`

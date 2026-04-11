@@ -1,6 +1,6 @@
-# THEORA Desktop
+# FERAL Desktop
 
-Native desktop app wrapping the THEORA web UI via [Tauri 2](https://v2.tauri.app/).
+Native desktop app wrapping the FERAL web UI via [Tauri 2](https://v2.tauri.app/).
 
 ## Requirements
 
@@ -25,13 +25,13 @@ npm run tauri:build
 ```
 
 Produces:
-- macOS: `src-tauri/target/release/bundle/dmg/THEORA_1.0.0_*.dmg`
-- Linux: `src-tauri/target/release/bundle/appimage/THEORA_1.0.0_*.AppImage`
-- Windows: `src-tauri/target/release/bundle/msi/THEORA_1.0.0_*.msi`
+- macOS: `src-tauri/target/release/bundle/dmg/FERAL_1.0.0_*.dmg`
+- Linux: `src-tauri/target/release/bundle/appimage/FERAL_1.0.0_*.AppImage`
+- Windows: `src-tauri/target/release/bundle/msi/FERAL_1.0.0_*.msi`
 
 ## Architecture
 
-The desktop app loads the Brain's web UI (`http://localhost:9090`) in a native window. Make sure the Brain server is running (`theora serve`) before launching.
+The desktop app loads the Brain's web UI (`http://localhost:9090`) in a native window. Make sure the Brain server is running (`feral serve`) before launching.
 
 Features:
 - System tray icon (click to show/hide)

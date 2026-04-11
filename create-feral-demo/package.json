@@ -1,0 +1,14 @@
+{
+  "name": "create-feral-demo",
+  "version": "1.0.0",
+  "description": "One-command demo launcher for FERAL — the open AI operating system",
+  "bin": {
+    "create-feral-demo": "./index.js"
+  },
+  "keywords": ["feral", "ai", "agent", "demo", "os"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/feral-ai/feral"
+  }
+}

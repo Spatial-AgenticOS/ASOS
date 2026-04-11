@@ -1,0 +1,79 @@
+{
+    "skill_id": "messaging_sms",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Messaging",
+        "primary_color": "#00B894",
+        "secondary_color": "#0984E3",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Send SMS and WhatsApp messages using Twilio. Read recent messages and manage conversations.",
+    "trigger_phrases": [
+        "send a text",
+        "text someone",
+        "send a message",
+        "message",
+        "sms",
+        "send sms to",
+        "whatsapp message",
+        "notify",
+        "tell them",
+        "let them know"
+    ],
+    "categories": ["messaging", "communication"],
+    "auth": {
+        "type": "api_key",
+        "api_key_header": "Authorization"
+    },
+    "endpoints": [
+        {
+            "id": "send_sms",
+            "method": "POST",
+            "url": "https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+            "description": "Send an SMS text message to a phone number.",
+            "params": [
+                {"name": "account_sid", "type": "string", "required": true, "description": "Twilio Account SID"},
+                {"name": "To", "type": "string", "required": true, "description": "Recipient phone number in E.164 format (e.g. +1234567890)"},
+                {"name": "From", "type": "string", "required": true, "description": "Your Twilio phone number"},
+                {"name": "Body", "type": "string", "required": true, "description": "The message content"}
+            ],
+            "returns_description": "{sid, status, to, from, body, date_created}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "list_messages",
+            "method": "GET",
+            "url": "https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+            "description": "List recent SMS messages.",
+            "params": [
+                {"name": "account_sid", "type": "string", "required": true, "description": "Twilio Account SID"},
+                {"name": "PageSize", "type": "number", "required": false, "default": "20", "description": "Number of messages to return"}
+            ],
+            "returns_description": "{messages: [{sid, to, from, body, status, date_sent}]}",
+            "ui_hint": "list"
+        }
+    ],
+    "flows": [
+        {
+            "id": "send_and_confirm",
+            "description": "Send a message and show confirmation",
+            "steps": [
+                {"endpoint_id": "send_sms"}
+            ]
+        }
+    ],
+    "crons": [],
+    "triggers": [
+        {
+            "id": "high_stress_alert",
+            "condition": "biometric.heart_rate_bpm > 160 && biometric.inferred_state == 'stressed'",
+            "action_flow_id": "send_and_confirm",
+            "cooldown_seconds": 1800
+        }
+    ],
+    "permissions": ["messaging", "contacts"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 100
+}

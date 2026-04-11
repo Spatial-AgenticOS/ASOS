@@ -1,5 +1,5 @@
 {
-  description = "THEORA thin Nix foundation (brain + client + dev shell)";
+  description = "FERAL thin Nix foundation (brain + client + dev shell)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
@@ -17,10 +17,10 @@
           python = pkgs.python311;
           pyPkgs = pkgs.python311Packages;
           node = pkgs.nodejs_20;
-          theoraPythonPackage = pyPkgs.buildPythonPackage rec {
-            pname = "theora-asos";
+          feralPythonPackage = pyPkgs.buildPythonPackage rec {
+            pname = "feral-ai";
             version = "1.1.0";
-            src = ./asos-core;
+            src = ./feral-core;
             pyproject = true;
             nativeBuildInputs = with pyPkgs; [ setuptools wheel ];
             propagatedBuildInputs = with pyPkgs; [
@@ -42,13 +42,13 @@
         in
         {
           packages = rec {
-            theora-brain = theoraPythonPackage;
+            feral-brain = feralPythonPackage;
 
-            theora-client = pkgs.writeShellApplication {
-              name = "theora-client";
+            feral-client = pkgs.writeShellApplication {
+              name = "feral-client";
               runtimeInputs = [ node ];
               text = ''
-                cd ${self}/asos-client
+                cd ${self}/feral-client
                 if [ ! -d node_modules ]; then
                   echo "node_modules not found. Run: npm install"
                   exit 1
@@ -57,36 +57,36 @@
               '';
             };
 
-            default = theora-brain;
+            default = feral-brain;
           };
 
           apps = {
             brain = {
               type = "app";
-              program = "${pkgs.writeShellScript "theora-brain-app" ''
-                export THEORA_HOME="${THEORA_HOME:-$HOME/.theora}"
-                export THEORA_HOST="${THEORA_HOST:-0.0.0.0}"
-                export THEORA_PORT="${THEORA_PORT:-9090}"
-                if [ -z "${THEORA_PUBLIC_BASE_URL:-}" ]; then
-                  export THEORA_PUBLIC_BASE_URL="http://localhost:$THEORA_PORT"
+              program = "${pkgs.writeShellScript "feral-brain-app" ''
+                export FERAL_HOME="${FERAL_HOME:-$HOME/.feral}"
+                export FERAL_HOST="${FERAL_HOST:-0.0.0.0}"
+                export FERAL_PORT="${FERAL_PORT:-9090}"
+                if [ -z "${FERAL_PUBLIC_BASE_URL:-}" ]; then
+                  export FERAL_PUBLIC_BASE_URL="http://localhost:$FERAL_PORT"
                 fi
-                exec ${self.packages.${system}.theora-brain}/bin/theora serve --bind "$THEORA_HOST" --serve-port "$THEORA_PORT"
+                exec ${self.packages.${system}.feral-brain}/bin/feral serve --bind "$FERAL_HOST" --serve-port "$FERAL_PORT"
               ''}";
             };
             client = {
               type = "app";
-              program = "${self.packages.${system}.theora-client}/bin/theora-client";
+              program = "${self.packages.${system}.feral-client}/bin/feral-client";
             };
             default = {
               type = "app";
-              program = "${pkgs.writeShellScript "theora-brain-default-app" ''
-                export THEORA_HOME="${THEORA_HOME:-$HOME/.theora}"
-                export THEORA_HOST="${THEORA_HOST:-0.0.0.0}"
-                export THEORA_PORT="${THEORA_PORT:-9090}"
-                if [ -z "${THEORA_PUBLIC_BASE_URL:-}" ]; then
-                  export THEORA_PUBLIC_BASE_URL="http://localhost:$THEORA_PORT"
+              program = "${pkgs.writeShellScript "feral-brain-default-app" ''
+                export FERAL_HOME="${FERAL_HOME:-$HOME/.feral}"
+                export FERAL_HOST="${FERAL_HOST:-0.0.0.0}"
+                export FERAL_PORT="${FERAL_PORT:-9090}"
+                if [ -z "${FERAL_PUBLIC_BASE_URL:-}" ]; then
+                  export FERAL_PUBLIC_BASE_URL="http://localhost:$FERAL_PORT"
                 fi
-                exec ${self.packages.${system}.theora-brain}/bin/theora serve --bind "$THEORA_HOST" --serve-port "$THEORA_PORT"
+                exec ${self.packages.${system}.feral-brain}/bin/feral serve --bind "$FERAL_HOST" --serve-port "$FERAL_PORT"
               ''}";
             };
           };
@@ -101,28 +101,28 @@
               pkgs.cargo
             ];
             shellHook = ''
-              export THEORA_HOME="${THEORA_HOME:-$HOME/.theora}"
-              export THEORA_HOST="${THEORA_HOST:-0.0.0.0}"
-              export THEORA_PORT="${THEORA_PORT:-9090}"
-              export THEORA_PUBLIC_BASE_URL="${THEORA_PUBLIC_BASE_URL:-http://localhost:$THEORA_PORT}"
-              echo "THEORA dev shell ready"
-              echo "Run brain: cd asos-core && python -m cli.main serve"
-              echo "Run client: cd asos-client && npm install && npm run dev"
+              export FERAL_HOME="${FERAL_HOME:-$HOME/.feral}"
+              export FERAL_HOST="${FERAL_HOST:-0.0.0.0}"
+              export FERAL_PORT="${FERAL_PORT:-9090}"
+              export FERAL_PUBLIC_BASE_URL="${FERAL_PUBLIC_BASE_URL:-http://localhost:$FERAL_PORT}"
+              echo "FERAL dev shell ready"
+              echo "Run brain: cd feral-core && python -m cli.main serve"
+              echo "Run client: cd feral-client && npm install && npm run dev"
             '';
           };
         }))
     // {
-      nixosModules.theora-brain = { config, lib, pkgs, ... }:
+      nixosModules.feral-brain = { config, lib, pkgs, ... }:
         let
-          cfg = config.services.theora.brain;
+          cfg = config.services.feral.brain;
         in
         {
-          options.services.theora.brain = {
-            enable = lib.mkEnableOption "THEORA brain service";
+          options.services.feral.brain = {
+            enable = lib.mkEnableOption "FERAL brain service";
             package = lib.mkOption {
               type = lib.types.package;
-              default = self.packages.${pkgs.system}.theora-brain;
-              description = "THEORA brain package to execute.";
+              default = self.packages.${pkgs.system}.feral-brain;
+              description = "FERAL brain package to execute.";
             };
             host = lib.mkOption {
               type = lib.types.str;
@@ -134,34 +134,34 @@
             };
             home = lib.mkOption {
               type = lib.types.str;
-              default = "/var/lib/theora";
+              default = "/var/lib/feral";
             };
           };
 
           config = lib.mkIf cfg.enable {
-            users.users.theora = {
+            users.users.feral = {
               isSystemUser = true;
-              group = "theora";
+              group = "feral";
               home = cfg.home;
               createHome = true;
             };
-            users.groups.theora = { };
+            users.groups.feral = { };
 
-            systemd.services.theora-brain = {
-              description = "THEORA Brain";
+            systemd.services.feral-brain = {
+              description = "FERAL Brain";
               after = [ "network-online.target" ];
               wantedBy = [ "multi-user.target" ];
               environment = {
-                THEORA_HOME = cfg.home;
-                THEORA_HOST = cfg.host;
-                THEORA_PORT = toString cfg.port;
-                THEORA_PUBLIC_BASE_URL = "http://localhost:${toString cfg.port}";
+                FERAL_HOME = cfg.home;
+                FERAL_HOST = cfg.host;
+                FERAL_PORT = toString cfg.port;
+                FERAL_PUBLIC_BASE_URL = "http://localhost:${toString cfg.port}";
               };
               serviceConfig = {
-                ExecStart = "${cfg.package}/bin/theora serve --bind ${cfg.host} --serve-port ${toString cfg.port}";
+                ExecStart = "${cfg.package}/bin/feral serve --bind ${cfg.host} --serve-port ${toString cfg.port}";
                 Restart = "on-failure";
-                User = "theora";
-                Group = "theora";
+                User = "feral";
+                Group = "feral";
                 WorkingDirectory = cfg.home;
               };
             };

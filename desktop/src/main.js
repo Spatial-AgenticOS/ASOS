@@ -73,7 +73,7 @@ function showStarting() {
         <div class="glow-ring"></div>
         ${BRAIN_SVG}
       </div>
-      <div class="splash-title">THEORA</div>
+      <div class="splash-title">FERAL</div>
       <div class="splash-subtitle">Local-First Agentic OS</div>
       <div class="splash-dots"><span></span><span></span><span></span></div>
       <div class="splash-status">Initializing brain on localhost:9090 …</div>
@@ -82,7 +82,7 @@ function showStarting() {
 }
 
 function showBrain(url) {
-  appEl.innerHTML = `<iframe src="${url}" title="THEORA" class="frame" allow="clipboard-read; clipboard-write"></iframe>`;
+  appEl.innerHTML = `<iframe src="${url}" title="FERAL" class="frame" allow="clipboard-read; clipboard-write"></iframe>`;
 }
 
 function showError(msg) {
@@ -91,8 +91,8 @@ function showError(msg) {
       ${ERROR_SVG}
       <div class="error-title">${msg}</div>
       <div class="error-hint">
-        Make sure the ASOS brain server is reachable.<br/>
-        Set <code>ASOS_CORE_DIR</code> if the brain lives outside the default layout.
+        Make sure the FERAL brain server is reachable.<br/>
+        Set <code>FERAL_CORE_DIR</code> if the brain lives outside the default layout.
       </div>
       <button class="btn" type="button" id="retry">Retry</button>
     </div>
@@ -147,8 +147,8 @@ async function boot() {
 
 void (async () => {
   await listen('voice-activation', () => {
-    window.dispatchEvent(new CustomEvent('theora-voice-activation'));
-    console.log('[THEORA] Voice shortcut (Cmd/Ctrl+Shift+T)');
+    window.dispatchEvent(new CustomEvent('feral-voice-activation'));
+    console.log('[FERAL] Voice shortcut (Cmd/Ctrl+Shift+T)');
   });
   await boot();
 })();

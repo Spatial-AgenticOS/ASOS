@@ -1,19 +1,19 @@
-// THEORA WASM Skill Template (AssemblyScript)
+// FERAL WASM Skill Template (AssemblyScript)
 //
-// Host functions imported from THEORA runtime:
+// Host functions imported from FERAL runtime:
 
-@external("env", "theora_log")
-declare function theora_log(ptr: usize, len: u32): void;
+@external("env", "feral_log")
+declare function feral_log(ptr: usize, len: u32): void;
 
-@external("env", "theora_http")
-declare function theora_http(ptr: usize, len: u32): u32;
+@external("env", "feral_http")
+declare function feral_http(ptr: usize, len: u32): u32;
 
 function log(msg: string): void {
   const encoded = String.UTF8.encode(msg);
-  theora_log(changetype<usize>(encoded), encoded.byteLength);
+  feral_log(changetype<usize>(encoded), encoded.byteLength);
 }
 
-// Entry point called by THEORA
+// Entry point called by FERAL
 export function execute(inputPtr: usize, inputLen: u32): u64 {
   const input = String.UTF8.decodeUnsafe(inputPtr, inputLen);
   log("Skill invoked with: " + input.substring(0, 100));

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# THEORA One-Line Installer
+# FERAL One-Line Installer
 # ==========================
-# curl -sSL https://raw.githubusercontent.com/Spatial-AgenticOS/ASOS/main/scripts/install.sh | bash
+# curl -sSL https://raw.githubusercontent.com/feral-ai/feral/main/scripts/install.sh | bash
 #
 set -euo pipefail
 
@@ -14,7 +14,7 @@ RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-VENV_DIR="$HOME/.theora-env"
+VENV_DIR="$HOME/.feral-env"
 
 echo -e "${BOLD}${CYAN}"
 echo "  ╔══════════════════════════════════════════════════╗"
@@ -74,33 +74,33 @@ $PYTHON -m pip install --upgrade pip --quiet 2>/dev/null || true
 # ─── Install ────────────────────────────────────────────
 
 echo ""
-echo -e "  Installing THEORA..."
+echo -e "  Installing FERAL..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
 
-PIP_LOG=$(mktemp /tmp/theora-pip-XXXXXX.log 2>/dev/null || echo "/tmp/theora-pip-install.log")
+PIP_LOG=$(mktemp /tmp/feral-pip-XXXXXX.log 2>/dev/null || echo "/tmp/feral-pip-install.log")
 
 install_success=false
 
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../asos-core/pyproject.toml" ]; then
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../feral-core/pyproject.toml" ]; then
     REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
     echo -e "  ${DIM}From local repo: $REPO_ROOT${NC}"
-    if $PYTHON -m pip install --upgrade --force-reinstall -e "$REPO_ROOT/asos-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+    if $PYTHON -m pip install --upgrade --force-reinstall -e "$REPO_ROOT/feral-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
         install_success=true
     fi
 else
     echo -e "  ${DIM}Installing from GitHub...${NC}"
-    if $PYTHON -m pip install --upgrade --force-reinstall "theora-asos[llm] @ git+https://github.com/Spatial-AgenticOS/ASOS.git#subdirectory=asos-core" 2>&1 | tee "$PIP_LOG" | tail -5; then
+    if $PYTHON -m pip install --upgrade --force-reinstall "feral-ai[llm] @ git+https://github.com/feral-ai/feral.git#subdirectory=feral-core" 2>&1 | tee "$PIP_LOG" | tail -5; then
         install_success=true
     else
         echo -e "  ${DIM}Git install failed. Trying PyPI...${NC}"
-        if $PYTHON -m pip install --upgrade --force-reinstall "theora-asos[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+        if $PYTHON -m pip install --upgrade --force-reinstall "feral-ai[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
             install_success=true
         else
             echo -e "  ${DIM}PyPI failed. Cloning repo...${NC}"
             TMPDIR=$(mktemp -d)
-            if git clone --depth 1 https://github.com/Spatial-AgenticOS/ASOS.git "$TMPDIR/ASOS" 2>/dev/null; then
-                if $PYTHON -m pip install --upgrade --force-reinstall -e "$TMPDIR/ASOS/asos-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+            if git clone --depth 1 https://github.com/feral-ai/feral.git "$TMPDIR/feral" 2>/dev/null; then
+                if $PYTHON -m pip install --upgrade --force-reinstall -e "$TMPDIR/feral/feral-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
                     install_success=true
                 fi
             fi
@@ -115,8 +115,8 @@ if [ "$install_success" = false ]; then
     echo ""
     echo "  Common fixes:"
     echo "    1. Upgrade pip:  $PYTHON -m pip install --upgrade pip"
-    echo "    2. Retry:        source ~/.theora-env/bin/activate && pip install theora-asos[llm]"
-    echo "    3. Manual clone: git clone https://github.com/Spatial-AgenticOS/ASOS && cd ASOS/asos-core && pip install -e .[llm]"
+    echo "    2. Retry:        source ~/.feral-env/bin/activate && pip install feral-ai[llm]"
+    echo "    3. Manual clone: git clone https://github.com/feral-ai/feral && cd feral/feral-core && pip install -e .[llm]"
     exit 1
 fi
 
@@ -127,12 +127,12 @@ echo -e "  ${DIM}Installing Playwright Chromium runtime (best effort)...${NC}"
 $PYTHON -m playwright install chromium --with-deps >/dev/null 2>&1 || true
 
 # ─── Installed Package Diagnostics ──────────────────────
-PKG_INFO="$($PYTHON -m pip show theora-asos 2>/dev/null || true)"
+PKG_INFO="$($PYTHON -m pip show feral-ai 2>/dev/null || true)"
 if [ -n "$PKG_INFO" ]; then
     PKG_VERSION="$(printf '%s\n' "$PKG_INFO" | awk -F': ' '/^Version:/{print $2}')"
     PKG_LOCATION="$(printf '%s\n' "$PKG_INFO" | awk -F': ' '/^Location:/{print $2}')"
     if [ -n "${PKG_VERSION:-}" ]; then
-        echo -e "  ${GREEN}✓${NC} Installed package: theora-asos ${PKG_VERSION}"
+        echo -e "  ${GREEN}✓${NC} Installed package: feral-ai ${PKG_VERSION}"
     fi
     if [ -n "${PKG_LOCATION:-}" ]; then
         echo -e "  ${DIM}Location: ${PKG_LOCATION}${NC}"
@@ -142,12 +142,12 @@ fi
 # ─── Verify CLI ─────────────────────────────────────────
 
 echo ""
-if command -v theora &> /dev/null; then
-    echo -e "  ${GREEN}✓${NC} theora command available"
+if command -v feral &> /dev/null; then
+    echo -e "  ${GREEN}✓${NC} feral command available"
 else
-    echo -e "  ${YELLOW}⚠${NC} 'theora' not found in PATH"
+    echo -e "  ${YELLOW}⚠${NC} 'feral' not found in PATH"
     if [ -n "$VENV_DIR" ]; then
-        echo -e "  ${DIM}Activate your env first: source ~/.theora-env/bin/activate${NC}"
+        echo -e "  ${DIM}Activate your env first: source ~/.feral-env/bin/activate${NC}"
     else
         echo -e "  ${DIM}Try: $PYTHON -m cli.main${NC}"
     fi
@@ -159,17 +159,17 @@ echo ""
 echo -e "${GREEN}${BOLD}  Installed!${NC}"
 echo ""
 
-THEORA_CREDS="$HOME/.theora/credentials.json"
-if [ ! -f "$THEORA_CREDS" ] || [ ! -s "$THEORA_CREDS" ]; then
+FERAL_CREDS="$HOME/.feral/credentials.json"
+if [ ! -f "$FERAL_CREDS" ] || [ ! -s "$FERAL_CREDS" ]; then
     echo -e "  ${BOLD}First-time setup — let's configure your agent.${NC}"
     echo ""
     echo -e "  ${DIM}You can do this two ways:${NC}"
     echo ""
     echo -e "  ${CYAN}Option A: Terminal wizard (quick, 2 minutes)${NC}"
-    echo "    theora setup"
+    echo "    feral setup"
     echo ""
     echo -e "  ${CYAN}Option B: Web UI wizard (full configuration)${NC}"
-    echo "    theora serve"
+    echo "    feral serve"
     echo "    Then open http://localhost:9090 — the setup wizard starts automatically."
     echo ""
 
@@ -177,16 +177,16 @@ if [ ! -f "$THEORA_CREDS" ] || [ ! -s "$THEORA_CREDS" ]; then
     answer=${answer:-y}
 
     if [[ "$answer" =~ ^[Yy]$ ]]; then
-        if command -v theora &> /dev/null; then
-            theora setup
+        if command -v feral &> /dev/null; then
+            feral setup
         else
             $PYTHON -m cli.setup_wizard 2>/dev/null || {
-                echo -e "  ${DIM}Wizard not available. Start with: theora serve${NC}"
+                echo -e "  ${DIM}Wizard not available. Start with: feral serve${NC}"
             }
         fi
     else
         echo ""
-        echo -e "  ${DIM}No problem. Run 'theora serve' and configure via the web UI.${NC}"
+        echo -e "  ${DIM}No problem. Run 'feral serve' and configure via the web UI.${NC}"
     fi
     echo ""
 fi
@@ -194,19 +194,19 @@ fi
 # ─── Post-Install Summary ──────────────────────────────
 
 echo -e "  ${BOLD}┌──────────────────────────────────────────────┐${NC}"
-echo -e "  ${BOLD}│  Start THEORA:                               │${NC}"
+echo -e "  ${BOLD}│  Start FERAL:                               │${NC}"
 echo -e "  ${BOLD}│                                              │${NC}"
 if [ -n "$VENV_DIR" ]; then
-echo -e "  ${BOLD}│    source ~/.theora-env/bin/activate         │${NC}"
+echo -e "  ${BOLD}│    source ~/.feral-env/bin/activate         │${NC}"
 fi
-echo -e "  ${BOLD}│    theora start                              │${NC}"
+echo -e "  ${BOLD}│    feral start                              │${NC}"
 echo -e "  ${BOLD}│                                              │${NC}"
 echo -e "  ${BOLD}│  Brain + dashboard at localhost:9090          │${NC}"
 echo -e "  ${BOLD}└──────────────────────────────────────────────┘${NC}"
 echo ""
 echo -e "  ${DIM}Other commands:${NC}"
-echo "    theora setup      Re-run setup wizard"
-echo "    theora doctor     Check what's working"
-echo "    theora serve      Headless server mode"
-echo "    theora status     Current brain status"
+echo "    feral setup      Re-run setup wizard"
+echo "    feral doctor     Check what's working"
+echo "    feral serve      Headless server mode"
+echo "    feral status     Current brain status"
 echo ""

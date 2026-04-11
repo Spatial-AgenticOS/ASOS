@@ -1,30 +1,30 @@
-# THEORA Runtime Contract
+# FERAL Runtime Contract
 
-This document defines the deterministic runtime contract for THEORA Brain. Every component (server, CLI, client, desktop wrapper, Docker, Nix) must obey these rules so behaviour is predictable and reproducible.
+This document defines the deterministic runtime contract for FERAL Brain. Every component (server, CLI, client, desktop wrapper, Docker, Nix) must obey these rules so behaviour is predictable and reproducible.
 
 ## Bind and Public URL
 
 | Variable | Default | Purpose |
 |:---------|:--------|:--------|
-| `THEORA_HOST` | `0.0.0.0` | uvicorn bind address |
-| `THEORA_PORT` | `9090` | uvicorn bind port |
-| `THEORA_PUBLIC_BASE_URL` | `http://localhost:9090` | URL the browser/API client uses to reach the brain |
-| `THEORA_PUBLIC_SCHEME` | `http` | scheme for computed public URL when `THEORA_PUBLIC_BASE_URL` is unset |
-| `THEORA_PUBLIC_HOST` | `localhost` | host for computed public URL |
-| `THEORA_PUBLIC_PORT` | same as `THEORA_PORT` | port for computed public URL |
+| `FERAL_HOST` | `0.0.0.0` | uvicorn bind address |
+| `FERAL_PORT` | `9090` | uvicorn bind port |
+| `FERAL_PUBLIC_BASE_URL` | `http://localhost:9090` | URL the browser/API client uses to reach the brain |
+| `FERAL_PUBLIC_SCHEME` | `http` | scheme for computed public URL when `FERAL_PUBLIC_BASE_URL` is unset |
+| `FERAL_PUBLIC_HOST` | `localhost` | host for computed public URL |
+| `FERAL_PUBLIC_PORT` | same as `FERAL_PORT` | port for computed public URL |
 
-Helpers in `asos-core/config/runtime.py` resolve these with fallback chains. Nothing in the codebase should hard-code `localhost:9090` — use the helpers.
+Helpers in `feral-core/config/runtime.py` resolve these with fallback chains. Nothing in the codebase should hard-code `localhost:9090` — use the helpers.
 
 ## State Directory
 
 | Variable | Default | Contents |
 |:---------|:--------|:---------|
-| `THEORA_HOME` | `~/.theora` | Root for all persistent state |
+| `FERAL_HOME` | `~/.feral` | Root for all persistent state |
 
-Layout inside `THEORA_HOME`:
+Layout inside `FERAL_HOME`:
 
 ```
-~/.theora/
+~/.feral/
 ├── config.yaml          # feature flags, provider, voice mode, security
 ├── credentials.json     # API keys (chmod 600)
 ├── identity.yaml        # agent name, personality, voice, rules
@@ -38,32 +38,32 @@ Layout inside `THEORA_HOME`:
 └── TOOLS.md             # auto-synced tool descriptions
 ```
 
-The server creates `THEORA_HOME` and `memory.db` on first startup if they do not exist.
+The server creates `FERAL_HOME` and `memory.db` on first startup if they do not exist.
 
 ## LLM Provider
 
 | Variable | Default | Purpose |
 |:---------|:--------|:--------|
-| `THEORA_LLM_PROVIDER` | `openai` | Active provider: `openai`, `ollama`, `groq`, `anthropic`, `gemini` |
-| `THEORA_LLM_MODEL` | `gpt-4o-mini` | Model within the provider |
-| `THEORA_LLM_BASE_URL` | provider default | Override API endpoint |
-| `THEORA_OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `FERAL_LLM_PROVIDER` | `openai` | Active provider: `openai`, `ollama`, `groq`, `anthropic`, `gemini` |
+| `FERAL_LLM_MODEL` | `gpt-4o-mini` | Model within the provider |
+| `FERAL_LLM_BASE_URL` | provider default | Override API endpoint |
+| `FERAL_OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `OPENAI_API_KEY` | none | OpenAI key (required for openai provider) |
 | `GROQ_API_KEY` | none | Groq key (required for groq provider) |
 | `ANTHROPIC_API_KEY` | none | Anthropic key |
 | `GEMINI_API_KEY` | none | Google Gemini key |
 
-Provider presets are defined in `asos-core/agents/llm_provider.py` (`PROVIDER_PRESETS`). Apply with `POST /api/llm/presets/apply`. The `ollama_vision` preset activates the local VLM path (model `llava`).
+Provider presets are defined in `feral-core/agents/llm_provider.py` (`PROVIDER_PRESETS`). Apply with `POST /api/llm/presets/apply`. The `ollama_vision` preset activates the local VLM path (model `llava`).
 
 ## Audio Pipeline
 
 | Variable | Default | Purpose |
 |:---------|:--------|:--------|
-| `THEORA_STT_PROVIDER` | `openai` | Speech-to-text engine |
-| `THEORA_STT_MODEL` | `whisper-1` | STT model |
-| `THEORA_TTS_PROVIDER` | `openai` | Text-to-speech engine |
-| `THEORA_TTS_MODEL` | `tts-1` | TTS model |
-| `THEORA_TTS_VOICE` | `nova` | Voice selection |
+| `FERAL_STT_PROVIDER` | `openai` | Speech-to-text engine |
+| `FERAL_STT_MODEL` | `whisper-1` | STT model |
+| `FERAL_TTS_PROVIDER` | `openai` | Text-to-speech engine |
+| `FERAL_TTS_MODEL` | `tts-1` | TTS model |
+| `FERAL_TTS_VOICE` | `nova` | Voice selection |
 
 Realtime voice uses OpenAI Realtime API directly over WebSocket, not the STT/TTS pipeline.
 
@@ -71,9 +71,9 @@ Realtime voice uses OpenAI Realtime API directly over WebSocket, not the STT/TTS
 
 | Variable | Default | Purpose |
 |:---------|:--------|:--------|
-| `THEORA_VISION_ENABLED` | `false` | Enable camera/vision pipeline |
-| `THEORA_VISION_MAX_FRAME_KB` | `512` | Max frame size for VLM analysis |
-| `THEORA_SCENE_COOLDOWN` | `10` | Seconds between VLM scene analyses per node |
+| `FERAL_VISION_ENABLED` | `false` | Enable camera/vision pipeline |
+| `FERAL_VISION_MAX_FRAME_KB` | `512` | Max frame size for VLM analysis |
+| `FERAL_SCENE_COOLDOWN` | `10` | Seconds between VLM scene analyses per node |
 
 When vision is requested on a model that does not support it, the provider returns a clear error message directing the user to use a VLM preset.
 
@@ -82,14 +82,14 @@ When vision is requested on a model that does not support it, the provider retur
 | Variable | Default | Purpose |
 |:---------|:--------|:--------|
 | `NODE_API_KEY` | `dev-secret-key` | Daemon WebSocket auth token |
-| `THEORA_MAX_TIER` | `active` | Execution sandbox max tier |
-| `THEORA_KEY_*` | none | Blind vault keys (never exposed to the LLM) |
+| `FERAL_MAX_TIER` | `active` | Execution sandbox max tier |
+| `FERAL_KEY_*` | none | Blind vault keys (never exposed to the LLM) |
 
 ## External Services
 
 | Variable | Default | Purpose |
 |:---------|:--------|:--------|
-| `THEORA_MARKETPLACE_URL` | `http://localhost:8080/api/v1` | Skill registry server |
+| `FERAL_MARKETPLACE_URL` | `http://localhost:8080/api/v1` | Skill registry server |
 | `TAVILY_API_KEY` | none | Web search |
 
 ## Startup Sequence
@@ -99,7 +99,7 @@ When vision is requested on a model that does not support it, the provider retur
    - Load builtin skills
    - Create `LLMProvider`, `Learner`, `SceneAnalyzer`
    - Create `BlindVault`, `ExecutionSandbox`, `SandboxPolicy`
-   - Create `DeviceRegistry`, `TheoraMCPServer`, `MCPClientManager`
+   - Create `DeviceRegistry`, `FeralMCPServer`, `MCPClientManager`
    - Create `ChannelManager`, OAuth integrations, `SyncEngine`
    - Create `WASMSandbox`, `WakeWordDetector`
    - Start `TaskFlowRuntime` (SQLite-backed, recovers in-progress flows)
@@ -108,7 +108,7 @@ When vision is requested on a model that does not support it, the provider retur
    - Create `GatewayRegistry`, `HardwareMesh`, `IdentityWorkspace`
    - Create `GenUIEngine` (shared LLM), `ServiceProviderRegistry`, `BrowserController`
    - Optionally initialize `ApprovalManager`, `DockerSandbox`, `CronService`
-3. Server begins accepting connections on `THEORA_HOST:THEORA_PORT`.
+3. Server begins accepting connections on `FERAL_HOST:FERAL_PORT`.
 
 ## Health Check
 
@@ -124,22 +124,22 @@ When vision is requested on a model that does not support it, the provider retur
 
 ## Client Discovery
 
-The web client (`asos-client/src/config.js`) resolves the brain URL in this order:
+The web client (`feral-client/src/config.js`) resolves the brain URL in this order:
 1. `VITE_BRAIN_BASE_URL` build-time variable (explicit override)
 2. Constructed from `VITE_BRAIN_HOST` (or `window.location.hostname`) and `VITE_BRAIN_PORT` (or `window.location.port`)
 3. Fallback: `http://localhost:9090`
 
 WebSocket URL is derived from the HTTP URL by swapping scheme (`http` to `ws`, `https` to `wss`) and appending `/v1/session`.
 
-Note: the client uses `VITE_BRAIN_*` prefixed variables (Vite build-time env), not the `THEORA_*` server-side variables. When deploying behind a reverse proxy or on a different host, set `VITE_BRAIN_BASE_URL` at build time to match `THEORA_PUBLIC_BASE_URL`.
+Note: the client uses `VITE_BRAIN_*` prefixed variables (Vite build-time env), not the `FERAL_*` server-side variables. When deploying behind a reverse proxy or on a different host, set `VITE_BRAIN_BASE_URL` at build time to match `FERAL_PUBLIC_BASE_URL`.
 
 ## Nix
 
 `flake.nix` provides:
 - `devShells.default`: Python 3.11, Node 20, git, Rust
-- `packages.theora-brain`: shell wrapper for `asos-core`
-- `packages.theora-client`: shell wrapper for `asos-client`
-- `nixosModules.theora-brain`: systemd service unit (Linux only)
+- `packages.feral-brain`: shell wrapper for `feral-core`
+- `packages.feral-client`: shell wrapper for `feral-client`
+- `nixosModules.feral-brain`: systemd service unit (Linux only)
 
 Systems currently defined in `flake.nix`: `x86_64-linux`, `aarch64-linux`. Darwin outputs are not yet in the flake; macOS development uses `pip install` or Docker.
 

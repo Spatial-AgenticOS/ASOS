@@ -1,12 +1,12 @@
-# Adding Skills to ASOS
+# Adding Skills to FERAL
 
-Extending ASOS relies on mapping Python or JSON boundaries onto LLM function descriptors.
+Extending FERAL relies on mapping Python or JSON boundaries onto LLM function descriptors.
 
 ## Defining the Capability (JSON Manifest)
 
-Every capability inside ASOS must be governed by a schema explicitly readable by the Anthropic/OpenAI APIs.
+Every capability inside FERAL must be governed by a schema explicitly readable by the Anthropic/OpenAI APIs.
 
-**Create `asos-core/skills/manifests/new_skill.json`:**
+**Create `feral-core/skills/manifests/new_skill.json`:**
 ```json
 {
   "skill_id": "iot_light",
@@ -55,7 +55,7 @@ To handle the incoming payload, modify your daemon code (e.g. `robot_template.py
 ## Defining Pure Python Cloud Skills
 
 If you want the API server to perform the execution (e.g., hitting Stripe or Gmail instead of local hardware):
-1. Create a `.py` file inside `asos-core/skills/impl/`.
+1. Create a `.py` file inside `feral-core/skills/impl/`.
 2. Inherit from `BaseSkill`.
 3. Set `requires_daemon: false` in the corresponding manifest.
 4. Define the execution override explicitly, handling the exact signature provided by your `endpoints`.

@@ -1,0 +1,72 @@
+{
+    "skill_id": "subagent",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Subagent Orchestrator",
+        "primary_color": "#7C3AED",
+        "secondary_color": "#5B21B6",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Spawn parallel child agents to handle multiple tasks concurrently, then return structured results.",
+    "trigger_phrases": [
+        "research in parallel",
+        "split into subtasks",
+        "run multiple agents",
+        "parallel investigation"
+    ],
+    "categories": ["orchestration", "planning", "automation"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "spawn_subagent",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Run one or more tasks in parallel using isolated subagent contexts with tool access.",
+            "params": [
+                {
+                    "name": "tasks",
+                    "type": "array",
+                    "required": false,
+                    "description": "Array of task strings to run in parallel",
+                    "items": {"type": "string"}
+                },
+                {
+                    "name": "task",
+                    "type": "string",
+                    "required": false,
+                    "description": "Single task string (alternative to tasks array)"
+                },
+                {
+                    "name": "goal",
+                    "type": "string",
+                    "required": false,
+                    "description": "Shared goal/context prepended to each task"
+                },
+                {
+                    "name": "max_workers",
+                    "type": "integer",
+                    "required": false,
+                    "description": "Parallel worker cap (default up to 3, max 6)"
+                },
+                {
+                    "name": "max_iterations",
+                    "type": "integer",
+                    "required": false,
+                    "description": "Reasoning loops per subagent (default up to 8, max 12)"
+                }
+            ],
+            "returns_description": "Structured per-task results with success/error details",
+            "ui_hint": "list"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": ["llm", "orchestration"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 500
+}

@@ -7,11 +7,11 @@ slug: /guides/skills
 
 # Writing Skills
 
-A **skill** teaches THEORA a new capability — calling an API, transforming data, or controlling hardware. There are three ways to create one, depending on complexity.
+A **skill** teaches FERAL a new capability — calling an API, transforming data, or controlling hardware. There are three ways to create one, depending on complexity.
 
 ## Option 1: JSON Manifest (any REST API)
 
-Drop a JSON file in `~/.theora/skills/`. The Brain discovers it at startup and exposes the endpoints as agent tools.
+Drop a JSON file in `~/.feral/skills/`. The Brain discovers it at startup and exposes the endpoints as agent tools.
 
 ```json
 {
@@ -56,7 +56,7 @@ Drop a JSON file in `~/.theora/skills/`. The Brain discovers it at startup and e
 Set the API key securely:
 
 ```bash
-export THEORA_KEY_weather_api=your-key-here
+export FERAL_KEY_weather_api=your-key-here
 ```
 
 The Blind Vault stores this key and injects it into requests — the LLM never sees the raw value.
@@ -75,17 +75,17 @@ The Blind Vault stores this key and injects it into requests — the LLM never s
 
 ## Option 2: Python Plugin
 
-For tools that need custom logic (not just HTTP calls), use the SDK's `TheoraPlugin` base class.
+For tools that need custom logic (not just HTTP calls), use the SDK's `FeralPlugin` base class.
 
 ```python
-from theora_sdk import TheoraPlugin, theora_tool
+from feral_sdk import FeralPlugin, feral_tool
 
-class TranslatorPlugin(TheoraPlugin):
+class TranslatorPlugin(FeralPlugin):
     name = "translator"
     description = "Translate text between languages"
     version = "0.1.0"
 
-    @theora_tool(description="Translate text to a target language")
+    @feral_tool(description="Translate text to a target language")
     async def translate(self, text: str, target_lang: str) -> dict:
         # Custom logic — call a translation API, run a local model, etc.
         translated = await self._call_translation_service(text, target_lang)
@@ -107,15 +107,15 @@ class TranslatorPlugin(TheoraPlugin):
 | `on_load()` | Brain starts or hot-reloads the plugin |
 | `on_unload()` | Brain shuts down |
 | `execute(endpoint_id, args, vault)` | Brain invokes a tool (called automatically) |
-| `to_manifest()` | Generates a skill manifest from `@theora_tool` decorators |
+| `to_manifest()` | Generates a skill manifest from `@feral_tool` decorators |
 
 ### Installing a Python Plugin
 
-Place the module in `~/.theora/plugins/` or install it as a Python package. The Brain discovers plugins that subclass `TheoraPlugin`.
+Place the module in `~/.feral/plugins/` or install it as a Python package. The Brain discovers plugins that subclass `FeralPlugin`.
 
 ## Option 3: WASM Skill (sandboxed)
 
-For untrusted or third-party skills, THEORA can execute WebAssembly modules in a Wasmtime sandbox.
+For untrusted or third-party skills, FERAL can execute WebAssembly modules in a Wasmtime sandbox.
 
 ```bash
 # Scaffold a new WASM skill
@@ -141,7 +141,7 @@ Place the `.wasm` file alongside a manifest:
 
 ## Self-Learning Skills
 
-THEORA can auto-detect repeated patterns and generate skill manifests from usage history. When the agent notices it keeps performing the same multi-step sequence, it proposes a new skill. You can review and approve pending skills:
+FERAL can auto-detect repeated patterns and generate skill manifests from usage history. When the agent notices it keeps performing the same multi-step sequence, it proposes a new skill. You can review and approve pending skills:
 
 ```bash
 # List pending auto-generated skills
@@ -156,8 +156,8 @@ curl -X POST http://localhost:9090/api/skills/approve/skill_id
 Browse and install community skills from the registry:
 
 ```bash
-theora marketplace search "weather"
-theora marketplace install weather_api
+feral marketplace search "weather"
+feral marketplace install weather_api
 ```
 
 Or via the API:

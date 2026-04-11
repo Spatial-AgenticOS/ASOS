@@ -1,8 +1,8 @@
 """
-THEORA Skill Registry — Community Skill Server
+FERAL Skill Registry — Community Skill Server
 ================================================
 A minimal FastAPI service for publishing, discovering, and installing
-community skills. Deploy at registry.theora.io.
+community skills. Deploy at registry.feral.io.
 
 Run locally: uvicorn registry.server:app --port 8080
 """
@@ -20,10 +20,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="THEORA Skill Registry", version="1.0.0")
+app = FastAPI(title="FERAL Skill Registry", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-DB_PATH = os.getenv("REGISTRY_DB", str(Path.home() / ".theora" / "registry.db"))
+DB_PATH = os.getenv("REGISTRY_DB", str(Path.home() / ".feral" / "registry.db"))
 
 
 def get_db():
@@ -68,7 +68,7 @@ class SkillInfo(BaseModel):
 
 @app.get("/")
 def root():
-    return {"name": "THEORA Skill Registry", "version": "1.0.0"}
+    return {"name": "FERAL Skill Registry", "version": "1.0.0"}
 
 
 @app.get("/api/v1/skills/search")

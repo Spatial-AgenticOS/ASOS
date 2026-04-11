@@ -1,0 +1,123 @@
+{
+    "skill_id": "system_settings",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "System Settings",
+        "primary_color": "#64748B",
+        "secondary_color": "#1E293B",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Read and update FERAL system settings, user identity, and agent personality. Use this when the user asks you to change who they are, adjust the agent personality, or modify system configuration.",
+    "trigger_phrases": [
+        "change my name",
+        "update my profile",
+        "my identity",
+        "who am I",
+        "change agent name",
+        "change personality",
+        "update settings",
+        "change settings",
+        "set my name",
+        "my profile",
+        "change the agent",
+        "configure",
+        "update my info",
+        "set provider",
+        "change model",
+        "change voice"
+    ],
+    "categories": ["system", "identity", "settings"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "read_user_profile",
+            "method": "GET",
+            "url": "internal://system_settings/read_user_profile",
+            "description": "Read the user's profile (USER.md) — who they are, what they do, their interests.",
+            "params": [],
+            "returns_description": "{content: string}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "update_user_profile",
+            "method": "POST",
+            "url": "internal://system_settings/update_user_profile",
+            "description": "Update the user's profile. Accepts name, location, occupation, and interests. Rewrites USER.md.",
+            "params": [
+                {"name": "name", "type": "string", "required": false, "description": "User's name"},
+                {"name": "location", "type": "string", "required": false, "description": "User's location"},
+                {"name": "occupation", "type": "string", "required": false, "description": "User's occupation or role"},
+                {"name": "interests", "type": "string", "required": false, "description": "User's interests and hobbies"},
+                {"name": "raw_content", "type": "string", "required": false, "description": "Full raw USER.md content (overrides individual fields)"}
+            ],
+            "returns_description": "{ok: true}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "read_agent_personality",
+            "method": "GET",
+            "url": "internal://system_settings/read_agent_personality",
+            "description": "Read the agent's personality and identity (SOUL.md, IDENTITY.yaml).",
+            "params": [],
+            "returns_description": "{name, personality, soul_content}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "update_agent_personality",
+            "method": "POST",
+            "url": "internal://system_settings/update_agent_personality",
+            "description": "Update the agent's name, personality, or voice. Rewrites SOUL.md and IDENTITY.yaml.",
+            "params": [
+                {"name": "agent_name", "type": "string", "required": false, "description": "The agent's display name"},
+                {"name": "personality", "type": "string", "required": false, "description": "Personality description text"},
+                {"name": "tts_voice", "type": "string", "required": false, "description": "TTS voice name (e.g. nova, alloy, echo, shimmer)"}
+            ],
+            "returns_description": "{ok: true}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "read_settings",
+            "method": "GET",
+            "url": "internal://system_settings/read_settings",
+            "description": "Read current system settings (LLM provider, model, features, etc.).",
+            "params": [],
+            "returns_description": "{settings: dict}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "update_setting",
+            "method": "POST",
+            "url": "internal://system_settings/update_setting",
+            "description": "Update a system setting value. E.g. change the LLM provider or model.",
+            "params": [
+                {"name": "section", "type": "string", "required": true, "description": "Settings section (e.g. 'llm', 'features', 'voice')"},
+                {"name": "key", "type": "string", "required": true, "description": "Setting key (e.g. 'provider', 'model', 'streaming')"},
+                {"name": "value", "type": "string", "required": true, "description": "New value"}
+            ],
+            "returns_description": "{ok: true}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "create_skill",
+            "method": "POST",
+            "url": "internal://system_settings/create_skill",
+            "description": "Create and register a brand new skill from a capability description. Use when the user asks you to learn something new, add a capability, or integrate with a service you don't currently support.",
+            "params": [
+                {"name": "capability", "type": "string", "required": true, "description": "What the skill should do, in plain language (e.g. 'check my Notion pages', 'control Spotify playback')"},
+                {"name": "service", "type": "string", "required": false, "description": "The service or API to integrate with (e.g. 'Notion API', 'Spotify Web API')"}
+            ],
+            "returns_description": "{skill_id, name, endpoints, message}",
+            "ui_hint": "detail_card"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": ["system.write"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 100
+}

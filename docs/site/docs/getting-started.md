@@ -7,7 +7,7 @@ slug: /getting-started
 
 # Getting Started
 
-Get THEORA running locally in under five minutes. By the end of this page you will have a brain server, a web dashboard, and your first conversation.
+Get FERAL running locally in under five minutes. By the end of this page you will have a brain server, a web dashboard, and your first conversation.
 
 ## Prerequisites
 
@@ -17,17 +17,17 @@ Get THEORA running locally in under five minutes. By the end of this page you wi
 ## Install
 
 ```bash
-pip install theora-asos[llm]
+pip install feral-ai[llm]
 ```
 
-This installs the `theora` CLI, the FastAPI brain server, and the bundled web UI.
+This installs the `feral` CLI, the FastAPI brain server, and the bundled web UI.
 
 ## Setup
 
 Run the interactive setup wizard:
 
 ```bash
-theora setup
+feral setup
 ```
 
 The wizard walks you through:
@@ -39,12 +39,12 @@ The wizard walks you through:
 | **Skills & Tools** | Enable computer use, web search, vision, hardware control. Add keys for Tavily, Spotify, etc. |
 | **Features** | Voice mode (realtime / whisper / disabled), streaming, proactive behavior, wake word. |
 
-All configuration is written to `~/.theora/`. No cloud account needed.
+All configuration is written to `~/.feral/`. No cloud account needed.
 
 ## Start
 
 ```bash
-theora start
+feral start
 ```
 
 This launches the brain and serves the web dashboard at [http://localhost:9090](http://localhost:9090).
@@ -53,21 +53,21 @@ Open the URL in your browser. Type a message or click the microphone for voice.
 
 ## First Chat (CLI)
 
-You can also talk to THEORA from the terminal:
+You can also talk to FERAL from the terminal:
 
 ```bash
-theora "What files are in my home directory?"
-theora "Search the web for latest AI news"
-theora "Remember that my favorite color is blue"
-theora "What's my favorite color?"
+feral "What files are in my home directory?"
+feral "Search the web for latest AI news"
+feral "Remember that my favorite color is blue"
+feral "What's my favorite color?"
 ```
 
 ## First Chat (SDK)
 
 ```python
-from theora_sdk import TheoraClient
+from feral_sdk import FeralClient
 
-async with TheoraClient("http://localhost:9090") as client:
+async with FeralClient("http://localhost:9090") as client:
     reply = await client.chat("Hello! What can you do?")
     print(reply)
 ```
@@ -77,7 +77,7 @@ async with TheoraClient("http://localhost:9090") as client:
 If you prefer Docker:
 
 ```bash
-git clone https://github.com/Spatial-AgenticOS/ASOS.git && cd ASOS
+git clone https://github.com/feral-ai/feral.git && cd feral
 cp .env.example .env   # fill in your API keys
 docker compose up -d
 ```
@@ -91,6 +91,6 @@ docker compose up -d
 ## What's Next
 
 - [Architecture](./architecture.md) — understand how the brain, memory, and device mesh fit together
-- [Python SDK](./sdk/python.md) — build plugins and automate THEORA programmatically
+- [Python SDK](./sdk/python.md) — build plugins and automate FERAL programmatically
 - [Write a Skill](./guides/skills.md) — add new capabilities to your agent
 - [Connect a Device](./guides/devices.md) — bring hardware into the mesh

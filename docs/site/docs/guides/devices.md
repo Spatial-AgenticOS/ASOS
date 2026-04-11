@@ -7,7 +7,7 @@ slug: /guides/devices
 
 # Writing a HUP Device Adapter
 
-The **Hardware Use Protocol (HUP)** is how physical devices — wristbands, smart glasses, robots, sensors — join the THEORA mesh. Each device runs a small adapter that connects to the Brain over WebSocket, registers its capabilities, streams telemetry, and responds to commands.
+The **Hardware Use Protocol (HUP)** is how physical devices — wristbands, smart glasses, robots, sensors — join the FERAL mesh. Each device runs a small adapter that connects to the Brain over WebSocket, registers its capabilities, streams telemetry, and responds to commands.
 
 ## Concepts
 
@@ -21,12 +21,12 @@ The **Hardware Use Protocol (HUP)** is how physical devices — wristbands, smar
 ## Quick Start (Python SDK)
 
 ```bash
-pip install theora-sdk
+pip install feral-sdk
 ```
 
 ```python
 import asyncio
-from theora_sdk import HUPDevice
+from feral_sdk import HUPDevice
 
 class TemperatureSensor(HUPDevice):
     device_type = "sensor"
@@ -102,7 +102,7 @@ The manifest tells the Brain what the device can do:
 ```json
 {
   "device_type": "wearable",
-  "name": "Theora Wristband",
+  "name": "Feral Wristband",
   "capabilities": ["heart_rate", "spo2", "skin_temp", "accelerometer"],
   "telemetry_interval_s": 5.0,
   "actions": [
@@ -145,23 +145,23 @@ curl http://localhost:9090/api/devices
 
 ## Supported Devices
 
-THEORA ships with reference adapters for:
+FERAL ships with reference adapters for:
 
 | Device | Adapter Location |
 |:-------|:-----------------|
-| Smart Glasses (BLE) | `asos-nodes/` |
-| Wristband (HR, SpO2, temp) | `asos-nodes/` |
-| iOS Bluetooth Bridge | `asos-nodes/phone-bridge/` |
-| Home Assistant | `asos-core/integrations/` |
+| Smart Glasses (BLE) | `feral-nodes/` |
+| Wristband (HR, SpO2, temp) | `feral-nodes/` |
+| iOS Bluetooth Bridge | `feral-nodes/phone-bridge/` |
+| Home Assistant | `feral-core/integrations/` |
 
 Use these as templates for your own hardware adapters.
 
 ## TypeScript / Node Adapter
 
 ```typescript
-import { TheoraNode } from '@theora/sdk';
+import { FeralNode } from '@feral/sdk';
 
-const node = new TheoraNode({
+const node = new FeralNode({
   nodeId: 'garage-door',
   nodeType: 'actuator',
   capabilities: ['open', 'close', 'status'],
@@ -182,4 +182,4 @@ node.onCommand(async (action, params) => {
 });
 ```
 
-See the [Node SDK reference](../sdk/node.md) for the full `TheoraNode` API.
+See the [Node SDK reference](../sdk/node.md) for the full `FeralNode` API.

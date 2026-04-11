@@ -7,20 +7,20 @@ slug: /sdk/python
 
 # Python SDK
 
-The `theora-sdk` package lets you talk to a running THEORA Brain, build plugins, and create hardware device adapters — all from Python.
+The `feral-sdk` package lets you talk to a running FERAL Brain, build plugins, and create hardware device adapters — all from Python.
 
 ```bash
-pip install theora-sdk
+pip install feral-sdk
 ```
 
-## TheoraClient
+## FeralClient
 
-`TheoraClient` is an async HTTP + WebSocket client for the Brain API.
+`FeralClient` is an async HTTP + WebSocket client for the Brain API.
 
 ```python
-from theora_sdk import TheoraClient
+from feral_sdk import FeralClient
 
-async with TheoraClient("http://localhost:9090") as client:
+async with FeralClient("http://localhost:9090") as client:
     # Health check
     health = await client.health()
 
@@ -48,7 +48,7 @@ async with TheoraClient("http://localhost:9090") as client:
 ### Constructor
 
 ```python
-TheoraClient(base_url: str = "http://localhost:9090")
+FeralClient(base_url: str = "http://localhost:9090")
 ```
 
 ### Methods
@@ -65,24 +65,24 @@ TheoraClient(base_url: str = "http://localhost:9090")
 | `list_conversations(limit=20)` | `list[dict]` | Conversation history |
 | `invoke_skill(skill_id, endpoint, args={})` | `dict` | Directly invoke a skill endpoint |
 
-## TheoraPlugin
+## FeralPlugin
 
-Build agent tools as Python classes. Decorate methods with `@theora_tool` to expose them.
+Build agent tools as Python classes. Decorate methods with `@feral_tool` to expose them.
 
 ```python
-from theora_sdk import TheoraPlugin, theora_tool
+from feral_sdk import FeralPlugin, feral_tool
 
-class WeatherPlugin(TheoraPlugin):
+class WeatherPlugin(FeralPlugin):
     name = "weather"
     description = "Real-time weather data"
     version = "0.1.0"
 
-    @theora_tool(description="Get current weather for a city")
+    @feral_tool(description="Get current weather for a city")
     async def current(self, city: str) -> dict:
         # Your logic here — call an API, read a sensor, etc.
         return {"city": city, "temp_f": 72, "condition": "sunny"}
 
-    @theora_tool(description="Get 5-day forecast")
+    @feral_tool(description="Get 5-day forecast")
     async def forecast(self, city: str) -> dict:
         return {"city": city, "days": 5, "forecast": ["sunny", "cloudy", "rain", "sunny", "sunny"]}
 ```
@@ -94,12 +94,12 @@ class WeatherPlugin(TheoraPlugin):
 | `on_load()` | Brain loads the plugin at startup |
 | `on_unload()` | Brain shuts down or hot-reloads |
 | `execute(endpoint_id, args, vault)` | Brain invokes a tool — called automatically |
-| `to_manifest()` | Generates a THEORA skill manifest from decorated methods |
+| `to_manifest()` | Generates a FERAL skill manifest from decorated methods |
 
-### @theora_tool Decorator
+### @feral_tool Decorator
 
 ```python
-@theora_tool(
+@feral_tool(
     description="Human-readable description for the LLM",
     name="optional_override",          # defaults to method name
     parameters={"city": {"type": "string", "description": "City name"}},
@@ -113,11 +113,11 @@ async def my_tool(self, city: str) -> dict:
 Create device adapters that connect physical hardware to the Brain's device mesh.
 
 ```python
-from theora_sdk import HUPDevice
+from feral_sdk import HUPDevice
 
 class WristbandAdapter(HUPDevice):
     device_type = "wearable"
-    device_name = "Theora Wristband"
+    device_name = "Feral Wristband"
     capabilities = ["heart_rate", "spo2", "skin_temp"]
     telemetry_interval_s = 5.0
 

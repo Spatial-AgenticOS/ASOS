@@ -5,24 +5,24 @@ sidebar_position: 10
 slug: /contributing
 ---
 
-# Contributing to THEORA
+# Contributing to FERAL
 
-THEORA is building toward an agent-native operating system. That is a large mission and we need help from many kinds of engineers — backend, frontend, ML, hardware, Nix/packaging, and documentation.
+FERAL is building toward an agent-native operating system. That is a large mission and we need help from many kinds of engineers — backend, frontend, ML, hardware, Nix/packaging, and documentation.
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/Spatial-AgenticOS/ASOS.git
-cd ASOS/asos-core
+git clone https://github.com/feral-ai/feral.git
+cd feral/feral-core
 pip install -e ".[llm,dev]"
-theora setup
-theora serve    # brain running on localhost:9090
+feral setup
+feral serve    # brain running on localhost:9090
 ```
 
 For the web UI (in a separate terminal):
 
 ```bash
-cd ASOS/asos-client
+cd feral/feral-client
 npm install
 npm run dev     # dev server on localhost:5173
 ```
@@ -70,7 +70,7 @@ pytest --cov --cov-report=term
 # Target: 70% coverage minimum
 ```
 
-Test files live in `asos-core/tests/`. Use `pytest-asyncio` for async tests — the `asyncio_mode = "auto"` config handles the event loop.
+Test files live in `feral-core/tests/`. Use `pytest-asyncio` for async tests — the `asyncio_mode = "auto"` config handles the event loop.
 
 ## Pull Request Process
 
@@ -101,13 +101,13 @@ Pick the area that matches your skills:
 
 | Lane | What You'd Work On | Entry Points |
 |:-----|:-------------------|:-------------|
-| **Runtime / Orchestrator** | Agent loop, LLM routing, TaskFlows, sessions, security | `asos-core/agents/` |
-| **Memory / Knowledge** | 4-tier memory, wiki compilation, ingest pipelines, federated sync | `asos-core/memory/` |
-| **GenUI / Provider Surfaces** | SDUI engine, provider contracts, surface caching, client renderer | `asos-core/genui/`, `asos-client/src/components/SduiRenderer.jsx` |
-| **Hardware / Daemons** | HUP protocol, daemon SDKs, device profiles, edge bridges | `asos-core/hardware/`, `asos-nodes/` |
-| **Voice / Perception** | Realtime voice, Gemini Live, wake word, vision pipeline | `asos-core/voice/`, `asos-core/perception/` |
+| **Runtime / Orchestrator** | Agent loop, LLM routing, TaskFlows, sessions, security | `feral-core/agents/` |
+| **Memory / Knowledge** | 4-tier memory, wiki compilation, ingest pipelines, federated sync | `feral-core/memory/` |
+| **GenUI / Provider Surfaces** | SDUI engine, provider contracts, surface caching, client renderer | `feral-core/genui/`, `feral-client/src/components/SduiRenderer.jsx` |
+| **Hardware / Daemons** | HUP protocol, daemon SDKs, device profiles, edge bridges | `feral-core/hardware/`, `feral-nodes/` |
+| **Voice / Perception** | Realtime voice, Gemini Live, wake word, vision pipeline | `feral-core/voice/`, `feral-core/perception/` |
 | **Nix / Packaging** | Flake outputs, NixOS modules, reproducible builds | `flake.nix` |
-| **Frontend / Shell** | Web UI, dashboard, Tauri desktop, mobile bridges | `asos-client/`, `desktop/` |
+| **Frontend / Shell** | Web UI, dashboard, Tauri desktop, mobile bridges | `feral-client/`, `desktop/` |
 | **Documentation** | Guides, API reference, architecture docs | `docs/` |
 
 ## Architecture Docs
@@ -115,20 +115,20 @@ Pick the area that matches your skills:
 Before diving in, read these to understand the system:
 
 - [Architecture Overview](./architecture.md)
-- [`docs/RUNTIME_CONTRACT.md`](https://github.com/Spatial-AgenticOS/ASOS/blob/main/docs/RUNTIME_CONTRACT.md) — env vars, state paths, startup/shutdown contract
-- [`docs/GENUI_PROVIDER_SPEC.md`](https://github.com/Spatial-AgenticOS/ASOS/blob/main/docs/GENUI_PROVIDER_SPEC.md) — building GenUI provider surfaces
-- [`docs/HARDWARE_ECOSYSTEM.md`](https://github.com/Spatial-AgenticOS/ASOS/blob/main/docs/HARDWARE_ECOSYSTEM.md) — building hardware daemons
-- [`docs/ROADMAP.md`](https://github.com/Spatial-AgenticOS/ASOS/blob/main/docs/ROADMAP.md) — strategic execution order
-- [`docs/SCORECARD.md`](https://github.com/Spatial-AgenticOS/ASOS/blob/main/docs/SCORECARD.md) — honest capability status
+- [`docs/RUNTIME_CONTRACT.md`](https://github.com/feral-ai/feral/blob/main/docs/RUNTIME_CONTRACT.md) — env vars, state paths, startup/shutdown contract
+- [`docs/GENUI_PROVIDER_SPEC.md`](https://github.com/feral-ai/feral/blob/main/docs/GENUI_PROVIDER_SPEC.md) — building GenUI provider surfaces
+- [`docs/HARDWARE_ECOSYSTEM.md`](https://github.com/feral-ai/feral/blob/main/docs/HARDWARE_ECOSYSTEM.md) — building hardware daemons
+- [`docs/ROADMAP.md`](https://github.com/feral-ai/feral/blob/main/docs/ROADMAP.md) — strategic execution order
+- [`docs/SCORECARD.md`](https://github.com/feral-ai/feral/blob/main/docs/SCORECARD.md) — honest capability status
 
 ## Reporting Issues
 
-Open an issue at [github.com/Spatial-AgenticOS/ASOS/issues](https://github.com/Spatial-AgenticOS/ASOS/issues) with:
+Open an issue at [github.com/feral-ai/feral/issues](https://github.com/feral-ai/feral/issues) with:
 
 - Steps to reproduce.
 - Expected vs actual behavior.
-- Python version, OS, and `theora --version` output.
+- Python version, OS, and `feral --version` output.
 
 ## Contact
 
-**Alpay Kasal** — [info@theora.io](mailto:info@theora.io)
+**Alpay Kasal** — [info@feral.io](mailto:info@feral.io)

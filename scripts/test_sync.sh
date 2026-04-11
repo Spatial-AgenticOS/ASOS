@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# THEORA Federated Sync — Two-Node Test
+# FERAL Federated Sync — Two-Node Test
 # ========================================
 # Spins up two Brain instances on different ports, saves a note on
 # instance A, triggers sync, and verifies the note appears on B.
@@ -21,28 +21,28 @@ cleanup() {
     echo -e "\n${YELLOW}Cleaning up...${NC}"
     kill "$PID_A" 2>/dev/null || true
     kill "$PID_B" 2>/dev/null || true
-    rm -rf /tmp/theora-sync-test-a /tmp/theora-sync-test-b
+    rm -rf /tmp/feral-sync-test-a /tmp/feral-sync-test-b
 }
 trap cleanup EXIT
 
-echo -e "${BOLD}THEORA Federated Sync Test${NC}"
+echo -e "${BOLD}FERAL Federated Sync Test${NC}"
 echo "=========================="
 
 # Create isolated data directories
-mkdir -p /tmp/theora-sync-test-a /tmp/theora-sync-test-b
+mkdir -p /tmp/feral-sync-test-a /tmp/feral-sync-test-b
 
-CORE_DIR="$(cd "$(dirname "$0")/../asos-core" && pwd)"
+CORE_DIR="$(cd "$(dirname "$0")/../feral-core" && pwd)"
 
 echo -e "\n[1/5] Starting Brain A on port $PORT_A..."
-THEORA_HOME=/tmp/theora-sync-test-a \
-THEORA_SYNC_PASSPHRASE="$PASSPHRASE" \
+FERAL_HOME=/tmp/feral-sync-test-a \
+FERAL_SYNC_PASSPHRASE="$PASSPHRASE" \
     python -m uvicorn api.server:app --host 127.0.0.1 --port "$PORT_A" \
     --log-level warning &
 PID_A=$!
 
 echo "[2/5] Starting Brain B on port $PORT_B..."
-THEORA_HOME=/tmp/theora-sync-test-b \
-THEORA_SYNC_PASSPHRASE="$PASSPHRASE" \
+FERAL_HOME=/tmp/feral-sync-test-b \
+FERAL_SYNC_PASSPHRASE="$PASSPHRASE" \
     python -m uvicorn api.server:app --host 127.0.0.1 --port "$PORT_B" \
     --log-level warning &
 PID_B=$!

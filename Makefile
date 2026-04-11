@@ -6,13 +6,13 @@ PIP    ?= $(PYTHON) -m pip
 # ── Tier 1: Quick start ──────────────────────────────────────
 
 install:
-	$(PIP) install -e "asos-core[llm]"
+	$(PIP) install -e "feral-core[llm]"
 	@echo ""
-	@echo "  Run: theora setup   (first-time configuration)"
-	@echo "  Run: theora start   (brain + dashboard)"
+	@echo "  Run: feral setup   (first-time configuration)"
+	@echo "  Run: feral start   (brain + dashboard)"
 
 setup:
-	theora setup
+	feral setup
 
 # ── Tier 3: Full development environment ─────────────────────
 
@@ -27,20 +27,20 @@ dev: dev-brain dev-deps
 	@echo "    make test      — run tests"
 
 dev-brain:
-	$(PIP) install -e "asos-core[llm,dev]"
+	$(PIP) install -e "feral-core[llm,dev]"
 
 dev-deps:
-	@if [ -d asos-client ] && command -v npm >/dev/null 2>&1; then \
-		cd asos-client && npm install; \
+	@if [ -d feral-client ] && command -v npm >/dev/null 2>&1; then \
+		cd feral-client && npm install; \
 	else \
-		echo "  [skip] asos-client npm install (npm not found or directory missing)"; \
+		echo "  [skip] feral-client npm install (npm not found or directory missing)"; \
 	fi
 
 serve:
-	theora serve
+	feral serve
 
 client:
-	cd asos-client && npm run dev
+	cd feral-client && npm run dev
 
 # ── Docker (semi-manual tier) ────────────────────────────────
 
@@ -64,29 +64,29 @@ docker-logs:
 # ── Testing & quality ────────────────────────────────────────
 
 test:
-	cd asos-core && $(PYTHON) -m pytest tests/ -v
+	cd feral-core && $(PYTHON) -m pytest tests/ -v
 
 lint:
-	cd asos-core && $(PYTHON) -m pytest tests/ -v --tb=short -q 2>/dev/null || true
+	cd feral-core && $(PYTHON) -m pytest tests/ -v --tb=short -q 2>/dev/null || true
 	@echo "  (Full lint tooling planned — currently relies on pytest)"
 
 # ── Utilities ────────────────────────────────────────────────
 
 doctor:
-	theora doctor
+	feral doctor
 
 bundle-webui:
 	bash scripts/build_webui.sh
 
 clean:
-	rm -rf asos-core/webui
-	rm -rf asos-core/*.egg-info
-	rm -rf asos-core/__pycache__
+	rm -rf feral-core/webui
+	rm -rf feral-core/*.egg-info
+	rm -rf feral-core/__pycache__
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 help:
 	@echo ""
-	@echo "  THEORA Makefile"
+	@echo "  FERAL Makefile"
 	@echo "  ───────────────"
 	@echo ""
 	@echo "  Quick start:"
@@ -106,6 +106,6 @@ help:
 	@echo ""
 	@echo "  Utilities:"
 	@echo "    make doctor        check system health"
-	@echo "    make bundle-webui  build client into asos-core/webui/"
+	@echo "    make bundle-webui  build client into feral-core/webui/"
 	@echo "    make clean         remove build artifacts"
 	@echo ""

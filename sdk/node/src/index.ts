@@ -1,20 +1,20 @@
 /**
- * @theora/sdk — Build plugins, tools, and device adapters for THEORA.
+ * @feral/sdk — Build plugins, tools, and device adapters for FERAL.
  *
  * @example
  * ```ts
- * import { TheoraClient, definePlugin } from '@theora/sdk';
+ * import { FeralClient, definePlugin } from '@feral/sdk';
  *
- * const client = new TheoraClient('http://localhost:9090');
+ * const client = new FeralClient('http://localhost:9090');
  * const response = await client.chat('Hello!');
  * ```
  */
 
-export { TheoraClient } from './client';
+export { FeralClient } from './client';
 export { definePlugin, type PluginDefinition, type ToolDefinition } from './plugin';
-export { TheoraNode, type NodeConfig } from './node';
+export { FeralNode, type NodeConfig } from './node';
 export type {
-  TheoraMessage,
+  FeralMessage,
   TextCommand,
   TextResponse,
   StreamDelta,

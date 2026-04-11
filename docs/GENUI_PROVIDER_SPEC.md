@@ -1,19 +1,19 @@
 # GenUI Provider Surface Specification
 
-This document defines the contract for building a GenUI provider surface in THEORA. A provider surface replaces a traditional hardcoded app with a declarative JSON contract that THEORA compiles, caches, and hydrates at runtime.
+This document defines the contract for building a GenUI provider surface in FERAL. A provider surface replaces a traditional hardcoded app with a declarative JSON contract that FERAL compiles, caches, and hydrates at runtime.
 
 ## How It Works
 
 1. A service provider submits a JSON contract via `POST /api/genui/providers/register`.
-2. THEORA compiles each named surface into SDUI JSON once.
-3. The compiled layout is cached under `~/.theora/genui_surfaces/{provider_id}/{surface_id}.json`.
+2. FERAL compiles each named surface into SDUI JSON once.
+3. The compiled layout is cached under `~/.feral/genui_surfaces/{provider_id}/{surface_id}.json`.
 4. On subsequent opens, the cached layout is loaded instantly and hydrated with runtime data.
 
 ```mermaid
 flowchart LR
   contract[Provider JSON Contract] --> register["POST /api/genui/providers/register"]
   register --> compile["POST .../surfaces/compile"]
-  compile --> cache["~/.theora/genui_surfaces/"]
+  compile --> cache["~/.feral/genui_surfaces/"]
   cache --> render["POST .../surfaces/render"]
   render --> ui[Rendered SDUI]
 ```
@@ -79,7 +79,7 @@ A surface is a named screen or view within the provider. Each surface has:
 | `template` | object | recommended | Pre-defined SDUI component tree |
 | `prompt` | string | fallback | Used for LLM-based generation if no template is provided |
 
-If a surface has a `template`, that template is used directly as the compiled layout. If no template is provided, THEORA uses the LLM to generate one from the `prompt` field and the provider context.
+If a surface has a `template`, that template is used directly as the compiled layout. If no template is provided, FERAL uses the LLM to generate one from the `prompt` field and the provider context.
 
 ## SDUI Component Types
 
@@ -232,7 +232,7 @@ Response includes both the hydrated `payload` and the original `layout` for comp
 
 ## Implementation Reference
 
-- Engine: `asos-core/genui/generator.py` (`GenUIEngine`, `ServiceProvider`, `ServiceProviderRegistry`)
-- Client renderer: `asos-client/src/components/SduiRenderer.jsx`
-- Tests: `asos-core/tests/test_genui.py`
-- Cache directory: `~/.theora/genui_surfaces/`
+- Engine: `feral-core/genui/generator.py` (`GenUIEngine`, `ServiceProvider`, `ServiceProviderRegistry`)
+- Client renderer: `feral-client/src/components/SduiRenderer.jsx`
+- Tests: `feral-core/tests/test_genui.py`
+- Cache directory: `~/.feral/genui_surfaces/`

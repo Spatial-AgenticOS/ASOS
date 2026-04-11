@@ -1,6 +1,6 @@
-/** Core message types for THEORA WebSocket protocol. */
+/** Core message types for FERAL WebSocket protocol. */
 
-export interface TheoraMessage {
+export interface FeralMessage {
   type: string;
   session_id?: string;
   hop?: string;

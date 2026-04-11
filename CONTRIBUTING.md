@@ -1,22 +1,22 @@
-# Contributing to THEORA
+# Contributing to FERAL
 
-THEORA is building an agent-native computing platform. Contributions across all system layers are welcome.
+FERAL is building an agent-native computing platform. Contributions across all system layers are welcome.
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/Spatial-AgenticOS/ASOS.git
-cd ASOS/asos-core
+git clone https://github.com/feral-ai/feral.git
+cd feral/feral-core
 pip install -e ".[llm,dev]"
 pytest                    # run tests
-theora setup              # configure locally
-theora serve              # start the brain
+feral setup              # configure locally
+feral serve              # start the brain
 ```
 
 For the web client:
 
 ```bash
-cd asos-client
+cd feral-client
 npm install
 npm run dev
 ```
@@ -31,9 +31,9 @@ nix develop
 
 | Directory | What it contains |
 |:----------|:-----------------|
-| `asos-core/` | Python backend: brain API, orchestrator, memory, voice, security, GenUI, hardware protocol |
-| `asos-client/` | React web UI (Vite + Tailwind) |
-| `asos-nodes/` | Hardware daemon SDKs (Python, iOS Swift, Android Kotlin) |
+| `feral-core/` | Python backend: brain API, orchestrator, memory, voice, security, GenUI, hardware protocol |
+| `feral-client/` | React web UI (Vite + Tailwind) |
+| `feral-nodes/` | Hardware daemon SDKs (Python, iOS Swift, Android Kotlin) |
 | `desktop/` | Tauri desktop app |
 | `registry/` | Skill marketplace server |
 | `scripts/` | Install, test, and demo scripts |
@@ -45,33 +45,33 @@ Pick the lane that matches your expertise. Each lane has clear entry files and s
 
 ### Runtime / Orchestrator
 Agent loop, LLM routing, multi-agent dispatch, TaskFlows, session management, security enforcement.
-- `asos-core/agents/orchestrator.py`
-- `asos-core/agents/multi_agent.py`
-- `asos-core/api/server.py`
-- `asos-core/security/`
+- `feral-core/agents/orchestrator.py`
+- `feral-core/agents/multi_agent.py`
+- `feral-core/api/server.py`
+- `feral-core/security/`
 
 ### Memory / Knowledge
 4-tier memory store, wiki compilation, ingest pipelines, federated sync, knowledge graph.
-- `asos-core/memory/store.py`
-- `asos-core/memory/sync.py`
+- `feral-core/memory/store.py`
+- `feral-core/memory/sync.py`
 
 ### GenUI / Provider Surfaces
 SDUI engine, provider contract lifecycle, surface caching, client renderer, component library.
-- `asos-core/genui/generator.py`
-- `asos-client/src/components/SduiRenderer.jsx`
+- `feral-core/genui/generator.py`
+- `feral-client/src/components/SduiRenderer.jsx`
 - See [`docs/GENUI_PROVIDER_SPEC.md`](docs/GENUI_PROVIDER_SPEC.md) for the contract format.
 
 ### Hardware / Daemons
 Node WebSocket protocol, daemon SDKs, device profiles, edge bridges (BLE, MQTT, serial, ROS).
-- `asos-core/hardware/protocol.py`
-- `asos-core/hardware/mesh.py`
-- `asos-nodes/`
+- `feral-core/hardware/protocol.py`
+- `feral-core/hardware/mesh.py`
+- `feral-nodes/`
 - See [`docs/HARDWARE_ECOSYSTEM.md`](docs/HARDWARE_ECOSYSTEM.md) for the daemon contract.
 
 ### Voice / Perception
 Realtime voice proxy, wake word detection, vision pipeline, multimodal sensor fusion.
-- `asos-core/voice/`
-- `asos-core/perception/`
+- `feral-core/voice/`
+- `feral-core/perception/`
 
 ### Nix / Packaging
 Flake outputs, NixOS service modules, reproducible builds, dependency closures.
@@ -80,13 +80,13 @@ Flake outputs, NixOS service modules, reproducible builds, dependency closures.
 
 ### Frontend / Shell
 Web UI pages, dashboard, Tauri desktop wrapper, mobile bridges.
-- `asos-client/src/`
+- `feral-client/src/`
 - `desktop/`
 
 ## Running Tests
 
 ```bash
-cd asos-core
+cd feral-core
 python -m pytest tests/ -v
 ```
 

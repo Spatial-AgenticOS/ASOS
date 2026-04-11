@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "io.theora.app"
+    namespace = "ai.feral.app"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "io.theora.app"
+        applicationId = "ai.feral.app"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

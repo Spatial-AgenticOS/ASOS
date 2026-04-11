@@ -1,0 +1,72 @@
+{
+    "skill_id": "screen_capture",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Screen Capture",
+        "primary_color": "#0EA5E9",
+        "secondary_color": "#0369A1",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Capture desktop screenshots and optionally analyze them with FERAL vision models.",
+    "trigger_phrases": [
+        "take a screenshot",
+        "analyze my screen",
+        "what is on my screen",
+        "capture desktop",
+        "screen check"
+    ],
+    "categories": ["vision", "desktop", "assistive"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "capture",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Capture a desktop screenshot and optionally analyze it with a VLM.",
+            "params": [
+                {
+                    "name": "path",
+                    "type": "string",
+                    "required": false,
+                    "description": "Optional output file path (default /tmp/feral_screen_<ts>.png)"
+                },
+                {
+                    "name": "region",
+                    "type": "string",
+                    "required": false,
+                    "description": "macOS only: x,y,width,height capture region"
+                },
+                {
+                    "name": "analyze",
+                    "type": "boolean",
+                    "required": false,
+                    "description": "If true, run scene analysis on the captured screenshot"
+                },
+                {
+                    "name": "query",
+                    "type": "string",
+                    "required": false,
+                    "description": "Specific question about the screenshot content"
+                },
+                {
+                    "name": "include_image",
+                    "type": "boolean",
+                    "required": false,
+                    "description": "Include base64 image in response (default true)"
+                }
+            ],
+            "returns_description": "Screenshot metadata, optional base64 image, and optional scene analysis",
+            "ui_hint": "detail_card"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": ["filesystem", "screen", "vision"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 1500
+}

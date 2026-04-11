@@ -1,4 +1,4 @@
-# THEORA Demo Playbook
+# FERAL Demo Playbook
 
 This playbook scripts the 10-beat platform demo. Every beat should work end-to-end before presenting. If a beat fails, note the failure honestly and either fix it or skip it with a clear explanation.
 
@@ -9,11 +9,11 @@ Run these checks before starting the demo.
 ### Required
 
 - [ ] Python 3.11+ installed
-- [ ] `asos-core` installed (`pip install -e ".[llm]"` from the ASOS directory)
+- [ ] `feral-core` installed (`pip install -e ".[llm]"` from the feral directory)
 - [ ] At least one LLM provider configured:
-  - **Cloud:** `OPENAI_API_KEY` set in environment or `~/.theora/credentials.json`
+  - **Cloud:** `OPENAI_API_KEY` set in environment or `~/.feral/credentials.json`
   - **Local:** `ollama serve` running with `llama3.1` pulled (`ollama pull llama3.1`)
-- [ ] Brain starts cleanly: `theora serve` or `python -m api.server` from `asos-core/`
+- [ ] Brain starts cleanly: `feral serve` or `python -m api.server` from `feral-core/`
 - [ ] Health check passes: `curl http://localhost:9090/health` returns `{"status": "ok"}`
 
 ### For Voice Beats
@@ -28,21 +28,21 @@ Run these checks before starting the demo.
 
 ### For Web Search
 
-- [ ] `TAVILY_API_KEY` set in environment or `~/.theora/credentials.json`
+- [ ] `TAVILY_API_KEY` set in environment or `~/.feral/credentials.json`
 
 ### Optional
 
-- [ ] Web UI built and bundled: `cd asos-client && npm ci && npm run build` then `scripts/build_webui.sh`
+- [ ] Web UI built and bundled: `cd feral-client && npm ci && npm run build` then `scripts/build_webui.sh`
 - [ ] Docker Compose: `docker compose up -d` (brain at :9090, client at :3000)
 
 ---
 
 ## Beat 1: Setup and Identity
 
-**Goal:** Show that THEORA has a real guided onboarding flow.
+**Goal:** Show that FERAL has a real guided onboarding flow.
 
 ```bash
-theora setup
+feral setup
 ```
 
 Walk through:
@@ -52,7 +52,7 @@ Walk through:
 4. Enable tools
 5. Set security preferences
 
-**Expected output:** `~/.theora/config.yaml`, `identity.yaml`, `credentials.json` created. Agent is ready.
+**Expected output:** `~/.feral/config.yaml`, `identity.yaml`, `credentials.json` created. Agent is ready.
 
 **Verify:**
 ```bash
@@ -119,7 +119,7 @@ The agent should use `read_file` and display content.
 ### Via API
 
 ```bash
-# Ingest the ASOS repo itself
+# Ingest the FERAL repo itself
 curl -X POST http://localhost:9090/api/wiki/ingest/repo \
   -H 'Content-Type: application/json' \
   -d '{"path": ".", "extensions": [".py", ".md"], "max_files": 20}'
@@ -268,7 +268,7 @@ A hardware daemon must be running. Use the Python SDK reference daemon or a real
 **Quick test with the reference daemon:**
 
 ```bash
-cd asos-nodes/python-node-sdk
+cd feral-nodes/python-node-sdk
 python hardware_daemon/daemon.py --node-id demo-sensor --node-type sensor --brain-url ws://localhost:9090/v1/node
 ```
 
@@ -401,7 +401,7 @@ This is not a chatbot demo. This is a platform demo.
 
 - **No API key:** Brain starts but LLM calls fail with clear error messages. Use Ollama for a fully offline demo.
 - **No Ollama:** Vision beat cannot run. Text/voice still work with cloud providers.
-- **Port conflict:** Set `THEORA_PORT` to an available port. Update client config accordingly.
+- **Port conflict:** Set `FERAL_PORT` to an available port. Update client config accordingly.
 - **Browser blocks mic:** Use HTTPS or explicitly allow mic in browser settings for localhost.
 - **No daemon running:** Hardware beat cannot run. All other beats work without a connected device.
 - **Provider surface beat:** Always works — no external dependencies. Uses the brain's REST API.

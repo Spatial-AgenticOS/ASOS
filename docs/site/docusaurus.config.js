@@ -2,15 +2,15 @@
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
-  title: 'THEORA',
+  title: 'FERAL',
   tagline: 'The open-source AI operating system for your devices',
   favicon: 'img/favicon.ico',
 
-  url: 'https://docs.theora.io',
+  url: 'https://docs.feral.io',
   baseUrl: '/',
 
   organizationName: 'Spatial-AgenticOS',
-  projectName: 'ASOS',
+  projectName: 'feral',
 
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
@@ -28,7 +28,7 @@ const config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.js',
-          editUrl: 'https://github.com/Spatial-AgenticOS/ASOS/tree/main/docs/site/',
+          editUrl: 'https://github.com/feral-ai/feral/tree/main/docs/site/',
         },
         blog: false,
         theme: {
@@ -41,11 +41,11 @@ const config = {
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
-      image: 'img/theora-social.png',
+      image: 'img/feral-social.png',
       navbar: {
-        title: 'THEORA',
+        title: 'FERAL',
         logo: {
-          alt: 'THEORA Logo',
+          alt: 'FERAL Logo',
           src: 'img/logo.svg',
         },
         items: [
@@ -53,7 +53,7 @@ const config = {
           { to: '/sdk/python', label: 'Python SDK', position: 'left' },
           { to: '/sdk/node', label: 'Node SDK', position: 'left' },
           {
-            href: 'https://github.com/Spatial-AgenticOS/ASOS',
+            href: 'https://github.com/feral-ai/feral',
             label: 'GitHub',
             position: 'right',
           },
@@ -88,12 +88,12 @@ const config = {
           {
             title: 'Community',
             items: [
-              { label: 'GitHub', href: 'https://github.com/Spatial-AgenticOS/ASOS' },
-              { label: 'Issues', href: 'https://github.com/Spatial-AgenticOS/ASOS/issues' },
+              { label: 'GitHub', href: 'https://github.com/feral-ai/feral' },
+              { label: 'Issues', href: 'https://github.com/feral-ai/feral/issues' },
             ],
           },
         ],
-        copyright: `Copyright © 2024–${new Date().getFullYear()} THEORA, Inc.`,
+        copyright: `Copyright © 2024–${new Date().getFullYear()} FERAL, Inc.`,
       },
       prism: {
         theme: require('prism-react-renderer').themes.github,

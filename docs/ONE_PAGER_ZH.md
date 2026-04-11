@@ -1,15 +1,15 @@
-# THEORA 一页纸
+# FERAL 一页纸
 
-> THEORA 是一个本地优先的 AI 代理平台。它不只是会聊天，而是可以理解、执行、记忆，并把软件与硬件能力连接在一起。
+> FERAL 是一个本地优先的 AI 代理平台。它不只是会聊天，而是可以理解、执行、记忆，并把软件与硬件能力连接在一起。
 
 ## 一句话说明
 
-THEORA 已经不是一个概念演示，而是一个真正可运行的平台。它已经可以进行文字和语音对话、调用工具、长期记忆信息、执行可恢复的工作流、分支和恢复会话，并接入本地视觉模型。
+FERAL 已经不是一个概念演示，而是一个真正可运行的平台。它已经可以进行文字和语音对话、调用工具、长期记忆信息、执行可恢复的工作流、分支和恢复会话，并接入本地视觉模型。
 
 ```mermaid
 flowchart LR
   user[用户] --> surface[网页或命令行]
-  surface --> brain[THEORA]
+  surface --> brain[FERAL]
   brain --> models[云端与本地模型]
   brain --> tools[工具与执行]
   brain --> memory[记忆与知识库]
@@ -19,9 +19,9 @@ flowchart LR
   memory --> output
 ```
 
-## THEORA 是什么
+## FERAL 是什么
 
-可以把 THEORA 理解成一个“本地优先的智能代理操作层”。
+可以把 FERAL 理解成一个“本地优先的智能代理操作层”。
 
 它把下面这些能力放进同一个系统里：
 - 文字和语音交互
@@ -36,7 +36,7 @@ flowchart LR
 
 ## 我们已经做出来了什么
 
-到目前为止，THEORA 的核心产品闭环已经基本成立：
+到目前为止，FERAL 的核心产品闭环已经基本成立：
 
 - 文字聊天和实时语音已经打通。
 - 电脑操作能力已经可用，支持命令、文件、搜索和网页信息获取。
@@ -50,14 +50,14 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-  theoraNow[THEORA 当前能力]
-  theoraNow --> conversation[聊天与语音]
-  theoraNow --> actions[电脑与网页执行]
-  theoraNow --> memoryCap[记忆与知识库]
-  theoraNow --> workflows[TaskFlows]
-  theoraNow --> sessions[会话分支恢复]
-  theoraNow --> localAi[本地模型与视觉]
-  theoraNow --> bridges[MCP 与设备桥接]
+  feralNow[FERAL 当前能力]
+  feralNow --> conversation[聊天与语音]
+  feralNow --> actions[电脑与网页执行]
+  feralNow --> memoryCap[记忆与知识库]
+  feralNow --> workflows[TaskFlows]
+  feralNow --> sessions[会话分支恢复]
+  feralNow --> localAi[本地模型与视觉]
+  feralNow --> bridges[MCP 与设备桥接]
 ```
 
 ## 今天已经能做什么
@@ -77,7 +77,7 @@ flowchart TD
 
 ## 为什么这件事重要
 
-很多本地 AI 项目只停留在“能聊天”。THEORA 想解决的是更完整的问题。
+很多本地 AI 项目只停留在“能聊天”。FERAL 想解决的是更完整的问题。
 
 - 它能记忆，所以工作不会每次从零开始。
 - 它能跑工作流，所以任务不会因为会话结束就消失。
@@ -89,7 +89,7 @@ flowchart TD
 
 最重要的一点是：
 
-THEORA 的核心平台能力已经成形。接下来的重点，不是重新发明产品，而是把已经存在的能力做得更稳定、更系统、更接近 OS 原生体验。
+FERAL 的核心平台能力已经成形。接下来的重点，不是重新发明产品，而是把已经存在的能力做得更稳定、更系统、更接近 OS 原生体验。
 
 ```mermaid
 flowchart LR
@@ -113,7 +113,7 @@ flowchart LR
 
 ## 最后的简单结论
 
-今天的 THEORA，已经是一个可运行的本地优先 AI 代理平台，具备：
+今天的 FERAL，已经是一个可运行的本地优先 AI 代理平台，具备：
 - 聊天
 - 语音
 - 电脑操作
@@ -127,7 +127,7 @@ flowchart LR
 
 ## 链接
 
-- 主仓库: [github.com/Spatial-AgenticOS/ASOS](https://github.com/Spatial-AgenticOS/ASOS)
+- 主仓库: [github.com/feral-ai/feral](https://github.com/feral-ai/feral)
 - README: [../README.md](../README.md)
 - 能力状态: [./SCORECARD.md](./SCORECARD.md)
 - 路线图: [./ROADMAP.md](./ROADMAP.md)

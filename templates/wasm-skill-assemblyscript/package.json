@@ -1,5 +1,5 @@
 {
-  "name": "theora-skill-example-as",
+  "name": "feral-skill-example-as",
   "version": "0.1.0",
   "scripts": {
     "build": "asc assembly/index.ts --target release --outFile build/skill.wasm --optimize",

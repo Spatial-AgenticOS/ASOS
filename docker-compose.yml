@@ -1,9 +1,9 @@
 version: "3.9"
 
 services:
-  asos-brain:
+  feral-brain:
     build:
-      context: ./asos-core
+      context: ./feral-core
       dockerfile: Dockerfile
     ports:
       - "9090:9090"
@@ -11,22 +11,22 @@ services:
       - .env
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - THEORA_LLM_PROVIDER=${THEORA_LLM_PROVIDER:-openai}
-      - THEORA_LLM_MODEL=${THEORA_LLM_MODEL:-gpt-4o-mini}
-      - THEORA_LLM_BASE_URL=${THEORA_LLM_BASE_URL:-}
-      - THEORA_VISION_ENABLED=${THEORA_VISION_ENABLED:-false}
-      - THEORA_VISION_MAX_FRAME_KB=${THEORA_VISION_MAX_FRAME_KB:-512}
-      - THEORA_PROACTIVE=${THEORA_PROACTIVE:-false}
-      - THEORA_STREAMING=${THEORA_STREAMING:-true}
-      - THEORA_SCENE_COOLDOWN=${THEORA_SCENE_COOLDOWN:-10}
-      - THEORA_STT_PROVIDER=${THEORA_STT_PROVIDER:-openai}
-      - THEORA_TTS_PROVIDER=${THEORA_TTS_PROVIDER:-openai}
-      - THEORA_TTS_VOICE=${THEORA_TTS_VOICE:-nova}
-      - THEORA_WAKE_WORD=${THEORA_WAKE_WORD:-true}
+      - FERAL_LLM_PROVIDER=${FERAL_LLM_PROVIDER:-openai}
+      - FERAL_LLM_MODEL=${FERAL_LLM_MODEL:-gpt-4o-mini}
+      - FERAL_LLM_BASE_URL=${FERAL_LLM_BASE_URL:-}
+      - FERAL_VISION_ENABLED=${FERAL_VISION_ENABLED:-false}
+      - FERAL_VISION_MAX_FRAME_KB=${FERAL_VISION_MAX_FRAME_KB:-512}
+      - FERAL_PROACTIVE=${FERAL_PROACTIVE:-false}
+      - FERAL_STREAMING=${FERAL_STREAMING:-true}
+      - FERAL_SCENE_COOLDOWN=${FERAL_SCENE_COOLDOWN:-10}
+      - FERAL_STT_PROVIDER=${FERAL_STT_PROVIDER:-openai}
+      - FERAL_TTS_PROVIDER=${FERAL_TTS_PROVIDER:-openai}
+      - FERAL_TTS_VOICE=${FERAL_TTS_VOICE:-nova}
+      - FERAL_WAKE_WORD=${FERAL_WAKE_WORD:-true}
       - NODE_API_KEY=${NODE_API_KEY:-dev-secret-key}
     volumes:
-      - theora-memory:/root/.theora
-      - theora-config:/root/.config/theora
+      - feral-memory:/root/.feral
+      - feral-config:/root/.config/feral
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/health')"]
@@ -35,9 +35,9 @@ services:
       retries: 3
       start_period: 10s
 
-  asos-client:
+  feral-client:
     build:
-      context: ./asos-client
+      context: ./feral-client
       dockerfile: Dockerfile
       args:
         - VITE_BRAIN_HOST=${VITE_BRAIN_HOST:-localhost}
@@ -45,7 +45,7 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      asos-brain:
+      feral-brain:
         condition: service_healthy
     restart: unless-stopped
 
@@ -67,9 +67,9 @@ services:
       retries: 3
 
 volumes:
-  theora-memory:
+  feral-memory:
     driver: local
-  theora-config:
+  feral-config:
     driver: local
   registry-data:
     driver: local

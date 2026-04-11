@@ -1,23 +1,23 @@
-// THEORA WASM Skill Template (Rust)
+// FERAL WASM Skill Template (Rust)
 //
 // Host functions available:
-//   theora_log(ptr, len)     — log a message
-//   theora_http(ptr, len)    — make an HTTP request (returns response ptr)
-//   theora_read_result(ptr, len) — read HTTP response into buffer
-//   theora_store_get(key_ptr, key_len) — read from skill storage
-//   theora_store_set(key_ptr, key_len, val_ptr, val_len) — write to skill storage
+//   feral_log(ptr, len)     — log a message
+//   feral_http(ptr, len)    — make an HTTP request (returns response ptr)
+//   feral_read_result(ptr, len) — read HTTP response into buffer
+//   feral_store_get(key_ptr, key_len) — read from skill storage
+//   feral_store_set(key_ptr, key_len, val_ptr, val_len) — write to skill storage
 
 extern "C" {
-    fn theora_log(ptr: *const u8, len: u32);
-    fn theora_http(ptr: *const u8, len: u32) -> u32;
-    fn theora_read_result(ptr: *mut u8, len: u32) -> u32;
+    fn feral_log(ptr: *const u8, len: u32);
+    fn feral_http(ptr: *const u8, len: u32) -> u32;
+    fn feral_read_result(ptr: *mut u8, len: u32) -> u32;
 }
 
 fn log(msg: &str) {
-    unsafe { theora_log(msg.as_ptr(), msg.len() as u32) }
+    unsafe { feral_log(msg.as_ptr(), msg.len() as u32) }
 }
 
-/// Entry point — called by THEORA when this skill is invoked.
+/// Entry point — called by FERAL when this skill is invoked.
 /// `input_ptr` points to a JSON string with the skill arguments.
 /// Returns a pointer to a JSON response string.
 #[no_mangle]

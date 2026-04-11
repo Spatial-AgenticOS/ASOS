@@ -1,12 +1,12 @@
-# THEORA Strategic Roadmap
+# FERAL Strategic Roadmap
 
-This is the execution-ordered roadmap for THEORA. It keeps the full future vision visible, but it does not pretend everything should be built at once.
+This is the execution-ordered roadmap for FERAL. It keeps the full future vision visible, but it does not pretend everything should be built at once.
 
 ## Strategic Call
 
 - Build against `NixOS minimal` as the primary OS-native path.
 - Keep `Debian minimal` as the packaging and deployment fallback.
-- Do not try to build the full THEORA OS first.
+- Do not try to build the full FERAL OS first.
 - Do build a thin Nix foundation now while shipping product-defining features in parallel.
 - Plan the first great public demo after the `Do Now` bucket is complete enough to tell one coherent story.
 
@@ -14,8 +14,8 @@ This is the execution-ordered roadmap for THEORA. It keeps the full future visio
 
 Right now, the correct move is to invest in the overlap between:
 
-- features that make THEORA feel meaningfully stronger than a local chatbot
-- infrastructure that makes a future NixOS-native THEORA realistic
+- features that make FERAL feel meaningfully stronger than a local chatbot
+- infrastructure that makes a future NixOS-native FERAL realistic
 - demo-worthy product surfaces that people can immediately understand
 
 That means the near-term work is not "all OS" and not "all feature candy." It is the smallest set of foundations and product bets that compound into both.
@@ -28,7 +28,7 @@ flowchart TD
   thinNix["Thin Nix foundation"]
   productMoat["Product moat features"]
   demoGate["Great demo gate"]
-  osNative["Deep OS-native THEORA"]
+  osNative["Deep OS-native FERAL"]
   futureBets["Future bets"]
 
   doNow --> thinNix
@@ -43,7 +43,7 @@ flowchart TD
 
 These are the highest-leverage items for the next serious execution window.
 
-- `Thin Nix foundation` `(medium, must do now)`: create the first reproducible packaging layer, flake outputs, and a deterministic runtime mode so THEORA can be built and run cleanly without hidden host assumptions.
+- `Thin Nix foundation` `(medium, must do now)`: create the first reproducible packaging layer, flake outputs, and a deterministic runtime mode so FERAL can be built and run cleanly without hidden host assumptions.
 - `Packaging and config hygiene` `(medium, must do now)`: remove hardcoded ports, localhost assumptions, undeclared dependencies, and fuzzy state-path behavior.
 - `Memory-wiki v1` `(medium, must do now)`: turn durable memory into a browsable markdown knowledge surface with provenance, not just embeddings and vibes.
 - `TaskFlows` `(medium-hard, must do now)`: add durable long-running workflow state so jobs can survive pauses, waiting states, and resume cleanly.
@@ -52,7 +52,7 @@ These are the highest-leverage items for the next serious execution window.
 
 ### Why these go first
 
-- They improve THEORA as a product immediately.
+- They improve FERAL as a product immediately.
 - They make the later NixOS-native move less risky.
 - They create a much stronger demo than "we have a big OS idea."
 - They increase differentiation against generic local agents.
@@ -70,7 +70,7 @@ These are the highest-leverage items for the next serious execution window.
 
 These are worth doing now, but only as bounded side tracks.
 
-- `graphify integration spike` `(medium, parallel)`: use it as a batch ingester for code, docs, PDFs, and research into THEORA's future wiki and knowledge graph layers. It belongs in the knowledge plane, not the OS foundation.
+- `graphify integration spike` `(medium, parallel)`: use it as a batch ingester for code, docs, PDFs, and research into FERAL's future wiki and knowledge graph layers. It belongs in the knowledge plane, not the OS foundation.
 - `Capability scorecard` `(easy-medium, parallel)`: keep a simple parity sheet for voice, browser, computer use, memory, workflows, and local models so priorities stay honest.
 - `Demo asset collection` `(easy, parallel)`: capture examples, artifacts, and user-facing screenshots as features land so demo planning is faster later.
 - `Provider and channel cards in GenUI` `(medium, parallel)`: make the installed-provider story visible in the interface, but do not let this block memory or workflow foundations.
@@ -80,7 +80,7 @@ These are worth doing now, but only as bounded side tracks.
 `graphify` is useful, but it is not step one.
 
 - Good use: source ingestion, graph extraction, wiki seeding, provenance-rich knowledge compilation.
-- Bad use: making it the foundation of Nix packaging or the core runtime before THEORA's own memory-wiki contract exists.
+- Bad use: making it the foundation of Nix packaging or the core runtime before FERAL's own memory-wiki contract exists.
 
 ## Do Next
 
@@ -88,7 +88,7 @@ These are the right next wave once the `Do Now` bucket is landed or clearly unde
 
 Execution order and gates for this wave are defined in [`docs/NEXT_WAVE_EXECUTION.md`](NEXT_WAVE_EXECUTION.md).
 
-- `Linux desktop node and telemetry plane` `(hard, next)`: make the Linux host a first-class THEORA node for battery, network, BLE, audio, notifications, screens, and active app state.
+- `Linux desktop node and telemetry plane` `(hard, next)`: make the Linux host a first-class FERAL node for battery, network, BLE, audio, notifications, screens, and active app state.
 - `Permission plane` `(hard, next)`: add Linux-native approval and permission handling for screen, mic, camera, browser control, and dangerous actions.
 - `Managed browser runtime` `(hard, next)`: stop relying on "user started Chrome the right way" and promote browser automation into a supervised runtime.
 - `Linux voice, browser, and screen hardening` `(hard, next)`: move from generic Linux assumptions to Wayland, PipeWire, and portal-aware behavior.
@@ -100,12 +100,12 @@ Execution order and gates for this wave are defined in [`docs/NEXT_WAVE_EXECUTIO
 
 These matter, but they should not steal focus from the current leverage.
 
-- `Installer ISO and first-boot experience` `(very hard, later)`: the real THEORA OS install path comes after the service graph and desktop node are stable.
+- `Installer ISO and first-boot experience` `(very hard, later)`: the real FERAL OS install path comes after the service graph and desktop node are stable.
 - `Rollback and recovery productization` `(hard, later)`: prove recovery, rollback, safe mode, and rebuild behavior once the NixOS service graph is real.
 - `Media creation and editing` `(hard, later)`: music and video generation or editing is valuable, but it opens a large rendering, storage, sandbox, and UX surface.
 - `Large channel expansion` `(hard, later)`: add broad messaging platform coverage after the core workflow and install story are stronger.
 - `Appliance and hardware profiles` `(hard, later)`: build special device SKUs and appliance-style images after the workstation path is stable.
-- `Deep THEORA OS identity layer` `(very hard, later)`: installer branding, first-boot persona onboarding, policy profiles, and recovery UX belong after the platform foundations exist.
+- `Deep FERAL OS identity layer` `(very hard, later)`: installer branding, first-boot persona onboarding, policy profiles, and recovery UX belong after the platform foundations exist.
 
 ## Do Not Touch Yet
 
@@ -125,7 +125,7 @@ The right time to plan the great demo is after the `Do Now` track is substantial
 That is the first point where the story becomes clear:
 
 - install is cleaner and more reproducible
-- THEORA has a believable Nix-native path
+- FERAL has a believable Nix-native path
 - memory feels durable and inspectable
 - workflows can survive pauses and resume
 - users can branch and restore sessions
@@ -136,9 +136,9 @@ That is the first point where the story becomes clear:
 
 The first great demo should show one connected story:
 
-1. Install or enable THEORA with a clean setup flow.
+1. Install or enable FERAL with a clean setup flow.
 2. Create identity and provider choices.
-3. Talk to THEORA with voice or text.
+3. Talk to FERAL with voice or text.
 4. Use browser or computer actions.
 5. Ingest a repo, doc set, or PDF into memory-wiki.
 6. Launch a long-running TaskFlow that pauses and resumes.
@@ -151,15 +151,15 @@ If those beats are real, the demo will feel like a platform. If they are not rea
 
 The first implementation wave should begin in:
 
-- `asos-core/pyproject.toml`: dependency truth and reproducible packaging.
-- `asos-core/api/server.py`: service boot, port behavior, runtime contracts.
-- `asos-core/config/loader.py`: config, state, and XDG-aware path rules.
-- `asos-client/src/config.js`: deployment assumptions and same-origin strategy.
-- `asos-core/agents/llm_provider.py`: local model and provider management.
-- `asos-core/skills/impl/browser_use.py`: managed browser runtime assumptions.
-- `asos-core/skills/impl/screen_capture.py`: Wayland and portal-aware capture path.
-- `asos-core/memory/`: memory-wiki and durable knowledge surfaces.
-- `asos-core/security/`: approvals, dangerous tools, and future Linux permission bridging.
+- `feral-core/pyproject.toml`: dependency truth and reproducible packaging.
+- `feral-core/api/server.py`: service boot, port behavior, runtime contracts.
+- `feral-core/config/loader.py`: config, state, and XDG-aware path rules.
+- `feral-client/src/config.js`: deployment assumptions and same-origin strategy.
+- `feral-core/agents/llm_provider.py`: local model and provider management.
+- `feral-core/skills/impl/browser_use.py`: managed browser runtime assumptions.
+- `feral-core/skills/impl/screen_capture.py`: Wayland and portal-aware capture path.
+- `feral-core/memory/`: memory-wiki and durable knowledge surfaces.
+- `feral-core/security/`: approvals, dangerous tools, and future Linux permission bridging.
 
 ## Final Call
 
@@ -168,7 +168,7 @@ The right move is:
 - do the thin Nix foundation now
 - do memory-wiki, TaskFlows, branching, and local vision now
 - use `graphify` as a knowledge-plane accelerator, not a foundation
-- push deep OS-native THEORA work into the next major wave
+- push deep OS-native FERAL work into the next major wave
 - plan the great demo immediately after the first wave is real enough to stand on its own
 
 That keeps the entire future vision alive without letting the roadmap turn into a giant pile of simultaneous ambition.

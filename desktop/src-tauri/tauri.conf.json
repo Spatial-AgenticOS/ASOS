@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "THEORA",
+  "productName": "FERAL",
   "version": "1.0.0",
-  "identifier": "io.theora.desktop",
+  "identifier": "ai.feral.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "THEORA",
+        "title": "FERAL",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -28,10 +28,10 @@
       }
     ],
     "trayIcon": {
-      "id": "theora-tray",
+      "id": "feral-tray",
       "iconAsTemplate": true,
       "menuOnLeftClick": false,
-      "tooltip": "THEORA"
+      "tooltip": "FERAL"
     },
     "security": {
       "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws://localhost:* http://localhost:* ws://127.0.0.1:* http://127.0.0.1:*; img-src 'self' data: blob: http://localhost:* http://127.0.0.1:*; media-src 'self' blob:; font-src 'self' data:; frame-src 'self' http://localhost:* http://127.0.0.1:*",
@@ -48,7 +48,7 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "THEORA — Local-First AI Agent",
+    "shortDescription": "FERAL — Local-First AI Agent",
     "macOS": {
       "minimumSystemVersion": "12.0",
       "signingIdentity": null
@@ -58,7 +58,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/theora-ai/theora-desktop/releases/latest/download/latest.json"
+        "https://github.com/feral-ai/feral-desktop/releases/latest/download/latest.json"
       ],
       "pubkey": ""
     }

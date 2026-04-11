@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "theora-android"
+rootProject.name = "feral-android"
 include(":app")

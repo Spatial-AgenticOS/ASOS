@@ -41,7 +41,7 @@ coverage.xml
 *.egg-info/
 *.egg
 
-# Theora
+# Feral
 memory_store.json
 client-tmp/
 poetry.lock

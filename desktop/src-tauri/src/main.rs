@@ -15,18 +15,18 @@ struct BrainProcess(pub Mutex<Option<Child>>);
 // Brain process helpers
 // ---------------------------------------------------------------------------
 
-fn resolve_asos_core_dir() -> Result<std::path::PathBuf, String> {
-    if let Ok(dir) = std::env::var("ASOS_CORE_DIR") {
+fn resolve_feral_core_dir() -> Result<std::path::PathBuf, String> {
+    if let Ok(dir) = std::env::var("FERAL_CORE_DIR") {
         return std::path::PathBuf::from(dir)
             .canonicalize()
-            .map_err(|e| format!("ASOS_CORE_DIR invalid: {e}"));
+            .map_err(|e| format!("FERAL_CORE_DIR invalid: {e}"));
     }
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../asos-core")
+        .join("../../feral-core")
         .canonicalize()
-        .map_err(|e| format!("asos-core path: {e}"))?;
+        .map_err(|e| format!("feral-core path: {e}"))?;
     if !path.is_dir() {
-        return Err(format!("asos-core not found at {}", path.display()));
+        return Err(format!("feral-core not found at {}", path.display()));
     }
     Ok(path)
 }
@@ -40,8 +40,8 @@ fn python_bin() -> &'static str {
 }
 
 fn brain_base_url() -> String {
-    std::env::var("THEORA_PUBLIC_BASE_URL")
-        .or_else(|_| std::env::var("THEORA_BRAIN_URL"))
+    std::env::var("FERAL_PUBLIC_BASE_URL")
+        .or_else(|_| std::env::var("FERAL_BRAIN_URL"))
         .unwrap_or_else(|_| "http://localhost:9090".to_string())
 }
 
@@ -56,7 +56,7 @@ fn start_brain(state: State<'_, BrainProcess>) -> Result<u32, String> {
         let _ = existing.kill();
         let _ = existing.wait();
     }
-    let dir = resolve_asos_core_dir()?;
+    let dir = resolve_feral_core_dir()?;
     let mut cmd = Command::new(python_bin());
     cmd.current_dir(&dir)
         .args(["-m", "api.server"])
@@ -179,7 +179,7 @@ fn main() {
             let show_hide = MenuItem::with_id(
                 app,
                 "show_hide",
-                "Show / Hide THEORA",
+                "Show / Hide FERAL",
                 true,
                 None::<&str>,
             )?;
@@ -191,7 +191,7 @@ fn main() {
                 None::<&str>,
             )?;
             let quit =
-                MenuItem::with_id(app, "quit", "Quit THEORA", true, None::<&str>)?;
+                MenuItem::with_id(app, "quit", "Quit FERAL", true, None::<&str>)?;
 
             let menu = Menu::with_items(
                 app,
@@ -204,9 +204,9 @@ fn main() {
                 ],
             )?;
 
-            let tray = TrayIconBuilder::with_id("theora-tray")
-                .title("THEORA")
-                .tooltip("THEORA — starting…")
+            let tray = TrayIconBuilder::with_id("feral-tray")
+                .title("FERAL")
+                .tooltip("FERAL — starting…")
                 .menu(&menu)
                 .menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -256,7 +256,7 @@ fn main() {
             std::thread::spawn(move || loop {
                 let (ok, detail) = brain_health_probe();
                 let dot = if ok { "🟢" } else { "🔴" };
-                let tip = format!("THEORA — {dot} {detail}");
+                let tip = format!("FERAL — {dot} {detail}");
                 let _ = tray_bg.set_tooltip(Some(tip.as_str()));
                 std::thread::sleep(Duration::from_secs(2));
             });
@@ -271,5 +271,5 @@ fn main() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("error while running THEORA Desktop");
+        .expect("error while running FERAL Desktop");
 }

@@ -7,7 +7,7 @@
         "name": "My WASM Skill",
         "primary_color": "#E67E22"
     },
-    "description": "A sample WASM skill that runs sandboxed inside THEORA.",
+    "description": "A sample WASM skill that runs sandboxed inside FERAL.",
     "trigger_phrases": ["run my wasm skill", "execute wasm"],
     "categories": ["utility"],
     "auth": { "type": "none" },
@@ -15,7 +15,7 @@
         {
             "id": "execute",
             "method": "WS_EXECUTE",
-            "url": "wasm://theora_skill_example.wasm",
+            "url": "wasm://feral_skill_example.wasm",
             "description": "Execute the WASM skill",
             "params": [
                 { "name": "input", "type": "string", "required": true, "description": "Input data" }

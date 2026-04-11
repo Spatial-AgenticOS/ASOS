@@ -1,0 +1,79 @@
+{
+    "skill_id": "notes_memory",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Notes & Memory",
+        "primary_color": "#FDCB6E",
+        "secondary_color": "#2D3436",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Save notes, reminders, and things to remember. FERAL's personal knowledge base. Recall saved information on demand.",
+    "trigger_phrases": [
+        "remember this",
+        "remember that",
+        "remember",
+        "save a note",
+        "save note",
+        "remind me",
+        "take a note",
+        "write this down",
+        "don't forget",
+        "what did I save",
+        "my notes",
+        "recall",
+        "what was that thing",
+        "store this",
+        "note that",
+        "note this"
+    ],
+    "categories": ["productivity", "memory", "notes"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "save_note",
+            "method": "POST",
+            "url": "http://localhost:9090/internal/memory/save",
+            "description": "Save a note or piece of information to FERAL's memory. User says 'remember X' and X gets stored.",
+            "params": [
+                {"name": "content", "type": "string", "required": true, "description": "The content to remember"},
+                {"name": "tags", "type": "array", "items": {"type": "string"}, "required": false, "description": "Tags for categorization"},
+                {"name": "importance", "type": "string", "required": false, "default": "normal", "description": "Priority", "enum": ["low", "normal", "high", "critical"]}
+            ],
+            "returns_description": "{id, content, tags, created_at, importance}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "search_notes",
+            "method": "GET",
+            "url": "http://localhost:9090/internal/memory/search",
+            "description": "Search saved notes and memories. Returns matching notes ranked by relevance.",
+            "params": [
+                {"name": "query", "type": "string", "required": true, "description": "Search query"},
+                {"name": "limit", "type": "number", "required": false, "default": "10", "description": "Max results"}
+            ],
+            "returns_description": "Array of {id, content, tags, created_at, relevance_score}",
+            "ui_hint": "list"
+        },
+        {
+            "id": "list_recent",
+            "method": "GET",
+            "url": "http://localhost:9090/internal/memory/recent",
+            "description": "List the most recently saved notes.",
+            "params": [
+                {"name": "limit", "type": "number", "required": false, "default": "10", "description": "Number of recent notes"}
+            ],
+            "returns_description": "Array of {id, content, tags, created_at}",
+            "ui_hint": "list"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": [],
+    "requires_daemon": false,
+    "max_calls_per_hour": 10000
+}

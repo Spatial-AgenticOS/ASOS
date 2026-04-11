@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# THEORA Demo — one-command setup
+# FERAL Demo — one-command setup
 # Usage: bash scripts/demo.sh
 
 BOLD='\033[1m'
@@ -69,9 +69,9 @@ if [ ! -f .env ]; then
     info "OpenAI key configured"
   else
     if [[ "$OSTYPE" == "darwin"* ]]; then
-      sed -i '' "s|THEORA_LLM_PROVIDER=.*|THEORA_LLM_PROVIDER=ollama|" .env
+      sed -i '' "s|FERAL_LLM_PROVIDER=.*|FERAL_LLM_PROVIDER=ollama|" .env
     else
-      sed -i "s|THEORA_LLM_PROVIDER=.*|THEORA_LLM_PROVIDER=ollama|" .env
+      sed -i "s|FERAL_LLM_PROVIDER=.*|FERAL_LLM_PROVIDER=ollama|" .env
     fi
     warn "No OpenAI key — using Ollama (make sure it's running: ollama serve)"
   fi
@@ -81,7 +81,7 @@ fi
 
 # Step 4: Build and start
 echo ""
-echo -e "  ${BOLD}Starting THEORA...${NC}"
+echo -e "  ${BOLD}Starting FERAL...${NC}"
 $COMPOSE up -d --build 2>&1 | while IFS= read -r line; do echo "  $line"; done
 
 # Step 5: Wait for Brain health
@@ -99,7 +99,7 @@ done
 
 if ! curl -sf http://localhost:9090/ >/dev/null 2>&1; then
   echo ""
-  warn "Brain didn't start in time. Check: $COMPOSE logs asos-brain"
+  warn "Brain didn't start in time. Check: $COMPOSE logs feral-brain"
 fi
 
 # Step 6: Open browser
@@ -115,9 +115,9 @@ else
   echo -e "  ${DIM}Open http://localhost:3000 in your browser${NC}"
 fi
 
-echo -e "  ${BOLD}Done!${NC} THEORA is running."
+echo -e "  ${BOLD}Done!${NC} FERAL is running."
 echo ""
 echo -e "  ${DIM}Useful commands:${NC}"
-echo -e "    $COMPOSE logs -f asos-brain    ${DIM}# Brain logs${NC}"
+echo -e "    $COMPOSE logs -f feral-brain    ${DIM}# Brain logs${NC}"
 echo -e "    $COMPOSE down                  ${DIM}# Stop everything${NC}"
 echo ""
