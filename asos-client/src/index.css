@@ -34,21 +34,11 @@ html.light {
   --color-asos-user: #0891b2;
 }
 
-html.light ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.1);
-}
-html.light ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.2);
-}
-html.light ::selection {
-  background: rgba(8, 145, 178, 0.2);
-  color: #18181b;
-}
+html.light ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.1); }
+html.light ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.2); }
+html.light ::selection { background: rgba(8, 145, 178, 0.2); color: #18181b; }
 
-html {
-  height: 100%;
-  -webkit-text-size-adjust: 100%;
-}
+html { height: 100%; -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
@@ -61,31 +51,83 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-#root {
-  height: 100%;
+#root { height: 100%; }
+
+.safe-area-bottom { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.15); }
+
+::selection { background: rgba(6, 182, 212, 0.3); color: #fff; }
+
+/* ── The Orb ───────────────────────────────────────── */
+.orb {
+  border-radius: 9999px;
+  border: 2px solid var(--color-asos-accent);
+  box-shadow: 0 0 12px var(--color-asos-accent-glow), inset 0 0 8px var(--color-asos-accent-glow);
+  transition: border-color 0.5s, box-shadow 0.5s, opacity 0.5s;
+  will-change: transform, box-shadow;
 }
 
-.safe-area-bottom {
-  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+.orb-idle {
+  animation: orbBreathe 3s ease-in-out infinite;
 }
 
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+.orb-listening {
+  animation: orbListen 1.2s ease-in-out infinite;
+  border-width: 2.5px;
+  box-shadow: 0 0 20px var(--color-asos-accent-glow), inset 0 0 12px var(--color-asos-accent-glow);
 }
 
-::selection {
-  background: rgba(6, 182, 212, 0.3);
-  color: #fff;
+.orb-thinking {
+  animation: orbThink 2s linear infinite;
+  border-style: dashed;
+  border-width: 2px;
+}
+
+.orb-speaking {
+  animation: orbSpeak 0.8s ease-in-out infinite alternate;
+  box-shadow: 0 0 24px var(--color-asos-accent-glow), inset 0 0 14px var(--color-asos-accent-glow);
+}
+
+.orb-alert {
+  animation: orbAlert 1.5s ease-in-out infinite;
+  border-color: #f59e0b;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.25), inset 0 0 8px rgba(245, 158, 11, 0.15);
+}
+
+.orb-disconnected {
+  border-color: var(--color-asos-text-muted);
+  box-shadow: none;
+  opacity: 0.4;
+}
+
+@keyframes orbBreathe {
+  0%, 100% { transform: scale(1);    box-shadow: 0 0 12px var(--color-asos-accent-glow), inset 0 0 8px var(--color-asos-accent-glow); }
+  50%      { transform: scale(1.06); box-shadow: 0 0 20px var(--color-asos-accent-glow), inset 0 0 12px var(--color-asos-accent-glow); }
+}
+
+@keyframes orbListen {
+  0%, 100% { transform: scale(1);    }
+  50%      { transform: scale(1.12); }
+}
+
+@keyframes orbThink {
+  0%   { transform: rotate(0deg);   }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes orbSpeak {
+  0%   { transform: scale(1);    border-radius: 50%; }
+  50%  { transform: scale(1.04); border-radius: 46% 54% 50% 50%; }
+  100% { transform: scale(1.02); border-radius: 50% 50% 54% 46%; }
+}
+
+@keyframes orbAlert {
+  0%, 100% { box-shadow: 0 0 10px rgba(245, 158, 11, 0.15); }
+  50%      { box-shadow: 0 0 24px rgba(245, 158, 11, 0.35); }
 }
 
 /* ── Voice Waveform ─────────────────────────────────── */
@@ -130,7 +172,7 @@ body {
   100% { transform: scale(0.85); opacity: 0.6; }
 }
 
-/* ── Device chip connect animation ──────────────────── */
+/* ── Device chip ────────────────────────────────────── */
 .device-chip-in {
   animation: devicePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -142,12 +184,12 @@ body {
 
 /* ── SDUI enter animations ──────────────────────────── */
 .sdui-fade-in {
-  animation: sduiFadeSlide 0.35s ease-out both;
+  animation: sduiFadeSlide 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 
 @keyframes sduiFadeSlide {
-  0%   { opacity: 0; transform: translateY(8px); }
-  100% { opacity: 1; transform: translateY(0);   }
+  0%   { opacity: 0; transform: translateY(10px) scale(0.97); }
+  100% { opacity: 1; transform: translateY(0) scale(1);       }
 }
 
 .sdui-metric-pop {
@@ -186,4 +228,58 @@ body {
 @keyframes toastCountdown {
   0%   { width: 100%; }
   100% { width: 0%;   }
+}
+
+/* ── Typing cadence dots ────────────────────────────── */
+.thinking-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: var(--color-asos-text-muted);
+  animation: thinkFade 1.4s ease-in-out infinite;
+}
+
+@keyframes thinkFade {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+  40%           { opacity: 1;   transform: scale(1);    }
+}
+
+/* ── Ambient strip item fade-in ─────────────────────── */
+.ambient-item-enter {
+  animation: ambientFadeIn 0.4s ease-out both;
+}
+
+@keyframes ambientFadeIn {
+  0%   { opacity: 0; transform: translateY(-4px); }
+  100% { opacity: 1; transform: translateY(0);    }
+}
+
+/* ── Command palette ────────────────────────────────── */
+.palette-backdrop {
+  animation: paletteBgIn 0.2s ease-out both;
+}
+
+.palette-panel {
+  animation: palettePanelIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes paletteBgIn {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes palettePanelIn {
+  0%   { opacity: 0; transform: scale(0.96) translateY(-8px); }
+  100% { opacity: 1; transform: scale(1) translateY(0);       }
+}
+
+/* ── Message entrance ───────────────────────────────── */
+.msg-enter {
+  animation: msgSlideIn 0.3s ease-out both;
+}
+
+@keyframes msgSlideIn {
+  0%   { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0);   }
 }

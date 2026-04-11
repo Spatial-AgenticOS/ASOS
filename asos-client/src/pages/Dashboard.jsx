@@ -67,10 +67,7 @@ export default function Dashboard() {
     try {
       const ws = new WebSocket(WS_URL);
       ws.onopen = () => {
-        ws.send(JSON.stringify({
-          type: 'text_command',
-          payload: { text: action },
-        }));
+        ws.send(JSON.stringify({ type: 'text_command', payload: { text: action } }));
         setTimeout(() => ws.close(), 5000);
       };
     } catch { /* ignore */ }
@@ -115,7 +112,7 @@ export default function Dashboard() {
             <h1 className="text-2xl font-bold tracking-tight">Control Center</h1>
             <p className="text-xs text-asos-text-muted mt-0.5">
               THEORA Brain v{info?.version || '1.0.0'}
-              {d.llm_available && <span className="ml-2 text-green-400">LLM ready</span>}
+              {d.llm_available && <span className="ml-2 text-emerald-400">LLM ready</span>}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -133,18 +130,16 @@ export default function Dashboard() {
 
         {/* Top Status Row */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <StatusCard icon={Wifi} label="Sessions" value={sessionCount} color="#34d399" />
-          <StatusCard icon={Cpu} label="Devices" value={deviceCount} color="#06b6d4"
+          <StatusCard icon={Wifi}     label="Sessions" value={sessionCount} status="ok" />
+          <StatusCard icon={Cpu}      label="Devices"  value={deviceCount}  status={deviceCount > 0 ? 'ok' : 'muted'}
             subtitle={deviceCount > 0 ? `${deviceCount} connected` : 'none connected'} />
-          <StatusCard icon={Puzzle} label="Skills" value={skillsCount} color="#fbbf24" />
-          <StatusCard icon={Activity} label="Audio"
-            value={d.audio_available ? 'Ready' : 'Off'}
-            color={d.audio_available ? '#34d399' : '#71717a'} />
+          <StatusCard icon={Puzzle}   label="Skills"   value={skillsCount}  status="accent" />
+          <StatusCard icon={Activity} label="Audio"    value={d.audio_available ? 'Ready' : 'Off'}
+            status={d.audio_available ? 'ok' : 'muted'} />
         </div>
 
         {/* Main Grid: Devices + Health */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* Devices Panel */}
           <div className="bg-asos-card border border-asos-border rounded-xl p-5">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
@@ -160,12 +155,12 @@ export default function Dashboard() {
               <div className="space-y-2">
                 {devices.map(dev => (
                   <div key={dev.node_id} className="flex items-center gap-3 bg-asos-bg/30 rounded-lg px-4 py-3">
-                    <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_#22c55e]" />
+                    <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]" />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-mono truncate">{dev.node_id}</div>
                       <div className="text-xs text-asos-text-muted capitalize">{dev.type}</div>
                     </div>
-                    <Radio size={14} className="text-green-400" />
+                    <Radio size={14} className="text-emerald-400" />
                   </div>
                 ))}
               </div>
@@ -173,42 +168,30 @@ export default function Dashboard() {
               <div className="text-center py-8">
                 <Bluetooth size={28} className="mx-auto opacity-20 mb-3" />
                 <p className="text-sm text-asos-text-muted">No devices connected</p>
-                <p className="text-xs text-asos-text-muted mt-1">
-                  Use the hardware daemon or phone bridge to connect
-                </p>
-                <button onClick={() => navigate('/settings')}
-                  className="mt-3 text-xs text-asos-accent hover:underline">
+                <p className="text-xs text-asos-text-muted mt-1">Use the hardware daemon or phone bridge to connect</p>
+                <button onClick={() => navigate('/settings')} className="mt-3 text-xs text-asos-accent hover:underline">
                   Connect a device
                 </button>
               </div>
             )}
           </div>
 
-          {/* Health Metrics */}
           <div className="bg-asos-card border border-asos-border rounded-xl p-5">
             <div className="flex items-center gap-2 mb-4">
-              <Heart size={16} className="text-red-400" />
+              <Heart size={16} className="text-rose-400" />
               <h2 className="font-semibold text-sm">Live Health</h2>
             </div>
             {Object.keys(health).length > 0 ? (
               <div className="grid grid-cols-3 gap-4">
-                {health.heart_rate && (
-                  <HealthMetric icon={Heart} label="Heart Rate" value={`${health.heart_rate}`} unit="bpm" color="#f87171" />
-                )}
-                {health.spo2 && (
-                  <HealthMetric icon={Wind} label="SpO2" value={`${health.spo2}`} unit="%" color="#22d3ee" />
-                )}
-                {health.temperature && (
-                  <HealthMetric icon={Thermometer} label="Temp" value={`${health.temperature}`} unit="°C" color="#fbbf24" />
-                )}
+                {health.heart_rate && <HealthMetric icon={Heart}       label="Heart Rate" value={`${health.heart_rate}`} unit="bpm" status="critical" />}
+                {health.spo2        && <HealthMetric icon={Wind}        label="SpO2"       value={`${health.spo2}`}       unit="%"   status="accent" />}
+                {health.temperature && <HealthMetric icon={Thermometer} label="Temp"       value={`${health.temperature}`} unit="°C"  status="warning" />}
               </div>
             ) : (
               <div className="text-center py-8">
                 <Heart size={28} className="mx-auto opacity-20 mb-3" />
                 <p className="text-sm text-asos-text-muted">No health data</p>
-                <p className="text-xs text-asos-text-muted mt-1">
-                  Connect a wristband or phone to stream biometrics
-                </p>
+                <p className="text-xs text-asos-text-muted mt-1">Connect a wristband or phone to stream biometrics</p>
               </div>
             )}
           </div>
@@ -220,24 +203,16 @@ export default function Dashboard() {
             <Sparkles size={16} className="text-asos-accent" />
             <h2 className="font-semibold text-sm">Provider and Channel Plane</h2>
           </div>
-
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="bg-asos-bg/30 border border-asos-border rounded-lg p-3">
               <div className="text-xs text-asos-text-secondary uppercase tracking-wider mb-2">LLM Provider</div>
-              <div className="text-sm font-semibold capitalize">
-                {llmStatus?.provider || info?.config?.llm?.provider || 'unknown'}
-              </div>
-              <div className="text-xs text-asos-text-muted font-mono mt-1">
-                {llmStatus?.model || info?.config?.llm?.model || 'n/a'}
-              </div>
-              <div className={`text-[11px] mt-2 ${llmStatus?.available ? 'text-green-400' : 'text-yellow-400'}`}>
+              <div className="text-sm font-semibold capitalize">{llmStatus?.provider || info?.config?.llm?.provider || 'unknown'}</div>
+              <div className="text-xs text-asos-text-muted font-mono mt-1">{llmStatus?.model || info?.config?.llm?.model || 'n/a'}</div>
+              <div className={`text-[11px] mt-2 ${llmStatus?.available ? 'text-emerald-400' : 'text-amber-400'}`}>
                 {llmStatus?.available ? 'Connected' : 'Fallback / unavailable'}
               </div>
-              <div className="text-[11px] text-asos-text-muted mt-1">
-                Presets: {llmPresets.length}
-              </div>
+              <div className="text-[11px] text-asos-text-muted mt-1">Presets: {llmPresets.length}</div>
             </div>
-
             <div className="bg-asos-bg/30 border border-asos-border rounded-lg p-3">
               <div className="text-xs text-asos-text-secondary uppercase tracking-wider mb-2">Channels</div>
               <div className="text-sm font-semibold">{channelStats.channel_count || 0} active</div>
@@ -246,9 +221,7 @@ export default function Dashboard() {
                   {(channelStats.active_channels || []).map((ch) => (
                     <div key={ch} className="text-[11px] text-asos-text-secondary flex items-center justify-between">
                       <span className="capitalize">{ch}</span>
-                      <span className="text-asos-text-muted">
-                        {channelStats.details?.[ch]?.known_chats || 0} chats
-                      </span>
+                      <span className="text-asos-text-muted">{channelStats.details?.[ch]?.known_chats || 0} chats</span>
                     </div>
                   ))}
                 </div>
@@ -256,7 +229,6 @@ export default function Dashboard() {
                 <div className="text-[11px] text-asos-text-muted mt-2">No active channels</div>
               )}
             </div>
-
             <div className="bg-asos-bg/30 border border-asos-border rounded-lg p-3">
               <div className="text-xs text-asos-text-secondary uppercase tracking-wider mb-2">Providers + Devices</div>
               <div className="text-[11px] text-asos-text-secondary">GenUI Providers: {genuiProviders.length}</div>
@@ -277,28 +249,19 @@ export default function Dashboard() {
         {/* Quick Actions */}
         <div className="bg-asos-card border border-asos-border rounded-xl p-5">
           <div className="flex items-center gap-2 mb-4">
-            <Zap size={16} className="text-yellow-400" />
+            <Zap size={16} className="text-asos-accent" />
             <h2 className="font-semibold text-sm">Quick Actions</h2>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <QuickAction icon={Search} label="Search the Web"
-              onClick={() => executeQuickAction("What's the latest tech news?")}
-              loading={quickActionLoading === "What's the latest tech news?"} />
-            <QuickAction icon={Sun} label="Get Weather"
-              onClick={() => executeQuickAction("What's the weather like right now?")}
-              loading={quickActionLoading === "What's the weather like right now?"} />
-            <QuickAction icon={Brain} label="Memory Status"
-              onClick={() => executeQuickAction("Show me my memory stats")}
-              loading={quickActionLoading === "Show me my memory stats"} />
-            <QuickAction icon={Globe} label="System Check"
-              onClick={() => executeQuickAction("Run a system health check")}
-              loading={quickActionLoading === "Run a system health check"} />
+            <QuickAction icon={Search} label="Search the Web" onClick={() => executeQuickAction("What's the latest tech news?")} loading={quickActionLoading === "What's the latest tech news?"} />
+            <QuickAction icon={Sun} label="Get Weather" onClick={() => executeQuickAction("What's the weather like right now?")} loading={quickActionLoading === "What's the weather like right now?"} />
+            <QuickAction icon={Brain} label="Memory Status" onClick={() => executeQuickAction("Show me my memory stats")} loading={quickActionLoading === "Show me my memory stats"} />
+            <QuickAction icon={Globe} label="System Check" onClick={() => executeQuickAction("Run a system health check")} loading={quickActionLoading === "Run a system health check"} />
           </div>
         </div>
 
         {/* Memory + System Status */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* Memory */}
           <div className="bg-asos-card border border-asos-border rounded-xl p-5">
             <div className="flex items-center gap-2 mb-4">
               <Database size={16} className="text-asos-accent" />
@@ -312,7 +275,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* System Features */}
           <div className="bg-asos-card border border-asos-border rounded-xl p-5">
             <div className="flex items-center gap-2 mb-4">
               <Shield size={16} className="text-asos-accent" />
@@ -324,8 +286,7 @@ export default function Dashboard() {
               <FeatureRow label="Federated Sync" active={d.sync?.running} />
               <FeatureRow label="Audio Pipeline" active={d.audio_available} />
               <FeatureRow label="LLM Connected" active={d.llm_available} />
-              <FeatureRow label="Sync Peers" active={(d.sync?.peer_count || 0) > 0}
-                detail={`${d.sync?.peer_count || 0} peers`} />
+              <FeatureRow label="Sync Peers" active={(d.sync?.peer_count || 0) > 0} detail={`${d.sync?.peer_count || 0} peers`} />
             </div>
           </div>
         </div>
@@ -333,30 +294,26 @@ export default function Dashboard() {
         {/* Activity Feed */}
         <div className="bg-asos-card border border-asos-border rounded-xl p-5">
           <div className="flex items-center gap-2 mb-4">
-            <Activity size={16} className="text-green-400" />
+            <Activity size={16} className="text-emerald-400" />
             <h2 className="font-semibold text-sm">Activity Feed</h2>
           </div>
           {activity.length > 0 ? (
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {activity.slice().reverse().map((entry, i) => (
                 <div key={i} className="flex items-center gap-3 text-xs bg-asos-bg/20 rounded-lg px-3 py-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
-                  <span className="text-asos-text-secondary font-mono flex-shrink-0">
-                    {new Date(entry.timestamp * 1000).toLocaleTimeString()}
-                  </span>
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                  <span className="text-asos-text-secondary font-mono flex-shrink-0">{new Date(entry.timestamp * 1000).toLocaleTimeString()}</span>
                   <span className="text-asos-text-secondary capitalize font-medium">{entry.action}</span>
                   <span className="text-asos-text-muted truncate">{entry.detail}</span>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-xs text-asos-text-muted text-center py-4">
-              No activity yet — start chatting or connect a device
-            </p>
+            <p className="text-xs text-asos-text-muted text-center py-4">No activity yet — start chatting or connect a device</p>
           )}
         </div>
 
-        {/* Skills (compact) */}
+        {/* Skills */}
         {info?.skills && info.skills.length > 0 && (
           <div className="bg-asos-card border border-asos-border rounded-xl p-5">
             <div className="flex items-center gap-2 mb-4">
@@ -365,10 +322,8 @@ export default function Dashboard() {
             </div>
             <div className="flex flex-wrap gap-2">
               {info.skills.map(s => (
-                <span key={s.skill_id}
-                  className="text-xs bg-asos-bg/30 text-asos-text-secondary px-3 py-1.5 rounded-full">
-                  {s.name}
-                  <span className="text-asos-text-muted ml-1">·{s.endpoints}</span>
+                <span key={s.skill_id} className="text-xs bg-asos-bg/30 text-asos-text-secondary px-3 py-1.5 rounded-full">
+                  {s.name}<span className="text-asos-text-muted ml-1">·{s.endpoints}</span>
                 </span>
               ))}
             </div>
@@ -379,14 +334,23 @@ export default function Dashboard() {
   );
 }
 
-function StatusCard({ icon: Icon, label, value, subtitle, color }) {
+const STATUS_COLORS = {
+  ok:       'text-emerald-400',
+  warning:  'text-amber-400',
+  critical: 'text-rose-400',
+  accent:   'text-asos-accent',
+  muted:    'text-asos-text-muted',
+};
+
+function StatusCard({ icon: Icon, label, value, subtitle, status = 'accent' }) {
+  const color = STATUS_COLORS[status] || STATUS_COLORS.accent;
   return (
     <div className="bg-asos-card border border-asos-border rounded-xl p-4">
       <div className="flex items-center gap-2 mb-2">
-        <Icon size={14} style={{ color }} />
+        <Icon size={14} className={color} />
         <span className="text-[10px] text-asos-text-secondary uppercase tracking-wider">{label}</span>
       </div>
-      <div className="text-2xl font-bold" style={{ color }}>{value}</div>
+      <div className={`text-2xl font-bold ${color}`}>{value}</div>
       {subtitle && <div className="text-[10px] text-asos-text-muted mt-0.5 truncate">{subtitle}</div>}
     </div>
   );
@@ -404,11 +368,12 @@ function MemoryMetric({ label, value, icon: Icon }) {
   );
 }
 
-function HealthMetric({ icon: Icon, label, value, unit, color }) {
+function HealthMetric({ icon: Icon, label, value, unit, status = 'accent' }) {
+  const color = STATUS_COLORS[status] || STATUS_COLORS.accent;
   return (
     <div className="text-center">
-      <Icon size={18} className="mx-auto mb-2" style={{ color }} />
-      <div className="text-2xl font-bold" style={{ color }}>{value}</div>
+      <Icon size={18} className={`mx-auto mb-2 ${color}`} />
+      <div className={`text-2xl font-bold ${color}`}>{value}</div>
       <div className="text-[10px] text-asos-text-secondary">{unit}</div>
       <div className="text-[10px] text-asos-text-muted mt-0.5">{label}</div>
     </div>
@@ -421,7 +386,7 @@ function FeatureRow({ label, active, detail }) {
       <span className="text-xs text-asos-text-secondary">{label}</span>
       <div className="flex items-center gap-2">
         {detail && <span className="text-[10px] text-asos-text-muted">{detail}</span>}
-        <div className={`w-2 h-2 rounded-full ${active ? 'bg-green-500' : 'bg-zinc-600'}`} />
+        <div className={`w-2 h-2 rounded-full ${active ? 'bg-emerald-400' : 'bg-asos-text-muted/30'}`} />
       </div>
     </div>
   );
@@ -429,16 +394,12 @@ function FeatureRow({ label, active, detail }) {
 
 function QuickAction({ icon: Icon, label, onClick, loading }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={loading}
-      className="flex items-center gap-2 bg-asos-bg/30 hover:bg-asos-bg/50 rounded-lg px-4 py-3 text-sm transition text-left disabled:opacity-50"
-    >
-      {loading ? (
-        <Loader2 size={16} className="animate-spin text-asos-accent flex-shrink-0" />
-      ) : (
-        <Icon size={16} className="text-asos-accent flex-shrink-0" />
-      )}
+    <button onClick={onClick} disabled={loading}
+      className="flex items-center gap-2 bg-asos-bg/30 hover:bg-asos-bg/50 rounded-lg px-4 py-3 text-sm transition text-left disabled:opacity-50">
+      {loading
+        ? <Loader2 size={16} className="animate-spin text-asos-accent flex-shrink-0" />
+        : <Icon size={16} className="text-asos-accent flex-shrink-0" />
+      }
       <span className="text-xs text-asos-text-secondary">{label}</span>
     </button>
   );

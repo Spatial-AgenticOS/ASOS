@@ -359,7 +359,7 @@ const CodeBlock = ({ code, language }) => (
 );
 
 const MarkdownView = ({ content }) => (
-  <div className="prose prose-invert prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: content }} />
+  <div className="prose prose-sm max-w-none text-asos-text prose-headings:text-asos-text prose-a:text-asos-accent prose-strong:text-asos-text prose-code:text-asos-accent" dangerouslySetInnerHTML={{ __html: content }} />
 );
 
 const isShellResult = (node) => {
@@ -395,7 +395,7 @@ const TerminalBlock = ({ fields }) => {
   const truncated = stdout.split('\n').length > 6;
 
   return (
-    <div className="bg-[#0d0d0d] border border-asos-border rounded-lg overflow-hidden text-[11px] font-mono">
+    <div className="bg-asos-bg border border-asos-border rounded-lg overflow-hidden text-[11px] font-mono">
       <div className="flex items-center gap-1.5 px-2.5 py-1 border-b border-asos-border/50 bg-asos-card/60">
         <span className={`w-1.5 h-1.5 rounded-full ${exitCode === '0' || exitCode === '' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
         <span className="text-asos-text-muted text-[10px]">

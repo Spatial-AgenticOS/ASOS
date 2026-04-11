@@ -1,7 +1,8 @@
 import React from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Settings, Brain, Cpu, ListChecks, Sun, Moon } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Settings, Cpu, ListChecks, Sun, Moon } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
+import TheOrb from './TheOrb';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -17,10 +18,8 @@ export default function AppShell() {
     <div className="flex flex-col lg:flex-row h-screen bg-asos-bg text-asos-text">
       {/* Desktop Sidebar */}
       <nav className="hidden lg:flex w-[220px] flex-shrink-0 bg-asos-surface border-r border-asos-border flex-col">
-        <div className="flex items-center gap-2.5 px-5 py-5 border-b border-asos-border">
-          <div className="w-8 h-8 rounded-lg bg-asos-accent-dim flex items-center justify-center">
-            <Brain size={18} className="text-asos-accent" />
-          </div>
+        <div className="flex items-center gap-3 px-5 py-5 border-b border-asos-border">
+          <TheOrb size={28} mode="idle" connected />
           <div>
             <span className="font-semibold text-sm tracking-wide block">THEORA</span>
             <span className="text-[10px] text-asos-text-muted">Agent OS</span>
@@ -50,7 +49,7 @@ export default function AppShell() {
         <div className="px-4 py-4 border-t border-asos-border flex items-center justify-between">
           <div className="flex items-center gap-2 text-[11px] text-asos-text-muted">
             <Cpu size={11} />
-            <span>v1.0.0</span>
+            <span>v1.2.0</span>
           </div>
           <button
             onClick={toggleTheme}
@@ -75,9 +74,7 @@ export default function AppShell() {
             end={to === '/'}
             className={({ isActive }) =>
               `flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-all ${
-                isActive
-                  ? 'text-asos-accent'
-                  : 'text-asos-text-muted'
+                isActive ? 'text-asos-accent' : 'text-asos-text-muted'
               }`
             }
           >

@@ -1,11 +1,69 @@
 """Dashboard, system info, health, and activity endpoints."""
 
 import os
+import time
 from fastapi import APIRouter
+from pathlib import Path
 
 from api.state import state
+from config.loader import theora_home
 
 router = APIRouter()
+
+
+@router.get("/api/identity/greeting")
+async def identity_greeting():
+    """Personalized greeting for the smart empty state."""
+    hour = time.localtime().tm_hour
+    if hour < 12:
+        tod = "Good morning"
+    elif hour < 18:
+        tod = "Good afternoon"
+    else:
+        tod = "Good evening"
+
+    name = ""
+    user_path = theora_home() / "USER.md"
+    try:
+        if user_path.exists():
+            content = user_path.read_text()
+            for line in content.splitlines():
+                if line.strip().startswith("- Name:"):
+                    name = line.split(":", 1)[1].strip().split()[0]
+                    break
+    except Exception:
+        pass
+
+    greeting = f"{tod}, {name}." if name else f"{tod}."
+
+    health_summary = ""
+    try:
+        frames = []
+        if state.perception:
+            for sid in list(getattr(state.perception, '_frames', {}).keys()):
+                f = state.perception.get_frame(sid)
+                if f and f.heart_rate > 0:
+                    frames.append(f)
+        if frames:
+            f = frames[0]
+            health_summary = f"Heart rate {f.heart_rate} bpm, SpO2 {f.spo2_pct}%."
+    except Exception:
+        pass
+
+    last_memory = ""
+    try:
+        recent = state.memory.episode_recent(limit=1, session_id=None)
+        if recent:
+            last_memory = (recent[0].get("summary", "") or "")[:120]
+    except Exception:
+        pass
+
+    return {
+        "name": name,
+        "greeting": greeting,
+        "health_summary": health_summary,
+        "last_memory": last_memory,
+    }
 
 
 @router.get("/health")

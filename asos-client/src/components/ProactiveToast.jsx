@@ -38,12 +38,12 @@ export default function ProactiveToast({ alert, onDismiss, onAction }) {
   const borderColor =
     kind === 'warning'    ? 'border-amber-500/30' :
     kind === 'suggestion' ? 'border-asos-accent/30' :
-    kind === 'reminder'   ? 'border-violet-500/30' :
+    kind === 'reminder'   ? 'border-asos-accent/30' :
     'border-asos-border';
   const iconColor =
     kind === 'warning'    ? 'text-amber-400' :
     kind === 'suggestion' ? 'text-asos-accent' :
-    kind === 'reminder'   ? 'text-violet-400' :
+    kind === 'reminder'   ? 'text-asos-accent' :
     'text-asos-text-secondary';
 
   return (
@@ -83,7 +83,7 @@ export default function ProactiveToast({ alert, onDismiss, onAction }) {
       <div className="h-0.5 mx-4 mb-2 rounded-full bg-asos-border overflow-hidden">
         <div
           className={`h-full rounded-full ${
-            kind === 'warning' ? 'bg-amber-400' : kind === 'suggestion' ? 'bg-asos-accent' : 'bg-violet-400'
+            kind === 'warning' ? 'bg-amber-400' : 'bg-asos-accent'
           } ${exiting ? '' : 'proactive-toast-progress'}`}
         />
       </div>

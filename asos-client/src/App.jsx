@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SduiRenderer } from './components/SduiRenderer';
-import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle, Phone, Camera, CameraOff, BookOpen, RefreshCw, Search, ListChecks, GitBranch, RotateCcw, BookmarkPlus, MessageSquarePlus, History, Trash2, ChevronLeft, Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
+import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, AlertTriangle, Phone, Camera, CameraOff, BookOpen, RefreshCw, Search, ListChecks, GitBranch, RotateCcw, BookmarkPlus, MessageSquarePlus, History, Trash2, ChevronLeft, Sparkles, ChevronDown, ChevronUp, Command } from 'lucide-react';
 import { WS_URL, API_BASE } from './config';
 import { RealtimeVoiceEngine } from './lib/voiceRealtime';
 import { VisionCapture } from './lib/visionCapture';
 import VoiceWaveform from './components/VoiceWaveform';
 import ProactiveToast from './components/ProactiveToast';
+import TheOrb from './components/TheOrb';
+import AmbientStrip from './components/AmbientStrip';
+import CommandPalette from './components/CommandPalette';
 
 function SkillProposalCard({ msg, onDecision, busy }) {
   const [expanded, setExpanded] = useState(false);
@@ -105,6 +108,10 @@ export default function App() {
   const [learnedNotice, setLearnedNotice] = useState(null);
   const [permissionRequest, setPermissionRequest] = useState(null);
   const [proactiveAlert, setProactiveAlert] = useState(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [screenContext, setScreenContext] = useState('');
+  const [sessionStartTime] = useState(Date.now());
+  const [greeting, setGreeting] = useState(null);
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -119,6 +126,9 @@ export default function App() {
   useEffect(() => {
     fetch(`${API_BASE}/api/dashboard`).then(r => r.json()).then(data => {
       if (data?.health?.heart_rate) setHr(data.health.heart_rate);
+    }).catch(() => {});
+    fetch(`${API_BASE}/api/identity/greeting`).then(r => r.json()).then(data => {
+      if (data && !data.error) setGreeting(data);
     }).catch(() => {});
   }, []);
 
@@ -274,6 +284,8 @@ export default function App() {
               action_label: data.action_label || '',
               action_id: data.action_id || '',
             });
+          } else if (event === 'ambient_context' && data) {
+            if (data.screen_description) setScreenContext(data.screen_description);
           }
         }
       } catch (e) {
@@ -802,43 +814,37 @@ export default function App() {
           if (a.action_id) handleUIAction(a.action_id);
         }}
       />
-      {/* Top Bar */}
-      <div className="flex-shrink-0 h-14 bg-asos-surface/80 border-b border-asos-border z-10 flex items-center justify-between px-4 backdrop-blur-xl">
+      {/* Top Bar — clean, orb-centric */}
+      <div className="flex-shrink-0 h-12 bg-asos-surface/80 border-b border-asos-border z-10 flex items-center justify-between px-4 backdrop-blur-xl">
         <div className="flex items-center gap-2.5">
-          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-red-400'}`} />
+          <TheOrb
+            size={20}
+            mode={!isConnected ? 'disconnected' : isThinking ? 'thinking' : isStreaming ? 'speaking' : isRecording ? 'listening' : proactiveAlert ? 'alert' : 'idle'}
+            connected={isConnected}
+          />
           <span className="font-semibold text-sm text-asos-text">THEORA</span>
-          {agentRuntime.multi_agent_enabled && (
-            <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
-              agentRuntime.multi_agent_ready
-                ? 'text-cyan-300 border-cyan-500/40 bg-cyan-500/10'
-                : 'text-amber-300 border-amber-500/40 bg-amber-500/10'
-            }`}>
-              MA {agentRuntime.multi_agent_ready ? 'ON' : 'INIT'}
-            </span>
-          )}
           {agentRuntime.active_subagents > 0 && (
-            <span className="text-[10px] px-2 py-0.5 rounded-full border text-violet-300 border-violet-500/40 bg-violet-500/10">
-              SUB {agentRuntime.active_subagents}
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-asos-accent/30 text-asos-accent bg-asos-accent-dim">
+              {agentRuntime.active_subagents} agents
             </span>
           )}
           {isRecording && (
-            <span className="ml-2 text-emerald-400 text-[11px] font-medium animate-pulse flex items-center gap-1">
-              <Phone size={11} />
-              LIVE
+            <span className="text-emerald-400 text-[10px] font-medium animate-pulse flex items-center gap-1">
+              <Phone size={10} /> LIVE
             </span>
           )}
         </div>
         <div className="flex items-center gap-1">
           {hr && (
-            <div className="flex items-center gap-1.5 text-rose-400 mr-2">
-              <Activity size={14} className="animate-pulse" />
-              <span className="font-mono text-xs">{hr}</span>
+            <div className="flex items-center gap-1.5 text-rose-400 mr-1.5">
+              <Activity size={13} />
+              <span className="font-mono text-[11px]">{hr}</span>
             </div>
           )}
           <button
             onClick={() => { void startNewThread(); }}
             className="p-2 rounded-lg text-asos-text-muted hover:text-asos-accent hover:bg-asos-accent-dim transition"
-            title="Start New Chat"
+            title="New Chat"
           >
             <MessageSquarePlus size={15} />
           </button>
@@ -850,44 +856,40 @@ export default function App() {
             <History size={15} />
           </button>
           <button
-            onClick={() => setWikiOpen(v => !v)}
-            className={`p-2 rounded-lg transition ${wikiOpen ? 'text-asos-accent bg-asos-accent-dim' : 'text-asos-text-muted hover:text-asos-text hover:bg-asos-card-hover'}`}
-            title="Memory Wiki"
+            onClick={() => setPaletteOpen(true)}
+            className="p-2 rounded-lg text-asos-text-muted hover:text-asos-text hover:bg-asos-card-hover transition"
+            title="Command Palette (⌘K)"
           >
-            <BookOpen size={15} />
-          </button>
-          <button
-            onClick={() => navigate('/taskflows')}
-            className="relative p-2 rounded-lg text-asos-text-muted hover:text-asos-text hover:bg-asos-card-hover transition"
-            title="TaskFlows"
-          >
-            <ListChecks size={15} />
-            {activeFlowCount > 0 && (
-              <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-asos-accent text-[9px] leading-4 text-white text-center font-medium">
-                {activeFlowCount}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => {
-              setSessionPanelOpen((v) => !v);
-              if (!sessionPanelOpen && sessionId) fetchSessionSnapshots();
-            }}
-            disabled={!sessionId}
-            className={`p-2 rounded-lg transition ${
-              sessionPanelOpen
-                ? 'text-asos-accent bg-asos-accent-dim'
-                : 'text-asos-text-muted hover:text-asos-text hover:bg-asos-card-hover'
-            } disabled:opacity-40`}
-            title="Session snapshots"
-          >
-            <GitBranch size={15} />
-          </button>
-          <button onClick={() => navigate('/settings')} className="p-2 rounded-lg text-asos-text-muted hover:text-asos-text hover:bg-asos-card-hover transition">
-            <Settings size={15} />
+            <Command size={15} />
           </button>
         </div>
       </div>
+
+      {/* Ambient Context Strip */}
+      <AmbientStrip
+        screenContext={screenContext}
+        hr={hr}
+        sessionStartTime={sessionStartTime}
+      />
+
+      {/* Command Palette */}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={(action) => {
+          if (action === 'open') setPaletteOpen(true);
+          else setPaletteOpen(false);
+        }}
+        onCommand={(text) => {
+          if (wsRef.current && wsRef.current.readyState === 1) {
+            const userMsg = { role: 'user', type: 'text', content: text };
+            setMessages(prev => [...prev, userMsg]);
+            wsRef.current.send(JSON.stringify({ type: 'chat', payload: { text } }));
+          }
+        }}
+        onToggle={(target) => {
+          if (target === 'wiki') setWikiOpen(v => !v);
+        }}
+      />
 
       {/* Transcript overlay */}
       {transcript && (
@@ -1172,18 +1174,48 @@ export default function App() {
       {/* Messages View */}
       <div className="flex-1 overflow-y-auto px-3 lg:px-5 py-4 space-y-2.5">
         {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full gap-3">
-            <div className="w-12 h-12 rounded-xl bg-asos-accent-dim flex items-center justify-center">
-              <Brain size={24} className="text-asos-accent" />
+          <div className="flex flex-col items-center justify-center h-full gap-4 px-6">
+            <TheOrb size={56} mode={isConnected ? 'idle' : 'disconnected'} connected={isConnected} />
+            <div className="text-center space-y-1">
+              <p className="text-base font-medium text-asos-text">
+                {greeting?.greeting || (new Date().getHours() < 12 ? 'Good morning.' : new Date().getHours() < 18 ? 'Good afternoon.' : 'Good evening.')}
+              </p>
+              {greeting?.health_summary && (
+                <p className="text-xs text-asos-text-secondary">{greeting.health_summary}</p>
+              )}
+              {!greeting?.health_summary && (
+                <p className="text-xs text-asos-text-muted">Type a message, use voice, or press <kbd className="text-[10px] bg-asos-card px-1 py-0.5 rounded border border-asos-border font-mono">⌘K</kbd></p>
+              )}
             </div>
-            <div className="text-center">
-              <p className="text-sm font-medium text-asos-text-secondary">What can I help you with?</p>
-              <p className="text-[11px] text-asos-text-muted mt-0.5">Type a message or start a voice conversation</p>
+            <div className="flex flex-wrap justify-center gap-2 mt-1">
+              {[
+                { label: 'Start briefing', text: 'Give me my morning briefing' },
+                { label: 'Check health', text: 'How is my health right now?' },
+                { label: 'What was I working on?', text: 'What was I working on recently?' },
+              ].map(action => (
+                <button
+                  key={action.label}
+                  onClick={() => {
+                    if (wsRef.current && wsRef.current.readyState === 1) {
+                      setMessages(prev => [...prev, { role: 'user', type: 'text', content: action.text }]);
+                      wsRef.current.send(JSON.stringify({ type: 'chat', payload: { text: action.text } }));
+                    }
+                  }}
+                  className="text-xs px-3 py-1.5 rounded-full border border-asos-border text-asos-text-secondary hover:text-asos-accent hover:border-asos-accent/30 hover:bg-asos-accent-dim transition"
+                >
+                  {action.label}
+                </button>
+              ))}
             </div>
+            {greeting?.last_memory && (
+              <p className="text-[11px] text-asos-text-muted mt-2 max-w-sm text-center italic">
+                Yesterday: "{greeting.last_memory}"
+              </p>
+            )}
           </div>
         )}
         {messages.map((msg, idx) => (
-          <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          <div key={idx} className={`msg-enter flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`} style={{ animationDelay: `${Math.min(idx * 30, 150)}ms` }}>
             {msg.role === 'user' ? (
               <div className="max-w-[78%] bg-asos-user text-white rounded-2xl rounded-br-sm px-3.5 py-2 shadow-md shadow-asos-user/10">
                 {msg.type === 'text' && (
@@ -1199,48 +1231,56 @@ export default function App() {
                 <span className="text-[10px] text-asos-text-muted bg-asos-card px-2.5 py-0.5 rounded-full border border-asos-border">{msg.content}</span>
               </div>
             ) : (
-              <div className="max-w-[75%]">
-                {msg.type === 'text' && (
-                  <div className="bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-sm px-3.5 py-2">
-                    <span className="text-[13px] leading-snug text-asos-text">
-                      {msg.source === 'voice' && <Mic size={11} className="inline mr-1 text-asos-text-muted" />}
-                      {msg.content}
-                    </span>
-                  </div>
-                )}
-                {msg.type === 'sdui' && (
-                  <div className="rounded-xl overflow-hidden">
-                    <SduiRenderer node={msg.payload} onAction={handleUIAction} compact />
-                  </div>
-                )}
-                {msg.type === 'skill_proposal' && (
-                  <SkillProposalCard
-                    msg={msg}
-                    onDecision={handleSkillProposalDecision}
-                    busy={skillProposalBusy}
-                  />
-                )}
+              <div className="flex gap-2 max-w-[80%]">
+                <div className="flex-shrink-0 mt-1">
+                  <TheOrb size={14} mode="idle" connected={isConnected} />
+                </div>
+                <div className="min-w-0">
+                  {msg.type === 'text' && (
+                    <div className="bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-sm px-3.5 py-2">
+                      <span className="text-[13px] leading-snug text-asos-text">
+                        {msg.source === 'voice' && <Mic size={11} className="inline mr-1 text-asos-text-muted" />}
+                        {msg.content}
+                      </span>
+                    </div>
+                  )}
+                  {msg.type === 'sdui' && (
+                    <div className="sdui-fade-in rounded-xl overflow-hidden">
+                      <SduiRenderer node={msg.payload} onAction={handleUIAction} compact />
+                    </div>
+                  )}
+                  {msg.type === 'skill_proposal' && (
+                    <SkillProposalCard
+                      msg={msg}
+                      onDecision={handleSkillProposalDecision}
+                      busy={skillProposalBusy}
+                    />
+                  )}
+                </div>
               </div>
             )}
           </div>
         ))}
         {isStreaming && streamingText && (
           <div className="flex justify-start">
-            <div className="max-w-[75%] bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-sm px-3.5 py-2">
-              <span className="text-[13px] leading-snug text-asos-text">{streamingText}</span>
-              <span className="inline-block w-1 h-3.5 bg-asos-accent rounded-sm animate-pulse ml-0.5 align-middle" />
+            <div className="flex gap-2 max-w-[80%]">
+              <div className="flex-shrink-0 mt-1"><TheOrb size={14} mode="speaking" connected /></div>
+              <div className="bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-sm px-3.5 py-2">
+                <span className="text-[13px] leading-snug text-asos-text">{streamingText}</span>
+                <span className="inline-block w-1 h-3.5 bg-asos-accent rounded-sm animate-pulse ml-0.5 align-middle" />
+              </div>
             </div>
           </div>
         )}
         {isThinking && !isStreaming && (
           <div className="flex justify-start">
-            <div className="flex items-center gap-2 px-3.5 py-2 bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-sm">
-              <div className="flex gap-0.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-asos-accent animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-asos-accent animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-asos-accent animate-bounce" style={{ animationDelay: '300ms' }} />
+            <div className="flex gap-2">
+              <div className="flex-shrink-0 mt-1"><TheOrb size={14} mode="thinking" connected /></div>
+              <div className="flex items-center gap-1.5 px-3.5 py-2.5 bg-asos-assistant border border-asos-border rounded-2xl rounded-bl-sm">
+                <span className="thinking-dot" style={{ animationDelay: '0ms' }} />
+                <span className="thinking-dot" style={{ animationDelay: '200ms' }} />
+                <span className="thinking-dot" style={{ animationDelay: '400ms' }} />
               </div>
-              <span className="text-[11px] text-asos-text-muted">thinking...</span>
             </div>
           </div>
         )}
