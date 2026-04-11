@@ -322,6 +322,58 @@ class SkillGenerator:
         """Get all skills waiting for user approval."""
         return list(self._pending_skills.values())
 
+    async def generate_skill_with_retry(self, capability: str, service: str = "", max_retries: int = 3) -> Optional[dict]:
+        """Generate a skill with automatic retry on failure."""
+        # Check pre-built templates first for instant demo experience
+        template = self._match_template(capability, service)
+        if template:
+            skill_id = template["skill_id"]
+            self._pending_skills[skill_id] = template
+            self._generation_count += 1
+            logger.info(f"Matched pre-built template: {skill_id}")
+            return template
+
+        for attempt in range(max_retries):
+            result = await self.generate_skill(capability, service)
+            if result:
+                valid, errors = self._validate_manifest(result)
+                if valid:
+                    return result
+                logger.warning("Generated skill failed validation (attempt %d/%d): %s", attempt + 1, max_retries, errors)
+            else:
+                logger.debug("Generation attempt %d/%d returned None", attempt + 1, max_retries)
+        logger.error("Skill generation failed after %d retries for: %s", max_retries, capability)
+        return None
+
+    @staticmethod
+    def _validate_manifest(manifest: dict) -> tuple[bool, list[str]]:
+        """Validate a generated skill manifest before registration."""
+        errors = []
+        if not manifest.get("skill_id"):
+            errors.append("missing skill_id")
+        if not manifest.get("endpoints"):
+            errors.append("missing endpoints")
+        sid = manifest.get("skill_id", "")
+        if sid and not sid.replace("_", "").isalnum():
+            errors.append(f"invalid skill_id format: {sid}")
+        for i, ep in enumerate(manifest.get("endpoints", [])):
+            if not ep.get("id"):
+                errors.append(f"endpoint[{i}] missing id")
+            if not ep.get("url") and not ep.get("method", "").upper() == "PYTHON":
+                errors.append(f"endpoint[{i}] missing url")
+        return (len(errors) == 0, errors)
+
+    @staticmethod
+    def _match_template(capability: str, service: str) -> Optional[dict]:
+        """Match against pre-built skill templates for reliable demo performance."""
+        cap_lower = (capability + " " + service).lower()
+        for template in _DEMO_SKILL_TEMPLATES:
+            for kw in template.get("_match_keywords", []):
+                if kw in cap_lower:
+                    result = {k: v for k, v in template.items() if not k.startswith("_")}
+                    return result
+        return None
+
     @property
     def stats(self) -> dict:
         return {
@@ -332,3 +384,98 @@ class SkillGenerator:
             "debounce_seconds": self._need_debounce_seconds,
             "proposal_cooldown_seconds": self._proposal_cooldown_seconds,
         }
+
+
+_DEMO_SKILL_TEMPLATES = [
+    {
+        "_match_keywords": ["github", "pull request", "pr", "repo"],
+        "skill_id": "github_pr_review",
+        "brand": {"name": "GitHub PR Review", "primary_color": "#24292e"},
+        "description": "List and summarize open pull requests from a GitHub repository",
+        "trigger_phrases": ["check my PRs", "github pull requests", "show open PRs", "review PRs"],
+        "categories": ["developer", "productivity"],
+        "auth": {"type": "bearer"},
+        "endpoints": [
+            {
+                "id": "list_prs",
+                "method": "GET",
+                "url": "https://api.github.com/repos/{owner}/{repo}/pulls",
+                "description": "List open pull requests for a repository",
+                "params": [
+                    {"name": "owner", "type": "string", "description": "Repository owner", "required": True},
+                    {"name": "repo", "type": "string", "description": "Repository name", "required": True},
+                    {"name": "state", "type": "string", "description": "PR state: open, closed, all", "required": False},
+                ],
+                "returns_description": "Array of pull request objects with title, number, author, and status",
+                "ui_hint": "list",
+            },
+            {
+                "id": "get_pr",
+                "method": "GET",
+                "url": "https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}",
+                "description": "Get details of a specific pull request",
+                "params": [
+                    {"name": "owner", "type": "string", "description": "Repository owner", "required": True},
+                    {"name": "repo", "type": "string", "description": "Repository name", "required": True},
+                    {"name": "pull_number", "type": "number", "description": "PR number", "required": True},
+                ],
+                "returns_description": "Full pull request details including diff stats, reviewers, and comments",
+                "ui_hint": "detail_card",
+            },
+        ],
+        "requires_daemon": False,
+        "permissions": ["network"],
+    },
+    {
+        "_match_keywords": ["weather", "temperature", "forecast", "rain"],
+        "skill_id": "weather_lookup",
+        "brand": {"name": "Weather Lookup", "primary_color": "#4FC3F7"},
+        "description": "Get current weather and forecast for any location",
+        "trigger_phrases": ["weather", "temperature", "forecast", "is it going to rain", "what's the weather"],
+        "categories": ["utility", "daily"],
+        "auth": {"type": "none"},
+        "endpoints": [
+            {
+                "id": "current",
+                "method": "GET",
+                "url": "https://wttr.in/{location}?format=j1",
+                "description": "Get current weather conditions for a location",
+                "params": [
+                    {"name": "location", "type": "string", "description": "City name or coordinates", "required": True},
+                ],
+                "returns_description": "Current temperature, humidity, wind, conditions, and 3-day forecast",
+                "ui_hint": "metric",
+            },
+        ],
+        "requires_daemon": False,
+        "permissions": ["network"],
+    },
+    {
+        "_match_keywords": ["http", "api", "fetch", "request", "endpoint", "curl"],
+        "skill_id": "http_request",
+        "brand": {"name": "HTTP Request", "primary_color": "#FF7043"},
+        "description": "Make HTTP requests to any API endpoint and return the response",
+        "trigger_phrases": ["make a request", "call an API", "fetch from URL", "HTTP request"],
+        "categories": ["developer", "utility"],
+        "auth": {"type": "none"},
+        "endpoints": [
+            {
+                "id": "request",
+                "method": "PYTHON",
+                "url": "internal://http_request/request",
+                "description": "Make an HTTP request to any URL with custom method, headers, and body",
+                "params": [
+                    {"name": "url", "type": "string", "description": "The URL to request", "required": True},
+                    {"name": "method", "type": "string", "description": "HTTP method (GET, POST, PUT, DELETE)", "required": False},
+                    {"name": "headers", "type": "string", "description": "JSON string of headers", "required": False},
+                    {"name": "body", "type": "string", "description": "Request body", "required": False},
+                ],
+                "returns_description": "HTTP status code and response body",
+                "ui_hint": "detail_card",
+            },
+        ],
+        "python_impl": "from skills.base import BaseSkill\nimport aiohttp\nimport json\n\nclass HttpRequestSkill(BaseSkill):\n    def __init__(self):\n        super().__init__(skill_id='http_request')\n\n    async def execute(self, endpoint_id, args, vault=None):\n        url = args.get('url', '')\n        method = args.get('method', 'GET').upper()\n        headers = json.loads(args.get('headers', '{}')) if args.get('headers') else {}\n        body = args.get('body')\n        try:\n            async with aiohttp.ClientSession() as session:\n                async with session.request(method, url, headers=headers, data=body, timeout=aiohttp.ClientTimeout(total=30)) as resp:\n                    text = await resp.text()\n                    return {'success': True, 'status_code': resp.status, 'data': {'body': text[:5000], 'status': resp.status, 'headers': dict(resp.headers)}, 'error': None}\n        except Exception as e:\n            return {'success': False, 'status_code': 500, 'data': None, 'error': str(e)}",
+        "requires_daemon": False,
+        "permissions": ["network"],
+    },
+]

@@ -5,6 +5,8 @@ import { Activity, Mic, MicOff, Send, Brain, Wifi, WifiOff, Zap, Settings, Alert
 import { WS_URL, API_BASE } from './config';
 import { RealtimeVoiceEngine } from './lib/voiceRealtime';
 import { VisionCapture } from './lib/visionCapture';
+import VoiceWaveform from './components/VoiceWaveform';
+import ProactiveToast from './components/ProactiveToast';
 
 function SkillProposalCard({ msg, onDecision, busy }) {
   const [expanded, setExpanded] = useState(false);
@@ -102,6 +104,7 @@ export default function App() {
   const [threadsDirty, setThreadsDirty] = useState(false);
   const [learnedNotice, setLearnedNotice] = useState(null);
   const [permissionRequest, setPermissionRequest] = useState(null);
+  const [proactiveAlert, setProactiveAlert] = useState(null);
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -263,6 +266,14 @@ export default function App() {
             const heartRate = data?.health?.heart_rate;
             if (heartRate) setHr(heartRate);
             setActiveFlowCount(data?.taskflows?.running || 0);
+          } else if (event === 'proactive_alert' && data) {
+            setProactiveAlert({
+              kind: data.kind || 'info',
+              title: data.title || '',
+              message: data.message || '',
+              action_label: data.action_label || '',
+              action_id: data.action_id || '',
+            });
           }
         }
       } catch (e) {
@@ -784,6 +795,13 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-full max-w-full lg:max-w-3xl mx-auto bg-asos-bg relative overflow-hidden">
+      <ProactiveToast
+        alert={proactiveAlert}
+        onDismiss={() => setProactiveAlert(null)}
+        onAction={(a) => {
+          if (a.action_id) handleUIAction(a.action_id);
+        }}
+      />
       {/* Top Bar */}
       <div className="flex-shrink-0 h-14 bg-asos-surface/80 border-b border-asos-border z-10 flex items-center justify-between px-4 backdrop-blur-xl">
         <div className="flex items-center gap-2.5">
@@ -1269,6 +1287,9 @@ export default function App() {
           >
             {isRecording ? <MicOff size={16} /> : <Mic size={16} />}
           </button>
+          {isRecording && (
+            <VoiceWaveform mode={isThinking ? 'thinking' : isStreaming ? 'speaking' : 'listening'} />
+          )}
           <div className="flex-1 relative">
             <input
               type="text"

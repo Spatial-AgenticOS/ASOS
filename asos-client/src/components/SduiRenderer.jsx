@@ -474,7 +474,7 @@ export const SduiRenderer = ({ node, onAction, compact = false }) => {
     }
     case 'Card':
       return (
-        <div className={`bg-asos-card border border-asos-border backdrop-blur-md shadow-md flex flex-col ${sp(spacing || 12)} ${compact ? 'p-2.5' : 'p-3'}`}
+        <div className={`sdui-fade-in bg-asos-card border border-asos-border backdrop-blur-md shadow-md flex flex-col ${sp(spacing || 12)} ${compact ? 'p-2.5' : 'p-3'}`}
           style={{ borderRadius: corner_radius || 10 }}>
           {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} compact={compact} />)}
         </div>
@@ -509,7 +509,11 @@ export const SduiRenderer = ({ node, onAction, compact = false }) => {
       return (
         <div className={`grid ${pd(padding)} ${sp(spacing || 12)} w-full`}
           style={{ gridTemplateColumns: `repeat(${columns || 2}, minmax(0, 1fr))` }}>
-          {children && children.map((c, i) => <SduiRenderer key={i} node={c} onAction={onAction} compact={compact} />)}
+          {children && children.map((c, i) => (
+            <div key={i} className="sdui-fade-in" style={{ animationDelay: `${i * 80}ms` }}>
+              <SduiRenderer node={c} onAction={onAction} compact={compact} />
+            </div>
+          ))}
         </div>
       );
     case 'ScrollView':
@@ -522,10 +526,10 @@ export const SduiRenderer = ({ node, onAction, compact = false }) => {
       );
     case 'MetricCard':
       return (
-        <div className={`bg-asos-card border border-asos-border backdrop-blur-md shadow-md ${compact ? 'p-2.5' : 'p-3'} flex flex-col items-center gap-1.5`}
+        <div className={`sdui-metric-pop bg-asos-card border border-asos-border backdrop-blur-md shadow-md ${compact ? 'p-2.5' : 'p-3'} flex flex-col items-center gap-1.5`}
           style={{ borderRadius: corner_radius || 12 }}>
           {icon && <LucideDynamicIcon name={icon} size={compact ? 20 : 24} color={color || '#06b6d4'} />}
-          <span className={`${compact ? 'text-xl' : 'text-2xl'} font-bold`} style={{ color: color || '#fff' }}>{value}</span>
+          <span className={`${compact ? 'text-xl' : 'text-2xl'} font-bold transition-transform duration-300`} style={{ color: color || '#fff' }}>{value}</span>
           {unit && <span className="text-[10px] opacity-60 uppercase tracking-wider">{unit}</span>}
           <span className={`${compact ? 'text-[11px]' : 'text-xs'} opacity-80`}>{label}</span>
         </div>

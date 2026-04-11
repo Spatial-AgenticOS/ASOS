@@ -307,6 +307,7 @@ class RealtimeProxy:
         perception=None,
         send_to_node: Callable[[str, dict], Awaitable[None]] | None = None,
         send_to_session: Callable[[str, Any], Awaitable[None]] | None = None,
+        identity_workspace=None,
     ):
         self._sessions: dict[str, RealtimeSession] = {}
         self._node_to_session: dict[str, str] = {}
@@ -317,6 +318,9 @@ class RealtimeProxy:
         self._send_to_node = send_to_node
         self._send_to_session = send_to_session
         self._api_key = os.getenv("OPENAI_API_KEY", "")
+
+        from voice.personality import VoicePersonality
+        self._voice_personality = VoicePersonality(identity_workspace=identity_workspace)
 
     @property
     def available(self) -> bool:
@@ -390,13 +394,45 @@ class RealtimeProxy:
             await self.stop_session(sid)
 
     def _build_system_prompt(self, session_id: str) -> str:
-        parts = [
-            "You are THEORA, a personal AI assistant with access to the user's "
-            "physical environment through smart glasses, phone sensors, and connected devices. "
-            "You can see what the user sees, monitor their health, control smart home devices, "
-            "search the web, manage notes, and more. Be concise in voice responses. "
-            "When using tools, explain what you're doing briefly.",
-        ]
+        user_name = ""
+        recent_context = ""
+        if self._memory:
+            history = self._memory.working_get(session_id, limit=3)
+            snippets = [
+                e.get("text", "")[:80]
+                for e in history
+                if e.get("role") == "user" and e.get("text")
+            ]
+            if snippets:
+                recent_context = " | ".join(snippets)
+
+        try:
+            from config.loader import theora_home
+            user_md = theora_home() / "USER.md"
+            if user_md.exists():
+                for line in user_md.read_text().splitlines():
+                    stripped = line.strip().lstrip("#").strip()
+                    if stripped and stripped.lower().startswith("name:"):
+                        user_name = stripped.split(":", 1)[1].strip()
+                        break
+        except Exception:
+            pass
+
+        tod = self._voice_personality.current_time_of_day()
+        personality_block = self._voice_personality.get_voice_instructions(
+            time_of_day=tod,
+            user_name=user_name,
+            recent_context=recent_context,
+        )
+
+        parts = [personality_block]
+
+        parts.append(
+            "\nYou have access to the user's physical environment through "
+            "smart glasses, phone sensors, and connected devices. "
+            "You can see what the user sees, monitor their health, "
+            "control smart home devices, search the web, manage notes, and more."
+        )
 
         if self._perception:
             frame = self._perception.get_frame(session_id)

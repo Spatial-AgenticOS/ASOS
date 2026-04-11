@@ -749,6 +749,12 @@ def main():
     start_p = sub.add_parser("start", help="Start THEORA — brain + dashboard + chat in one command")
     start_p.add_argument("--serve-port", default=str(brain_port()), help=f"Port (default {brain_port()})")
     start_p.add_argument("--no-browser", action="store_true", help="Don't open browser")
+    start_p.add_argument("--demo", action="store_true", help="Demo mode: simulated hardware, pre-seeded memory, compelling identity")
+
+    # theora demo (shortcut for start --demo)
+    demo_p = sub.add_parser("demo", help="Launch THEORA in demo mode with simulated hardware and pre-seeded data")
+    demo_p.add_argument("--scenario", default="", choices=["", "morning", "developer", "mesh"], help="Run a specific demo scenario")
+    demo_p.add_argument("--serve-port", default=str(brain_port()), help=f"Port (default {brain_port()})")
 
     # theora serve (headless server only)
     serve_p = sub.add_parser("serve", help="Start the brain server (headless, no chat)")
@@ -784,7 +790,14 @@ def main():
     args, remaining = parser.parse_known_args()
     _apply_connection_args(args)
 
-    if args.subcommand == "start":
+    if args.subcommand == "demo":
+        os.environ["THEORA_DEMO"] = "1"
+        if getattr(args, "scenario", ""):
+            os.environ["THEORA_DEMO_SCENARIO"] = args.scenario
+        cmd_start(port=int(args.serve_port), no_browser=False)
+    elif args.subcommand == "start":
+        if getattr(args, "demo", False):
+            os.environ["THEORA_DEMO"] = "1"
         cmd_start(port=int(args.serve_port), no_browser=args.no_browser)
     elif args.subcommand == "serve":
         cmd_serve(host=args.bind, port=int(args.serve_port))

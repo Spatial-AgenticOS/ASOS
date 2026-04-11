@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 
 import { API_BASE as API, WS_URL } from '../config';
+import DeviceStatusBar from '../components/DeviceStatusBar';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -106,6 +107,7 @@ export default function Dashboard() {
 
   return (
     <div className="h-full overflow-y-auto">
+      <DeviceStatusBar devices={devices} hr={health.heart_rate} />
       <div className="max-w-6xl mx-auto p-4 lg:p-8 space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between">

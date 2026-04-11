@@ -1,0 +1,14 @@
+{
+  "name": "create-theora-demo",
+  "version": "1.0.0",
+  "description": "One-command demo launcher for THEORA — the open AI operating system",
+  "bin": {
+    "create-theora-demo": "./index.js"
+  },
+  "keywords": ["theora", "ai", "agent", "demo", "os"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/theora-ai/theora"
+  }
+}

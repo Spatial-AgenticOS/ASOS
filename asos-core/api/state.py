@@ -49,6 +49,7 @@ from hardware.mesh import HardwareMesh
 from identity.workspace import IdentityWorkspace
 from genui.generator import GenUIEngine, ServiceProviderRegistry
 from skills.impl.browser_use import BrowserController
+from agents.session_handoff import SessionHandoffManager
 
 logger = logging.getLogger("theora.brain")
 
@@ -135,6 +136,7 @@ class BrainState:
         self.scheduler = None
         self.docker_sandbox = None
         self.taskflows: Optional[TaskFlowRuntime] = None
+        self.session_handoff: Optional[SessionHandoffManager] = None
 
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
@@ -237,6 +239,7 @@ class BrainState:
             perception=self.perception,
             send_to_node=self._send_dict_to_node,
             send_to_session=self.send_to_session,
+            identity_workspace=self.identity_workspace,
         )
 
         self.voice_router = VoiceRouter(
@@ -270,6 +273,35 @@ class BrainState:
         self.identity_workspace = IdentityWorkspace()
         self.identity_workspace.sync_tools_from_registry(self.skill_registry)
 
+        # Screen Capture Loop
+        self.screen_loop = None
+        try:
+            from perception.screen_loop import ScreenLoop
+            self.screen_loop = ScreenLoop(
+                perception=self.perception,
+                memory=self.memory,
+                llm=_shared_llm,
+            )
+            import asyncio
+            asyncio.create_task(self.screen_loop.start())
+            logger.info("Screen capture loop started")
+        except Exception as e:
+            logger.debug(f"Screen loop skipped: {e}")
+
+        # Cross-Device Session Handoff
+        self.session_handoff = None
+        try:
+            from agents.session_handoff import SessionHandoffManager
+            self.session_handoff = SessionHandoffManager(
+                sessions=self.sessions,
+                daemons=self.daemons,
+                memory=self.memory,
+                send_to_session=self.send_to_session,
+            )
+            logger.info("Session handoff manager initialized")
+        except Exception as e:
+            logger.debug(f"Session handoff skipped: {e}")
+
         self.genui_engine = GenUIEngine(llm=_shared_llm)
         self.service_providers = ServiceProviderRegistry()
         if self.orchestrator:
@@ -277,6 +309,13 @@ class BrainState:
 
         self.browser = BrowserController()
         self._register_browser_skill()
+
+        self.session_handoff = SessionHandoffManager(
+            sessions=self.sessions,
+            daemons=self.daemons,
+            memory=self.memory,
+            send_to_session=self.send_to_session,
+        )
 
         try:
             from security.exec_approvals import ApprovalManager
@@ -302,9 +341,76 @@ class BrainState:
         except Exception as e:
             logger.debug(f"Cron scheduler skipped: {e}")
 
+        # Proactive Intelligence Engine
+        try:
+            from agents.proactive_engine import ProactiveEngine
+            self.proactive = ProactiveEngine(
+                perception=self.perception,
+                memory=self.memory,
+                orchestrator=self.orchestrator,
+                llm=_shared_llm,
+            )
+
+            async def _proactive_delivery(msg):
+                alert = {
+                    "trigger_id": msg.trigger_id,
+                    "priority": msg.priority.name,
+                    "title": msg.title,
+                    "body": msg.body,
+                    "action": msg.action,
+                    "action_payload": msg.action_payload,
+                    "sdui": msg.sdui,
+                    "voice_text": msg.voice_text,
+                }
+                await self.broadcast_event("proactive_alert", alert)
+
+            self.proactive.on_message(_proactive_delivery)
+            import asyncio
+            asyncio.create_task(self.proactive.start())
+            logger.info("Proactive intelligence engine started")
+        except Exception as e:
+            self.proactive = None
+            logger.debug(f"Proactive engine skipped: {e}")
+
+        # Demo mode initialization
+        self._demo = None
+        if os.environ.get("THEORA_DEMO", "").lower() in ("1", "true", "yes"):
+            try:
+                from demo.seed import seed_demo_identity, seed_demo_memory
+                from demo.simulator import DemoOrchestrator
+                seed_demo_identity()
+                seed_demo_memory(self.memory)
+                self._demo = DemoOrchestrator()
+
+                async def _push_demo_telemetry(data):
+                    wb = data.get("wristband", {})
+                    for sid in list(self.sessions):
+                        frame = self.perception.get_frame(sid)
+                        if frame and wb:
+                            frame.heart_rate = wb.get("heart_rate_bpm", 0)
+                            frame.spo2_pct = int(wb.get("spo2_pct", 0))
+                            frame.skin_temperature_c = wb.get("skin_temp_c", 0.0)
+                            frame.activity_state = wb.get("activity", "resting")
+                    await self.broadcast_event("dashboard_update", await _get_dashboard_data_safe())
+
+                async def _get_dashboard_data_safe():
+                    try:
+                        from api.routes.dashboard import _get_dashboard_data
+                        return await _get_dashboard_data()
+                    except Exception:
+                        return {}
+
+                self._demo.on_telemetry(_push_demo_telemetry)
+                import asyncio
+                asyncio.create_task(self._demo.start())
+                logger.info("DEMO MODE active — simulated hardware, seeded memory")
+            except Exception as e:
+                logger.warning(f"Demo mode init failed: {e}")
+
         stats = self.memory.stats()
+        demo_tag = " [DEMO MODE]" if self._demo else ""
         logger.info(
-            f"Brain v1.2.0 initialized — {len(self.skill_registry.skills)} skills, "
+            f"Brain v1.2.0 initialized{demo_tag} — {len(self.skill_registry.skills)} skills, "
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
             f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
         )
