@@ -46,8 +46,19 @@ export default function Dashboard() {
 
   useEffect(() => {
     refresh();
-    const iv = setInterval(refresh, 4000);
-    return () => clearInterval(iv);
+    let ws;
+    try {
+      ws = new WebSocket(WS_URL);
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === 'state_push' && msg.event === 'dashboard_update' && msg.data) {
+            setDashboard(msg.data);
+          }
+        } catch {}
+      };
+    } catch {}
+    return () => { if (ws) ws.close(); };
   }, [refresh]);
 
   const executeQuickAction = async (action) => {

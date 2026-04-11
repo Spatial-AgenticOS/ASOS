@@ -114,17 +114,9 @@ export default function App() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchHealth = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/dashboard`);
-        const data = await res.json();
-        const heartRate = data?.health?.heart_rate;
-        if (heartRate) setHr(heartRate);
-      } catch { /* no health data available */ }
-    };
-    fetchHealth();
-    const interval = setInterval(fetchHealth, 5000);
-    return () => clearInterval(interval);
+    fetch(`${API_BASE}/api/dashboard`).then(r => r.json()).then(data => {
+      if (data?.health?.heart_rate) setHr(data.health.heart_rate);
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -141,45 +133,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const fetchActiveFlows = async () => {
-      try {
-        const [running, waiting] = await Promise.all([
-          fetch(`${API_BASE}/api/taskflows?status=running&limit=100`).then(r => r.json()),
-          fetch(`${API_BASE}/api/taskflows?status=waiting&limit=100`).then(r => r.json()),
-        ]);
-        const count = (running.flows?.length || 0) + (waiting.flows?.length || 0);
-        setActiveFlowCount(count);
-      } catch {
-        setActiveFlowCount(0);
-      }
-    };
-    fetchActiveFlows();
-    const iv = setInterval(fetchActiveFlows, 4000);
-    return () => clearInterval(iv);
-  }, []);
-
-  useEffect(() => {
-    const fetchRuntimeStatus = async () => {
-      try {
-        const data = await fetch(`${API_BASE}/api/system/info`).then(r => r.json());
-        setAgentRuntime(data.orchestrator || {
-          multi_agent_enabled: false,
-          multi_agent_ready: false,
-          active_subagents: 0,
-          pending_confirmations: 0,
-        });
-      } catch {
-        setAgentRuntime({
-          multi_agent_enabled: false,
-          multi_agent_ready: false,
-          active_subagents: 0,
-          pending_confirmations: 0,
-        });
-      }
-    };
-    fetchRuntimeStatus();
-    const iv = setInterval(fetchRuntimeStatus, 4000);
-    return () => clearInterval(iv);
+    fetch(`${API_BASE}/api/system/info`).then(r => r.json()).then(data => {
+      setAgentRuntime(data.orchestrator || { multi_agent_enabled: false, multi_agent_ready: false, active_subagents: 0, pending_confirmations: 0 });
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -301,6 +257,13 @@ export default function App() {
             operation: payload.operation || 'read',
             reason: payload.reason || '',
           });
+        } else if (msg.type === 'state_push') {
+          const { event, data } = msg;
+          if (event === 'dashboard_update' && data) {
+            const heartRate = data?.health?.heart_rate;
+            if (heartRate) setHr(heartRate);
+            setActiveFlowCount(data?.taskflows?.running || 0);
+          }
         }
       } catch (e) {
         console.error("Message error:", e);

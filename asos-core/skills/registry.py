@@ -146,6 +146,21 @@ class SkillRegistry:
             except Exception as e:
                 logger.error(f"Failed to load skill {skill_file}: {e}")
 
+    def get_skill(self, skill_id: str):
+        """Return the executable BaseSkill implementation for a given skill_id, or None."""
+        from skills.impl import get_implementation
+        if skill_id not in self.skills:
+            return None
+        impl = get_implementation(skill_id)
+        if impl:
+            return impl
+        # Try loading dynamic implementation from marketplace
+        skills_dir = theora_home() / "skills" / skill_id
+        if skills_dir.is_dir():
+            self._try_load_dynamic_impl(skills_dir, skill_id)
+            return get_implementation(skill_id)
+        return None
+
     def get_all_tools(self) -> list[dict]:
         """Get all tools from all skills in LLM-compatible format."""
         tools = []

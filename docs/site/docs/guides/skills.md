@@ -1,0 +1,168 @@
+---
+id: skills
+title: Writing Skills
+sidebar_position: 1
+slug: /guides/skills
+---
+
+# Writing Skills
+
+A **skill** teaches THEORA a new capability — calling an API, transforming data, or controlling hardware. There are three ways to create one, depending on complexity.
+
+## Option 1: JSON Manifest (any REST API)
+
+Drop a JSON file in `~/.theora/skills/`. The Brain discovers it at startup and exposes the endpoints as agent tools.
+
+```json
+{
+  "skill_id": "weather_api",
+  "version": "1.0.0",
+  "description": "Real-time weather data for any city",
+  "brand": {
+    "name": "Weather",
+    "icon": "cloud",
+    "primary_color": "#3b82f6"
+  },
+  "auth": {
+    "type": "api_key",
+    "api_key_header": "X-API-Key"
+  },
+  "endpoints": [
+    {
+      "id": "current",
+      "method": "GET",
+      "url": "https://api.weather.example/current",
+      "description": "Get current weather for a city. The LLM reads this to decide when to use the tool.",
+      "params": [
+        { "name": "city", "type": "string", "required": true, "description": "City name" },
+        { "name": "units", "type": "string", "required": false, "description": "celsius or fahrenheit" }
+      ]
+    },
+    {
+      "id": "forecast",
+      "method": "GET",
+      "url": "https://api.weather.example/forecast",
+      "description": "Get a 5-day forecast",
+      "params": [
+        { "name": "city", "type": "string", "required": true }
+      ]
+    }
+  ],
+  "trigger_phrases": ["weather", "temperature", "forecast"],
+  "categories": ["weather", "utility"]
+}
+```
+
+Set the API key securely:
+
+```bash
+export THEORA_KEY_weather_api=your-key-here
+```
+
+The Blind Vault stores this key and injects it into requests — the LLM never sees the raw value.
+
+### Manifest Fields
+
+| Field | Required | Description |
+|:------|:---------|:------------|
+| `skill_id` | yes | Unique identifier |
+| `description` | yes | The LLM reads this to decide when to invoke the skill |
+| `brand` | no | Display name, icon, and color in the dashboard |
+| `auth` | no | Authentication config (`api_key`, `bearer`, `oauth2`) |
+| `endpoints[]` | yes | One or more callable endpoints |
+| `trigger_phrases` | no | Hints for the LLM's skill selection |
+| `categories` | no | For marketplace and dashboard grouping |
+
+## Option 2: Python Plugin
+
+For tools that need custom logic (not just HTTP calls), use the SDK's `TheoraPlugin` base class.
+
+```python
+from theora_sdk import TheoraPlugin, theora_tool
+
+class TranslatorPlugin(TheoraPlugin):
+    name = "translator"
+    description = "Translate text between languages"
+    version = "0.1.0"
+
+    @theora_tool(description="Translate text to a target language")
+    async def translate(self, text: str, target_lang: str) -> dict:
+        # Custom logic — call a translation API, run a local model, etc.
+        translated = await self._call_translation_service(text, target_lang)
+        return {"original": text, "translated": translated, "language": target_lang}
+
+    async def _call_translation_service(self, text: str, lang: str) -> str:
+        # Your implementation
+        ...
+
+    async def on_load(self):
+        """Called once when the Brain loads this plugin."""
+        print(f"Translator plugin v{self.version} loaded")
+```
+
+### Plugin Lifecycle
+
+| Method | When |
+|:-------|:-----|
+| `on_load()` | Brain starts or hot-reloads the plugin |
+| `on_unload()` | Brain shuts down |
+| `execute(endpoint_id, args, vault)` | Brain invokes a tool (called automatically) |
+| `to_manifest()` | Generates a skill manifest from `@theora_tool` decorators |
+
+### Installing a Python Plugin
+
+Place the module in `~/.theora/plugins/` or install it as a Python package. The Brain discovers plugins that subclass `TheoraPlugin`.
+
+## Option 3: WASM Skill (sandboxed)
+
+For untrusted or third-party skills, THEORA can execute WebAssembly modules in a Wasmtime sandbox.
+
+```bash
+# Scaffold a new WASM skill
+cp -r templates/wasm-skill-assemblyscript my-skill
+cd my-skill
+npm install
+npm run build    # produces build/skill.wasm
+```
+
+Place the `.wasm` file alongside a manifest:
+
+```json
+{
+  "skill_id": "my_wasm_skill",
+  "description": "Sandboxed skill",
+  "runtime": "wasm",
+  "wasm_path": "skill.wasm",
+  "endpoints": [
+    { "id": "run", "description": "Execute the skill" }
+  ]
+}
+```
+
+## Self-Learning Skills
+
+THEORA can auto-detect repeated patterns and generate skill manifests from usage history. When the agent notices it keeps performing the same multi-step sequence, it proposes a new skill. You can review and approve pending skills:
+
+```bash
+# List pending auto-generated skills
+curl http://localhost:9090/api/skills/pending
+
+# Approve one
+curl -X POST http://localhost:9090/api/skills/approve/skill_id
+```
+
+## Skill Marketplace
+
+Browse and install community skills from the registry:
+
+```bash
+theora marketplace search "weather"
+theora marketplace install weather_api
+```
+
+Or via the API:
+
+```bash
+curl "http://localhost:9090/api/marketplace/search?q=weather"
+curl -X POST http://localhost:9090/api/marketplace/install -d '{"skill_id": "weather_api"}'
+```

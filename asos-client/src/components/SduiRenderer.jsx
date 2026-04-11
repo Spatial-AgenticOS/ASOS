@@ -260,6 +260,63 @@ const FormView = ({ fields, action_id, submit_label, onAction }) => {
   );
 };
 
+const ToggleSwitch = ({ label, value, action_id, onAction }) => {
+  const [on, setOn] = useState(!!value);
+  return (
+    <div className="flex items-center justify-between w-full">
+      {label && <span className="text-sm">{label}</span>}
+      <button
+        onClick={() => { setOn(!on); if (onAction) onAction(action_id || 'toggle', { value: !on }); }}
+        className={`relative w-11 h-6 rounded-full transition-colors ${on ? 'bg-asos-accent' : 'bg-asos-border'}`}
+      >
+        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${on ? 'translate-x-5.5 left-0.5' : 'left-0.5'}`}
+          style={{ transform: on ? 'translateX(20px)' : 'translateX(0)' }} />
+      </button>
+    </div>
+  );
+};
+
+const MediaPlayer = ({ src, mediaType, title, height }) => {
+  if (mediaType === 'video' || (src && (src.endsWith('.mp4') || src.endsWith('.webm')))) {
+    return (
+      <div className="w-full">
+        {title && <span className="text-sm font-medium mb-1 block">{title}</span>}
+        <video src={src} controls className="w-full rounded-xl border border-asos-border" style={{ maxHeight: height || 300 }} />
+      </div>
+    );
+  }
+  return (
+    <div className="w-full">
+      {title && <span className="text-sm font-medium mb-1 block">{title}</span>}
+      <RealAudioPlayer url={src} label={title} />
+    </div>
+  );
+};
+
+const AccordionView = ({ sections, onAction }) => {
+  const [openIdx, setOpenIdx] = useState(-1);
+  return (
+    <div className="w-full flex flex-col gap-1">
+      {(sections || []).map((section, i) => (
+        <div key={i} className="border border-asos-border rounded-lg overflow-hidden">
+          <button
+            onClick={() => setOpenIdx(openIdx === i ? -1 : i)}
+            className="w-full flex items-center justify-between px-3 py-2 bg-asos-card hover:bg-white/5 transition text-sm font-medium"
+          >
+            {section.title || `Section ${i + 1}`}
+            <LucideIcons.ChevronDown size={16} className={`transition-transform ${openIdx === i ? 'rotate-180' : ''}`} />
+          </button>
+          {openIdx === i && (
+            <div className="px-3 py-2 text-sm">
+              {section.children ? section.children.map((c, j) => <SduiRenderer key={j} node={c} onAction={onAction} />) : section.content}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 const WebViewComponent = ({ url, height, sandbox }) => (
   <iframe
     src={url}
@@ -509,6 +566,14 @@ export const SduiRenderer = ({ node, onAction, compact = false }) => {
         <video src={node.url || url} controls className="w-full rounded-xl border border-asos-border"
           style={{ maxHeight: node.height || 300 }} />
       );
+    case 'Toggle':
+    case 'ToggleSwitch':
+      return <ToggleSwitch label={label} value={node.value} action_id={action_id} onAction={onAction} />;
+    case 'MediaPlayer':
+      return <MediaPlayer src={node.src || url} mediaType={node.mediaType || node.media_type} title={node.title || label} height={node.height} />;
+    case 'Accordion':
+    case 'AccordionView':
+      return <AccordionView sections={node.sections} onAction={onAction} />;
     case 'Skeleton':
       return (
         <div className="w-full animate-pulse">

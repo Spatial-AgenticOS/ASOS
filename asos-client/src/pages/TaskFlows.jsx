@@ -69,8 +69,8 @@ export default function TaskFlows() {
 
   useEffect(() => {
     fetchFlows();
-    const iv = setInterval(() => fetchFlows(), 3000);
-    return () => clearInterval(iv);
+    const refreshTimer = setInterval(fetchFlows, 15000);
+    return () => clearInterval(refreshTimer);
   }, [fetchFlows]);
 
   const loadFlow = async (flowId) => {

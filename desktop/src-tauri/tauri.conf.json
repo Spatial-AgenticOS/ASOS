@@ -21,9 +21,18 @@
         "resizable": true,
         "fullscreen": false,
         "center": true,
-        "decorations": true
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "transparent": false
       }
     ],
+    "trayIcon": {
+      "id": "theora-tray",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": false,
+      "tooltip": "THEORA"
+    },
     "security": {
       "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws://localhost:* http://localhost:* ws://127.0.0.1:* http://127.0.0.1:*; img-src 'self' data: blob: http://localhost:* http://127.0.0.1:*; media-src 'self' blob:; font-src 'self' data:; frame-src 'self' http://localhost:* http://127.0.0.1:*",
       "capabilities": ["default"]
@@ -39,6 +48,19 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "THEORA — Local-First AI Agent"
+    "shortDescription": "THEORA — Local-First AI Agent",
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": null
+    },
+    "createUpdaterArtifacts": "v1Compatible"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/theora-ai/theora-desktop/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
   }
 }

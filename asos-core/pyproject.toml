@@ -32,6 +32,10 @@ dependencies = [
     "duckduckgo-search>=6.0.0",
     "html2text>=2024.2.26",
     "pymupdf",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    "aiohttp>=3.9.0",
+    "openai>=1.50.0",
 ]
 
 [project.optional-dependencies]
@@ -113,3 +117,17 @@ include = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*", "*/webui/*", "setup.py"]
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__",
+    "raise NotImplementedError",
+]

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "theora-sdk"
+version = "0.1.0"
+description = "THEORA SDK — Build plugins, tools, device adapters, and GenUI components for the THEORA AI operating system."
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [{name = "THEORA Team"}]
+requires-python = ">=3.11"
+keywords = ["theora", "agent", "sdk", "plugin", "hardware", "genui"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "httpx>=0.27.0",
+    "websockets>=13.0",
+    "pydantic>=2.9.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Spatial-AgenticOS/ASOS"
+Documentation = "https://docs.theora.io"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["theora_sdk*"]

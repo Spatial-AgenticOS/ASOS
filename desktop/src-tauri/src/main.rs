@@ -4,11 +4,16 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{Builder as GsBuilder, ShortcutState};
 
 struct BrainProcess(pub Mutex<Option<Child>>);
+
+// ---------------------------------------------------------------------------
+// Brain process helpers
+// ---------------------------------------------------------------------------
 
 fn resolve_asos_core_dir() -> Result<std::path::PathBuf, String> {
     if let Ok(dir) = std::env::var("ASOS_CORE_DIR") {
@@ -39,6 +44,10 @@ fn brain_base_url() -> String {
         .or_else(|_| std::env::var("THEORA_BRAIN_URL"))
         .unwrap_or_else(|_| "http://localhost:9090".to_string())
 }
+
+// ---------------------------------------------------------------------------
+// Tauri commands — brain lifecycle
+// ---------------------------------------------------------------------------
 
 #[tauri::command]
 fn start_brain(state: State<'_, BrainProcess>) -> Result<u32, String> {
@@ -119,6 +128,23 @@ fn get_brain_url() -> String {
     brain_base_url()
 }
 
+// ---------------------------------------------------------------------------
+// Graceful brain shutdown
+// ---------------------------------------------------------------------------
+
+fn shutdown_brain(state: &BrainProcess) {
+    if let Ok(mut guard) = state.0.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
 fn main() {
     let shortcuts: &[&str] = if cfg!(target_os = "macos") {
         &["cmd+shift+t"]
@@ -137,17 +163,78 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(global_shortcut)
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .manage(BrainProcess(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             start_brain,
             stop_brain,
             check_brain_health,
-            get_brain_url
+            get_brain_url,
         ])
         .setup(|app| {
+            // ---- System tray menu ----------------------------------------
+            let show_hide = MenuItem::with_id(
+                app,
+                "show_hide",
+                "Show / Hide THEORA",
+                true,
+                None::<&str>,
+            )?;
+            let quick_chat = MenuItem::with_id(
+                app,
+                "quick_chat",
+                "Quick Chat",
+                true,
+                None::<&str>,
+            )?;
+            let quit =
+                MenuItem::with_id(app, "quit", "Quit THEORA", true, None::<&str>)?;
+
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &show_hide,
+                    &PredefinedMenuItem::separator(app)?,
+                    &quick_chat,
+                    &PredefinedMenuItem::separator(app)?,
+                    &quit,
+                ],
+            )?;
+
             let tray = TrayIconBuilder::with_id("theora-tray")
                 .title("THEORA")
                 .tooltip("THEORA — starting…")
+                .menu(&menu)
+                .menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show_hide" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            if w.is_visible().unwrap_or(false) {
+                                let _ = w.hide();
+                            } else {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    }
+                    "quick_chat" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                            let _ = app.emit("voice-activation", ());
+                        }
+                    }
+                    "quit" => {
+                        if let Some(bp) = app.try_state::<BrainProcess>() {
+                            shutdown_brain(bp.inner());
+                        }
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
@@ -156,14 +243,15 @@ fn main() {
                     } = event
                     {
                         let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
                         }
                     }
                 })
                 .build(app)?;
 
+            // ---- Background health tooltip loop --------------------------
             let tray_bg = tray.clone();
             std::thread::spawn(move || loop {
                 let (ok, detail) = brain_health_probe();
@@ -174,6 +262,13 @@ fn main() {
             });
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                if let Some(bp) = window.app_handle().try_state::<BrainProcess>() {
+                    shutdown_brain(bp.inner());
+                }
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running THEORA Desktop");

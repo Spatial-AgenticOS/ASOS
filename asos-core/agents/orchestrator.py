@@ -1,10 +1,13 @@
 """
-THEORA Orchestrator — The Agentic Brain (v0.4.0)
+THEORA Orchestrator — The Agentic Brain (v0.4.1)
 ==================================================
 The core OS loop. Receives fused multimodal perception →
 matches skills → calls LLM with tools → executes → generates UI →
 logs execution → updates memory → responds with voice + visuals.
 
+v0.4.1:
+  - Split into focused modules: ToolRunner, ContextManager,
+    RefusalHandler, IdentityLoader.  Orchestrator delegates to each.
 v0.4.0:
   - Self-learning agent (knowledge extraction, session summarization)
   - Execution-log-aware skill routing with penalty scores
@@ -18,7 +21,6 @@ import json
 import logging
 import os
 import re
-import shlex
 import time
 from typing import Optional, Callable, Awaitable, TYPE_CHECKING
 from uuid import uuid4
@@ -41,6 +43,12 @@ from agents.llm_provider import LLMProvider
 from agents.genui_generator import GenUIGenerator
 from perception.fusion import PerceptionEngine, PerceptionFrame
 
+# Sub-modules — orchestrator delegates to these focused classes
+from agents.tool_runner import ToolRunner, SafetyLevel
+from agents.context_manager import ContextManager
+from agents.refusal_handler import RefusalHandler
+from agents.identity_loader import IdentityLoader
+
 if TYPE_CHECKING:
     from api.server import VisionBuffer
     from memory.store import MemoryStore
@@ -51,20 +59,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger("theora.orchestrator")
 
 
-# ─────────────────────────────────────────────
-# Safety Classification
-# ─────────────────────────────────────────────
-
-class SafetyLevel:
-    AUTO = "auto"          # Execute immediately
-    CONFIRM = "confirm"    # Ask user confirmation via SDUI
-    DENY = "deny"          # Block outright
-
-
 class Orchestrator:
     """
     The core agentic loop — fully wired to perception, memory, and safety.
+
+    Heavy lifting is delegated to:
+      - ToolRunner      – tool dispatch, safety, anti-loop, subagents
+      - ContextManager   – conversation history compaction
+      - RefusalHandler   – LLM refusal detection and fallback execution
+      - IdentityLoader   – ~/.theora/ identity files → system prompt
     """
+
+    # Class-level constants kept on Orchestrator for backward compat
+    ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use", "browser", "desktop_automation", "screen_capture", "system_settings", "agentic_computer_use"}
 
     def __init__(
         self,
@@ -92,15 +99,19 @@ class Orchestrator:
         self.genui = GenUIGenerator()
         self._mcp_client = None
 
+        # Delegate sub-modules
+        self.tool_runner = ToolRunner(self)
+        self.context_manager = ContextManager(max_messages=15)
+        self.refusal_handler = RefusalHandler(self)
+        self.identity_loader = IdentityLoader(memory=memory)
+
         # State
         self.biometric_state: dict[str, dict] = {}
         self.conversation_history: dict[str, list[dict]] = {}
         self._pending_daemon_results: dict[str, asyncio.Future] = {}
         self._pending_frame_futures: dict[str, asyncio.Future] = {}
-        self._daemon_session_map: dict[str, str] = {}
         self._pending_confirmations: dict[str, dict] = {}
         self._pending_permission_requests: dict[str, dict] = {}
-        self._active_subagent_tasks = 0
         self._fallback_learning_state: dict[str, dict] = {}
         self._auto_learn_threshold = 3
         self._auto_learn_window_seconds = 1800
@@ -117,7 +128,7 @@ class Orchestrator:
         # Proactive loop config
         self._proactive_enabled = os.environ.get("THEORA_PROACTIVE", "").lower() in ("true", "1", "yes")
         self._last_proactive_check: dict[str, float] = {}
-        self._proactive_cooldown = 60.0  # min seconds between proactive triggers per session
+        self._proactive_cooldown = 60.0
 
         # Streaming config
         self._streaming_enabled = os.environ.get("THEORA_STREAMING", "true").lower() in ("true", "1", "yes")
@@ -126,10 +137,11 @@ class Orchestrator:
         except ValueError:
             self._max_iterations = 20
 
-        # Anti-loop guard (same tool + args repeated in a row)
-        self._tool_repeat_state: dict[str, dict] = {}
-
         self.executor.load_vault_from_env()
+
+    # ─────────────────────────────────────────────
+    # Wiring helpers (called by BrainState / server)
+    # ─────────────────────────────────────────────
 
     def set_llm(self, llm: LLMProvider):
         """Set the shared LLM provider — avoids duplicate connections."""
@@ -171,9 +183,84 @@ class Orchestrator:
         return {
             "multi_agent_enabled": self._multi_agent_enabled,
             "multi_agent_ready": self._multi_agent is not None,
-            "active_subagents": self._active_subagent_tasks,
+            "active_subagents": self.tool_runner._active_subagent_tasks,
             "pending_confirmations": len(self._pending_confirmations),
         }
+
+    # ─────────────────────────────────────────────
+    # Backward-compat delegation methods
+    # (tests / internal code may call these directly)
+    # ─────────────────────────────────────────────
+
+    def _compact_context(self, history: list[dict]) -> list[dict]:
+        return self.context_manager.compact(history)
+
+    def _is_refusal_text(self, text: str) -> bool:
+        return self.refusal_handler.is_refusal(text)
+
+    def _build_system_prompt(self, frame: PerceptionFrame, skills: list[SkillManifest], session_id: str = "") -> str:
+        return self.identity_loader.build_system_prompt(
+            frame, skills, session_id, identity_text=self._load_identity(),
+        )
+
+    def _load_identity(self) -> str:
+        return self.identity_loader.load_identity()
+
+    def _classify_safety(self, tool_name: str, args: dict) -> str:
+        return self.tool_runner.classify_safety(tool_name, args)
+
+    def _enforce_safety(self, tool_name: str, args: dict) -> Optional[dict]:
+        return self.tool_runner.enforce_safety(tool_name, args)
+
+    async def _execute_tool_call_for_llm(self, session_id: str, tool_call: dict, available_skills: list[SkillManifest]) -> dict:
+        return await self.tool_runner.execute_tool_call_for_llm(session_id, tool_call, available_skills)
+
+    async def _execute_tool_call(self, session_id: str, tool_call: dict, available_skills: list[SkillManifest]):
+        return await self.tool_runner.execute_tool_call(session_id, tool_call, available_skills)
+
+    async def _execute_daemon_command(self, session_id: str, node_id: str, action: str, args: dict):
+        return await self.tool_runner.execute_daemon_command(session_id, node_id, action, args)
+
+    async def _spawn_subagents_for_task(self, session_id: str, args: dict) -> dict:
+        return await self.tool_runner.spawn_subagents(session_id, args)
+
+    async def _execute_action_intent_fallback(self, session_id: str, text: str, available_skills: list[SkillManifest]) -> bool:
+        return await self.refusal_handler.execute_action_intent_fallback(session_id, text, available_skills)
+
+    @staticmethod
+    def _tool_signature(tool_name: str, args: dict) -> str:
+        return ToolRunner.tool_signature(tool_name, args)
+
+    def _register_tool_attempt(self, session_id: str, tool_name: str, args: dict) -> int:
+        return self.tool_runner.register_tool_attempt(session_id, tool_name, args)
+
+    @staticmethod
+    def _anti_loop_guidance(tool_name: str, streak: int) -> str:
+        return ToolRunner.anti_loop_guidance(tool_name, streak)
+
+    def _query_implies_action(self, text: str) -> bool:
+        return self.refusal_handler.query_implies_action(text)
+
+    def _action_text_is_destructive(self, text: str) -> bool:
+        return self.refusal_handler.action_text_is_destructive(text)
+
+    @staticmethod
+    def _extract_first_url(text: str) -> str:
+        return RefusalHandler.extract_first_url(text)
+
+    def _extract_open_app_name(self, text: str) -> str:
+        return self.refusal_handler.extract_open_app_name(text)
+
+    def _build_action_intent_tool_call(self, text: str) -> Optional[dict]:
+        return self.refusal_handler.build_action_intent_tool_call(text)
+
+    @staticmethod
+    def _summarize_action_result(tool_call: dict, result_data: dict) -> str:
+        return RefusalHandler.summarize_action_result(tool_call, result_data)
+
+    @staticmethod
+    def _capability_key(text: str) -> str:
+        return RefusalHandler.capability_key(text)
 
     # ─────────────────────────────────────────────
     # Core Command Handler
@@ -204,7 +291,6 @@ class Orchestrator:
                         self.memory.working_push(session_id, {"role": "assistant", "text": ack})
                     return
 
-        # Record in episodic memory
         if self.memory:
             self.memory.episode_save(
                 session_id=session_id,
@@ -213,7 +299,7 @@ class Orchestrator:
                 detail=json.dumps(context or {}),
             )
 
-        # Multi-agent path: route through specialist workers
+        # Multi-agent path
         if self._multi_agent_enabled and self._multi_agent and self.llm and self.llm.available:
             source = (context or {}).get("source", "")
             if source != "proactive":
@@ -233,7 +319,6 @@ class Orchestrator:
         relevant_skills = await self._route_prompt(text)
         tools = self.skills.get_tools_for_skills(relevant_skills)
 
-        # Merge MCP tools so the LLM can call external MCP servers
         if self._mcp_client:
             mcp_tools = self._mcp_client.to_llm_tool_definitions()
             if mcp_tools:
@@ -242,7 +327,6 @@ class Orchestrator:
         if relevant_skills:
             logger.info(f"  Matched: {[s.brand.name for s in relevant_skills]}")
 
-        # Direct mode (no LLM)
         if not self.llm.available:
             await self._direct_execute(session_id, text, relevant_skills)
             return
@@ -315,7 +399,6 @@ class Orchestrator:
                     result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
                     latency_ms = (time.time() - t_start) * 1000
 
-                    # Log execution
                     if self.memory:
                         parts = tc["name"].split("__", 1)
                         skill_id = parts[0] if len(parts) == 2 else tc["name"]
@@ -350,7 +433,6 @@ class Orchestrator:
 
         self.conversation_history[session_id] = history[-20:]
 
-        # Self-learning: notify learner of new messages
         if self.learner:
             asyncio.ensure_future(self.learner.on_message(session_id, "user", text))
 
@@ -502,7 +584,6 @@ class Orchestrator:
                     if anti_loop_guidance:
                         history.append({"role": "system", "content": anti_loop_guidance})
 
-                    # GenUI: generate rich UI for tool results when applicable
                     await self._try_genui_for_result(session_id, tc, result_data)
                 continue
 
@@ -529,11 +610,6 @@ class Orchestrator:
         """
         Called periodically. Examines context changes and decides whether
         to proactively act without user prompt.
-
-        Triggers:
-          - Health anomaly (HR > 150 sustained, SpO2 < 90)
-          - Battery critical (< 10%)
-          - Context-inferred actions (e.g., calendar + GPS = late for meeting)
         """
         if not self._proactive_enabled or not self.llm.available:
             return
@@ -568,7 +644,6 @@ class Orchestrator:
                 importance=0.9,
             )
 
-        # Generate a proactive response
         await self.handle_command(
             session_id=session_id,
             text=f"[SYSTEM PROACTIVE ALERT] {alert_text} Take appropriate action and notify the user.",
@@ -585,49 +660,11 @@ class Orchestrator:
             await self.learner.summarize_session(session_id)
         self.conversation_history.pop(session_id, None)
         self._last_proactive_check.pop(session_id, None)
-        self._tool_repeat_state.pop(session_id, None)
+        self.tool_runner.clear_session(session_id)
 
     # ─────────────────────────────────────────────
     # Skill Routing
     # ─────────────────────────────────────────────
-
-    ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use", "browser", "desktop_automation", "screen_capture", "system_settings", "agentic_computer_use"}
-    ACTION_INTENT_WORDS = {
-        "create", "open", "make", "write", "run", "play", "generate", "send",
-        "install", "build", "edit", "delete", "move", "copy", "search", "find",
-        "start", "stop", "launch", "record", "download", "upload",
-    }
-    DESTRUCTIVE_ACTION_WORDS = {
-        "delete", "remove", "erase", "destroy", "wipe", "format", "factory reset",
-        "shutdown", "reboot", "kill", "terminate", "rm -rf",
-    }
-    COMMON_APP_NAMES = {
-        "music": "Music",
-        "spotify": "Spotify",
-        "safari": "Safari",
-        "chrome": "Google Chrome",
-        "terminal": "Terminal",
-        "notes": "Notes",
-        "finder": "Finder",
-        "mail": "Mail",
-        "calendar": "Calendar",
-        "vscode": "Visual Studio Code",
-        "visual studio code": "Visual Studio Code",
-        "slack": "Slack",
-    }
-    REFUSAL_PHRASES = (
-        "i can't",
-        "i cannot",
-        "i am unable",
-        "i'm unable",
-        "not possible",
-        "unfortunately i",
-        "i don't have the ability",
-        "cannot do that",
-        "can't do that",
-        "can't create",
-        "cannot create",
-    )
 
     async def _route_prompt(self, text: str) -> list[SkillManifest]:
         if not self.skills.skills:
@@ -676,13 +713,6 @@ class Orchestrator:
                 skills.append(self.skills.skills[core_id])
         return skills
 
-    def _query_implies_action(self, text: str) -> bool:
-        normalized = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
-        words = [w for w in normalized.split() if w]
-        if len(words) >= 6:
-            return True
-        return any(word in self.ACTION_INTENT_WORDS for word in words)
-
     def _fallback_skills_for_query(self, text: str, top_k: int = 5) -> list[SkillManifest]:
         results = self.skills.find_skills_for_query(text, top_k=top_k)
         if results:
@@ -692,84 +722,74 @@ class Orchestrator:
             return list(self.skills.skills.values())
         return results
 
-    def _is_refusal_text(self, text: str) -> bool:
-        if not text:
-            return False
-        normalized = re.sub(r"\s+", " ", text.lower()).strip()
-        return any(phrase in normalized for phrase in self.REFUSAL_PHRASES)
+    def _apply_routing_penalties(self, skills: list[SkillManifest]) -> list[SkillManifest]:
+        """Re-rank skills based on execution log reliability."""
+        if not self.learner or not skills:
+            return skills
 
-    @staticmethod
-    def _extract_first_url(text: str) -> str:
-        match = re.search(r"(https?://[^\s]+)", text or "", flags=re.IGNORECASE)
-        if not match:
-            return ""
-        return match.group(1).rstrip(").,;!?")
+        penalties = self.learner.get_routing_penalties()
+        if not penalties:
+            return skills
 
-    def _extract_open_app_name(self, text: str) -> str:
-        lowered = (text or "").lower()
-        for hint, app in self.COMMON_APP_NAMES.items():
-            if any(phrase in lowered for phrase in (f"open {hint}", f"launch {hint}", f"start {hint}")):
-                return app
+        penalized = []
+        for skill in skills:
+            penalty = penalties.get(skill.skill_id, 1.0)
+            if penalty < 0.2:
+                logger.info(f"Routing penalty: skipping {skill.skill_id} (penalty={penalty})")
+                continue
+            penalized.append(skill)
 
-        match = re.search(r"(?:open|launch|start)\s+([a-z0-9 ._+-]{2,40})(?:\s+app(?:lication)?)?", lowered)
-        if not match:
-            return ""
-        candidate = match.group(1).strip(" ._+-")
-        if not candidate:
-            return ""
-        # Preserve friendly capitalization for unknown app names.
-        return " ".join(w.capitalize() for w in candidate.split())
+        return penalized if penalized else skills[:1]
 
-    def _build_action_intent_tool_call(self, text: str) -> Optional[dict]:
-        lowered = (text or "").lower()
-        app_name = self._extract_open_app_name(text)
-        if app_name:
-            return {
-                "name": "desktop_control__open_app",
-                "args": {"script": f'tell application "{app_name}" to activate'},
-                "_intent": f"open {app_name}",
-            }
+    # ─────────────────────────────────────────────
+    # Confirmation & Capability Growth
+    # ─────────────────────────────────────────────
 
-        url = self._extract_first_url(text)
-        if url:
-            return {
-                "name": "desktop_control__shell_command",
-                "args": {"command": f"open {shlex.quote(url)}"},
-                "_intent": f"open URL {url}",
-            }
-
-        if "desktop" in lowered and any(token in lowered for token in ("note", "file", "txt")):
-            content_match = re.search(r"(?:add|with|containing|content[: ]+)(.+)$", text, flags=re.IGNORECASE)
-            content = (content_match.group(1).strip() if content_match else "hello world").strip("\"'")
-            python_code = (
-                "from pathlib import Path; "
-                "p=Path.home()/'Desktop'/'theora_note.txt'; "
-                f"p.write_text({content!r}); "
-                "print(f'Created {p}')"
-            )
-            return {
-                "name": "computer_use__bash",
-                "args": {"command": f"python3 -c {shlex.quote(python_code)}"},
-                "_intent": "create desktop note",
-            }
-
-        if self._query_implies_action(text):
-            return {
-                "name": "agentic_computer_use__execute_task",
-                "args": {"task": text, "max_steps": 8},
-                "_intent": "execute GUI workflow",
-            }
-
-        return None
-
-    def _action_text_is_destructive(self, text: str) -> bool:
-        lowered = (text or "").lower()
-        return any(token in lowered for token in self.DESTRUCTIVE_ACTION_WORDS)
-
-    @staticmethod
-    def _capability_key(text: str) -> str:
-        normalized = re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
-        return normalized[:180]
+    async def _queue_action_confirmation(
+        self,
+        session_id: str,
+        tool_call: dict,
+        available_skills: list[SkillManifest],
+        reason: str,
+    ) -> None:
+        confirmation_id = str(uuid4())[:8]
+        self._pending_confirmations[confirmation_id] = {
+            "tool_call": {"name": tool_call["name"], "args": tool_call.get("args", {})},
+            "skills": available_skills,
+            "reason": reason,
+            "created_at": time.time(),
+        }
+        args_preview = json.dumps(tool_call.get("args", {}), default=str)[:400]
+        sdui = {
+            "type": "VStack",
+            "spacing": 12,
+            "padding": 20,
+            "children": [
+                {"type": "Text", "value": "Confirmation Required", "style": "headline", "color": "#f59e0b"},
+                {"type": "Text", "value": "This action can change your local system. Confirm to proceed.", "style": "body"},
+                {"type": "Text", "value": f"Action: {tool_call['name']}", "style": "caption"},
+                {"type": "Text", "value": f"Args: {args_preview}", "style": "caption"},
+                {"type": "Text", "value": f"Reason: {reason[:240]}", "style": "caption"},
+                {
+                    "type": "HStack",
+                    "spacing": 10,
+                    "children": [
+                        {"type": "Button", "action_id": f"confirm_{confirmation_id}", "label": "Confirm", "style": "primary"},
+                        {"type": "Button", "action_id": f"reject_{confirmation_id}", "label": "Cancel", "style": "secondary"},
+                    ],
+                },
+            ],
+        }
+        await self.send(
+            session_id,
+            TheoraMessage(
+                session_id=session_id,
+                hop="brain",
+                type="sdui",
+                payload=SDUIPayload(root=sdui).model_dump(),
+            ),
+        )
+        await self._send_text(session_id, "I need your confirmation for this higher-impact action.")
 
     async def _maybe_auto_expand_capability(self, session_id: str, text: str) -> None:
         """Auto-learn repeated unmet capabilities with safety guardrails."""
@@ -838,210 +858,6 @@ class Orchestrator:
         )
         await self._send_text(session_id, payload["message"])
 
-    async def _queue_action_confirmation(
-        self,
-        session_id: str,
-        tool_call: dict,
-        available_skills: list[SkillManifest],
-        reason: str,
-    ) -> None:
-        confirmation_id = str(uuid4())[:8]
-        self._pending_confirmations[confirmation_id] = {
-            "tool_call": {"name": tool_call["name"], "args": tool_call.get("args", {})},
-            "skills": available_skills,
-            "reason": reason,
-            "created_at": time.time(),
-        }
-        args_preview = json.dumps(tool_call.get("args", {}), default=str)[:400]
-        sdui = {
-            "type": "VStack",
-            "spacing": 12,
-            "padding": 20,
-            "children": [
-                {"type": "Text", "value": "Confirmation Required", "style": "headline", "color": "#f59e0b"},
-                {"type": "Text", "value": "This action can change your local system. Confirm to proceed.", "style": "body"},
-                {"type": "Text", "value": f"Action: {tool_call['name']}", "style": "caption"},
-                {"type": "Text", "value": f"Args: {args_preview}", "style": "caption"},
-                {"type": "Text", "value": f"Reason: {reason[:240]}", "style": "caption"},
-                {
-                    "type": "HStack",
-                    "spacing": 10,
-                    "children": [
-                        {"type": "Button", "action_id": f"confirm_{confirmation_id}", "label": "Confirm", "style": "primary"},
-                        {"type": "Button", "action_id": f"reject_{confirmation_id}", "label": "Cancel", "style": "secondary"},
-                    ],
-                },
-            ],
-        }
-        await self.send(
-            session_id,
-            TheoraMessage(
-                session_id=session_id,
-                hop="brain",
-                type="sdui",
-                payload=SDUIPayload(root=sdui).model_dump(),
-            ),
-        )
-        await self._send_text(session_id, "I need your confirmation for this higher-impact action.")
-
-    @staticmethod
-    def _summarize_action_result(tool_call: dict, result_data: dict) -> str:
-        tool_name = tool_call.get("name", "action")
-        if not isinstance(result_data, dict):
-            return f"I executed {tool_name}."
-
-        if result_data.get("status") == "command_sent_to_hardware_daemon":
-            return "Command sent to the connected device daemon."
-
-        if result_data.get("success"):
-            data = result_data.get("data")
-            if isinstance(data, dict):
-                if data.get("note"):
-                    return f"Done. {data.get('note')}"
-                if data.get("stdout"):
-                    return f"Done. {str(data.get('stdout'))[:240]}"
-            return f"Done. Executed {tool_name} successfully."
-
-        error = result_data.get("error") or result_data.get("note") or "Unknown error"
-        return f"I attempted {tool_name}, but it failed: {error}"
-
-    async def _execute_action_intent_fallback(
-        self,
-        session_id: str,
-        text: str,
-        available_skills: list[SkillManifest],
-    ) -> bool:
-        tool_call = self._build_action_intent_tool_call(text)
-        if not tool_call:
-            return False
-
-        tool_name = tool_call["name"]
-        args = tool_call.get("args", {})
-        safety_level = self._classify_safety(tool_name, args)
-        if self._action_text_is_destructive(text) and safety_level == SafetyLevel.AUTO:
-            safety_level = SafetyLevel.CONFIRM
-
-        if safety_level == SafetyLevel.DENY:
-            denial = self._enforce_safety(tool_name, args) or {
-                "error": "This action is blocked by safety policy.",
-            }
-            await self._send_text(session_id, denial.get("error", "Blocked by safety policy."))
-            return True
-
-        if safety_level == SafetyLevel.CONFIRM:
-            await self._maybe_auto_expand_capability(session_id, text)
-            await self._queue_action_confirmation(
-                session_id=session_id,
-                tool_call=tool_call,
-                available_skills=available_skills,
-                reason=text,
-            )
-            return True
-
-        result_data = await self._execute_tool_call_for_llm(session_id, tool_call, available_skills)
-        await self._try_genui_for_result(session_id, tool_call, result_data)
-        summary = self._summarize_action_result(tool_call, result_data)
-        await self._send_text(session_id, summary)
-        if self.memory:
-            self.memory.working_push(session_id, {"role": "assistant", "text": summary[:300]})
-        await self._maybe_auto_expand_capability(session_id, text)
-        return True
-
-    def _apply_routing_penalties(self, skills: list[SkillManifest]) -> list[SkillManifest]:
-        """
-        Re-rank skills based on execution log reliability.
-        Skills with poor track records get demoted.
-        """
-        if not self.learner or not skills:
-            return skills
-
-        penalties = self.learner.get_routing_penalties()
-        if not penalties:
-            return skills
-
-        penalized = []
-        for skill in skills:
-            penalty = penalties.get(skill.skill_id, 1.0)
-            if penalty < 0.2:
-                logger.info(f"Routing penalty: skipping {skill.skill_id} (penalty={penalty})")
-                continue
-            penalized.append(skill)
-
-        return penalized if penalized else skills[:1]
-
-    # ─────────────────────────────────────────────
-    # Context Management
-    # ─────────────────────────────────────────────
-
-    def _compact_context(self, history: list[dict]) -> list[dict]:
-        max_messages = 15
-        if len(history) <= max_messages:
-            return history
-        logger.info(f"Compacting context window from {len(history)} to {max_messages}")
-        return history[-max_messages:]
-
-    # ─────────────────────────────────────────────
-    # Safety: Graduated Permission System
-    # ─────────────────────────────────────────────
-
-    def _classify_safety(self, tool_name: str, args: dict) -> str:
-        """
-        Graduated safety classification:
-          AUTO    — safe, execute immediately (reads, searches, notes)
-          CONFIRM — potentially impactful, ask user (send message, order, schedule)
-          DENY    — dangerous, block outright (format disk, delete all, unsafe robot speeds)
-        """
-        name_lower = tool_name.lower()
-
-        # DENY: dangerous hardware with unsafe parameters
-        deny_actions = ["format", "erase_all", "factory_reset", "self_destruct"]
-        if any(d in name_lower for d in deny_actions):
-            return SafetyLevel.DENY
-        if ("robot_move" in name_lower or "actuator" in name_lower) and args.get("speed", 0) > 80:
-            return SafetyLevel.DENY
-
-        # AUTO: reads, searches, queries, notes, status checks
-        auto_patterns = [
-            "search", "query", "get", "list", "current", "now_playing",
-            "forecast", "status", "read", "notes_memory", "web_search",
-        ]
-        if any(p in name_lower for p in auto_patterns):
-            return SafetyLevel.AUTO
-
-        # CONFIRM: anything that writes, sends, modifies, or controls hardware
-        confirm_patterns = [
-            "send", "post", "create", "delete", "update", "move", "grip",
-            "play", "pause", "skip", "volume", "lock", "message", "order",
-            "schedule", "daemon", "execute", "robot", "actuator", "motor",
-        ]
-        if any(p in name_lower for p in confirm_patterns):
-            return SafetyLevel.CONFIRM
-
-        return SafetyLevel.AUTO
-
-    def _enforce_safety(self, tool_name: str, args: dict) -> Optional[dict]:
-        """
-        Returns a denial dict if the action should be blocked.
-        Returns None if the action is allowed to proceed.
-        """
-        level = self._classify_safety(tool_name, args)
-
-        if level == SafetyLevel.DENY:
-            return {
-                "status": "PermissionOutcome::Deny",
-                "error": "Safety Protocol: Action Blocked",
-                "note": f"Action '{tool_name}' with args {args} is classified as dangerous and has been blocked.",
-                "safety_level": "deny",
-            }
-
-        if level == SafetyLevel.CONFIRM:
-            # For now, auto-approve CONFIRM level but log a warning.
-            # In production, this would send an SDUI confirmation dialog and await response.
-            logger.info(f"Safety CONFIRM: {tool_name} — auto-approved (production would ask user)")
-            return None
-
-        return None  # AUTO — proceed
-
     # ─────────────────────────────────────────────
     # Vision
     # ─────────────────────────────────────────────
@@ -1074,359 +890,6 @@ class Orchestrator:
         future = self._pending_frame_futures.pop(msg_id, None)
         if future and not future.done():
             future.set_result(frame_payload)
-
-    # ─────────────────────────────────────────────
-    # Tool Execution
-    # ─────────────────────────────────────────────
-
-    @staticmethod
-    def _tool_signature(tool_name: str, args: dict) -> str:
-        """Create a stable signature for anti-loop detection."""
-        try:
-            args_key = json.dumps(args or {}, sort_keys=True, default=str)
-        except Exception:
-            args_key = str(args)
-        return f"{tool_name}::{args_key}"
-
-    def _register_tool_attempt(self, session_id: str, tool_name: str, args: dict) -> int:
-        """Track consecutive identical tool calls and return current streak."""
-        signature = self._tool_signature(tool_name, args)
-        state = self._tool_repeat_state.get(session_id)
-        if state and state.get("signature") == signature:
-            count = int(state.get("count", 0)) + 1
-        else:
-            count = 1
-        self._tool_repeat_state[session_id] = {
-            "signature": signature,
-            "count": count,
-            "tool_name": tool_name,
-        }
-        return count
-
-    @staticmethod
-    def _anti_loop_guidance(tool_name: str, streak: int) -> str:
-        alt_hint = ""
-        shell_tools = (
-            "desktop_control__shell_command", "computer_use__bash",
-            "desktop_control__shell", "shell_command",
-        )
-        if tool_name in shell_tools:
-            alt_hint = (
-                " IMPORTANT: For creating or writing files, use computer_use__write_file instead "
-                "of shell echo/printf. For running programs, check if computer_use__bash or "
-                "code_interpreter__execute can handle it directly."
-            )
-        return (
-            f"STOP: You have called '{tool_name}' with the same arguments "
-            f"{streak} times in a row. Do NOT repeat this call. "
-            f"You MUST use a completely different tool or approach.{alt_hint}"
-        )
-
-    async def _spawn_subagents_for_task(self, session_id: str, args: dict) -> dict:
-        """Run multiple sub-tasks in parallel with isolated subagent contexts."""
-        tasks_arg = args.get("tasks")
-        if isinstance(tasks_arg, str):
-            tasks = [tasks_arg]
-        elif isinstance(tasks_arg, list):
-            tasks = [str(t).strip() for t in tasks_arg if str(t).strip()]
-        else:
-            single = str(args.get("task", "")).strip()
-            tasks = [single] if single else []
-
-        if not tasks:
-            return {
-                "success": False,
-                "status_code": 400,
-                "data": None,
-                "error": "Provide 'tasks' (array) or 'task' (string) for subagent execution.",
-            }
-        if not self.llm or not self.llm.available:
-            return {
-                "success": False,
-                "status_code": 503,
-                "data": None,
-                "error": "LLM unavailable; cannot spawn subagents.",
-            }
-
-        goal = str(args.get("goal", "") or "").strip()
-        try:
-            max_workers = int(args.get("max_workers", min(3, len(tasks))) or 3)
-        except Exception:
-            max_workers = min(3, len(tasks))
-        try:
-            max_iterations = int(args.get("max_iterations", min(self._max_iterations, 8)) or 4)
-        except Exception:
-            max_iterations = min(self._max_iterations, 8)
-        max_workers = max(1, min(max_workers, 6))
-        max_iterations = max(1, min(max_iterations, 12))
-        sem = asyncio.Semaphore(max_workers)
-
-        async def _run_one(i: int, task_text: str) -> dict:
-            scoped_task = task_text if not goal else f"Goal: {goal}\nTask: {task_text}"
-            async with sem:
-                started = time.time()
-                self._active_subagent_tasks += 1
-                try:
-                    result = await self._run_subagent_task(
-                        parent_session_id=session_id,
-                        task_text=scoped_task,
-                        max_iterations=max_iterations,
-                        ordinal=i,
-                    )
-                    result["elapsed_ms"] = round((time.time() - started) * 1000, 2)
-                    return result
-                except Exception as e:
-                    return {
-                        "task_index": i,
-                        "task": task_text,
-                        "success": False,
-                        "result": "",
-                        "error": str(e),
-                        "iterations": 0,
-                        "tool_calls_executed": 0,
-                        "elapsed_ms": round((time.time() - started) * 1000, 2),
-                    }
-                finally:
-                    self._active_subagent_tasks = max(0, self._active_subagent_tasks - 1)
-
-        results = await asyncio.gather(*[_run_one(i, t) for i, t in enumerate(tasks, 1)])
-        success_count = sum(1 for r in results if r.get("success"))
-
-        return {
-            "success": True,
-            "status_code": 200,
-            "data": {
-                "goal": goal or None,
-                "task_count": len(tasks),
-                "max_workers": max_workers,
-                "max_iterations": max_iterations,
-                "success_count": success_count,
-                "results": results,
-            },
-            "error": None,
-        }
-
-    async def _run_subagent_task(
-        self,
-        *,
-        parent_session_id: str,
-        task_text: str,
-        max_iterations: int,
-        ordinal: int,
-    ) -> dict:
-        """Execute one subagent task with isolated history and full tool access."""
-        relevant_skills = await self._route_prompt(task_text)
-        tools = self.skills.get_tools_for_skills(relevant_skills)
-        if self._mcp_client:
-            mcp_tools = self._mcp_client.to_llm_tool_definitions()
-            if mcp_tools:
-                tools = (tools or []) + mcp_tools
-
-        frame = self.perception.get_frame(parent_session_id)
-        system_prompt = self._build_system_prompt(frame, relevant_skills, parent_session_id)
-        history: list[dict] = [{"role": "user", "content": task_text}]
-        sub_session_id = f"{parent_session_id}:sub:{ordinal}:{str(uuid4())[:6]}"
-        final_text = ""
-        tool_calls_executed = 0
-        iterations_used = 0
-
-        for i in range(max_iterations):
-            iterations_used = i + 1
-            response = await self.llm.chat(
-                messages=[{"role": "system", "content": system_prompt}, *history],
-                tools=tools if tools else None,
-            )
-            text_content, tool_calls = self.llm.extract_response(response)
-
-            assistant_msg = {"role": "assistant"}
-            if text_content:
-                assistant_msg["content"] = text_content
-            if "choices" in response and response["choices"]:
-                raw_msg = response["choices"][0].get("message", {})
-                if raw_msg.get("tool_calls"):
-                    assistant_msg["tool_calls"] = raw_msg["tool_calls"]
-            if len(assistant_msg) > 1:
-                history.append(assistant_msg)
-
-            if tool_calls:
-                for tc in tool_calls:
-                    if tc.get("name", "").startswith("subagent__"):
-                        result_data = {
-                            "success": False,
-                            "error": "Nested subagent spawning is blocked to prevent recursion loops.",
-                        }
-                    else:
-                        result_data = await self._execute_tool_call_for_llm(
-                            sub_session_id,
-                            tc,
-                            relevant_skills,
-                        )
-                    tool_calls_executed += 1
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", str(uuid4())[:8]),
-                        "name": tc.get("name", ""),
-                        "content": json.dumps(result_data, default=str)[:2000],
-                    })
-                continue
-
-            if text_content:
-                final_text = text_content
-            break
-
-        if not final_text:
-            final_text = "No final answer produced by subagent."
-
-        return {
-            "task_index": ordinal,
-            "task": task_text,
-            "success": True,
-            "result": final_text,
-            "error": None,
-            "iterations": iterations_used,
-            "tool_calls_executed": tool_calls_executed,
-        }
-
-    async def _execute_tool_call_for_llm(self, session_id: str, tool_call: dict, available_skills: list[SkillManifest]) -> dict:
-        tool_name = tool_call["name"]
-        args = tool_call["args"]
-        logger.info(f"  LLM Tool call: {tool_name}({json.dumps(args)[:200]})")
-
-        # Route MCP tool calls through the MCP client
-        if tool_name.startswith("mcp_") and self._mcp_client:
-            logger.info(f"  MCP tool: {tool_name}")
-            result = await self._mcp_client.call_tool(tool_name, args)
-            content = result.get("content", [])
-            if content and isinstance(content, list):
-                return {"data": "\n".join(c.get("text", str(c)) for c in content)}
-            return result
-
-        parts = tool_name.split("__", 1)
-        if len(parts) != 2:
-            return {"error": f"Invalid tool reference: {tool_name}"}
-
-        skill_id, endpoint_id = parts
-        if skill_id == "subagent" and endpoint_id == "spawn_subagent":
-            return await self._spawn_subagents_for_task(session_id, args)
-
-        logger.info(f"  Tool executing: {skill_id}__{endpoint_id}")
-
-        streak = self._register_tool_attempt(session_id, tool_name, args)
-        anti_loop_note = None
-        if streak >= 5:
-            message = (
-                f"Anti-loop guard: blocked repeated call '{tool_name}' with identical "
-                f"arguments ({streak}x in a row)."
-            )
-            logger.warning(message)
-            return {
-                "success": False,
-                "error": message,
-                "anti_loop_blocked": True,
-                "anti_loop_streak": streak,
-            }
-        if streak >= 3:
-            anti_loop_note = self._anti_loop_guidance(tool_name, streak)
-            logger.warning(anti_loop_note)
-
-        # Safety check
-        denial = self._enforce_safety(tool_name, args)
-        if denial:
-            logger.warning(f"Safety denial: {tool_name}")
-            return denial
-
-        if skill_id.startswith("daemon_"):
-            await self._execute_daemon_command(session_id, skill_id, endpoint_id, args)
-            return {"status": "command_sent_to_hardware_daemon", "note": "Command is executing asynchronously on the device."}
-
-        skill = self.skills.skills.get(skill_id)
-        if not skill:
-            return {"error": f"Skill not found: {skill_id}"}
-
-        endpoint = next((ep for ep in skill.endpoints if ep.id == endpoint_id), None)
-        if not endpoint:
-            return {"error": f"Endpoint not found: {endpoint_id}"}
-
-        result = await self.executor.execute(
-            tool_name=tool_name, args=args, skill=skill, endpoint=endpoint,
-        )
-
-        if not result.get("success"):
-            logger.warning(f"PostToolUse: Action failed — {result.get('error')}")
-
-        if anti_loop_note:
-            result = dict(result)
-            result["_anti_loop_guidance"] = anti_loop_note
-            result["_anti_loop_streak"] = streak
-
-        return result
-
-    async def _execute_tool_call(self, session_id: str, tool_call: dict, available_skills: list[SkillManifest]):
-        tool_name = tool_call["name"]
-        args = tool_call["args"]
-        logger.info(f"  Tool call: {tool_name}({json.dumps(args)[:200]})")
-
-        parts = tool_name.split("__", 1)
-        if len(parts) != 2:
-            await self._send_text(session_id, f"Invalid tool reference: {tool_name}")
-            return
-
-        skill_id, endpoint_id = parts
-
-        if skill_id.startswith("daemon_"):
-            await self._execute_daemon_command(session_id, skill_id, endpoint_id, args)
-            return
-
-        skill = self.skills.skills.get(skill_id)
-        if not skill:
-            await self._send_text(session_id, f"Skill not found: {skill_id}")
-            return
-
-        endpoint = next((ep for ep in skill.endpoints if ep.id == endpoint_id), None)
-        if not endpoint:
-            await self._send_text(session_id, f"Endpoint not found: {endpoint_id}")
-            return
-
-        result = await self.executor.execute(
-            tool_name=tool_name, args=args, skill=skill, endpoint=endpoint,
-        )
-
-        if result["success"] and result["data"]:
-            sdui = self.genui.generate(
-                data=result["data"],
-                skill_brand=skill.brand.model_dump(),
-                ui_hint=endpoint.ui_hint,
-                endpoint_id=endpoint_id,
-            )
-            await self._send_text(session_id, f"Here's the result from {skill.brand.name}:")
-            await self.send(session_id, TheoraMessage(
-                session_id=session_id, hop="brain", type="sdui",
-                payload=SDUIPayload(root=sdui).model_dump(),
-            ))
-        else:
-            error = result.get("error", "Unknown error")
-            await self._send_text(session_id, f"Failed to call {skill.brand.name}: {error}")
-
-    async def _execute_daemon_command(self, session_id: str, node_id: str, action: str, args: dict):
-        actual_node_id = node_id.replace("daemon_", "")
-
-        if actual_node_id not in self.daemons:
-            available = list(self.daemons.keys()) if self.daemons else ["none"]
-            await self._send_text(session_id, f"Node '{actual_node_id}' not connected. Available: {available}")
-            return
-
-        ws = self.daemons[actual_node_id]
-        request_id = str(uuid4())[:8]
-        daemon_msg = {
-            "type": "command",
-            "request_id": request_id,
-            "command": action,
-            "args": args,
-        }
-
-        self._daemon_session_map[request_id] = session_id
-        await ws.send_json(daemon_msg)
-        await self._send_text(session_id, f"Command sent to node '{actual_node_id}'...")
 
     # ─────────────────────────────────────────────
     # Direct Execution (no LLM)
@@ -1531,7 +994,6 @@ class Orchestrator:
         save_patterns = ["remember", "save", "write down", "don't forget", "store", "note that", "note this"]
         knowledge_patterns = ["i am ", "my name is ", "i live ", "i work ", "i like ", "my favorite"]
 
-        # Knowledge extraction
         if any(p in text_lower for p in knowledge_patterns):
             self.memory.knowledge_store(
                 subject="user", predicate="stated", obj=text[:300], source="conversation",
@@ -1756,7 +1218,7 @@ class Orchestrator:
             elif param.name in ("city", "location", "place", "address"):
                 args[param.name] = subject or text
             elif param.name == "lat" and "lon" in [p.name for p in endpoint.params]:
-                pass  # skip — needs geocoding which direct mode can't do
+                pass
         return args
 
     # ─────────────────────────────────────────────
@@ -1774,7 +1236,6 @@ class Orchestrator:
             pending = self._pending_confirmations.pop(confirmation_id, None)
             if pending:
                 logger.info(f"User confirmed action: {confirmation_id}")
-                # Re-execute the confirmed action
                 await self._execute_tool_call(session_id, pending["tool_call"], pending.get("skills", []))
         elif action_id.startswith("reject_"):
             confirmation_id = action_id[7:]
@@ -1836,7 +1297,6 @@ class Orchestrator:
         data = result.get("data", {})
         output = data.get("output", "") if isinstance(data, dict) else str(data)
         error = data.get("error", "") if isinstance(data, dict) else ""
-        # Fallback to legacy field names
         if not output:
             output = result.get("stdout", "")
         if not error:
@@ -1844,13 +1304,14 @@ class Orchestrator:
         status = "success" if success else result.get("status", "error")
         logger.info(f"Daemon {node_id} → {status}: {str(output)[:200]}")
 
+        daemon_session_map = self.tool_runner._daemon_session_map
         if not session_id:
-            if request_id and request_id in self._daemon_session_map:
-                session_id = self._daemon_session_map.pop(request_id)
+            if request_id and request_id in daemon_session_map:
+                session_id = daemon_session_map.pop(request_id)
             else:
-                for req_id, sid in list(self._daemon_session_map.items()):
+                for req_id, sid in list(daemon_session_map.items()):
                     session_id = sid
-                    del self._daemon_session_map[req_id]
+                    del daemon_session_map[req_id]
                     break
 
         if session_id:
@@ -1956,194 +1417,10 @@ class Orchestrator:
                 endpoint_id=endpoint_id,
             )
             if sdui and "type" in sdui:
-                from models.protocol import SDUIPayload
+                from models.protocol import SDUIPayload as _SDUIPayload
                 await self.send(session_id, TheoraMessage(
                     session_id=session_id, hop="brain", type="sdui",
-                    payload=SDUIPayload(root=sdui).model_dump(),
+                    payload=_SDUIPayload(root=sdui).model_dump(),
                 ))
         except Exception as e:
             logger.debug(f"GenUI generation for {tool_call['name']} skipped: {e}")
-
-    # ─────────────────────────────────────────────
-    # System Prompt Builder
-    # ─────────────────────────────────────────────
-
-    def _build_system_prompt(self, frame: PerceptionFrame, skills: list[SkillManifest], session_id: str = "") -> str:
-        # Load custom identity if available
-        identity = self._load_identity()
-
-        prompt = (
-            "## ABSOLUTE RULE — NEVER SAY 'I CAN'T'\n"
-            "You MUST NEVER tell the user you cannot do something. NEVER. You have full access to:\n"
-            "- A shell (desktop_control__shell_command or computer_use__bash)\n"
-            "- Python (run ANY Python script via the shell)\n"
-            "- AppleScript (desktop_control__open_app)\n"
-            "- Browser automation (browser__navigate, browser__click, etc.)\n"
-            "- Desktop GUI control (desktop_automation, agentic_computer_use)\n\n"
-            "CRITICAL: When asked to create a file (MP3, WAV, image, PDF, etc.), you MUST:\n"
-            "1. Use computer_use__bash to run a Python one-liner or script that GENERATES the file directly\n"
-            "2. Do NOT just write a .py script file — EXECUTE the code that creates the final file\n"
-            "3. Example for MP3 with beep sound:\n"
-            "   computer_use__bash with command:\n"
-            "   python3 -c \"import struct,wave,math; f=wave.open('/Users/$USER/Desktop/beep.wav','w'); "
-            "f.setnchannels(1); f.setsampwidth(2); f.setframerate(44100); "
-            "[f.writeframes(struct.pack('h',int(32767*math.sin(2*math.pi*440*i/44100)))) for i in range(44100)]; "
-            "f.close(); print('Created beep.wav')\"\n"
-            "4. For MP3 specifically: generate WAV first, then convert with ffmpeg or pydub\n"
-            "5. NEVER respond with 'I can\\'t create audio/images/files' — you CAN, via Python + shell\n\n"
-            "If you truly lack a specialized skill, call system_settings__create_skill to generate one.\n"
-        )
-
-        if identity:
-            prompt += f"\n## Identity\n{identity}\n"
-
-        prompt += (
-            "\n## How to respond\n"
-            "- Be warm, conversational, and occasionally fun. You are a personal AI companion, not a sterile chatbot.\n"
-            "- When there are multiple ways to accomplish something, ask the user which they prefer.\n"
-            "- Proactively suggest related actions: \"Done! Want me to also...?\"\n"
-            "- Encourage creativity: remind users they can create custom skills, automations, and workflows.\n"
-            "- If the user seems stuck, offer ideas and options rather than waiting silently.\n"
-            "- Use tools when you need external data or to perform actions.\n"
-            "- After a tool call, summarize the result in plain, friendly language.\n"
-            "- Be proactive — if you notice something relevant in sensor data or context, mention it.\n"
-            "- Answer questions directly. No JSON dumps, no raw UI markup.\n"
-            "\n## Local Computer & Browser Control\n"
-            "You control the user's Mac and browser directly. ALWAYS use these tools:\n"
-            "- **desktop_control__open_app**: Open ANY app — Music, Safari, Notes, Terminal, etc.\n"
-            "  Call with script='tell application \"AppName\" to activate'.\n"
-            "- **desktop_control__shell_command**: Run ANY shell command. This is your most powerful tool.\n"
-            "  Create files (echo, python3, touch), read files (cat), install packages (pip, brew),\n"
-            "  generate audio (python3 wave module, ffmpeg), manipulate images, anything the shell can do.\n"
-            "  When user says 'create a file on my desktop': echo 'content' > ~/Desktop/file.txt\n"
-            "- **desktop_automation__click_screen**: Click at absolute screen coordinates.\n"
-            "- **desktop_automation__type_text**: Type keystrokes globally.\n"
-            "- **desktop_automation__key_combo**: Press key combinations (e.g., cmd+c).\n"
-            "- **desktop_automation__scroll**: Scroll at a position.\n"
-            "- **desktop_automation__get_cursor_position**: Get current cursor location.\n"
-            "- **browser__navigate**: Navigate to a URL.\n"
-            "- **browser__click**: Click elements by CSS selector.\n"
-            "- **browser__type_text**: Type into browser inputs.\n"
-            "- **browser__screenshot**: Screenshot the browser page.\n"
-            "- **browser__evaluate**: Run JavaScript in the browser.\n"
-            "- **notes_memory**: THEORA's internal memory. Only for remembering things, NOT filesystem files.\n"
-            "- **system_settings__read_user_profile / update_user_profile**: Read/write user identity.\n"
-            "- **system_settings__read_agent_personality / update_agent_personality**: Change agent name/personality/voice.\n"
-            "- **system_settings__read_settings / update_setting**: Read/write system config (LLM, features, etc.).\n"
-            "- **system_settings__create_skill**: Create a NEW skill on-the-fly from a capability description.\n"
-            "  When user asks you to 'learn' something, 'add a skill', or do something you lack a skill for,\n"
-            "  call this with a description and it generates + registers the skill immediately.\n"
-            "- **agentic_computer_use__execute_task**: Autonomous vision-action loop for complex GUI tasks.\n"
-            "  Takes screenshots, analyzes with AI vision, clicks/types/scrolls iteratively.\n"
-            "  Use for multi-step GUI workflows: filling forms, navigating apps, multi-click sequences.\n"
-            "  For simple single actions (open app, click one thing), use desktop_control or desktop_automation.\n"
-            "  For complex workflows that require SEEING the screen, use agentic_computer_use.\n"
-        )
-
-        # Perception Context
-        perception_context = frame.to_system_context()
-        if perception_context and perception_context != "No sensor data available.":
-            prompt += f"\n## Live Perception\n{perception_context}\n"
-
-        # Memory Context
-        if self.memory and session_id:
-            memory_context = self.memory.build_context_for_llm(session_id, max_tokens_budget=800)
-            if memory_context:
-                prompt += f"\n## Memory\n{memory_context}\n"
-
-        # Available skills
-        if skills:
-            skill_summary = ", ".join(s.brand.name for s in skills)
-            prompt += f"\nRelevant skills: {skill_summary}\n"
-
-        # Connected nodes
-        if frame.connected_nodes:
-            prompt += f"\nConnected devices: {frame.connected_nodes}\n"
-
-        return prompt
-
-    def _load_identity(self) -> str:
-        """Load agent identity from ~/.theora/ files: IDENTITY.yaml, USER.md, SOUL.md, MEMORY.md."""
-        home = theora_home()
-        parts: list[str] = []
-
-        # 1. IDENTITY.yaml — agent name, personality, rules
-        for p in (home / "identity.yaml", home / "identity.yml", home / "IDENTITY.yaml"):
-            if p.exists():
-                try:
-                    import yaml
-                    with open(p) as f:
-                        data = yaml.safe_load(f) or {}
-                    name = data.get("name", "THEORA")
-                    tagline = data.get("tagline", "")
-                    personality = data.get("personality", "")
-                    rules = data.get("rules", [])
-                    greeting_style = data.get("greeting_style", "")
-
-                    parts.append(f"You are {name}.")
-                    if tagline:
-                        parts.append(tagline)
-                    if personality:
-                        parts.append(f"\n## Personality\n{personality}")
-                    if rules:
-                        parts.append("\n## Rules\n" + "\n".join(f"- {r}" for r in rules))
-                    if greeting_style:
-                        parts.append(f"\n## Communication Style\n{greeting_style}")
-                    break
-                except Exception as e:
-                    logger.warning(f"Failed to load identity: {e}")
-
-        if not parts:
-            parts.append(
-                "You are THEORA, a personal AI operating system.\n"
-                "You run locally on the user's devices — phone, laptop, wearables, smart home.\n"
-                "You are warm, helpful, and genuinely interested in making the user's life easier.\n"
-                "You're privacy-first — everything stays on-device unless the user says otherwise.\n"
-                "You learn the user's preferences over time and get better at anticipating their needs.\n"
-                "You have personality: you can be witty, ask thoughtful questions, and suggest creative ideas.\n"
-                "When given a task, you think about related things the user might want and offer them proactively."
-            )
-
-        # 2. USER.md — who the user is
-        user_md = home / "USER.md"
-        if user_md.exists():
-            try:
-                content = user_md.read_text().strip()
-                if content and content != "# About Me\n\nTell your agent about yourself here.":
-                    parts.append(f"\n## About the User\n{content}")
-            except Exception:
-                pass
-
-        # 3. SOUL.md — deeper personality / behavioral notes
-        soul_md = home / "SOUL.md"
-        soul_loaded = False
-        if soul_md.exists():
-            try:
-                content = soul_md.read_text().strip()
-                if content:
-                    parts.append(f"\n## Soul\n{content}")
-                    soul_loaded = True
-            except Exception:
-                pass
-        if not soul_loaded:
-            parts.append(
-                "\n## Default Personality\n"
-                "- Be warm and conversational — you're a companion, not a command line.\n"
-                "- When multiple approaches exist, ask the user which they prefer.\n"
-                "- Proactively suggest related actions after completing a task.\n"
-                "- Encourage the user to explore: custom skills, workflows, automations.\n"
-                "- If the user seems stuck, offer concrete ideas rather than waiting.\n"
-                "- Never flatly refuse — say what you CAN do and offer the closest alternative."
-            )
-
-        # 4. MEMORY.md — persistent long-term knowledge the user has given
-        memory_md = home / "MEMORY.md"
-        if memory_md.exists():
-            try:
-                content = memory_md.read_text().strip()
-                if content:
-                    parts.append(f"\n## Long-Term Memory\n{content}")
-            except Exception:
-                pass
-
-        return "\n".join(parts)

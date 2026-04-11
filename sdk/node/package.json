@@ -1,0 +1,22 @@
+{
+  "name": "@theora/sdk",
+  "version": "0.1.0",
+  "description": "THEORA SDK — Build plugins, tools, and device adapters for the THEORA AI operating system.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["theora", "agent", "sdk", "plugin", "hardware", "genui"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Spatial-AgenticOS/ASOS"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

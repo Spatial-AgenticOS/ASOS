@@ -1,0 +1,134 @@
+---
+id: contributing
+title: Contributing
+sidebar_position: 10
+slug: /contributing
+---
+
+# Contributing to THEORA
+
+THEORA is building toward an agent-native operating system. That is a large mission and we need help from many kinds of engineers — backend, frontend, ML, hardware, Nix/packaging, and documentation.
+
+## Development Setup
+
+```bash
+git clone https://github.com/Spatial-AgenticOS/ASOS.git
+cd ASOS/asos-core
+pip install -e ".[llm,dev]"
+theora setup
+theora serve    # brain running on localhost:9090
+```
+
+For the web UI (in a separate terminal):
+
+```bash
+cd ASOS/asos-client
+npm install
+npm run dev     # dev server on localhost:5173
+```
+
+Or use Make targets from the repo root:
+
+```bash
+make dev        # install all deps
+make serve      # brain
+make client     # web UI dev server
+make test       # run pytest
+make help       # list all targets
+```
+
+## Code Style
+
+### Python
+
+- **Type hints** on all function signatures.
+- **Ruff** for linting, **Black**-compatible formatting.
+- Keep functions focused and short. Prefer composition over inheritance.
+- Avoid broad `except:` blocks — catch specific exceptions.
+
+### TypeScript / React
+
+- **Strict mode** enabled.
+- **Prettier** for formatting.
+- Functional components with hooks.
+
+### General
+
+- No commented-out code in PRs.
+- Comments explain *why*, not *what*.
+- New features should include tests.
+
+## Testing
+
+```bash
+# Unit + integration tests
+pytest
+
+# With coverage report
+pytest --cov --cov-report=term
+
+# Target: 70% coverage minimum
+```
+
+Test files live in `asos-core/tests/`. Use `pytest-asyncio` for async tests — the `asyncio_mode = "auto"` config handles the event loop.
+
+## Pull Request Process
+
+1. **Fork** the repository and create a feature branch:
+
+   ```bash
+   git checkout -b feat/my-feature
+   ```
+
+2. **Write tests** for new functionality.
+
+3. **Run the test suite** and ensure it passes:
+
+   ```bash
+   pytest
+   ```
+
+4. **Open a PR** against `main` with a clear title and description:
+   - What changed and why.
+   - How to test the change.
+   - Screenshots for UI changes.
+
+5. **One approval** from a maintainer is required to merge.
+
+## Contributor Lanes
+
+Pick the area that matches your skills:
+
+| Lane | What You'd Work On | Entry Points |
+|:-----|:-------------------|:-------------|
+| **Runtime / Orchestrator** | Agent loop, LLM routing, TaskFlows, sessions, security | `asos-core/agents/` |
+| **Memory / Knowledge** | 4-tier memory, wiki compilation, ingest pipelines, federated sync | `asos-core/memory/` |
+| **GenUI / Provider Surfaces** | SDUI engine, provider contracts, surface caching, client renderer | `asos-core/genui/`, `asos-client/src/components/SduiRenderer.jsx` |
+| **Hardware / Daemons** | HUP protocol, daemon SDKs, device profiles, edge bridges | `asos-core/hardware/`, `asos-nodes/` |
+| **Voice / Perception** | Realtime voice, Gemini Live, wake word, vision pipeline | `asos-core/voice/`, `asos-core/perception/` |
+| **Nix / Packaging** | Flake outputs, NixOS modules, reproducible builds | `flake.nix` |
+| **Frontend / Shell** | Web UI, dashboard, Tauri desktop, mobile bridges | `asos-client/`, `desktop/` |
+| **Documentation** | Guides, API reference, architecture docs | `docs/` |
+
+## Architecture Docs
+
+Before diving in, read these to understand the system:
+
+- [Architecture Overview](./architecture.md)
+- [`docs/RUNTIME_CONTRACT.md`](https://github.com/Spatial-AgenticOS/ASOS/blob/main/docs/RUNTIME_CONTRACT.md) — env vars, state paths, startup/shutdown contract
+- [`docs/GENUI_PROVIDER_SPEC.md`](https://github.com/Spatial-AgenticOS/ASOS/blob/main/docs/GENUI_PROVIDER_SPEC.md) — building GenUI provider surfaces
+- [`docs/HARDWARE_ECOSYSTEM.md`](https://github.com/Spatial-AgenticOS/ASOS/blob/main/docs/HARDWARE_ECOSYSTEM.md) — building hardware daemons
+- [`docs/ROADMAP.md`](https://github.com/Spatial-AgenticOS/ASOS/blob/main/docs/ROADMAP.md) — strategic execution order
+- [`docs/SCORECARD.md`](https://github.com/Spatial-AgenticOS/ASOS/blob/main/docs/SCORECARD.md) — honest capability status
+
+## Reporting Issues
+
+Open an issue at [github.com/Spatial-AgenticOS/ASOS/issues](https://github.com/Spatial-AgenticOS/ASOS/issues) with:
+
+- Steps to reproduce.
+- Expected vs actual behavior.
+- Python version, OS, and `theora --version` output.
+
+## Contact
+
+**Alpay Kasal** — [info@theora.io](mailto:info@theora.io)
