@@ -363,17 +363,291 @@ These issues were **never identified** in the original completeness roadmap:
 
 ---
 
-## 11. Instructions for New Agent
+## 11. Runtime Architecture Deep Dive
+
+This section traces the 8 critical data flows a new agent must understand before modifying anything.
+
+### 11.1 WebSocket Protocol
+
+```mermaid
+sequenceDiagram
+    participant C as Client/Mobile
+    participant WS as WebSocket /v1/session
+    participant O as Orchestrator
+    participant TR as ToolRunner
+    participant SE as SkillExecutor
+
+    C->>WS: {"type": "text_command", "payload": {"text": "..."}}
+    WS->>O: handle_command_stream(text, session_id)
+    O->>O: _route_prompt(text) → relevant skills
+    O->>O: llm.chat_stream(messages, tools)
+    O-->>C: {"type": "stream_delta", "payload": {"text": "token..."}}
+    O->>TR: execute_tool_call_for_llm(tool_call)
+    TR->>SE: execute(skill_id, endpoint_id, args)
+    SE-->>TR: result dict
+    TR-->>O: tool result → feed back to LLM
+    O-->>C: {"type": "stream_delta", "payload": {"text": "final answer..."}}
+```
+
+**Entry point**: `api/server.py` `client_session()` at line ~699 — `@app.websocket("/v1/session")`
+
+**Wire format**: Every message is a `FeralMessage` (defined in `models/protocol.py`):
+```
+{msg_id, session_id, timestamp_ms, hop: "client"|"brain"|"daemon"|"skill", type, payload}
+```
+
+**Client-to-brain message types**:
+| `type` | Handler |
+|--------|---------|
+| `text_command` | `orchestrator.handle_command_stream` |
+| `voice_config` | `voice_router.set_session_voice_mode` → start OpenAI or Gemini realtime session |
+| `audio_chunk` | Route to Gemini proxy or `voice_router.handle_audio_from_client` |
+| `ui_event` | `orchestrator.handle_ui_event` |
+| `device_register` | Updates `state.devices` |
+| `vision_frame` | Stored in `VisionBuffer` |
+| `biometric` | Routes to perception |
+
+**Brain-to-client message types**: `text_response`, `stream_delta`, `transcript`, `tts_chunk`, `audio_response`, `voice_config_ack`, `skill_proposal`, `sdui_update`, `proactive_alert`, `ambient_context`
+
+### 11.2 Orchestrator Agent Loop
+
+**Entry**: `agents/orchestrator.py` `handle_command_stream()` at line ~439
+
+```mermaid
+flowchart TD
+    A[User text arrives] --> B[Working memory push]
+    B --> C["_route_prompt(text)"]
+    C --> D["LLM picks relevant skills → tool definitions"]
+    D --> E["IdentityLoader.build_system_prompt()"]
+    E --> F["Build messages: system + history + perception frame + user text"]
+    F --> G["llm.chat_stream(messages, tools)"]
+    G --> H{Tool calls in response?}
+    H -->|Yes| I["ToolRunner.execute_tool_call_for_llm()"]
+    I --> J["SkillExecutor.execute(skill_id, endpoint_id, args)"]
+    J --> K[Feed result back to LLM]
+    K --> G
+    H -->|No| L["Stream final text to client"]
+    L --> M["Memory: log execution + episode_save"]
+```
+
+**Key env vars**:
+- `FERAL_STREAMING` (default true) — streaming vs single-shot
+- `FERAL_MULTI_AGENT` — enables multi-agent routing
+- `FERAL_MAX_ITERATIONS` — max tool-call loops before break
+- `FERAL_VISION_ENABLED` — include screen frame in perception
+
+**Multi-agent path**: If enabled, `MultiAgentOrchestrator.run()` splits into parallel skill-specific agents.
+
+### 11.3 Tool Execution Chain
+
+Example: user says "check my calendar"
+
+```
+User: "check my calendar"
+  → orchestrator._route_prompt("check my calendar")
+    → LLM router returns ["calendar_google"]
+  → skills.get_tools_for_skills(["calendar_google"])
+    → [{name: "calendar_google__upcoming_events", parameters: {...}}, ...]
+  → LLM emits tool_call: {name: "calendar_google__upcoming_events", arguments: {days_ahead: 7}}
+  → ToolRunner.execute_tool_call_for_llm()
+    → parse name as "calendar_google" + "upcoming_events"
+    → enforce_safety("calendar_google__upcoming_events", args) → checks autonomy mode
+    → SkillExecutor.execute("calendar_google", "upcoming_events", args)
+      → checks get_implementation("calendar_google")
+      → if registered: CalendarIntegration.execute("upcoming_events", args)
+      → if NOT registered: falls back to manifest HTTP/OAuth path
+  → result dict returned to LLM for summarization
+```
+
+**Skill ID convention**: Tool names in LLM calls are `{skill_id}__{endpoint_id}` (double underscore separator). The `ToolRunner` splits on `__` at line ~274.
+
+**Registration matters**: `register_instance(skill_id, integration_object)` must use the EXACT skill_id from the JSON manifest. Mismatches cause the executor to miss the native implementation and fall back to raw HTTP.
+
+### 11.4 Identity System
+
+**Files on disk** (all under `~/.feral/`):
+| File | Purpose | Loader |
+|------|---------|--------|
+| `IDENTITY.yaml` | Name, tagline, version, greeting style | Both loaders |
+| `SOUL.md` | Free-form personality (tone, style, boundaries) | Both loaders |
+| `USER.md` | User profile (preferences, context) | Both loaders |
+| `MEMORY.md` | Accumulated facts the system should always remember | Both loaders |
+| `TOOLS.md` | Known tool preferences | IdentityWorkspace only |
+
+**Two parallel loaders** (historical artifact):
+1. `identity/workspace.py` `IdentityWorkspace` — used by voice personality and Gemini system prompt
+2. `agents/identity_loader.py` `IdentityLoader` — used by the orchestrator for LLM system prompt
+
+**System prompt assembly** (`IdentityLoader.build_system_prompt`):
+```
+Hard-coded rules (safety, formatting)
+  + Identity text (SOUL + USER + MEMORY merged)
+  + Perception frame context (screen, audio, sensors)
+  + Memory context (build_context_for_llm with recent episodes)
+  + Available skill names
+  + Connected hardware nodes
+```
+
+### 11.5 Voice Pipeline (Three Paths)
+
+```mermaid
+flowchart TD
+    subgraph input [Audio Input]
+        Mic[Microphone / Phone]
+    end
+
+    Mic --> VR[VoiceRouter]
+
+    VR -->|"voice_config: openai"| OAI[OpenAI Realtime Proxy]
+    VR -->|"voice_config: gemini"| GEM[Gemini Live Proxy]
+    VR -->|"default / whisper"| WH[Whisper Path]
+
+    OAI --> OAIWS["wss://api.openai.com/v1/realtime"]
+    OAIWS --> |"audio + tool calls"| OAI
+    OAI -->|"audio_response"| Client
+
+    GEM --> GEMWS["Google Multimodal Live WebSocket"]
+    GEMWS -->|"audio response"| GEM
+    GEM -->|"audio_response"| Client
+
+    WH --> AP["AudioPipeline.process_audio_chunk()"]
+    AP --> STT["STT → transcript text"]
+    STT --> Orch["Orchestrator.handle_command_stream()"]
+    Orch --> TTS["TTS synthesis"]
+    TTS -->|"tts_chunk"| Client
+```
+
+- **OpenAI Realtime** (`voice/realtime_proxy.py`): Full-duplex WebSocket. Audio in + audio out + inline tool calls. `RealtimeSession._handle_tool_call` routes to `SkillExecutor.execute`.
+- **Gemini Live** (`voice/gemini_realtime.py`): Same concept, Google's Multimodal Live API. Bypasses OpenAI path entirely when active.
+- **Whisper path** (`voice/router.py` `_handle_whisper_path`): STT → text → orchestrator → TTS. Higher latency but works with any LLM provider.
+
+**Wake word**: Optional gate before any audio path. Config via `FERAL_WAKE_WORD` env var. Implementation: `perception/wake_word.py`.
+
+### 11.6 Memory System (4 Tiers)
+
+```mermaid
+flowchart LR
+    subgraph tiers [Memory Tiers]
+        WM["Working Memory\n(in-RAM deque per session)"]
+        EM["Episodic Memory\n(SQLite + FTS5 + vector embeddings)"]
+        SM["Semantic Memory\n(knowledge table + KnowledgeGraph)"]
+        EL["Execution Log\n(tool call history)"]
+    end
+
+    Search["search_all()"] --> EM
+    Search --> SM
+    Search --> EL
+    EM -->|"hybrid: 0.3 text + 0.7 vector + temporal decay"| Results
+    SM -->|"KG triple lookup"| Results
+```
+
+**Key methods**:
+- `episode_save(content, metadata)` — saves + queues for embedding
+- `episode_search_hybrid(query, limit)` — FTS + vector cosine + temporal decay (TEXT_WEIGHT=0.3, VECTOR_WEIGHT=0.7)
+- `search_all(query)` — merges episodes, notes, knowledge, KG entities, sorted by score
+- `log_execution(tool_name, args, result)` — audit trail
+- `working_push(session_id, text)` / `working_get(session_id)` — short-term context
+
+**DB**: SQLite at `~/.feral/memory.db`
+
+### 11.7 Proactive Engine
+
+```mermaid
+flowchart TD
+    Start["start() — async loop every 15s"] --> Eval["_evaluate()"]
+    Eval --> Rules{Rule checks}
+    Rules --> HR["HR > 120 → CRITICAL alert"]
+    Rules --> SpO2["SpO2 < 92 → CRITICAL alert"]
+    Rules --> Break["Session > 90 min → SUGGESTION"]
+    Rules --> Sleep["Sleep trend declining 3 days → SUGGESTION"]
+    Rules --> Meeting["Calendar: meeting < 15 min → IMPORTANT"]
+    Rules --> Morning["Time 6-9 AM, first eval → morning briefing"]
+    Rules --> LLM["_evaluate_with_llm() — additive, 60s cooldown"]
+    HR & SpO2 & Break & Sleep & Meeting & Morning & LLM --> Deliver["_deliver() → registered callbacks"]
+    Deliver --> Broadcast["broadcast_event('proactive_alert', msg)"]
+    Broadcast --> Client["WebSocket → client toast / voice"]
+```
+
+**Cooldown**: Each trigger type has `TriggerState` with `cooldown_s` (default 300s) and tracks `dismiss_count` for preference learning.
+
+**PerceptionFrame** (from `perception/fusion.py`): Dataclass with `audio`, `vision`, `sensors` (HR, SpO2, temp), `gesture`, `nodes`, `screen_description`.
+
+### 11.8 GenUI / Server-Driven UI
+
+**Flow**: `GenUIEngine.generate_from_prompt(prompt, context_data)` → LLM with `GENUI_SYSTEM_PROMPT` → parse JSON SDUI tree → deliver to client as `sdui_update` message.
+
+**ServiceProvider system**: Reusable branded component templates. `register_component()` / `register_surface()` → `render()` hydrates templates with data → cached under `~/.feral/genui_surfaces/`.
+
+**Client rendering**: `feral-client/src/components/SduiRenderer.jsx` — recursive component tree renderer. Supports: MarkdownView, ChartView, TableView, FormView, ImageView, TerminalView, AlertView.
+
+### 11.9 Known Wiring Bugs (Must Fix)
+
+These are real bugs where code exists but is not connected:
+
+1. **ProactiveEngine missing calendar + health**: `api/state.py` line ~390 creates `ProactiveEngine` but does NOT pass `calendar=self.calendar` or `health_aggregator=self.health_aggregator`. The engine has `_calendar` and `_health` params and uses them for meeting prep and sleep trend checks — but they're `None` at runtime. **Fix**: add the kwargs to the constructor call.
+
+2. **Skill registration ID mismatch**: `register_instance("calendar", self.calendar)` uses ID `"calendar"` but the manifest `skills/manifests/calendar.json` defines `"skill_id": "calendar_google"`. When the LLM calls `calendar_google__upcoming_events`, the executor looks for implementation with key `"calendar_google"` and finds nothing. Same issue with messaging: registered as `"messaging"` but manifest says `"messaging_sms"`. **Fix**: use exact manifest IDs.
+
+3. **APNs JWT signing incomplete**: `channels/push.py` `_send_apns()` sends to `api.push.apple.com` but does not implement JWT token generation with the APNs auth key. Production APNs requires a signed JWT in the Authorization header using ES256. **Fix**: implement JWT signing with `cryptography` or `PyJWT`.
+
+---
+
+## 12. The "Center of Your Life" Vision
+
+This is the core product thesis. FERAL aims to be a single AI brain at the center of everything:
+
+```
+                        ┌─────────────┐
+                        │   CALENDAR   │
+                        │  Email       │
+                   ┌────┤  Messaging   ├────┐
+                   │    └─────────────┘    │
+            ┌──────┴──────┐         ┌──────┴──────┐
+            │  SMART HOME  │         │   HEALTH     │
+            │  Lights      │         │  Whoop       │
+            │  Thermostat  │         │  Oura Ring   │
+            │  Appliances  │         │  Wristband   │
+            └──────┬──────┘         └──────┬──────┘
+                   │    ┌─────────────┐    │
+                   │    │             │    │
+                   └────┤ FERAL BRAIN ├────┘
+                   ┌────┤  Memory     ├────┐
+                   │    │  Identity   │    │
+                   │    │  Autonomy   │    │
+            ┌──────┴──────┐         ┌──────┴──────┐
+            │  COMPUTER    │         │    PHONE     │
+            │  Screen      │         │  Push notifs │
+            │  Browser     │         │  Location    │
+            │  Files       │         │  Camera      │
+            └──────┬──────┘         └──────┬──────┘
+                   │    ┌─────────────┐    │
+                   └────┤   VOICE      ├────┘
+                        │  Wake word   │
+                        │  Realtime    │
+                        └─────────────┘
+```
+
+**What's built**: All integration code exists. Calendar, email, messaging, health platforms, location, push notifications, smart home, screen capture, browser use, voice pipeline, memory, identity, autonomy levels, proactive coaching, GenUI, digital twin, ambient mode, timeline view.
+
+**What's wired**: Most integrations are initialized in `state.py` and registered as skills. The proactive engine runs its eval loop. Voice pipeline works end-to-end.
+
+**What's broken wiring** (see 11.9): ProactiveEngine doesn't receive calendar/health objects. Skill registration IDs don't match manifests. APNs auth incomplete. Phone bridge GPS returns fake data.
+
+---
+
+## 13. Instructions for New Agent
 
 1. **Read this file first.** It is the single source of truth.
 2. **Run `ls -la` at the repo root** to orient yourself, then check `git log --oneline -10` for recent changes.
 3. **Before editing any file**, read it first with the Read tool.
 4. **After every meaningful change set**, commit and push to `origin main`.
 5. **Check the "Execution Priority" table in Section 8** — that's your ordered task list.
-6. **Key patterns to follow**:
+6. **Fix the 3 wiring bugs in Section 11.9 FIRST** — they're blocking features that are already built.
+7. **Key patterns to follow**:
    - Python integrations: match `integrations/spotify.py` pattern (class, `__init__(oauth_manager)`, `execute()` dispatch)
    - API routes: match `api/routes/dashboard.py` pattern (FastAPI router, import state)
    - React pages: match `pages/Dashboard.jsx` pattern (functional component, `API_BASE` config, `feral-*` CSS tokens)
    - Tests: match `tests/test_safety.py` pattern (pytest, async where needed)
-7. **Don't duplicate work.** The 12 completeness roadmap features are DONE. Focus on the gaps in Sections 6 and 7.
-8. **The comparison table with OpenClaw is the north star.** Every change should flip a row from "OpenClaw wins" to "Tie" or "FERAL wins."
+8. **Don't duplicate work.** The 12 completeness roadmap features are DONE. Focus on the gaps in Sections 6 and 7.
+9. **The comparison table with OpenClaw is the north star.** Every change should flip a row from "OpenClaw wins" to "Tie" or "FERAL wins."
+10. **Understand the data flows in Section 11 before modifying the orchestrator, voice, memory, or proactive engine.** These are tightly coupled systems — a change in one affects the others.

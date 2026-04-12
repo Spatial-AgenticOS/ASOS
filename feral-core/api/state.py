@@ -242,11 +242,11 @@ class BrainState:
         if self.notion:
             register_instance("notion", self.notion)
         if self.calendar:
-            register_instance("calendar", self.calendar)
+            register_instance("calendar_google", self.calendar)
         if self.email:
             register_instance("email", self.email)
         if self.messaging and self.messaging.connected:
-            register_instance("messaging", self.messaging)
+            register_instance("messaging_sms", self.messaging)
         if self.health_aggregator:
             register_instance("health_data", self.health_aggregator)
 
@@ -392,6 +392,8 @@ class BrainState:
                 memory=self.memory,
                 orchestrator=self.orchestrator,
                 llm=_shared_llm,
+                calendar=self.calendar,
+                health_aggregator=self.health_aggregator,
             )
 
             async def _proactive_delivery(msg):
