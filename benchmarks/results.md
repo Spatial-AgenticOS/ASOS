@@ -127,7 +127,7 @@ The perception engine + memory system enables proactive context-aware interventi
 
 ```bash
 # Start the FERAL brain
-cd feral/feral-core && feral start
+cd FERAL-AI/feral-core && feral start
 
 # Run benchmarks (quick)
 python -m benchmarks.run --quick --output benchmarks/results.md

@@ -77,7 +77,7 @@ async with FeralClient("http://localhost:9090") as client:
 If you prefer Docker:
 
 ```bash
-git clone https://github.com/feral-ai/feral.git && cd feral
+git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
 cp .env.example .env   # fill in your API keys
 docker compose up -d
 ```

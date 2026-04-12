@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/feral-ai/feral"
+Homepage = "https://github.com/FERAL-AI/FERAL-AI"
 Documentation = "https://docs.feral.io"
 
 [tool.setuptools.packages.find]

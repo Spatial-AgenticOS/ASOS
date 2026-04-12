@@ -45,3 +45,7 @@ coverage.xml
 memory_store.json
 client-tmp/
 poetry.lock
+
+# Internal handoff docs (keep locally, don't push)
+HANDOFF.md
+HANDOVER.md

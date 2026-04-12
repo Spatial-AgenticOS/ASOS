@@ -12,8 +12,8 @@ FERAL is building toward an agent-native operating system. That is a large missi
 ## Development Setup
 
 ```bash
-git clone https://github.com/feral-ai/feral.git
-cd feral/feral-core
+git clone https://github.com/FERAL-AI/FERAL-AI.git
+cd FERAL-AI/feral-core
 pip install -e ".[llm,dev]"
 feral setup
 feral serve    # brain running on localhost:9090
@@ -22,7 +22,7 @@ feral serve    # brain running on localhost:9090
 For the web UI (in a separate terminal):
 
 ```bash
-cd feral/feral-client
+cd FERAL-AI/feral-client
 npm install
 npm run dev     # dev server on localhost:5173
 ```
@@ -115,15 +115,15 @@ Pick the area that matches your skills:
 Before diving in, read these to understand the system:
 
 - [Architecture Overview](./architecture.md)
-- [`docs/RUNTIME_CONTRACT.md`](https://github.com/feral-ai/feral/blob/main/docs/RUNTIME_CONTRACT.md) — env vars, state paths, startup/shutdown contract
-- [`docs/GENUI_PROVIDER_SPEC.md`](https://github.com/feral-ai/feral/blob/main/docs/GENUI_PROVIDER_SPEC.md) — building GenUI provider surfaces
-- [`docs/HARDWARE_ECOSYSTEM.md`](https://github.com/feral-ai/feral/blob/main/docs/HARDWARE_ECOSYSTEM.md) — building hardware daemons
-- [`docs/ROADMAP.md`](https://github.com/feral-ai/feral/blob/main/docs/ROADMAP.md) — strategic execution order
-- [`docs/SCORECARD.md`](https://github.com/feral-ai/feral/blob/main/docs/SCORECARD.md) — honest capability status
+- [`docs/RUNTIME_CONTRACT.md`](https://github.com/FERAL-AI/FERAL-AI/blob/main/docs/RUNTIME_CONTRACT.md) — env vars, state paths, startup/shutdown contract
+- [`docs/GENUI_PROVIDER_SPEC.md`](https://github.com/FERAL-AI/FERAL-AI/blob/main/docs/GENUI_PROVIDER_SPEC.md) — building GenUI provider surfaces
+- [`docs/HARDWARE_ECOSYSTEM.md`](https://github.com/FERAL-AI/FERAL-AI/blob/main/docs/HARDWARE_ECOSYSTEM.md) — building hardware daemons
+- [`docs/ROADMAP.md`](https://github.com/FERAL-AI/FERAL-AI/blob/main/docs/ROADMAP.md) — strategic execution order
+- [`docs/SCORECARD.md`](https://github.com/FERAL-AI/FERAL-AI/blob/main/docs/SCORECARD.md) — honest capability status
 
 ## Reporting Issues
 
-Open an issue at [github.com/feral-ai/feral/issues](https://github.com/feral-ai/feral/issues) with:
+Open an issue at [github.com/FERAL-AI/FERAL-AI/issues](https://github.com/FERAL-AI/FERAL-AI/issues) with:
 
 - Steps to reproduce.
 - Expected vs actual behavior.

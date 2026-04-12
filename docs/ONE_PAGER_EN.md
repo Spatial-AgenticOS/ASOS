@@ -173,7 +173,7 @@ That means the project is already past the concept stage. The job now is to hard
 
 ## Links
 
-- Main repo: [github.com/feral-ai/feral](https://github.com/feral-ai/feral)
+- Main repo: [github.com/FERAL-AI/FERAL-AI](https://github.com/FERAL-AI/FERAL-AI)
 - README: [../README.md](../README.md)
 - Developer Mission: [./DEVELOPER_MISSION.md](./DEVELOPER_MISSION.md)
 - Scorecard: [./SCORECARD.md](./SCORECARD.md)

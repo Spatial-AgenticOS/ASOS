@@ -200,8 +200,8 @@ async def demo_server_api():
 async def main():
     print(f"""
 {BOLD}╔══════════════════════════════════════════════════════════╗
-║              T H E O R A   D E M O                       ║
-║  Open AI Agent — Computer Use, Search, GenUI, Memory     ║
+║              F E R A L   D E M O                          ║
+║  Unleashed AI — Computer Use, Search, GenUI, Memory      ║
 ╚══════════════════════════════════════════════════════════╝{NC}
 """)
 

@@ -30,7 +30,7 @@ def run_demo(scenario: str = ""):
         from demo.scenarios import SCENARIOS
         print()
         print("  ╔══════════════════════════════════════╗")
-        print("  ║     T H E O R A   D E M O           ║")
+        print("  ║     F E R A L   D E M O              ║")
         print("  ╚══════════════════════════════════════╝")
         print()
         print("  Available demo scenarios:")

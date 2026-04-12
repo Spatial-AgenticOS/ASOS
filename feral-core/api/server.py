@@ -1280,8 +1280,8 @@ a{color:#06b6d4}p{line-height:1.6}</style></head>
 <p>The API is active, but the web dashboard is not bundled in this install.</p>
 <p style="margin-top:1.5rem"><strong>Quick fix — reinstall with the dashboard:</strong></p>
 <ol style="text-align:left;line-height:2">
-<li>Clone: <code>git clone https://github.com/feral-ai/feral</code></li>
-<li>Build UI: <code>cd feral && make bundle-webui</code></li>
+<li>Clone: <code>git clone https://github.com/FERAL-AI/FERAL-AI.git</code></li>
+<li>Build UI: <code>cd FERAL-AI && make bundle-webui</code></li>
 <li>Install: <code>pip install -e feral-core[llm]</code></li>
 <li>Restart: <code>feral serve</code></li>
 </ol>

@@ -96,8 +96,8 @@ dev = [
 feral = "cli.main:main"
 
 [project.urls]
-Homepage = "https://github.com/feral-ai/feral"
-Issues = "https://github.com/feral-ai/feral/issues"
+Homepage = "https://github.com/FERAL-AI/FERAL-AI"
+Issues = "https://github.com/FERAL-AI/FERAL-AI/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

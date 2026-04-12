@@ -58,7 +58,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/feral-ai/feral-desktop/releases/latest/download/latest.json"
+        "https://github.com/FERAL-AI/FERAL-AI/releases/latest/download/latest.json"
       ],
       "pubkey": ""
     }

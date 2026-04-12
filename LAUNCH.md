@@ -3,7 +3,7 @@
 ## Pre-launch Checklist
 
 - [ ] Create GitHub org: `feral-ai`
-- [ ] Create repo: `feral-ai/feral`
+- [ ] Create repo: `FERAL-AI/FERAL-AI`
 - [ ] Reserve npm: `feral-ai`, `create-feral-demo`
 - [ ] Reserve PyPI: `feral-ai`
 - [ ] Register domain: `feral.ai` or `getferal.ai` or `goferal.dev`
@@ -109,7 +109,7 @@ FERAL is Apache 2.0 licensed. The entire stack:
 pip install feral-ai
 feral start
 
-GitHub: github.com/feral-ai/feral
+GitHub: github.com/FERAL-AI/FERAL-AI
 
 Is your AI feral yet?
 ```
@@ -145,7 +145,7 @@ Or see the demos:
   feral demo --scenario developer  # Screen-aware coding assistant
   feral demo --scenario mesh       # Cross-device continuity
 
-GitHub: https://github.com/feral-ai/feral
+GitHub: https://github.com/FERAL-AI/FERAL-AI
 
 We're not competing with OpenHands or OpenClaw — those are great terminal task runners. FERAL is an ambient personal AI that spans your entire device ecosystem.
 

@@ -16,8 +16,8 @@ banner() {
   echo ""
   echo -e "${CYAN}${BOLD}"
   echo "  ╔══════════════════════════════════════╗"
-  echo "  ║         T H E O R A  Demo            ║"
-  echo "  ║     Local-First Agentic OS v1.0.0    ║"
+  echo "  ║         F E R A L  Demo                ║"
+  echo "  ║     Unleashed AI  v1.2.0              ║"
   echo "  ╚══════════════════════════════════════╝"
   echo -e "${NC}"
 }

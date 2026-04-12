@@ -60,8 +60,8 @@ HTTP_BASE = _runtime_http_base()
 
 BANNER = """
 ╔══════════════════════════════════════╗
-║          T H E O R A                 ║
-║   Spatial Agentic OS  v1.2.0        ║
+║          F E R A L                    ║
+║   Unleashed AI  v1.2.0              ║
 ╚══════════════════════════════════════╝
   Type a message to chat. Commands:
     /status   — system health
@@ -368,7 +368,7 @@ def cmd_start(port: int | None = None, no_browser: bool = False):
 
     print(f"""
   ╔══════════════════════════════════════╗
-  ║          T H E O R A                 ║
+  ║          F E R A L                    ║
   ║   Starting agent on port {port}       ║
   ╚══════════════════════════════════════╝
 """)

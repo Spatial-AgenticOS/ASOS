@@ -17,7 +17,7 @@ const readline = require('readline');
 const BANNER = `
 ╔══════════════════════════════════════════════════════════╗
 ║                                                          ║
-║            T H E O R A   D E M O                        ║
+║            F E R A L   D E M O                           ║
 ║                                                          ║
 ║    The Open AI Operating System                          ║
 ║    Voice · Hardware · Memory · Self-Learning             ║
@@ -93,8 +93,8 @@ async function main() {
     } catch {
       console.log('  ℹ  pip install not available. Trying from source...');
       try {
-        execSync('git clone --depth 1 https://github.com/feral-ai/feral /tmp/feral-demo 2>&1', { stdio: 'inherit' });
-        execSync(`cd /tmp/feral-demo/feral && ${python} -m pip install -e ".[llm]" 2>&1`, { stdio: 'inherit' });
+        execSync('git clone --depth 1 https://github.com/FERAL-AI/FERAL-AI.git /tmp/feral-demo 2>&1', { stdio: 'inherit' });
+        execSync(`cd /tmp/feral-demo/feral-core && ${python} -m pip install -e ".[llm]" 2>&1`, { stdio: 'inherit' });
       } catch (e) {
         console.error('  ❌ Failed to install FERAL:', e.message);
         process.exit(1);

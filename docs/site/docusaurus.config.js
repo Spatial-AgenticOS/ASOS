@@ -10,7 +10,7 @@ const config = {
   baseUrl: '/',
 
   organizationName: 'Spatial-AgenticOS',
-  projectName: 'feral',
+  projectName: 'ASOS',
 
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
@@ -28,7 +28,7 @@ const config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.js',
-          editUrl: 'https://github.com/feral-ai/feral/tree/main/docs/site/',
+          editUrl: 'https://github.com/FERAL-AI/FERAL-AI/tree/main/docs/site/',
         },
         blog: false,
         theme: {
@@ -53,7 +53,7 @@ const config = {
           { to: '/sdk/python', label: 'Python SDK', position: 'left' },
           { to: '/sdk/node', label: 'Node SDK', position: 'left' },
           {
-            href: 'https://github.com/feral-ai/feral',
+            href: 'https://github.com/FERAL-AI/FERAL-AI',
             label: 'GitHub',
             position: 'right',
           },
@@ -88,8 +88,8 @@ const config = {
           {
             title: 'Community',
             items: [
-              { label: 'GitHub', href: 'https://github.com/feral-ai/feral' },
-              { label: 'Issues', href: 'https://github.com/feral-ai/feral/issues' },
+              { label: 'GitHub', href: 'https://github.com/FERAL-AI/FERAL-AI' },
+              { label: 'Issues', href: 'https://github.com/FERAL-AI/FERAL-AI/issues' },
             ],
           },
         ],

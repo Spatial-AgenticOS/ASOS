@@ -127,7 +127,7 @@ flowchart LR
 
 ## 链接
 
-- 主仓库: [github.com/feral-ai/feral](https://github.com/feral-ai/feral)
+- 主仓库: [github.com/FERAL-AI/FERAL-AI](https://github.com/FERAL-AI/FERAL-AI)
 - README: [../README.md](../README.md)
 - 能力状态: [./SCORECARD.md](./SCORECARD.md)
 - 路线图: [./ROADMAP.md](./ROADMAP.md)

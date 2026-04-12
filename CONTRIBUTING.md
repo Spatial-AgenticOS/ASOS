@@ -4,9 +4,13 @@ FERAL is building an agent-native computing platform. Contributions across all s
 
 ## Development Setup
 
+Prerequisites:
+- Python 3.11+
+- Node.js 20+ (for `feral-client`)
+
 ```bash
-git clone https://github.com/feral-ai/feral.git
-cd feral/feral-core
+git clone https://github.com/FERAL-AI/FERAL-AI.git
+cd FERAL-AI/feral-core
 pip install -e ".[llm,dev]"
 pytest                    # run tests
 feral setup              # configure locally
@@ -16,7 +20,7 @@ feral serve              # start the brain
 For the web client:
 
 ```bash
-cd feral-client
+cd FERAL-AI/feral-client
 npm install
 npm run dev
 ```

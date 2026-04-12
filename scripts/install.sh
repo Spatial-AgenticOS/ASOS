@@ -2,7 +2,7 @@
 #
 # FERAL One-Line Installer
 # ==========================
-# curl -sSL https://raw.githubusercontent.com/feral-ai/feral/main/scripts/install.sh | bash
+# curl -sSL https://raw.githubusercontent.com/FERAL-AI/FERAL-AI/main/scripts/install.sh | bash
 #
 set -euo pipefail
 
@@ -18,8 +18,8 @@ VENV_DIR="$HOME/.feral-env"
 
 echo -e "${BOLD}${CYAN}"
 echo "  ╔══════════════════════════════════════════════════╗"
-echo "  ║            T H E O R A  Installer                ║"
-echo "  ║   Open AI Operating System · Privacy-First       ║"
+echo "  ║            F E R A L  Installer                    ║"
+echo "  ║   Unleashed AI · Privacy-First                   ║"
 echo "  ╚══════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
@@ -90,7 +90,7 @@ if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../feral-core/pyproject.toml" ]; th
     fi
 else
     echo -e "  ${DIM}Installing from GitHub...${NC}"
-    if $PYTHON -m pip install --upgrade --force-reinstall "feral-ai[llm] @ git+https://github.com/feral-ai/feral.git#subdirectory=feral-core" 2>&1 | tee "$PIP_LOG" | tail -5; then
+    if $PYTHON -m pip install --upgrade --force-reinstall "feral-ai[llm] @ git+https://github.com/FERAL-AI/FERAL-AI.git#subdirectory=feral-core" 2>&1 | tee "$PIP_LOG" | tail -5; then
         install_success=true
     else
         echo -e "  ${DIM}Git install failed. Trying PyPI...${NC}"
@@ -99,7 +99,7 @@ else
         else
             echo -e "  ${DIM}PyPI failed. Cloning repo...${NC}"
             TMPDIR=$(mktemp -d)
-            if git clone --depth 1 https://github.com/feral-ai/feral.git "$TMPDIR/feral" 2>/dev/null; then
+            if git clone --depth 1 https://github.com/FERAL-AI/FERAL-AI.git "$TMPDIR/feral" 2>/dev/null; then
                 if $PYTHON -m pip install --upgrade --force-reinstall -e "$TMPDIR/feral/feral-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
                     install_success=true
                 fi
@@ -116,7 +116,7 @@ if [ "$install_success" = false ]; then
     echo "  Common fixes:"
     echo "    1. Upgrade pip:  $PYTHON -m pip install --upgrade pip"
     echo "    2. Retry:        source ~/.feral-env/bin/activate && pip install feral-ai[llm]"
-    echo "    3. Manual clone: git clone https://github.com/feral-ai/feral && cd feral/feral-core && pip install -e .[llm]"
+    echo "    3. Manual clone: git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI/feral-core && pip install -e .[llm]"
     exit 1
 fi
 

@@ -14,8 +14,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Spatial-AgenticOS/ASOS/stargazers"><img src="https://img.shields.io/github/stars/Spatial-AgenticOS/ASOS?style=flat-square&color=06b6d4" alt="Stars" /></a>
-  <a href="https://github.com/Spatial-AgenticOS/ASOS/commits/main"><img src="https://img.shields.io/github/last-commit/Spatial-AgenticOS/ASOS?style=flat-square&color=06b6d4" alt="Last Commit" /></a>
+  <a href="https://github.com/FERAL-AI/FERAL-AI/stargazers"><img src="https://img.shields.io/github/stars/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Stars" /></a>
+  <a href="https://github.com/FERAL-AI/FERAL-AI/commits/main"><img src="https://img.shields.io/github/last-commit/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Last Commit" /></a>
   <img src="https://img.shields.io/badge/license-Apache%202.0-06b6d4?style=flat-square" alt="License" />
   <img src="https://img.shields.io/badge/python-3.11+-06b6d4?style=flat-square" alt="Python" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20iOS%20%7C%20Android-06b6d4?style=flat-square" alt="Platform" />
@@ -139,11 +139,21 @@ Always-on full-screen dashboard — next meeting, heart rate, active tasks, weat
 ## Get Started
 
 ```bash
-pip install feral-ai
+git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
+make install
 feral start
 ```
 
-That's it. Brain starts, UI opens, voice activates. No API key required for local models (Ollama auto-detected).
+That is the current recommended path. Brain starts, UI opens, voice activates.
+
+Prefer a manual install instead of `make`?
+
+```bash
+cd feral-core && pip install -e ".[llm]"
+feral start
+```
+
+PyPI install (`pip install feral-ai`) is coming soon after the package publish pipeline is finalized.
 
 Want the full experience with cloud LLM?
 
@@ -252,7 +262,7 @@ feral/
 ## Contributing
 
 ```bash
-git clone https://github.com/Spatial-AgenticOS/ASOS.git && cd ASOS
+git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
 cd feral-core && pip install -e ".[llm,dev]"
 cd ../feral-client && npm install && npm run dev
 ```

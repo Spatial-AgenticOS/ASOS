@@ -19,7 +19,7 @@
           node = pkgs.nodejs_20;
           feralPythonPackage = pyPkgs.buildPythonPackage rec {
             pname = "feral-ai";
-            version = "1.1.0";
+            version = "1.2.0";
             src = ./feral-core;
             pyproject = true;
             nativeBuildInputs = with pyPkgs; [ setuptools wheel ];
