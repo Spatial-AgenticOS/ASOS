@@ -1,8 +1,7 @@
 <p align="center">
-  <img src="feral-logo.svg" width="80" alt="FERAL" />
+  <img src="feral-banner.png" width="600" alt="FERAL — Unleashed AI" />
 </p>
 
-<h1 align="center">FERAL</h1>
 <p align="center"><strong>AI off the leash.</strong></p>
 
 <p align="center">
