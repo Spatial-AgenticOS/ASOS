@@ -21,10 +21,12 @@ Architecture:
 
 from __future__ import annotations
 import asyncio
+import json
 import logging
 import math
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Callable, Awaitable, Optional
 
@@ -74,12 +76,16 @@ class ProactiveEngine:
         memory=None,
         orchestrator=None,
         llm=None,
+        calendar=None,
+        health_aggregator=None,
         check_interval_s: float = 15.0,
     ):
         self._perception = perception
         self._memory = memory
         self._orchestrator = orchestrator
         self._llm = llm
+        self._calendar = calendar
+        self._health = health_aggregator
         self._interval = check_interval_s
         self._running = False
         self._callbacks: list[Callable[[ProactiveMessage], Awaitable[None]]] = []
@@ -87,6 +93,7 @@ class ProactiveEngine:
         self._first_interaction_today = True
         self._last_hr_alert = 0.0
         self._last_break_suggestion = 0.0
+        self._last_llm_eval = 0.0
         self._session_start = time.time()
 
     def on_message(self, callback: Callable[[ProactiveMessage], Awaitable[None]]):
@@ -188,11 +195,151 @@ class ProactiveEngine:
             ))
             self._last_break_suggestion = now
 
+        # --- Sleep Trend Check ---
+        if self._health and self._can_fire("sleep_declining"):
+            try:
+                trend = await self._health.get_sleep_trend(days=3)
+                if len(trend) >= 3:
+                    hours = [e.get("total_sleep_hours") or e.get("sleep_score") for e in trend[-3:]]
+                    hours = [h for h in hours if h is not None]
+                    if len(hours) >= 3 and hours[-1] < hours[-2] < hours[-3]:
+                        hr_str = ", ".join(f"{h:.1f}h" if isinstance(h, float) else str(h) for h in hours)
+                        messages.append(ProactiveMessage(
+                            trigger_id="sleep_declining",
+                            priority=Priority.SUGGESTION,
+                            title="Sleep Trend Declining",
+                            body=f"Your sleep has been declining — {hr_str}. Want to set up a wind-down routine?",
+                            voice_text=f"I noticed your sleep has been trending down the last few nights. Want to set up a wind-down routine?",
+                            action="Set up routine",
+                        ))
+            except Exception as e:
+                logger.debug("Sleep trend check failed: %s", e)
+
+        # --- Productivity Coaching ---
+        if session_minutes > 90 and self._can_fire("focus_break"):
+            same_app = False
+            for frame in frames:
+                if frame.scene_description:
+                    same_app = True
+                    break
+            if same_app:
+                messages.append(ProactiveMessage(
+                    trigger_id="focus_break",
+                    priority=Priority.SUGGESTION,
+                    title="Focus Break",
+                    body=f"You've been focused for {int(session_minutes)}m. A 5-minute break improves sustained performance.",
+                    voice_text=f"You've been locked in for {int(session_minutes)} minutes. A short break will help you stay sharp.",
+                    action="Take 5 min",
+                ))
+
+        # --- Meeting Prep ---
+        if self._calendar and self._can_fire("meeting_prep"):
+            try:
+                result = await self._calendar.next_event()
+                if result.get("success") and result.get("data"):
+                    ev = result["data"]
+                    start_str = ev.get("start", "")
+                    title = ev.get("summary", "Untitled")
+                    if start_str and "No upcoming" not in str(ev.get("message", "")):
+                        try:
+                            start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                            minutes_until = (start_dt - datetime.now(timezone.utc)).total_seconds() / 60
+                            if 0 < minutes_until < 15:
+                                messages.append(ProactiveMessage(
+                                    trigger_id="meeting_prep",
+                                    priority=Priority.IMPORTANT,
+                                    title="Meeting Soon",
+                                    body=f"Meeting '{title}' in {int(minutes_until)} minutes. Want a quick briefing on related context?",
+                                    voice_text=f"You have '{title}' coming up in {int(minutes_until)} minutes. Want me to prep a quick briefing?",
+                                    action="Brief me",
+                                    action_payload={"event": ev},
+                                ))
+                        except (ValueError, TypeError):
+                            pass
+            except Exception as e:
+                logger.debug("Meeting prep check failed: %s", e)
+
+        # --- LLM-based evaluation (additive, runs last) ---
+        await self._evaluate_with_llm(frames, messages)
+
         # --- Deliver Messages ---
         for msg in sorted(messages, key=lambda m: m.priority.value, reverse=True):
             if self._can_fire(msg.trigger_id):
                 await self._deliver(msg)
                 self._record_fire(msg.trigger_id)
+
+    async def _evaluate_with_llm(self, frames: list, existing_triggers: list[ProactiveMessage]):
+        """Ask the LLM whether FERAL should proactively say something.
+
+        Only called when an LLM client is configured and enough time has
+        elapsed since the last LLM evaluation (60s cooldown).  Results are
+        appended to *existing_triggers* — they don't replace rule-based ones.
+        """
+        if not self._llm:
+            return
+
+        now = time.time()
+        if now - self._last_llm_eval < 60:
+            return
+        self._last_llm_eval = now
+
+        frame_summaries = []
+        for frame in frames[:3]:
+            frame_summaries.append(frame.to_system_context())
+
+        recent_trigger_ids = [m.trigger_id for m in existing_triggers[:5]]
+
+        prompt = (
+            "You are FERAL's proactive intelligence layer. Given the current "
+            "perception context and recent rule-based triggers, decide if FERAL "
+            "should proactively say something ADDITIONAL.\n\n"
+            f"Perception frames:\n{chr(10).join(frame_summaries) or 'No sensor data.'}\n\n"
+            f"Already-triggered rules: {recent_trigger_ids or 'none'}\n\n"
+            "If you think FERAL should speak up, return ONLY valid JSON:\n"
+            '{"trigger_id": "llm_<topic>", "priority": "SUGGESTION"|"IMPORTANT", '
+            '"title": "...", "body": "...", "action": "..."}\n\n'
+            "If nothing useful to add, return exactly: null"
+        )
+
+        try:
+            response = await self._llm.chat(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=300,
+            )
+            text = ""
+            if isinstance(response, dict):
+                text = response.get("content", "") or response.get("text", "")
+            elif isinstance(response, str):
+                text = response
+            else:
+                text = str(response)
+
+            text = text.strip()
+            if not text or text == "null":
+                return
+
+            data = json.loads(text)
+            if not isinstance(data, dict) or "trigger_id" not in data:
+                return
+
+            priority_str = data.get("priority", "SUGGESTION").upper()
+            priority = Priority[priority_str] if priority_str in Priority.__members__ else Priority.SUGGESTION
+
+            existing_triggers.append(ProactiveMessage(
+                trigger_id=data["trigger_id"],
+                priority=priority,
+                title=data.get("title", "FERAL Insight"),
+                body=data.get("body", ""),
+                voice_text=data.get("body", ""),
+                action=data.get("action", ""),
+            ))
+            logger.info("LLM proactive trigger: %s", data["trigger_id"])
+
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.debug("LLM eval returned non-JSON: %s", e)
+        except Exception as e:
+            logger.warning("LLM proactive evaluation failed: %s", e)
 
     async def _build_morning_briefing(self) -> ProactiveMessage | None:
         """Build a personalized morning briefing from memory and health data."""

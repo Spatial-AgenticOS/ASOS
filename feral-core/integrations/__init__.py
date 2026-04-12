@@ -3,3 +3,7 @@ from integrations.spotify import SpotifyIntegration
 from integrations.home_assistant import HomeAssistantIntegration
 from integrations.notion import NotionIntegration
 from integrations.webhook_receiver import WebhookReceiver, EventBus
+from integrations.health_platforms import WhoopClient, OuraClient, HealthAggregator
+from integrations.calendar import CalendarIntegration
+from integrations.email import EmailIntegration
+from integrations.messaging import MessagingHub

@@ -63,6 +63,7 @@ from api.routes.mcp import router as mcp_router
 from api.routes.channels import router as channels_router
 from api.routes.conversations import router as conversations_router
 from api.routes.devices import router as devices_router
+from api.routes.timeline import router as timeline_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -127,6 +128,7 @@ app.include_router(mcp_router)
 app.include_router(channels_router)
 app.include_router(conversations_router)
 app.include_router(devices_router)
+app.include_router(timeline_router)
 
 
 # ─────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Settings, Cpu, ListChecks, Sun, Moon } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Settings, Cpu, ListChecks, Clock, Sun, Moon } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import TheOrb from './TheOrb';
 
@@ -8,6 +8,7 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/chat', icon: MessageSquare, label: 'Chat' },
   { to: '/taskflows', icon: ListChecks, label: 'Flows' },
+  { to: '/timeline', icon: Clock, label: 'Timeline' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 

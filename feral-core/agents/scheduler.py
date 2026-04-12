@@ -6,16 +6,20 @@ SQLite-backed job scheduler for reminders, health checks, data sync, and proacti
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Callable, Optional
+from uuid import uuid4
 
 from config.loader import feral_data_home
+
+logger = logging.getLogger("feral.scheduler")
 
 
 class JobType(str, Enum):
@@ -43,6 +47,7 @@ class ScheduledJob:
     next_run: float
     enabled: bool
     run_count: int
+    recurring: bool = True
 
 
 def _default_db_path() -> str:
@@ -171,10 +176,15 @@ class CronService:
                     last_run REAL,
                     next_run REAL NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
-                    run_count INTEGER NOT NULL DEFAULT 0
+                    run_count INTEGER NOT NULL DEFAULT 0,
+                    recurring INTEGER NOT NULL DEFAULT 1
                 )
                 """
             )
+            try:
+                conn.execute("ALTER TABLE scheduled_jobs ADD COLUMN recurring INTEGER NOT NULL DEFAULT 1")
+            except sqlite3.OperationalError:
+                pass
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sched_next ON scheduled_jobs (next_run)"
             )
@@ -204,6 +214,10 @@ class CronService:
     @staticmethod
     def _row_to_job(row: sqlite3.Row) -> ScheduledJob:
         payload = json.loads(row["payload"] or "{}")
+        try:
+            recurring = bool(row["recurring"])
+        except (IndexError, KeyError):
+            recurring = True
         return ScheduledJob(
             id=row["id"],
             job_type=JobType(row["job_type"]),
@@ -216,6 +230,7 @@ class CronService:
             next_run=row["next_run"],
             enabled=bool(row["enabled"]),
             run_count=row["run_count"],
+            recurring=recurring,
         )
 
     def create_job(
@@ -225,6 +240,7 @@ class CronService:
         description: str,
         payload: dict[str, Any],
         session_id: str,
+        recurring: bool = True,
     ) -> ScheduledJob:
         if isinstance(job_type, str):
             job_type = JobType(job_type)
@@ -237,8 +253,8 @@ class CronService:
                 """
                 INSERT INTO scheduled_jobs
                 (job_type, cron_expr, description, payload, session_id,
-                 created_at, last_run, next_run, enabled, run_count)
-                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 1, 0)
+                 created_at, last_run, next_run, enabled, run_count, recurring)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 1, 0, ?)
                 """,
                 (
                     job_type.value,
@@ -248,6 +264,7 @@ class CronService:
                     session_id,
                     now,
                     nxt,
+                    int(recurring),
                 ),
             )
             jid = cur.lastrowid
@@ -304,16 +321,33 @@ class CronService:
             ).fetchone()
             if row is None:
                 return
-            cron = row["cron_expr"]
-            nxt = CronService._compute_next_run(cron, now)
-            conn.execute(
-                """
-                UPDATE scheduled_jobs
-                SET last_run = ?, next_run = ?, run_count = run_count + 1
-                WHERE id = ?
-                """,
-                (now, nxt, job_id),
-            )
+
+            try:
+                is_recurring = bool(row["recurring"])
+            except (IndexError, KeyError):
+                is_recurring = True
+
+            if is_recurring:
+                cron = row["cron_expr"]
+                nxt = CronService._compute_next_run(cron, now)
+                conn.execute(
+                    """
+                    UPDATE scheduled_jobs
+                    SET last_run = ?, next_run = ?, run_count = run_count + 1
+                    WHERE id = ?
+                    """,
+                    (now, nxt, job_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE scheduled_jobs
+                    SET last_run = ?, run_count = run_count + 1, enabled = 0
+                    WHERE id = ?
+                    """,
+                    (now, job_id),
+                )
+                logger.info(f"Non-recurring job {job_id} completed and disabled")
             conn.commit()
 
     def pause_job(self, job_id: int) -> bool:
@@ -386,6 +420,189 @@ class CronService:
             }
             for r in rows
         ]
+
+    # ─── Natural Language Automations ───
+
+    _NL_PATTERNS: list[tuple[str, str]] = [
+        (r"every\s+morning", "daily 07:00"),
+        (r"every\s+evening", "daily 19:00"),
+        (r"every\s+night", "daily 22:00"),
+        (r"every\s+afternoon", "daily 14:00"),
+        (r"every\s+day\s+at\s+(\d{1,2})\s*(am|pm)", "_daily_ampm"),
+        (r"every\s+day\s+at\s+(\d{1,2}):(\d{2})\s*(am|pm)?", "_daily_hhmm"),
+        (r"every\s+(\d+)\s*h(?:ours?)?", "_every_hours"),
+        (r"every\s+(\d+)\s*m(?:in(?:ute)?s?)?", "_every_minutes"),
+        (r"every\s+hour", "every 1h"),
+        (r"weekly\s+(?:on\s+)?(\w+)(?:\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?", "_weekly"),
+        (r"daily\s+(\d{1,2}):(\d{2})", "_daily_hhmm_bare"),
+    ]
+
+    @staticmethod
+    def _resolve_ampm(hour: int, ampm: Optional[str]) -> int:
+        if ampm is None:
+            return hour % 24
+        ampm = ampm.lower()
+        if ampm == "pm" and hour != 12:
+            return (hour + 12) % 24
+        if ampm == "am" and hour == 12:
+            return 0
+        return hour % 24
+
+    @classmethod
+    def _parse_nl_to_cron(cls, text: str) -> Optional[str]:
+        """Try regex-based natural language → cron_expr conversion."""
+        t = text.strip().lower()
+
+        for pattern, action in cls._NL_PATTERNS:
+            m = re.search(pattern, t, re.I)
+            if not m:
+                continue
+
+            if action == "_daily_ampm":
+                hh = cls._resolve_ampm(int(m.group(1)), m.group(2))
+                return f"daily {hh:02d}:00"
+
+            if action == "_daily_hhmm":
+                hh = int(m.group(1))
+                mm = int(m.group(2))
+                ampm = m.group(3) if m.lastindex and m.lastindex >= 3 else None
+                hh = cls._resolve_ampm(hh, ampm)
+                return f"daily {hh:02d}:{mm:02d}"
+
+            if action == "_daily_hhmm_bare":
+                return f"daily {int(m.group(1)):02d}:{int(m.group(2)):02d}"
+
+            if action == "_every_hours":
+                return f"every {m.group(1)}h"
+
+            if action == "_every_minutes":
+                return f"every {m.group(1)}m"
+
+            if action == "_weekly":
+                day_map = {
+                    "mon": "1", "monday": "1", "tue": "2", "tuesday": "2",
+                    "wed": "3", "wednesday": "3", "thu": "4", "thursday": "4",
+                    "fri": "5", "friday": "5", "sat": "6", "saturday": "6",
+                    "sun": "0", "sunday": "0",
+                }
+                day_name = m.group(1).lower()
+                dow = day_map.get(day_name, "1")
+                hour_raw = int(m.group(2)) if m.group(2) else 9
+                ampm = m.group(4) if m.lastindex and m.lastindex >= 4 else None
+                hh = cls._resolve_ampm(hour_raw, ampm)
+                mm = int(m.group(3)) if m.group(3) else 0
+                return f"{mm} {hh} * * {dow}"
+
+            return action
+
+        return None
+
+    def create_from_natural_language(
+        self,
+        text: str,
+        session_id: str,
+        llm: Optional[Any] = None,
+    ) -> ScheduledJob:
+        """
+        Parse a natural-language automation request and create a ScheduledJob.
+        Uses LLM if provided, otherwise falls back to regex.
+        """
+        cron_expr: Optional[str] = None
+        description = text
+        action_text = text
+
+        if llm is not None:
+            try:
+                cron_expr, description, action_text = self._parse_with_llm(text, llm)
+            except Exception as exc:
+                logger.warning(f"LLM parsing failed, falling back to regex: {exc}")
+                cron_expr = None
+
+        if cron_expr is None:
+            cron_expr = self._parse_nl_to_cron(text)
+
+        if cron_expr is None:
+            logger.warning(f"Could not parse schedule from: {text!r} — defaulting to every 1h")
+            cron_expr = "every 1h"
+
+        payload = {"action_text": action_text, "source": "natural_language", "original_text": text}
+        job = self.create_job(
+            job_type=JobType.CUSTOM,
+            cron_expr=cron_expr,
+            description=description,
+            payload=payload,
+            session_id=session_id,
+            recurring=True,
+        )
+        logger.info(f"NL automation created: id={job.id} cron={cron_expr!r} desc={description!r}")
+        return job
+
+    @staticmethod
+    def _parse_with_llm(text: str, llm: Any) -> tuple[str, str, str]:
+        """
+        Send text to the LLM and extract structured schedule info.
+        Expects llm to have a synchronous `complete(prompt)` or async `chat(...)`.
+        Returns (cron_expr, description, action_text).
+        """
+        prompt = (
+            "Extract scheduling info from the following user request. "
+            "Return ONLY valid JSON with keys: cron_expr, description, action_text.\n"
+            "cron_expr should be one of: 'every Nm', 'every Nh', 'daily HH:MM', "
+            "or a 5-field cron expression.\n"
+            "description is a short human summary.\n"
+            "action_text is the command/action to perform.\n\n"
+            f"User request: \"{text}\"\n\nJSON:"
+        )
+
+        response_text: str = ""
+        if hasattr(llm, "complete"):
+            response_text = str(llm.complete(prompt))
+        elif hasattr(llm, "complete_sync"):
+            response_text = str(llm.complete_sync(prompt))
+        else:
+            raise ValueError("LLM object has no suitable synchronous completion method")
+
+        cleaned = response_text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```\w*\n?", "", cleaned)
+            cleaned = re.sub(r"\n?```$", "", cleaned)
+
+        data = json.loads(cleaned)
+        return (
+            data.get("cron_expr", "every 1h"),
+            data.get("description", text),
+            data.get("action_text", text),
+        )
+
+    def list_automations(self, session_id: Optional[str] = None) -> list[ScheduledJob]:
+        """Return user-created automations (CUSTOM jobs), optionally filtered by session."""
+        with self._lock:
+            conn = self._conn
+            if session_id is None:
+                rows = conn.execute(
+                    "SELECT * FROM scheduled_jobs WHERE job_type = ? ORDER BY id ASC",
+                    (JobType.CUSTOM.value,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM scheduled_jobs WHERE job_type = ? AND session_id = ? ORDER BY id ASC",
+                    (JobType.CUSTOM.value, session_id),
+                ).fetchall()
+        return [self._row_to_job(r) for r in rows]
+
+    def delete_automation(self, job_id: int) -> bool:
+        """Remove a user automation by ID (only deletes CUSTOM jobs)."""
+        with self._lock:
+            conn = self._conn
+            cur = conn.execute(
+                "DELETE FROM scheduled_jobs WHERE id = ? AND job_type = ?",
+                (job_id, JobType.CUSTOM.value),
+            )
+            conn.commit()
+            deleted = cur.rowcount > 0
+        if deleted:
+            logger.info(f"Deleted automation job_id={job_id}")
+        return deleted
 
     def _loop(self) -> None:
         while not self._stop.wait(30.0):

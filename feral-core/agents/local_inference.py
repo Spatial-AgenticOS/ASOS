@@ -1,10 +1,11 @@
 """
-FERAL Local LLM Inference — MLX + llama.cpp
-==============================================
+FERAL Local LLM Inference — MLX + llama.cpp + Ollama
+======================================================
 Embedded inference that runs in-process — no external server.
 
 - MLXEngine: Apple Silicon Macs via mlx-lm (Metal-accelerated)
 - LlamaCppEngine: Cross-platform CPU/CUDA via llama-cpp-python
+- OllamaEngine: Delegates to a local Ollama daemon
 
 Model management in ~/.feral/models/ with auto-download from HuggingFace.
 """
@@ -15,16 +16,25 @@ import json
 import logging
 import os
 import platform
+import shutil
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, AsyncGenerator
+
+import httpx
 
 from config.loader import feral_data_home
 
 logger = logging.getLogger("feral.local_inference")
 
 MODELS_DIR = feral_data_home() / "models"
+
+RECOMMENDED_MODELS: dict[str, str] = {
+    "mlx-default": "mlx-community/Qwen2.5-7B-Instruct-4bit",
+    "gguf-default": "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
+    "ollama-default": "llama3.2:3b",
+}
 
 
 class LocalLLMEngine(ABC):
@@ -313,10 +323,198 @@ class LlamaCppEngine(LocalLLMEngine):
         logger.info(f"llama.cpp model unloaded: {self.model_id}")
 
 
+class OllamaEngine(LocalLLMEngine):
+    """Delegates inference to a local Ollama daemon."""
+
+    def __init__(
+        self,
+        model_id: str = "llama3.2:3b",
+        base_url: str | None = None,
+    ):
+        super().__init__(model_id)
+        self.base_url = (
+            base_url
+            or os.getenv("FERAL_OLLAMA_URL", "").strip()
+            or "http://localhost:11434"
+        ).rstrip("/")
+
+    async def load_model(self):
+        if not await self.health_check():
+            raise RuntimeError(
+                f"Ollama is not reachable at {self.base_url}. "
+                "Start it with `ollama serve` or set FERAL_OLLAMA_URL."
+            )
+
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=10) as client:
+            resp = await client.get("/api/tags")
+            resp.raise_for_status()
+            models = resp.json().get("models", [])
+            names = [m.get("name", "") for m in models]
+
+            if not any(self.model_id in n for n in names):
+                logger.info("Pulling Ollama model %s (this may take a while)…", self.model_id)
+                await self._pull_model()
+
+        self.loaded = True
+        logger.info("Ollama engine ready: %s @ %s", self.model_id, self.base_url)
+
+    async def _pull_model(self):
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=600) as client:
+            async with client.stream(
+                "POST", "/api/pull", json={"name": self.model_id, "stream": True},
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        progress = json.loads(line)
+                        status = progress.get("status", "")
+                        if "pulling" in status or "downloading" in status:
+                            logger.debug("Ollama pull: %s", status)
+                    except json.JSONDecodeError:
+                        pass
+
+    async def generate(
+        self, prompt: str, max_tokens: int = 512, temperature: float = 0.7,
+    ) -> str:
+        if not self.loaded:
+            await self.load_model()
+
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=120) as client:
+            resp = await client.post("/api/generate", json={
+                "model": self.model_id,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"num_predict": max_tokens, "temperature": temperature},
+            })
+            resp.raise_for_status()
+            return resp.json().get("response", "")
+
+    async def generate_stream(
+        self, prompt: str, max_tokens: int = 512, temperature: float = 0.7,
+    ) -> AsyncGenerator[str, None]:
+        if not self.loaded:
+            await self.load_model()
+
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=120) as client:
+            async with client.stream("POST", "/api/generate", json={
+                "model": self.model_id,
+                "prompt": prompt,
+                "stream": True,
+                "options": {"num_predict": max_tokens, "temperature": temperature},
+            }) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                        token = chunk.get("response", "")
+                        if token:
+                            yield token
+                        if chunk.get("done"):
+                            break
+                    except json.JSONDecodeError:
+                        continue
+
+    async def chat(
+        self,
+        messages: list[dict],
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+    ) -> str:
+        if not self.loaded:
+            await self.load_model()
+
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=120) as client:
+            resp = await client.post("/api/chat", json={
+                "model": self.model_id,
+                "messages": messages,
+                "stream": False,
+                "options": {"num_predict": max_tokens, "temperature": temperature},
+            })
+            resp.raise_for_status()
+            return resp.json().get("message", {}).get("content", "")
+
+    async def unload(self):
+        self.loaded = False
+        logger.info("Ollama engine unloaded (daemon still running): %s", self.model_id)
+
+    async def health_check(self) -> bool:
+        try:
+            async with httpx.AsyncClient(base_url=self.base_url, timeout=5) as client:
+                resp = await client.get("/api/tags")
+                return resp.status_code == 200
+        except Exception:
+            return False
+
+
+async def auto_setup_offline(
+    model_id: str | None = None,
+) -> OllamaEngine:
+    """Detect or bootstrap Ollama, pull the recommended model, return an engine.
+
+    Checks:
+      1. Is `ollama` on PATH (or at known install locations)?
+      2. Is the daemon already running?  If not, try to start it.
+      3. Pull the recommended model if not present.
+    """
+    target_model = model_id or RECOMMENDED_MODELS.get("ollama-default", "llama3.2:3b")
+
+    ollama_bin = shutil.which("ollama")
+    if not ollama_bin:
+        for candidate in (
+            "/usr/local/bin/ollama",
+            Path.home() / ".ollama" / "bin" / "ollama",
+            "/opt/homebrew/bin/ollama",
+        ):
+            if Path(candidate).is_file():
+                ollama_bin = str(candidate)
+                break
+
+    if not ollama_bin:
+        logger.warning(
+            "Ollama binary not found. Install from https://ollama.com — "
+            "then run `ollama serve` to start the daemon."
+        )
+        raise RuntimeError(
+            "Ollama is not installed. Install it from https://ollama.com "
+            "and run `ollama serve` to enable offline inference."
+        )
+
+    engine = OllamaEngine(model_id=target_model)
+
+    if not await engine.health_check():
+        logger.info("Ollama not running — attempting to start via `%s serve`…", ollama_bin)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                ollama_bin, "serve",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            for _ in range(15):
+                await asyncio.sleep(1)
+                if await engine.health_check():
+                    logger.info("Ollama daemon started (pid=%d)", proc.pid)
+                    break
+            else:
+                logger.warning(
+                    "Started Ollama but it didn't become healthy within 15 s. "
+                    "You may need to start it manually: `ollama serve`"
+                )
+        except Exception as e:
+            logger.error("Failed to start Ollama daemon: %s", e)
+            raise RuntimeError(f"Could not auto-start Ollama: {e}") from e
+
+    await engine.load_model()
+    return engine
+
+
 def create_local_engine(model_spec: str = "") -> LocalLLMEngine:
     """
     Factory: create the right engine based on spec and platform.
-    Spec format: "mlx:<model_id>" or "gguf:<model_id>" or just "<model_id>"
+    Spec format: "mlx:<model_id>" | "gguf:<model_id>" | "ollama:<model_id>" | "<model_id>"
     """
     if not model_spec:
         model_spec = os.getenv("FERAL_LOCAL_MODEL", "")
@@ -325,11 +523,13 @@ def create_local_engine(model_spec: str = "") -> LocalLLMEngine:
         return MLXEngine(model_spec[4:])
     elif model_spec.startswith("gguf:"):
         return LlamaCppEngine(model_spec[5:])
+    elif model_spec.startswith("ollama:"):
+        return OllamaEngine(model_spec[7:])
 
     # Auto-detect: prefer MLX on Apple Silicon
     if platform.system() == "Darwin" and platform.machine() == "arm64":
-        default = model_spec or "mlx-community/Qwen2.5-7B-Instruct-4bit"
+        default = model_spec or RECOMMENDED_MODELS["mlx-default"]
         return MLXEngine(default)
     else:
-        default = model_spec or "TheBloke/Mistral-7B-Instruct-v0.2-GGUF"
+        default = model_spec or RECOMMENDED_MODELS["gguf-default"]
         return LlamaCppEngine(default)

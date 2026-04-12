@@ -10,14 +10,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Optional, TYPE_CHECKING
 from uuid import uuid4
+
+from security.exec_approvals import ApprovalManager
 
 if TYPE_CHECKING:
     from agents.orchestrator import Orchestrator
 
 logger = logging.getLogger("feral.orchestrator.tool_runner")
+
+VALID_AUTONOMY_MODES = ("strict", "hybrid", "loose")
+READ_ONLY_PATTERNS = ("search", "get", "list", "query", "read", "current", "status", "forecast")
 
 
 # ─────────────────────────────────────────────
@@ -33,11 +39,17 @@ class SafetyLevel:
 class ToolRunner:
     """Encapsulates all tool-call execution, safety gating, and anti-loop logic."""
 
-    def __init__(self, orchestrator: "Orchestrator"):
+    def __init__(self, orchestrator: "Orchestrator", autonomy_mode: str = "hybrid"):
         self._orch = orchestrator
         self._tool_repeat_state: dict[str, dict] = {}
         self._active_subagent_tasks = 0
         self._daemon_session_map: dict[str, str] = {}
+        self._pending_approvals: dict[str, dict] = {}
+        self._approval_mgr = ApprovalManager()
+
+        raw_mode = os.environ.get("FERAL_AUTONOMY", "").strip().lower() or autonomy_mode
+        self._autonomy_mode = raw_mode if raw_mode in VALID_AUTONOMY_MODES else "hybrid"
+        logger.info(f"ToolRunner autonomy_mode={self._autonomy_mode}")
 
     # ─────────────────────────────────────────────
     # Safety: Graduated Permission System
@@ -75,10 +87,10 @@ class ToolRunner:
 
         return SafetyLevel.AUTO
 
-    def enforce_safety(self, tool_name: str, args: dict) -> Optional[dict]:
+    def enforce_safety(self, tool_name: str, args: dict, session_id: str = "") -> Optional[dict]:
         """
-        Returns a denial dict if the action should be blocked.
-        Returns None if the action is allowed to proceed.
+        Returns a denial dict if the action should be blocked, a pending-approval
+        dict if the user must confirm, or None if the action is allowed.
         """
         level = self.classify_safety(tool_name, args)
 
@@ -90,11 +102,75 @@ class ToolRunner:
                 "safety_level": "deny",
             }
 
-        if level == SafetyLevel.CONFIRM:
-            logger.info(f"Safety CONFIRM: {tool_name} — auto-approved (production would ask user)")
+        name_lower = tool_name.lower()
+        is_read_only = any(p in name_lower for p in READ_ONLY_PATTERNS)
+
+        needs_approval = False
+        if self._autonomy_mode == "strict":
+            needs_approval = not is_read_only
+        elif self._autonomy_mode == "hybrid":
+            needs_approval = level == SafetyLevel.CONFIRM
+        # loose: nothing needs approval
+
+        if not needs_approval:
+            if self._autonomy_mode == "loose" and level == SafetyLevel.CONFIRM:
+                logger.info(f"Safety CONFIRM (loose mode auto-exec): {tool_name}")
             return None
 
-        return None  # AUTO — proceed
+        approved, reason = self._approval_mgr.check_approval(tool_name, session_id)
+        if approved:
+            logger.info(f"Standing approval for {tool_name}: {reason}")
+            return None
+
+        request_id = str(uuid4())
+        pending = {
+            "status": "pending_approval",
+            "tool_name": tool_name,
+            "args": args,
+            "request_id": request_id,
+            "session_id": session_id,
+            "safety_level": level,
+        }
+        self._pending_approvals[request_id] = pending
+        logger.info(f"Approval required ({self._autonomy_mode}): {tool_name} → request_id={request_id}")
+        return pending
+
+    # ─── Approval lifecycle ───
+
+    def approve_pending(self, request_id: str) -> Optional[dict]:
+        """Approve a pending request; returns tool_name + args for re-execution."""
+        pending = self._pending_approvals.pop(request_id, None)
+        if pending is None:
+            return None
+        logger.info(f"Approved pending request {request_id} for {pending['tool_name']}")
+        return {"tool_name": pending["tool_name"], "args": pending["args"]}
+
+    def deny_pending(self, request_id: str) -> Optional[dict]:
+        """Deny and remove a pending request."""
+        pending = self._pending_approvals.pop(request_id, None)
+        if pending is None:
+            return None
+        logger.info(f"Denied pending request {request_id} for {pending['tool_name']}")
+        return {
+            "status": "PermissionOutcome::Deny",
+            "tool_name": pending["tool_name"],
+            "request_id": request_id,
+            "note": "User denied this action.",
+        }
+
+    def set_autonomy_mode(self, mode: str) -> str:
+        """Runtime toggle for autonomy mode. Returns the effective mode."""
+        mode = mode.strip().lower()
+        if mode not in VALID_AUTONOMY_MODES:
+            logger.warning(f"Invalid autonomy mode '{mode}', keeping {self._autonomy_mode}")
+            return self._autonomy_mode
+        self._autonomy_mode = mode
+        logger.info(f"Autonomy mode changed to: {mode}")
+        return self._autonomy_mode
+
+    @property
+    def autonomy_mode(self) -> str:
+        return self._autonomy_mode
 
     # ─────────────────────────────────────────────
     # Anti-loop Detection
@@ -219,9 +295,9 @@ class ToolRunner:
             anti_loop_note = self.anti_loop_guidance(tool_name, streak)
             logger.warning(anti_loop_note)
 
-        denial = self.enforce_safety(tool_name, args)
+        denial = self.enforce_safety(tool_name, args, session_id=session_id)
         if denial:
-            logger.warning(f"Safety denial: {tool_name}")
+            logger.warning(f"Safety gate ({denial.get('status')}): {tool_name}")
             return denial
 
         if skill_id.startswith("daemon_"):

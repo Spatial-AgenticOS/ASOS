@@ -43,6 +43,10 @@ from integrations.spotify import SpotifyIntegration
 from integrations.home_assistant import HomeAssistantIntegration
 from integrations.notion import NotionIntegration
 from integrations.webhook_receiver import WebhookReceiver, EventBus
+from integrations.calendar import CalendarIntegration
+from integrations.email import EmailIntegration
+from integrations.messaging import MessagingHub
+from integrations.health_platforms import HealthAggregator, WhoopClient, OuraClient
 from skills.marketplace import MarketplaceClient
 from gateway.protocol import MethodRegistry, GatewaySession, register_core_methods
 from hardware.mesh import HardwareMesh
@@ -116,6 +120,13 @@ class BrainState:
         self.spotify: Optional[SpotifyIntegration] = None
         self.home_assistant: Optional[HomeAssistantIntegration] = None
         self.notion: Optional[NotionIntegration] = None
+        self.calendar: Optional[CalendarIntegration] = None
+        self.email: Optional[EmailIntegration] = None
+        self.messaging: Optional[MessagingHub] = None
+        self.health_aggregator: Optional[HealthAggregator] = None
+        self.digital_twin = None
+        self.location_engine = None
+        self.push_channel = None
         self.event_bus: Optional[EventBus] = None
         self.webhook_receiver: Optional[WebhookReceiver] = None
         self.marketplace: Optional[MarketplaceClient] = None
@@ -183,6 +194,30 @@ class BrainState:
         self.spotify = SpotifyIntegration(oauth_manager=self.oauth)
         self.home_assistant = HomeAssistantIntegration(oauth_manager=self.oauth)
         self.notion = NotionIntegration(oauth_manager=self.oauth)
+        self.calendar = CalendarIntegration(oauth_manager=self.oauth)
+        self.email = EmailIntegration(oauth_manager=self.oauth)
+        self.messaging = MessagingHub()
+        try:
+            whoop = WhoopClient(oauth_manager=self.oauth)
+            oura = OuraClient()
+            self.health_aggregator = HealthAggregator(whoop=whoop, oura=oura)
+        except Exception as e:
+            logger.debug(f"Health aggregator init skipped: {e}")
+        try:
+            from perception.location import LocationEngine
+            self.location_engine = LocationEngine()
+        except Exception as e:
+            logger.debug(f"Location engine skipped: {e}")
+        try:
+            from channels.push import PushChannel
+            self.push_channel = PushChannel()
+        except Exception as e:
+            logger.debug(f"Push channel skipped: {e}")
+        try:
+            from agents.digital_twin import DigitalTwin
+            self.digital_twin = DigitalTwin(memory=self.memory, identity_loader=None, llm=_shared_llm)
+        except Exception as e:
+            logger.debug(f"Digital twin skipped: {e}")
         self.event_bus = EventBus()
         self.webhook_receiver = WebhookReceiver(event_bus=self.event_bus)
         self.marketplace = MarketplaceClient(skill_registry=self.skill_registry)
@@ -206,6 +241,14 @@ class BrainState:
             register_instance("smart_home_hue", self.home_assistant)
         if self.notion:
             register_instance("notion", self.notion)
+        if self.calendar:
+            register_instance("calendar", self.calendar)
+        if self.email:
+            register_instance("email", self.email)
+        if self.messaging and self.messaging.connected:
+            register_instance("messaging", self.messaging)
+        if self.health_aggregator:
+            register_instance("health_data", self.health_aggregator)
 
         try:
             self.taskflows = TaskFlowRuntime(memory_store=self.memory)
