@@ -1,5 +1,6 @@
 {
   "$schema": "https://mintlify.com/schema.json",
+  "theme": "mint",
   "name": "FERAL",
   "logo": {
     "dark": "/images/feral-banner.png",
