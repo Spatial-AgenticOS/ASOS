@@ -1,0 +1,232 @@
+---
+id: hardware
+title: Hardware Mesh Protocol
+sidebar_position: 9
+slug: /guides/hardware
+---
+
+# Hardware Mesh Protocol
+
+FERAL controls physical devices through the **Hardware Use Protocol (HUP)** — a WebSocket-based mesh that lets devices register, stream telemetry, and receive commands with no cloud roundtrip. Everything runs on the local network.
+
+## HUP Overview
+
+HUP is to hardware what MCP is to software tools. Devices connect to the Brain over WebSocket, announce their capabilities via a declarative manifest, and the agent can then invoke those capabilities as tools.
+
+```
+Device → WebSocket → Brain (HUP endpoint /v1/node)
+         ←commands←
+         →telemetry→
+```
+
+Key properties:
+- **Local-first**: all communication stays on the LAN.
+- **Declarative**: devices describe what they can do, not how.
+- **Bidirectional**: the Brain sends commands; devices push telemetry.
+- **Hot-pluggable**: devices can join and leave the mesh at any time.
+
+## Device Manifests
+
+Every HUP device registers with a JSON manifest that describes its identity, capabilities, and telemetry streams.
+
+```json
+{
+  "device_id": "wristband-001",
+  "name": "Theora Wristband",
+  "type": "wearable",
+  "firmware_version": "2.1.0",
+  "capabilities": [
+    {
+      "id": "heart_rate",
+      "type": "sensor",
+      "description": "Real-time heart rate in BPM",
+      "unit": "bpm",
+      "sample_rate_hz": 1
+    },
+    {
+      "id": "spo2",
+      "type": "sensor",
+      "description": "Blood oxygen saturation",
+      "unit": "percent",
+      "sample_rate_hz": 0.1
+    },
+    {
+      "id": "vibrate",
+      "type": "actuator",
+      "description": "Haptic vibration motor",
+      "params": [
+        {"name": "pattern", "type": "string", "enum": ["short", "long", "sos"]},
+        {"name": "intensity", "type": "number", "min": 0, "max": 100}
+      ]
+    }
+  ],
+  "telemetry": {
+    "interval_ms": 1000,
+    "streams": ["heart_rate", "spo2"]
+  }
+}
+```
+
+Once registered, the agent sees these as tools:
+
+```
+Available tools:
+  - wristband-001.heart_rate (sensor: read heart rate)
+  - wristband-001.spo2 (sensor: read blood oxygen)
+  - wristband-001.vibrate (actuator: trigger haptic vibration)
+```
+
+## Capability Types
+
+| Type | Direction | Examples |
+|:-----|:----------|:---------|
+| `sensor` | Device → Brain | Heart rate, temperature, motion, ambient light |
+| `actuator` | Brain → Device | Vibrate, LED color, lock/unlock, move servo |
+| `state` | Bidirectional | On/off toggle, mode selection, brightness level |
+| `stream` | Device → Brain (continuous) | Audio, video, raw IMU data |
+
+## Built-in Adapters
+
+### Wristband Adapter
+
+For BLE-connected health wristbands. Bridges BLE GATT characteristics to HUP.
+
+```python
+from feral_core.hardware import WristbandAdapter
+
+adapter = WristbandAdapter(
+    ble_address="AA:BB:CC:DD:EE:FF",
+    services={
+        "heart_rate": "0x180D",
+        "spo2": "0x1822",
+    },
+)
+await adapter.connect()
+await adapter.register_with_brain("http://localhost:9090")
+```
+
+### Smart Home Adapter
+
+Bridges Zigbee/Z-Wave/WiFi smart home devices via Home Assistant or direct local APIs.
+
+```yaml
+# ~/.feral/hardware/smart_home.yaml
+adapter: smart_home
+source: homeassistant
+ha_url: http://homeassistant.local:8123
+ha_token: $CREDENTIAL:ha_long_lived_token
+
+devices:
+  - entity_id: light.living_room
+    name: "Living Room Lights"
+    capabilities:
+      - id: toggle
+        type: state
+        states: ["on", "off"]
+      - id: brightness
+        type: state
+        range: [0, 255]
+      - id: color
+        type: state
+        format: hex
+```
+
+### Robot Arm Adapter
+
+Controls articulated robot arms via serial or network protocols.
+
+```yaml
+adapter: robot_arm
+protocol: serial
+port: /dev/ttyUSB0
+baud: 115200
+
+capabilities:
+  - id: move_joint
+    type: actuator
+    params:
+      - name: joint
+        type: integer
+        min: 1
+        max: 6
+      - name: angle
+        type: number
+        min: -180
+        max: 180
+      - name: speed
+        type: number
+        min: 0
+        max: 100
+  - id: gripper
+    type: actuator
+    params:
+      - name: action
+        type: string
+        enum: ["open", "close"]
+  - id: position
+    type: sensor
+    description: "Current joint angles"
+```
+
+## Direct Local Control
+
+HUP intentionally avoids cloud roundtrips. Commands go directly from the Brain to the device over the LAN. This gives:
+
+- **Low latency**: sub-10ms for local WebSocket commands.
+- **Privacy**: sensor data never leaves the home network.
+- **Reliability**: works without internet.
+
+The Brain can also run on the same device as the adapter (e.g., a Raspberry Pi with a BLE dongle), reducing the path to a local function call.
+
+## Telemetry Ingestion
+
+Devices push telemetry at their configured interval. The Brain routes it to:
+
+1. **Working memory** — latest values available to the LLM.
+2. **Execution log** — historical telemetry for trend analysis.
+3. **Proactive engine** — triggers alerts when thresholds are crossed.
+
+```json
+{
+  "type": "telemetry",
+  "device_id": "wristband-001",
+  "readings": [
+    {"capability": "heart_rate", "value": 72, "timestamp": 1718450400.0},
+    {"capability": "spo2", "value": 98, "timestamp": 1718450400.0}
+  ]
+}
+```
+
+## Writing a Custom Adapter
+
+Implement the `HUPAdapter` interface to connect any device:
+
+```python
+from feral_core.hardware import HUPAdapter, DeviceManifest
+
+class MyDeviceAdapter(HUPAdapter):
+    async def get_manifest(self) -> DeviceManifest:
+        return DeviceManifest(
+            device_id="my-device",
+            name="My Custom Device",
+            capabilities=[...],
+        )
+
+    async def execute(self, capability_id: str, params: dict) -> dict:
+        if capability_id == "toggle":
+            await self._send_command(params["state"])
+            return {"status": "ok"}
+
+    async def read_telemetry(self) -> list[dict]:
+        return [{"capability": "temperature", "value": self._read_temp()}]
+```
+
+## API Reference
+
+| Endpoint | Method | Description |
+|:---------|:-------|:------------|
+| `/v1/node` | WebSocket | HUP device connection endpoint |
+| `/api/devices` | GET | List connected devices and capabilities |
+| `/api/devices/{id}` | GET | Device details and recent telemetry |
+| `/api/devices/{id}/command` | POST | Send a command to a device |
+| `/api/devices/{id}/telemetry` | GET | Query historical telemetry |

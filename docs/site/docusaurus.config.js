@@ -67,6 +67,7 @@ const config = {
             items: [
               { label: 'Getting Started', to: '/getting-started' },
               { label: 'Architecture', to: '/architecture' },
+              { label: 'Deployment', to: '/deployment' },
               { label: 'Contributing', to: '/contributing' },
             ],
           },
@@ -83,6 +84,12 @@ const config = {
               { label: 'Writing Skills', to: '/guides/skills' },
               { label: 'Device Adapters', to: '/guides/devices' },
               { label: 'GenUI Components', to: '/guides/genui' },
+              { label: 'Security Model', to: '/guides/security' },
+              { label: 'Voice Pipeline', to: '/guides/voice' },
+              { label: 'Memory System', to: '/guides/memory' },
+              { label: 'Channels', to: '/guides/channels' },
+              { label: 'Autonomy Levels', to: '/guides/autonomy' },
+              { label: 'Hardware Mesh', to: '/guides/hardware' },
             ],
           },
           {

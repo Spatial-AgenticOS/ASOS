@@ -1,0 +1,176 @@
+---
+id: voice
+title: Voice Pipeline
+sidebar_position: 5
+slug: /guides/voice
+---
+
+# Voice Pipeline
+
+FERAL supports three voice paths optimized for different latency, cost, and quality tradeoffs. All paths share a common `VoiceRouter` that selects the best pipeline per session.
+
+## Voice Paths
+
+### OpenAI Realtime
+
+The lowest-latency option. Audio streams bidirectionally over a single WebSocket — no transcription step, no TTS step. The model hears your voice and speaks back directly.
+
+```yaml
+# ~/.feral/config.yaml
+voice:
+  mode: realtime
+  provider: openai
+  model: gpt-4o-realtime-preview
+  vad: server  # server-side voice activity detection
+```
+
+Latency: **~150ms** end-to-end. Best for conversational use where natural interruption matters.
+
+### Gemini Live
+
+Google's bidirectional streaming voice API. Similar architecture to OpenAI Realtime but uses Gemini models.
+
+```yaml
+voice:
+  mode: realtime
+  provider: gemini
+  model: gemini-2.0-flash-exp
+```
+
+Supports tool calling mid-stream — the model can pause speech, execute a tool, and resume with the result.
+
+### Whisper + Classic TTS
+
+The fallback pipeline that works with any LLM provider. Audio is transcribed locally, sent as text to the LLM, and the response is synthesized back to speech.
+
+```
+mic → Whisper (local) → text → LLM → text → TTS → speaker
+```
+
+```yaml
+voice:
+  mode: whisper
+  whisper_model: base.en    # tiny, base, small, medium, large
+  tts_provider: openai      # openai, elevenlabs, piper (local)
+  tts_voice: alloy
+```
+
+Latency: **400–800ms** depending on Whisper model size and LLM speed. Works offline with Ollama + Piper TTS.
+
+## Wake Word Detection
+
+FERAL uses [openwakeword](https://github.com/dscripka/openwakeword) for always-on, local wake word detection. No audio leaves the device until the wake word fires.
+
+```yaml
+voice:
+  wake_word:
+    enabled: true
+    model: hey_feral       # built-in model
+    threshold: 0.7         # detection confidence (0.0–1.0)
+    cooldown_seconds: 2    # ignore repeated triggers
+```
+
+Custom wake words can be trained with ~50 positive samples:
+
+```bash
+feral voice train-wakeword \
+  --name "hey jarvis" \
+  --positive-dir ./samples/positive \
+  --negative-dir ./samples/negative \
+  --output ~/.feral/wakewords/hey_jarvis.onnx
+```
+
+The wake word detector runs in a dedicated thread with ~2% CPU overhead on modern hardware.
+
+## VoiceRouter
+
+The `VoiceRouter` decides which pipeline handles each session based on configuration, provider availability, and client capabilities.
+
+```python
+from feral_core.voice import VoiceRouter
+
+router = VoiceRouter(config)
+
+# Returns the best available pipeline for this session
+pipeline = await router.resolve(
+    preferred="realtime",
+    client_supports_websocket=True,
+    provider_available={"openai": True, "gemini": False},
+)
+# pipeline == OpenAIRealtimePipeline(...)
+```
+
+Fallback chain: `realtime → gemini_live → whisper`. If the preferred provider is down, the router degrades gracefully.
+
+### Router Configuration
+
+```yaml
+voice:
+  router:
+    prefer: realtime
+    fallback_chain:
+      - openai_realtime
+      - gemini_live
+      - whisper
+    timeout_ms: 5000        # max time to establish a voice session
+    auto_switch: true        # switch mid-session if a provider fails
+```
+
+## Sub-200ms Latency Architecture
+
+Achieving low latency requires minimizing hops between the user's mic and the model's audio output.
+
+**Realtime path (OpenAI/Gemini):**
+
+```
+mic → WebSocket → provider (model + TTS in one step) → WebSocket → speaker
+```
+
+One network hop. The model generates audio tokens directly — no intermediate text.
+
+**Optimizations applied:**
+
+| Technique | Impact |
+|:----------|:-------|
+| Opus codec at 24kHz | 3× smaller frames vs raw PCM |
+| Server-side VAD | No extra roundtrip for silence detection |
+| Streaming playback | Speaker starts before full response arrives |
+| Connection keep-alive | Eliminates WebSocket setup on subsequent turns |
+| Edge routing | Provider SDKs route to nearest datacenter |
+
+**Whisper path optimizations:**
+
+| Technique | Impact |
+|:----------|:-------|
+| `base.en` model on GPU | ~100ms transcription for typical utterance |
+| Streaming TTS | First audio chunk plays while rest generates |
+| Sentence-level chunking | TTS starts per-sentence, not per-response |
+| Local inference (Piper) | Eliminates TTS network roundtrip entirely |
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|:---------|:-------|:------------|
+| `/v1/session` | WebSocket | Full duplex voice + text session |
+| `/api/voice/config` | GET | Current voice pipeline configuration |
+| `/api/voice/config` | PATCH | Update voice settings at runtime |
+| `/api/voice/wakeword/status` | GET | Wake word detector status and metrics |
+
+## Client Integration
+
+The web UI connects via WebSocket and negotiates the voice path during the handshake:
+
+```javascript
+const ws = new WebSocket("ws://localhost:9090/v1/session");
+ws.send(JSON.stringify({
+  type: "session_init",
+  voice: {
+    enabled: true,
+    preferred_mode: "realtime",
+    sample_rate: 24000,
+    codec: "opus",
+  },
+}));
+```
+
+The server responds with the resolved pipeline and codec parameters. Audio frames flow as binary WebSocket messages from that point.

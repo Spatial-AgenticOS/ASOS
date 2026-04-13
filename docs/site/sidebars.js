@@ -3,6 +3,7 @@ const sidebars = {
   docs: [
     'getting-started',
     'architecture',
+    'deployment',
     {
       type: 'category',
       label: 'SDKs',
@@ -11,7 +12,17 @@ const sidebars = {
     {
       type: 'category',
       label: 'Guides',
-      items: ['guides/skills', 'guides/devices', 'guides/genui'],
+      items: [
+        'guides/skills',
+        'guides/devices',
+        'guides/genui',
+        'guides/security',
+        'guides/voice',
+        'guides/memory',
+        'guides/channels',
+        'guides/autonomy',
+        'guides/hardware',
+      ],
     },
     'contributing',
   ],

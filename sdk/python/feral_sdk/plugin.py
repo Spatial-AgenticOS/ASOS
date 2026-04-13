@@ -57,7 +57,13 @@ class FeralPlugin:
         return dict(self._tools)
 
     def to_manifest(self) -> dict:
-        """Generate a FERAL skill manifest from this plugin's tools."""
+        """Generate a FERAL skill manifest from this plugin's tools.
+
+        Endpoints use ``internal://`` URLs with method ``PYTHON`` so the
+        Brain's SkillExecutor resolves them through the registered
+        BaseSkill / ``register_instance`` path rather than attempting an
+        HTTP request to a non-routable ``plugin://`` URL.
+        """
         endpoints = []
         for tool_id, info in self._tools.items():
             meta = info["meta"]
@@ -71,8 +77,8 @@ class FeralPlugin:
                 })
             endpoints.append({
                 "id": tool_id,
-                "method": "POST",
-                "url": f"plugin://{self.name}/{tool_id}",
+                "method": "PYTHON",
+                "url": f"internal://{self.name}/{tool_id}",
                 "description": meta.get("description", ""),
                 "params": params,
             })
