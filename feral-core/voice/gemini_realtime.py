@@ -1,30 +1,34 @@
 """
 FERAL Gemini Multimodal Live — Realtime Voice via Google's API
 ================================================================
-Single-WebSocket realtime voice using Gemini's Multimodal Live API.
-Same pattern as OpenAI Realtime: audio in/out, function calling.
+Single-WebSocket realtime voice using Gemini's BidiGenerateContent API.
+Same pattern as OpenAI Realtime: audio in/out, function calling, transcriptions.
 """
 
 from __future__ import annotations
 import asyncio
-import base64
 import json
 import logging
 import os
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable
 from uuid import uuid4
 
 logger = logging.getLogger("feral.voice.gemini_realtime")
 
-GEMINI_WS_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-SAMPLE_RATE = 24000
+GEMINI_WS_URL = (
+    "wss://generativelanguage.googleapis.com/ws/"
+    "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+)
+DEFAULT_MODEL = "gemini-2.0-flash-live-001"
+INPUT_SAMPLE_RATE = 16000
+OUTPUT_SAMPLE_RATE = 24000
 AUDIO_FORMAT = "pcm16"
 
 
 class GeminiRealtimeSession:
     """
     Single Gemini Multimodal Live session over WebSocket.
-    Audio in/out with function calling support.
+    Audio/video in, audio out, with function-calling support.
     """
 
     def __init__(
@@ -33,11 +37,12 @@ class GeminiRealtimeSession:
         node_id: str,
         *,
         api_key: str = "",
-        model: str = "gemini-2.0-flash-exp",
+        model: str = "",
         system_prompt: str = "",
         tools: list[dict] | None = None,
         on_audio_delta: Callable | None = None,
         on_transcript: Callable | None = None,
+        on_input_transcript: Callable | None = None,
         on_tool_call: Callable | None = None,
         on_speech_started: Callable | None = None,
         on_error: Callable | None = None,
@@ -45,12 +50,13 @@ class GeminiRealtimeSession:
         self.session_id = session_id
         self.node_id = node_id
         self._api_key = api_key or os.getenv("GEMINI_API_KEY", "")
-        self._model = model
+        self._model = model or os.getenv("FERAL_GEMINI_LIVE_MODEL", DEFAULT_MODEL)
         self._system_prompt = system_prompt
         self._tools = tools or []
 
         self._on_audio_delta = on_audio_delta
         self._on_transcript = on_transcript
+        self._on_input_transcript = on_input_transcript
         self._on_tool_call = on_tool_call
         self._on_speech_started = on_speech_started
         self._on_error = on_error
@@ -86,60 +92,70 @@ class GeminiRealtimeSession:
             self._connected = False
 
     async def _send_setup(self):
-        """Send initial setup message with model config and tools."""
-        gemini_tools = []
+        """Send initial config message with model, system instruction, and tools."""
+        function_declarations = []
         for t in self._tools:
             fn = t.get("function", {})
-            gemini_tools.append({
+            function_declarations.append({
                 "name": fn.get("name", ""),
                 "description": fn.get("description", ""),
                 "parameters": fn.get("parameters", {}),
             })
 
-        setup = {
-            "setup": {
-                "model": f"models/{self._model}",
-                "generationConfig": {
-                    "responseModalities": ["AUDIO"],
-                    "speechConfig": {
-                        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Aoede"}}
-                    },
-                },
-                "systemInstruction": {
-                    "parts": [{"text": self._system_prompt}]
-                },
-                "tools": [{"functionDeclarations": gemini_tools}] if gemini_tools else [],
-            }
+        config: dict = {
+            "model": f"models/{self._model}",
+            "responseModalities": ["AUDIO"],
+            "systemInstruction": {
+                "parts": [{"text": self._system_prompt}],
+            },
         }
-        await self._send(setup)
+        if function_declarations:
+            config["tools"] = [{"functionDeclarations": function_declarations}]
+
+        await self._send({"config": config})
 
     async def send_audio(self, audio_b64: str):
+        """Stream a chunk of PCM16 audio at 16 kHz to Gemini."""
         if not self._connected:
             return
         await self._send({
             "realtimeInput": {
-                "mediaChunks": [{
-                    "mimeType": "audio/pcm;rate=24000",
+                "audio": {
                     "data": audio_b64,
-                }]
-            }
+                    "mimeType": f"audio/pcm;rate={INPUT_SAMPLE_RATE}",
+                },
+            },
         })
 
-    async def send_text(self, text: str):
+    async def send_video(self, frame_b64: str, mime_type: str = "image/jpeg"):
+        """Stream a video/image frame to Gemini for multimodal context."""
         if not self._connected:
             return
         await self._send({
-            "clientContent": {
-                "turns": [{"role": "user", "parts": [{"text": text}]}],
-                "turnComplete": True,
-            }
+            "realtimeInput": {
+                "video": {
+                    "data": frame_b64,
+                    "mimeType": mime_type,
+                },
+            },
+        })
+
+    async def send_text(self, text: str):
+        """Send a text message into the live session."""
+        if not self._connected:
+            return
+        await self._send({
+            "realtimeInput": {
+                "text": text,
+            },
         })
 
     async def send_tool_response(self, function_responses: list[dict]):
+        """Return tool results to the model so it can continue generating."""
         await self._send({
             "toolResponse": {
                 "functionResponses": function_responses,
-            }
+            },
         })
 
     async def disconnect(self):
@@ -184,48 +200,13 @@ class GeminiRealtimeSession:
             logger.info("Gemini setup complete")
             return
 
-        server_content = event.get("serverContent", {})
+        server_content = event.get("serverContent")
         if server_content:
-            parts = server_content.get("modelTurn", {}).get("parts", [])
-            for part in parts:
-                if "inlineData" in part:
-                    inline = part["inlineData"]
-                    if inline.get("mimeType", "").startswith("audio/"):
-                        if self._on_audio_delta:
-                            await self._on_audio_delta(
-                                self.session_id, inline.get("data", ""), False,
-                            )
-                elif "text" in part:
-                    if self._on_transcript:
-                        await self._on_transcript(
-                            self.session_id, part["text"],
-                            not server_content.get("turnComplete", False),
-                        )
+            await self._handle_server_content(server_content)
 
-            if server_content.get("turnComplete"):
-                if self._on_audio_delta:
-                    await self._on_audio_delta(self.session_id, "", True)
-
-            if server_content.get("interrupted"):
-                if self._on_speech_started:
-                    await self._on_speech_started(self.session_id)
-
-        tool_call = event.get("toolCall", {})
+        tool_call = event.get("toolCall")
         if tool_call:
-            function_calls = tool_call.get("functionCalls", [])
-            for fc in function_calls:
-                name = fc.get("name", "")
-                args = json.dumps(fc.get("args", {}))
-                call_id = fc.get("id", str(uuid4())[:8])
-                logger.info(f"Gemini tool call: {name}")
-                if self._on_tool_call:
-                    result = await self._on_tool_call(
-                        self.session_id, call_id, name, args,
-                    )
-                    await self.send_tool_response([{
-                        "response": json.loads(result) if isinstance(result, str) else result,
-                        "id": call_id,
-                    }])
+            await self._handle_tool_call_event(tool_call)
 
         if "error" in event:
             error = event["error"]
@@ -233,6 +214,52 @@ class GeminiRealtimeSession:
             logger.error(f"Gemini API error: {msg}")
             if self._on_error:
                 await self._on_error(self.session_id, msg)
+
+    async def _handle_server_content(self, sc: dict):
+        parts = sc.get("modelTurn", {}).get("parts", [])
+        for part in parts:
+            if "inlineData" in part:
+                inline = part["inlineData"]
+                if inline.get("mimeType", "").startswith("audio/"):
+                    if self._on_audio_delta:
+                        await self._on_audio_delta(
+                            self.session_id, inline.get("data", ""), False,
+                        )
+
+        input_tx = sc.get("inputTranscription", {}).get("text")
+        if input_tx and self._on_input_transcript:
+            await self._on_input_transcript(self.session_id, input_tx)
+
+        output_tx = sc.get("outputTranscription", {}).get("text")
+        if output_tx and self._on_transcript:
+            await self._on_transcript(self.session_id, output_tx, True)
+
+        if sc.get("turnComplete"):
+            if self._on_transcript:
+                await self._on_transcript(self.session_id, "", False)
+            if self._on_audio_delta:
+                await self._on_audio_delta(self.session_id, "", True)
+
+        if sc.get("interrupted"):
+            if self._on_speech_started:
+                await self._on_speech_started(self.session_id)
+
+    async def _handle_tool_call_event(self, tool_call: dict):
+        function_calls = tool_call.get("functionCalls", [])
+        for fc in function_calls:
+            name = fc.get("name", "")
+            args = json.dumps(fc.get("args", {}))
+            call_id = fc.get("id", str(uuid4())[:8])
+            logger.info(f"Gemini tool call: {name}")
+            if self._on_tool_call:
+                result = await self._on_tool_call(
+                    self.session_id, call_id, name, args,
+                )
+                await self.send_tool_response([{
+                    "name": name,
+                    "id": call_id,
+                    "response": json.loads(result) if isinstance(result, str) else result,
+                }])
 
 
 class GeminiRealtimeProxy:
@@ -262,11 +289,16 @@ class GeminiRealtimeProxy:
     def available(self) -> bool:
         return bool(self._api_key)
 
+    def get_session(self, node_id: str) -> GeminiRealtimeSession | None:
+        """Look up session by node_id (mirrors RealtimeProxy.get_session)."""
+        sid = self._node_to_session.get(node_id)
+        return self._sessions.get(sid) if sid else None
+
     async def start_session(
         self,
         session_id: str,
         node_id: str,
-        model: str = "gemini-2.0-flash-exp",
+        model: str = "",
         system_prompt: str = "",
         on_audio_delta: Callable | None = None,
         on_transcript: Callable | None = None,
@@ -275,17 +307,19 @@ class GeminiRealtimeProxy:
         on_error: Callable | None = None,
     ) -> GeminiRealtimeSession:
         _sys_prompt = system_prompt or self._build_system_prompt(session_id)
+        _model = model or os.getenv("FERAL_GEMINI_LIVE_MODEL", DEFAULT_MODEL)
         tools = self._get_tools()
 
         gs = GeminiRealtimeSession(
             session_id=session_id,
             node_id=node_id,
             api_key=self._api_key,
-            model=model,
+            model=_model,
             system_prompt=_sys_prompt,
             tools=tools,
             on_audio_delta=on_audio_delta or self._handle_audio_delta,
             on_transcript=on_transcript or self._handle_transcript,
+            on_input_transcript=self._handle_input_transcript,
             on_tool_call=on_tool_call or self._handle_tool_call,
             on_speech_started=on_speech_started or self._handle_speech_started,
             on_error=on_error or self._handle_error,
@@ -312,6 +346,15 @@ class GeminiRealtimeProxy:
             gs = self._sessions.get(sid) if sid else None
         if gs and gs.connected:
             await gs.send_audio(audio_b64)
+
+    async def relay_video(self, session_id_or_node: str, frame_b64: str, mime_type: str = "image/jpeg"):
+        """Forward a video/image frame to an active Gemini session."""
+        gs = self._sessions.get(session_id_or_node)
+        if not gs:
+            sid = self._node_to_session.get(session_id_or_node)
+            gs = self._sessions.get(sid) if sid else None
+        if gs and gs.connected:
+            await gs.send_video(frame_b64, mime_type)
 
     async def shutdown(self):
         for sid in list(self._sessions):
@@ -379,7 +422,7 @@ class GeminiRealtimeProxy:
             return
         payload = {
             "data_b64": audio_b64, "encoding": AUDIO_FORMAT,
-            "sample_rate": SAMPLE_RATE, "is_final": is_done,
+            "sample_rate": OUTPUT_SAMPLE_RATE, "is_final": is_done,
         }
         if gs.node_id.startswith("webclient_") and self._send_to_session:
             from models.protocol import FeralMessage
@@ -396,6 +439,26 @@ class GeminiRealtimeProxy:
             self._memory.working_push(session_id, {
                 "role": "assistant", "text": text[:300], "source": "gemini_realtime",
             })
+
+    async def _handle_input_transcript(self, session_id: str, text: str):
+        """Handle user-speech transcription returned by Gemini."""
+        if text and self._memory:
+            self._memory.working_push(session_id, {
+                "role": "user", "text": text[:300], "source": "gemini_realtime_input",
+            })
+        gs = self._sessions.get(session_id)
+        if not gs:
+            return
+        payload = {"text": text, "role": "user", "is_partial": False}
+        if gs.node_id.startswith("webclient_") and self._send_to_session:
+            from models.protocol import FeralMessage
+            msg = FeralMessage(
+                session_id=session_id, hop="brain", type="transcript",
+                payload=payload,
+            )
+            await self._send_to_session(session_id, msg)
+        elif self._send_to_node:
+            await self._send_to_node(gs.node_id, {"type": "transcript", "payload": payload})
 
     async def _handle_tool_call(self, session_id: str, call_id: str, name: str, arguments: str) -> str:
         if not self._skill_executor or not self._skill_registry:

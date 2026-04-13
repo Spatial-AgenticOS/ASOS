@@ -450,6 +450,64 @@ class OllamaEngine(LocalLLMEngine):
             return False
 
 
+VISION_MODELS = ("llava", "moondream", "bakllava", "llava-phi3", "minicpm-v", "qwen2-vl", "gemma3")
+
+
+async def auto_setup_vision(ollama_url: str | None = None) -> dict:
+    """Pull a vision model via Ollama if available.
+
+    Returns ``{"available": bool, "model": str, "pulled": bool}``.
+    """
+    base = (
+        ollama_url
+        or os.getenv("FERAL_OLLAMA_URL", "").strip()
+        or "http://localhost:11434"
+    ).rstrip("/")
+    result: dict[str, object] = {"available": False, "model": "", "pulled": False}
+
+    try:
+        async with httpx.AsyncClient(base_url=base, timeout=5) as client:
+            resp = await client.get("/api/tags")
+            if resp.status_code != 200:
+                return result
+            models = resp.json().get("models", [])
+    except Exception:
+        return result
+
+    names = [m.get("name", "") for m in models]
+    for name in names:
+        if any(v in name.lower() for v in VISION_MODELS):
+            result["available"] = True
+            result["model"] = name
+            return result
+
+    target = "llava:7b"
+    try:
+        logger.info("Pulling vision model %s (this may take a while)…", target)
+        async with httpx.AsyncClient(base_url=base, timeout=600) as client:
+            async with client.stream(
+                "POST", "/api/pull", json={"name": target, "stream": True},
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        progress = json.loads(line)
+                        status = progress.get("status", "")
+                        if "pulling" in status or "downloading" in status:
+                            logger.debug("Vision model pull: %s", status)
+                    except json.JSONDecodeError:
+                        pass
+        result["available"] = True
+        result["model"] = target
+        result["pulled"] = True
+    except Exception as e:
+        logger.warning("Failed to pull vision model %s: %s", target, e)
+
+    return result
+
+
 async def auto_setup_offline(
     model_id: str | None = None,
 ) -> OllamaEngine:

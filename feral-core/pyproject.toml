@@ -63,6 +63,12 @@ wasm = [
 sync = [
     "zeroconf>=0.131.0",
 ]
+stt = [
+    "faster-whisper>=1.0.0",
+]
+tts = [
+    "piper-tts>=1.2.0",
+]
 wake = [
     "openwakeword>=0.6.0",
     "onnxruntime>=1.16.0",
@@ -87,6 +93,8 @@ all = [
     "openwakeword>=0.6.0",
     "onnxruntime>=1.16.0",
     "rich>=13.0.0",
+    "faster-whisper>=1.0.0",
+    "piper-tts>=1.2.0",
 ]
 dev = [
     "pytest>=8.0.0",
@@ -105,9 +113,9 @@ Issues = "https://github.com/FERAL-AI/FERAL-AI/issues"
 where = ["."]
 include = [
     "agents*", "api*", "channels*", "cli*", "config*", "gateway*",
-    "genui*", "hardware*", "identity*", "integrations*", "mcp*",
-    "memory*", "models*", "perception*", "security*", "skills*",
-    "voice*", "webui*", "tests*",
+    "genui*", "hardware*", "identity*", "infra*", "integrations*",
+    "mcp*", "memory*", "models*", "perception*", "security*",
+    "skills*", "voice*", "webui*", "tests*",
 ]
 
 [tool.setuptools.package-data]

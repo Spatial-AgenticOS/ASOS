@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from agents.llm_provider import LLMProvider
     from memory.store import MemoryStore
     from perception.fusion import PerceptionEngine
+    from perception.scene import SceneAnalyzer
 
 logger = logging.getLogger("feral.perception.screen")
 
@@ -226,6 +227,7 @@ class ScreenLoop:
         perception: Optional["PerceptionEngine"] = None,
         memory: Optional["MemoryStore"] = None,
         llm: Optional["LLMProvider"] = None,
+        scene_analyzer: Optional["SceneAnalyzer"] = None,
         interval: float = 8.0,
         session_id: str = "screen_loop",
         on_transition: Optional[Callable[[TransitionEvent], Any]] = None,
@@ -233,6 +235,7 @@ class ScreenLoop:
         self._perception = perception
         self._memory = memory
         self._llm = llm
+        self._scene_analyzer = scene_analyzer
         self._interval = max(1.0, interval)
         self._session_id = session_id
         self._on_transition = on_transition
@@ -308,7 +311,17 @@ class ScreenLoop:
         self._capture_count += 1
 
         description: Optional[str] = None
-        if self._llm and self._llm.available:
+        detected: Optional[list[str]] = None
+
+        if self._scene_analyzer and self._scene_analyzer.available:
+            encoding = "jpeg" if mime == "image/jpeg" else "png"
+            result = await self._scene_analyzer.analyze_frame(
+                image_b64, encoding=encoding, node_id=self._session_id, force=True,
+            )
+            if result:
+                description = result.get("scene_description")
+                detected = result.get("detected_objects")
+        elif self._llm and self._llm.available:
             description = await _ask_vision_llm(self._llm, image_b64, mime)
 
         if not description:
@@ -316,7 +329,8 @@ class ScreenLoop:
             return
 
         self._last_description = description
-        detected = self._extract_objects(description)
+        if detected is None:
+            detected = self._extract_objects(description)
         self._update_perception_frame(image_b64, mime, description, detected)
 
         transition = self._detector.detect(description)

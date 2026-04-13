@@ -443,6 +443,11 @@ class OnboardWizard:
                     self.config["vlm_provider"] = "ollama"
                     self.config["vlm_model"] = vlm_model
                     self.config["local_preset"] = "ollama_vision"
+                elif not vision_models and Confirm.ask(
+                    "No vision model found. Pull llava:7b for local vision? (~4.7 GB)",
+                    default=False,
+                ):
+                    await self._auto_pull_vision()
             else:
                 self.c.print("  [dim]No Ollama models found. Pull one: ollama pull llama3.1[/]")
                 self.config["model"] = "llama3.1"
@@ -796,6 +801,24 @@ class OnboardWizard:
 
     # ── Helpers ─────────────────────────────────────────────
 
+    async def _auto_pull_vision(self):
+        """Use auto_setup_vision to pull a vision model for Ollama."""
+        from agents.local_inference import auto_setup_vision
+
+        with Progress(SpinnerColumn(), TextColumn("{task.description}")) as prog:
+            prog.add_task("Pulling llava:7b — this may take a few minutes…", total=None)
+            result = await auto_setup_vision()
+
+        if result.get("available"):
+            model = result.get("model", "llava:7b")
+            self.config["vlm_provider"] = "ollama"
+            self.config["vlm_model"] = model
+            self.config["local_preset"] = "ollama_vision"
+            pulled_tag = " (just pulled)" if result.get("pulled") else ""
+            self.c.print(f"  [green]Vision model ready: {model}{pulled_tag}[/]")
+        else:
+            self.c.print("  [yellow]Could not pull vision model. You can pull manually: ollama pull llava:7b[/]")
+
     async def _validate_key(self, provider: str, key: str) -> bool:
         try:
             import httpx
@@ -933,7 +956,39 @@ class OnboardWizardPlain:
         print()
 
         # Model
-        if provider["models"]:
+        if provider_id == "ollama":
+            print("Step 2: Model")
+            ollama_models = await self._list_ollama_models()
+            if ollama_models:
+                for i, m in enumerate(ollama_models, 1):
+                    print(f"  {i}. {m}")
+                model_input = input(f"  Choose [{ollama_models[0]}]: ").strip()
+                self.config["model"] = model_input or ollama_models[0]
+                vision_models = [m for m in ollama_models if _looks_like_vision_model(m)]
+                if vision_models:
+                    use_vision = input(f"  Enable local vision with {vision_models[0]}? (Y/n): ").strip().lower()
+                    if use_vision not in ("n", "no"):
+                        self.config["vlm_provider"] = "ollama"
+                        self.config["vlm_model"] = vision_models[0]
+                        self.config["local_preset"] = "ollama_vision"
+                else:
+                    pull_vision = input("  No vision model found. Pull llava:7b (~4.7 GB)? (y/N): ").strip().lower()
+                    if pull_vision in ("y", "yes"):
+                        print("  Pulling llava:7b — this may take a few minutes…")
+                        from agents.local_inference import auto_setup_vision
+                        result = await auto_setup_vision()
+                        if result.get("available"):
+                            model_name = result.get("model", "llava:7b")
+                            self.config["vlm_provider"] = "ollama"
+                            self.config["vlm_model"] = model_name
+                            self.config["local_preset"] = "ollama_vision"
+                            print(f"  Vision model ready: {model_name}")
+                        else:
+                            print("  Could not pull vision model. Try manually: ollama pull llava:7b")
+            else:
+                print("  No Ollama models found. Pull one: ollama pull llama3.1")
+                self.config["model"] = "llama3.1"
+        elif provider["models"]:
             print("Step 2: Model")
             for i, m in enumerate(provider["models"], 1):
                 default = " (default)" if m == provider["default_model"] else ""
@@ -1057,6 +1112,16 @@ class OnboardWizardPlain:
                             self.creds[ek] = extra_val
         print()
 
+        # Vision settings for plain wizard
+        if self.config.get("vlm_provider"):
+            settings_vision = {
+                "enabled": True,
+                "provider": self.config["vlm_provider"],
+                "model": self.config.get("vlm_model", ""),
+            }
+        else:
+            settings_vision = {"enabled": False, "provider": "", "model": ""}
+
         # Save
         creds_path = FERAL_HOME / "credentials.json"
         creds_path.write_text(json.dumps(self.creds, indent=2))
@@ -1073,6 +1138,7 @@ class OnboardWizardPlain:
                 "model": self.config.get("model", "gpt-4o-mini"),
                 "base_url": self.config.get("base_url", provider_info.get("base_url", "")),
             },
+            "vision": settings_vision,
             "devices": {
                 "phone_bridge_url": self.config.get("phone_bridge_url", ""),
                 "glasses_model": self.config.get("glasses_model", ""),
@@ -1081,6 +1147,7 @@ class OnboardWizardPlain:
                 "multi_agent": bool(self.config.get("multi_agent", True)),
             },
             "meta": {
+                "local_preset": self.config.get("local_preset", ""),
                 "setup_complete": True,
             },
         }
@@ -1095,6 +1162,19 @@ class OnboardWizardPlain:
         print("    feral start")
         print("=" * 60)
         print()
+
+
+    async def _list_ollama_models(self) -> list[str]:
+        try:
+            import httpx
+            base = ollama_base_url()
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(f"{base}/api/tags")
+                if r.status_code == 200:
+                    return [m["name"] for m in r.json().get("models", [])]
+        except Exception:
+            pass
+        return []
 
 
 _DEFAULT_USER_MD = "# About Me\n\nTell your agent about yourself here.\n"

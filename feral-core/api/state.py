@@ -308,6 +308,7 @@ class BrainState:
             send_to_node=self._send_dict_to_node,
             send_to_session=self.send_to_session,
         )
+        self.voice_router.set_gemini_proxy(self.gemini_proxy)
 
         self.gateway_registry = MethodRegistry()
         register_core_methods(self.gateway_registry, self)
@@ -328,6 +329,7 @@ class BrainState:
                 perception=self.perception,
                 memory=self.memory,
                 llm=_shared_llm,
+                scene_analyzer=self.scene,
             )
             import asyncio
             asyncio.create_task(self.screen_loop.start())

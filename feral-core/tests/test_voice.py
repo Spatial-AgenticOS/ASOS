@@ -1,8 +1,6 @@
 """
-Unit tests for Gemini realtime voice proxy (`voice.gemini_realtime`).
-
-Exercises session bookkeeping, lifecycle hooks, and safe audio relay when
-no session exists.
+Unit tests for Gemini realtime voice proxy (`voice.gemini_realtime`)
+and VoiceRouter Gemini integration (`voice.router`).
 """
 
 from __future__ import annotations
@@ -46,7 +44,6 @@ class TestGeminiRealtimeProxy:
         """Relaying audio without a matching session is a silent no-op."""
         proxy = GeminiRealtimeProxy()
         await proxy.relay_audio("nonexistent-session", "AAA=")
-        # No exception; internal lookup yields nothing to forward.
 
     @pytest.mark.asyncio
     async def test_relay_audio_forwards_when_session_connected(self) -> None:
@@ -58,3 +55,73 @@ class TestGeminiRealtimeProxy:
         proxy._sessions["live-sid"] = gs
         await proxy.relay_audio("live-sid", "PCM64=")
         gs.send_audio.assert_awaited_once_with("PCM64=")
+
+    def test_get_session_by_node_id(self) -> None:
+        """get_session resolves node_id → session_id → session object."""
+        proxy = GeminiRealtimeProxy()
+        gs = MagicMock(spec=GeminiRealtimeSession)
+        proxy._sessions["sid-x"] = gs
+        proxy._node_to_session["node-x"] = "sid-x"
+        assert proxy.get_session("node-x") is gs
+        assert proxy.get_session("unknown") is None
+
+
+class TestVoiceRouterGemini:
+    """Tests for Gemini routing in VoiceRouter."""
+
+    def _make_router(self, *, gemini_available=True, openai_available=False):
+        from voice.router import VoiceRouter
+
+        router = VoiceRouter()
+        if gemini_available:
+            gemini = MagicMock()
+            gemini.available = True
+            gemini.get_session = MagicMock(return_value=None)
+            gemini.start_session = AsyncMock()
+            gemini._node_to_session = {}
+            router.set_gemini_proxy(gemini)
+        if openai_available:
+            rt = MagicMock()
+            rt.available = True
+            router._realtime = rt
+        return router
+
+    def test_resolve_provider_gemini_via_node_config(self) -> None:
+        router = self._make_router()
+        router.register_voice_config("n1", {"voice_provider": "gemini", "supports_realtime": True})
+        assert router._resolve_provider("n1") == "gemini"
+
+    def test_resolve_provider_falls_back_to_whisper(self) -> None:
+        router = self._make_router(gemini_available=False)
+        assert router._resolve_provider("n2") == "whisper"
+
+    def test_resolve_provider_env_override(self) -> None:
+        router = self._make_router()
+        router.register_voice_config("n3", {"supports_realtime": True})
+        with patch.dict("os.environ", {"FERAL_VOICE_PROVIDER": "gemini"}):
+            assert router._resolve_provider("n3") == "gemini"
+
+    def test_session_provider_gemini_via_env(self) -> None:
+        router = self._make_router()
+        router.set_session_voice_mode("s1", "realtime")
+        with patch.dict("os.environ", {"FERAL_VOICE_PROVIDER": "gemini"}):
+            assert router._resolve_session_provider("s1") == "gemini"
+
+    def test_set_gemini_proxy(self) -> None:
+        from voice.router import VoiceRouter
+        router = VoiceRouter()
+        assert router._gemini is None
+        proxy = MagicMock()
+        router.set_gemini_proxy(proxy)
+        assert router._gemini is proxy
+
+    @pytest.mark.asyncio
+    async def test_handle_audio_for_gemini_creates_session(self) -> None:
+        router = self._make_router()
+        gs_mock = MagicMock()
+        gs_mock.connected = True
+        gs_mock.send_audio = AsyncMock()
+        router._gemini.start_session = AsyncMock(return_value=gs_mock)
+        await router.handle_audio_for_gemini("sess-1", "AAAA==")
+        router._gemini.start_session.assert_awaited_once()
+        gs_mock.send_audio.assert_awaited_once_with("AAAA==")

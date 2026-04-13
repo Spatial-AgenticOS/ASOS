@@ -1,25 +1,28 @@
 """
-FERAL Voice Router — Dual-Path Audio Routing
+FERAL Voice Router — Triple-Path Audio Routing
 ===============================================
-Routes audio based on source capabilities:
-  - Phone/glasses with realtime support → RealtimeProxy (OpenAI Realtime API)
-  - Web client / channels → AudioPipeline (Whisper STT → Orchestrator → TTS)
+Routes audio based on source capabilities and provider config:
+  - Gemini realtime → GeminiRealtimeProxy (Gemini BidiGenerateContent)
+  - OpenAI realtime → RealtimeProxy (OpenAI Realtime API)
+  - Whisper path    → AudioPipeline (Whisper STT → Orchestrator → TTS)
 """
 
 from __future__ import annotations
 import logging
 import os
-from typing import Optional, Any, Callable, Awaitable
+from typing import Any, Callable, Awaitable
 
 logger = logging.getLogger("feral.voice.router")
+
+_ENV_VOICE_PROVIDER = "FERAL_VOICE_PROVIDER"
 
 
 class VoiceRouter:
     """
     Central audio routing layer.  Both web clients and daemon nodes can
     declare voice capabilities via a `voice_config` message.  The router
-    uses that declaration to choose between the OpenAI Realtime path and
-    the classic Whisper+TTS path.
+    uses that declaration to choose between the Gemini Realtime path,
+    the OpenAI Realtime path, and the classic Whisper+TTS path.
     """
 
     def __init__(
@@ -35,6 +38,7 @@ class VoiceRouter:
         send_to_node: Callable[[str, dict], Awaitable[None]] | None = None,
     ):
         self._realtime = realtime_proxy
+        self._gemini: Any = None
         self._audio = audio_pipeline
         self._orchestrator = orchestrator
         self._memory = memory
@@ -46,6 +50,10 @@ class VoiceRouter:
         self._node_voice_config: dict[str, dict] = {}
         self._node_session_map: dict[str, str] = {}
         self._session_voice_mode: dict[str, str] = {}
+
+    def set_gemini_proxy(self, proxy) -> None:
+        """Inject GeminiRealtimeProxy after construction (set from api/state.py)."""
+        self._gemini = proxy
 
     def register_voice_config(self, node_id: str, config: dict):
         """Store a node's voice capabilities.  Called when a `voice_config` message arrives."""
@@ -60,25 +68,60 @@ class VoiceRouter:
     def bind_node_to_session(self, node_id: str, session_id: str):
         self._node_session_map[node_id] = session_id
 
-    def should_use_realtime(self, node_id: str) -> bool:
-        """Decide whether a node should use the OpenAI Realtime path."""
-        if not self._realtime or not self._realtime.available:
-            return False
+    # ------------------------------------------------------------------
+    # Provider selection helpers
+    # ------------------------------------------------------------------
 
+    def _resolve_provider(self, node_id: str) -> str:
+        """Return 'gemini', 'openai', or 'whisper' for a given node."""
         cfg = self._node_voice_config.get(node_id, {})
 
         if cfg.get("mode") == "whisper":
-            return False
-        if cfg.get("supports_realtime") is True:
-            return True
+            return "whisper"
 
-        return False
+        explicit = cfg.get("voice_provider", "").lower()
+        if explicit == "gemini":
+            if self._gemini and self._gemini.available:
+                return "gemini"
+        if explicit == "openai":
+            if self._realtime and self._realtime.available:
+                return "openai"
+
+        env_provider = os.getenv(_ENV_VOICE_PROVIDER, "").lower()
+        if env_provider == "gemini" and self._gemini and self._gemini.available:
+            return "gemini"
+
+        if cfg.get("supports_realtime") is True:
+            if self._realtime and self._realtime.available:
+                return "openai"
+
+        return "whisper"
+
+    def _resolve_session_provider(self, session_id: str) -> str:
+        """Return 'gemini', 'openai', or 'whisper' for a web-client session."""
+        mode = self._session_voice_mode.get(session_id, "")
+        if mode != "realtime":
+            return "whisper"
+
+        env_provider = os.getenv(_ENV_VOICE_PROVIDER, "").lower()
+        if env_provider == "gemini" and self._gemini and self._gemini.available:
+            return "gemini"
+
+        if self._realtime and self._realtime.available:
+            return "openai"
+        return "whisper"
+
+    def should_use_realtime(self, node_id: str) -> bool:
+        """Decide whether a node should use any realtime path (OpenAI or Gemini)."""
+        return self._resolve_provider(node_id) in ("openai", "gemini")
 
     def session_uses_realtime(self, session_id: str) -> bool:
-        """Check if a web client session should use the Realtime path."""
-        if not self._realtime or not self._realtime.available:
-            return False
-        return self._session_voice_mode.get(session_id) == "realtime"
+        """Check if a web client session should use a realtime path."""
+        return self._resolve_session_provider(session_id) in ("openai", "gemini")
+
+    # ------------------------------------------------------------------
+    # Audio from daemon / phone nodes
+    # ------------------------------------------------------------------
 
     async def handle_audio_from_node(
         self,
@@ -90,12 +133,6 @@ class VoiceRouter:
         encoding: str = "pcm16",
         sample_rate: int = 24000,
     ):
-        """
-        Route incoming audio from a daemon/phone node.
-        If the node uses realtime, relay to OpenAI.
-        Otherwise, accumulate in Whisper pipeline.
-        """
-        # Wake word gate for node audio
         if self._wake_word and self._wake_word.enabled:
             import base64
             pcm_bytes = base64.b64decode(audio_b64)
@@ -103,7 +140,13 @@ class VoiceRouter:
             if not should_process:
                 return
 
-        if self.should_use_realtime(node_id):
+        provider = self._resolve_provider(node_id)
+
+        if provider == "gemini":
+            await self._handle_gemini_node(node_id, session_id, audio_b64)
+            return
+
+        if provider == "openai":
             rs = self._realtime.get_session(node_id)
             if not rs:
                 rs = await self._realtime.start_session(session_id, node_id)
@@ -121,6 +164,10 @@ class VoiceRouter:
             source_node_id=node_id,
         )
 
+    # ------------------------------------------------------------------
+    # Audio from web clients
+    # ------------------------------------------------------------------
+
     async def handle_audio_from_client(
         self,
         session_id: str,
@@ -130,13 +177,14 @@ class VoiceRouter:
         encoding: str = "pcm16",
         sample_rate: int = 24000,
     ):
-        """
-        Route audio from the web client.
-        If session is in realtime mode → OpenAI Realtime API (bi-directional voice + tools).
-        Otherwise → classic Whisper STT + Orchestrator + TTS.
-        """
-        if self.session_uses_realtime(session_id):
-            client_node = f"webclient_{session_id[:8]}"
+        provider = self._resolve_session_provider(session_id)
+        client_node = f"webclient_{session_id[:8]}"
+
+        if provider == "gemini":
+            await self._handle_gemini_client(session_id, client_node, audio_b64)
+            return
+
+        if provider == "openai":
             rs = self._realtime.get_session(client_node)
             if not rs:
                 rs = await self._realtime.start_session(session_id, client_node)
@@ -152,6 +200,50 @@ class VoiceRouter:
             encoding=encoding,
             sample_rate=sample_rate,
         )
+
+    # ------------------------------------------------------------------
+    # Gemini relay helpers
+    # ------------------------------------------------------------------
+
+    async def _handle_gemini_node(self, node_id: str, session_id: str, audio_b64: str):
+        gs = self._gemini.get_session(node_id)
+        if not gs:
+            gs = await self._gemini.start_session(session_id, node_id)
+        if gs and gs.connected:
+            await gs.send_audio(audio_b64)
+
+    async def _handle_gemini_client(self, session_id: str, client_node: str, audio_b64: str):
+        gs = self._gemini.get_session(client_node)
+        if not gs:
+            gs = await self._gemini.start_session(session_id, client_node)
+        if gs and gs.connected:
+            await gs.send_audio(audio_b64)
+
+    async def handle_audio_for_gemini(
+        self,
+        session_id: str,
+        audio_b64: str,
+        *,
+        node_id: str = "",
+    ):
+        """
+        Public entry-point for callers that know they want the Gemini path.
+        Resolves or creates a session, then relays audio.
+        """
+        if not self._gemini or not self._gemini.available:
+            logger.warning("handle_audio_for_gemini called but Gemini proxy unavailable")
+            return
+        lookup = node_id or session_id
+        gs = self._gemini.get_session(lookup)
+        if not gs:
+            _node = node_id or f"webclient_{session_id[:8]}"
+            gs = await self._gemini.start_session(session_id, _node)
+        if gs and gs.connected:
+            await gs.send_audio(audio_b64)
+
+    # ------------------------------------------------------------------
+    # Whisper STT → Orchestrator → TTS  (unchanged)
+    # ------------------------------------------------------------------
 
     async def _handle_whisper_path(
         self,
@@ -235,9 +327,21 @@ class VoiceRouter:
                 return msg.get("text", "")[:1000]
         return ""
 
+    # ------------------------------------------------------------------
+    # Text routing
+    # ------------------------------------------------------------------
+
     async def handle_text_from_node(self, node_id: str, session_id: str, text: str):
         """Route a text command from a node — if realtime is active, send as text there."""
-        if self.should_use_realtime(node_id):
+        provider = self._resolve_provider(node_id)
+
+        if provider == "gemini":
+            gs = self._gemini.get_session(node_id) if self._gemini else None
+            if gs and gs.connected:
+                await gs.send_text(text)
+                return
+
+        if provider == "openai":
             rs = self._realtime.get_session(node_id)
             if rs and rs.connected:
                 await rs.send_text(text)
@@ -251,28 +355,50 @@ class VoiceRouter:
             )
 
     async def handle_text_from_client_voice(self, session_id: str, text: str):
-        """Route a text message into an active realtime voice session (typed while voice is on)."""
-        if self.session_uses_realtime(session_id):
-            client_node = f"webclient_{session_id[:8]}"
+        """Route a text message into an active realtime voice session."""
+        provider = self._resolve_session_provider(session_id)
+        client_node = f"webclient_{session_id[:8]}"
+
+        if provider == "gemini":
+            gs = self._gemini.get_session(client_node) if self._gemini else None
+            if gs and gs.connected:
+                await gs.send_text(text)
+                return
+
+        if provider == "openai":
             rs = self._realtime.get_session(client_node) if self._realtime else None
             if rs and rs.connected:
                 await rs.send_text(text)
                 return
+
         if self._orchestrator:
             await self._orchestrator.handle_command_stream(
                 session_id=session_id, text=text, context={"source": "voice_text"},
             )
 
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     async def stop_session_voice(self, session_id: str):
         """Stop realtime voice for a web client session."""
         client_node = f"webclient_{session_id[:8]}"
+
+        if self._gemini:
+            gsid = self._gemini._node_to_session.get(client_node)
+            if gsid:
+                await self._gemini.stop_session(gsid)
+
         if self._realtime:
             sid_for_node = self._realtime._node_to_session.get(client_node)
             if sid_for_node:
                 await self._realtime.stop_session(sid_for_node)
+
         self._session_voice_mode.pop(session_id, None)
         logger.info(f"Voice stopped for session {session_id[:8]}")
 
     async def shutdown(self):
         if self._realtime:
             await self._realtime.shutdown()
+        if self._gemini:
+            await self._gemini.shutdown()

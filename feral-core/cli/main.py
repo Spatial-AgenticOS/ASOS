@@ -626,7 +626,26 @@ def cmd_doctor():
         _warn("Node.js", "not found — needed for client/webui development",
               "Install Node 20+: https://nodejs.org")
 
-    # ── 10. Key dependencies ──
+    # ── 10. Local audio backends ──
+    console.print()
+    console.print("[bold]Local Audio[/bold]")
+    try:
+        from perception.audio_pipeline import detect_local_audio_capabilities
+        caps = detect_local_audio_capabilities()
+        if caps["local_stt"]:
+            _pass("Local STT (faster-whisper)", f"models: {', '.join(caps['stt_models'])}")
+        else:
+            _warn("Local STT (faster-whisper)", "not installed — cloud-only STT",
+                  "pip install 'feral-ai[stt]'")
+        if caps["local_tts"]:
+            _pass("Local TTS (piper)", f"voices: {', '.join(caps['tts_voices'])}")
+        else:
+            _warn("Local TTS (piper)", "not installed — cloud-only TTS",
+                  "pip install 'feral-ai[tts]'")
+    except Exception as exc:
+        _warn("Local Audio", f"detection failed: {exc}")
+
+    # ── 11. Key dependencies ──
     console.print()
     console.print("[bold]Dependencies[/bold]")
     dep_pkgs = [
