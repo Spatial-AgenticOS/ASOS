@@ -20,11 +20,16 @@ def mock_vault():
 
 
 @pytest.fixture(autouse=True)
-def isolate_feral_home(tmp_path, monkeypatch):
+def isolate_feral_home(request, tmp_path, monkeypatch):
     """Isolate tests from real ~/.feral directory.
-    Uses a unique subdir to avoid colliding with test-specific fixtures
-    that also create tmp_path / '.feral' (e.g. test_config.py temp_dirs).
+    Skips for tests that manage FERAL_HOME themselves.
     """
+    markers = {m.name for m in request.node.iter_markers()}
+    if "no_auto_feral_home" in markers:
+        return
+    module_markers = getattr(request.module, "pytestmark", [])
+    if any(getattr(m, "name", "") == "no_auto_feral_home" for m in (module_markers if isinstance(module_markers, list) else [module_markers])):
+        return
     feral_dir = tmp_path / ".feral-isolation"
     monkeypatch.setenv("FERAL_HOME", str(feral_dir))
     os.makedirs(feral_dir, exist_ok=True)

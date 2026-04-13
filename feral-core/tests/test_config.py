@@ -11,6 +11,17 @@ import pytest
 
 from config.loader import ConfigLoader, feral_home, feral_data_home, DEFAULT_SETTINGS
 
+pytestmark = pytest.mark.no_auto_feral_home
+
+
+@pytest.fixture(autouse=True)
+def _clean_feral_env(monkeypatch):
+    """Remove all FERAL_* env vars so config tests control their own state."""
+    import os
+    for key in list(os.environ):
+        if key.startswith("FERAL_") or key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+            monkeypatch.delenv(key, raising=False)
+
 
 @pytest.fixture
 def temp_dirs(tmp_path):

@@ -15,6 +15,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.no_auto_feral_home
+
+
+@pytest.fixture(autouse=True)
+def _clean_feral_env_integration(monkeypatch):
+    """Remove FERAL_* env vars leaked by earlier test modules."""
+    for key in list(os.environ):
+        if key.startswith("FERAL_"):
+            monkeypatch.delenv(key, raising=False)
+
+import pytest
+
 from config.loader import ConfigLoader, DEFAULT_SETTINGS
 from models.protocol import (
     FeralMessage, NodeRegisterPayload, TextCommandPayload,

@@ -11,7 +11,7 @@ Usage:
 
 from __future__ import annotations
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from hardware.protocol import (
     DeviceManifest,
@@ -125,30 +125,30 @@ class SmartHomeAdapter:
             on = params.get("state", "on").lower() == "on"
             self._state["lights_on"] = on
             await self._send_hue_command({"on": on})
-            return HUPResult(action_id=action.action_id, device_id=self.device_id, success=True, data={"lights_on": on})
+            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"lights_on": on})
 
         elif cap_id == "lights_brightness":
             bri = int(params.get("brightness", 80))
             self._state["brightness"] = max(0, min(100, bri))
             await self._send_hue_command({"bri": int(bri * 2.54)})
-            return HUPResult(action_id=action.action_id, device_id=self.device_id, success=True, data={"brightness": self._state["brightness"]})
+            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"brightness": self._state["brightness"]})
 
         elif cap_id == "lights_color":
             color = params.get("color", "#FFFFFF")
             self._state["color"] = color
             await self._send_hue_command({"color": color})
-            return HUPResult(action_id=action.action_id, device_id=self.device_id, success=True, data={"color": color})
+            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"color": color})
 
         elif cap_id == "thermostat_set":
             temp = float(params.get("temperature_c", 22.0))
             self._state["temperature_setpoint_c"] = temp
-            return HUPResult(action_id=action.action_id, device_id=self.device_id, success=True, data={"setpoint_c": temp})
+            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"setpoint_c": temp})
 
         elif cap_id == "thermostat_read":
             import random
             current = round(self._state["temperature_setpoint_c"] + random.uniform(-1, 1), 1)
             return HUPResult(
-                action_id=action.action_id, device_id=self.device_id, success=True,
+                action_id=action.action_id, device_id=self.device_id, status="success",
                 data={"current_c": current, "setpoint_c": self._state["temperature_setpoint_c"]},
             )
 
@@ -162,9 +162,9 @@ class SmartHomeAdapter:
             }
             settings = scenes.get(scene, scenes["relax"])
             self._state.update(settings)
-            return HUPResult(action_id=action.action_id, device_id=self.device_id, success=True, data={"scene": scene, **settings})
+            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"scene": scene, **settings})
 
-        return HUPResult(action_id=action.action_id, device_id=self.device_id, success=False, error=f"Unknown capability: {cap_id}")
+        return HUPResult(action_id=action.action_id, device_id=self.device_id, status="failure", error=f"Unknown capability: {cap_id}")
 
     async def _send_hue_command(self, cmd: dict):
         """Send a command to the Hue bridge. Falls back to simulation if not configured."""

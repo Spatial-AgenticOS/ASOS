@@ -159,38 +159,38 @@ class WristbandAdapter:
             data = await self.read_telemetry()
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True, data={"bpm": data["heart_rate_bpm"]},
+                status="success", data={"bpm": data["heart_rate_bpm"]},
             )
         elif cap_id == "spo2":
             data = await self.read_telemetry()
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True, data={"spo2_pct": data["spo2_pct"]},
+                status="success", data={"spo2_pct": data["spo2_pct"]},
             )
         elif cap_id == "skin_temp":
             data = await self.read_telemetry()
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True, data={"temperature_c": data["skin_temp_c"]},
+                status="success", data={"temperature_c": data["skin_temp_c"]},
             )
         elif cap_id == "vibrate":
             pattern = (action.parameters or {}).get("pattern", "short")
             logger.info("Vibrating wristband: pattern=%s", pattern)
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True, data={"vibrated": True, "pattern": pattern},
+                status="success", data={"vibrated": True, "pattern": pattern},
             )
         elif cap_id == "set_led":
             color = (action.parameters or {}).get("color", "#00FF00")
             logger.info("Setting wristband LED to %s", color)
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True, data={"led_color": color},
+                status="success", data={"led_color": color},
             )
         else:
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=False, error=f"Unknown capability: {cap_id}",
+                status="failure", error=f"Unknown capability: {cap_id}",
             )
 
     async def telemetry_loop(self, callback, interval_s: float = 5.0):

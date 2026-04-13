@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 import asyncio
 import logging
-from typing import Any, Optional
 
 from hardware.protocol import (
     DeviceManifest,
@@ -155,7 +154,7 @@ class RobotArmAdapter:
         if self._estop and cap_id != "estop":
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=False, error="Emergency stop is active — physical reset required",
+                status="failure", error="Emergency stop is active — physical reset required",
             )
 
         if cap_id == "move_joints":
@@ -165,7 +164,7 @@ class RobotArmAdapter:
             self._position = [float(j) for j in joints[:self.dof]]
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True, data={"joints": self._position, "speed_pct": speed},
+                status="success", data={"joints": self._position, "speed_pct": speed},
             )
 
         elif cap_id == "move_cartesian":
@@ -174,7 +173,7 @@ class RobotArmAdapter:
             await self._send_gcode(f"G1 X{x} Y{y} Z{z} F{speed}")
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True, data={"position": {"x": x, "y": y, "z": z}},
+                status="success", data={"position": {"x": x, "y": y, "z": z}},
             )
 
         elif cap_id == "gripper":
@@ -184,7 +183,7 @@ class RobotArmAdapter:
             await self._send_gcode(cmd)
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True, data={"gripper_open": self._gripper_open},
+                status="success", data={"gripper_open": self._gripper_open},
             )
 
         elif cap_id == "home":
@@ -192,7 +191,7 @@ class RobotArmAdapter:
             self._position = [0.0] * self.dof
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True, data={"joints": self._position, "homed": True},
+                status="success", data={"joints": self._position, "homed": True},
             )
 
         elif cap_id == "estop":
@@ -201,18 +200,18 @@ class RobotArmAdapter:
             logger.critical("EMERGENCY STOP activated on %s", self.device_id)
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True, data={"estop": True},
-                message="Emergency stop activated. Physical reset required.",
+                status="success",
+                data={"estop": True, "message": "Emergency stop activated. Physical reset required."},
             )
 
         elif cap_id == "read_position":
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id,
-                success=True,
+                status="success",
                 data={"joints": self._position, "gripper_open": self._gripper_open, "estop": self._estop},
             )
 
-        return HUPResult(action_id=action.action_id, device_id=self.device_id, success=False, error=f"Unknown capability: {cap_id}")
+        return HUPResult(action_id=action.action_id, device_id=self.device_id, status="failure", error=f"Unknown capability: {cap_id}")
 
     async def _send_gcode(self, command: str):
         """Send a G-code command via serial. Simulates if no serial port."""

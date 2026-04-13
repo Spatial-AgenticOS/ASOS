@@ -128,13 +128,14 @@ include = [
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = ["no_auto_feral_home: skip the autouse FERAL_HOME isolation fixture"]
 
 [tool.coverage.run]
 source = ["."]
 omit = ["tests/*", "*/webui/*", "setup.py"]
 
 [tool.coverage.report]
-fail_under = 28
+fail_under = 35
 show_missing = true
 exclude_lines = [
     "pragma: no cover",
