@@ -138,24 +138,30 @@ Always-on full-screen dashboard — next meeting, heart rate, active tasks, weat
 
 ## Get Started
 
+**One-liner** (installs everything, creates a virtual env):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/FERAL-AI/FERAL-AI/main/scripts/install.sh | bash
+```
+
+After install, activate and run:
+
+```bash
+source ~/.feral-env/bin/activate
+feral start
+```
+
+**Or clone manually:**
+
 ```bash
 git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
-make install
+make install       # or: cd feral-core && pip install -e ".[llm]"
 feral start
 ```
 
-That is the current recommended path. Brain starts, UI opens, voice activates.
+Brain starts, UI opens, voice activates. No API key required for local models (Ollama auto-detected).
 
-Prefer a manual install instead of `make`?
-
-```bash
-cd feral-core && pip install -e ".[llm]"
-feral start
-```
-
-PyPI install (`pip install feral-ai`) is coming soon after the package publish pipeline is finalized.
-
-Want the full experience with cloud LLM?
+Want cloud LLM instead?
 
 ```bash
 export ANTHROPIC_API_KEY=sk-...    # or OPENAI_API_KEY, or OPENROUTER_API_KEY
