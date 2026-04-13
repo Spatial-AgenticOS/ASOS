@@ -157,6 +157,67 @@ class SlackBridge:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    async def read_channel_history(self, channel: str = "", limit: int = 25, **kwargs) -> dict:
+        """Fetch recent messages from a Slack channel."""
+        if not self._channel:
+            return {"success": False, "error": "Slack bot token not configured"}
+        try:
+            resp = await self._channel._http.get(
+                "https://slack.com/api/conversations.history",
+                params={"channel": channel, "limit": min(limit, 100)},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("ok"):
+                return {"success": False, "error": data.get("error", "Unknown Slack error")}
+            messages = [
+                {
+                    "ts": m.get("ts", ""),
+                    "user": m.get("user", ""),
+                    "text": m.get("text", ""),
+                    "thread_ts": m.get("thread_ts"),
+                }
+                for m in data.get("messages", [])
+            ]
+            return {"success": True, "data": {"channel": channel, "messages": messages}}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def reply_to_thread(self, channel: str = "", thread_ts: str = "", text: str = "", **kwargs) -> dict:
+        """Reply to a Slack thread."""
+        if not self._channel:
+            return {"success": False, "error": "Slack bot token not configured"}
+        try:
+            resp = await self._channel._http.post(
+                "https://slack.com/api/chat.postMessage",
+                json={"channel": channel, "thread_ts": thread_ts, "text": text},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("ok"):
+                return {"success": False, "error": data.get("error", "Unknown Slack error")}
+            return {"success": True, "data": {"channel": channel, "ts": data.get("ts", "")}}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def set_status(self, status_text: str = "", status_emoji: str = "", **kwargs) -> dict:
+        """Set the bot user's Slack status."""
+        if not self._channel:
+            return {"success": False, "error": "Slack bot token not configured"}
+        try:
+            profile = {"status_text": status_text, "status_emoji": status_emoji}
+            resp = await self._channel._http.post(
+                "https://slack.com/api/users.profile.set",
+                json={"profile": profile},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("ok"):
+                return {"success": False, "error": data.get("error", "Unknown Slack error")}
+            return {"success": True, "data": {"status_text": status_text, "status_emoji": status_emoji}}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     async def close(self):
         if self._channel and hasattr(self._channel, "_http"):
             await self._channel._http.aclose()
@@ -236,6 +297,9 @@ class MessagingHub:
             "telegram_get_updates": self.telegram.get_updates,
             "slack_send": self.slack.send,
             "slack_list_channels": self.slack.list_channels,
+            "slack_read_channel_history": self.slack.read_channel_history,
+            "slack_reply_to_thread": self.slack.reply_to_thread,
+            "slack_set_status": self.slack.set_status,
             "discord_send": self.discord.send,
             "discord_list_channels": self.discord.list_channels,
         }

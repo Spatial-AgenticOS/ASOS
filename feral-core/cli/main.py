@@ -685,13 +685,60 @@ def cmd_doctor():
 
 
 def cmd_setup():
-    """Launch the guided setup wizard."""
+    """Launch the guided setup wizard, then auto-generate a session token."""
     try:
         from cli.setup_wizard import run_setup
         run_setup()
     except ImportError:
         print("Setup wizard not available. Make sure cli/setup_wizard.py exists.")
         sys.exit(1)
+
+    from security.session_auth import generate_session_token, save_session_token, load_session_token
+    if load_session_token() is None:
+        token = generate_session_token()
+        save_session_token(token)
+        print(f"  Session token generated: {token[:8]}...{token[-4:]}")
+        print(f"  Stored in {feral_home() / 'session_token'}")
+
+
+def cmd_pair(name: str, list_devices: bool, revoke: str):
+    """Manage per-node device pairing."""
+    from security.device_pairing import DevicePairingStore
+
+    store = DevicePairingStore()
+
+    if list_devices:
+        devices = store.list_devices()
+        if not devices:
+            print("  No paired devices.")
+            return
+        for d in devices:
+            import datetime
+            ts = datetime.datetime.fromtimestamp(d["paired_at"]).strftime("%Y-%m-%d %H:%M")
+            seen = ""
+            if d["last_seen"]:
+                seen = f", last seen {datetime.datetime.fromtimestamp(d['last_seen']).strftime('%Y-%m-%d %H:%M')}"
+            print(f"  {d['device_id'][:12]}...  {d['name']:20s}  paired {ts}{seen}")
+        return
+
+    if revoke:
+        ok = store.revoke_device(revoke)
+        if ok:
+            print(f"  Revoked device {revoke}")
+        else:
+            print(f"  Device {revoke} not found.")
+        return
+
+    if not name:
+        name = "unnamed"
+    result = store.pair_device(name)
+    print(f"  Device paired: {result['name']}")
+    print(f"  Device ID:     {result['device_id']}")
+    print(f"  Token:         {result['token']}")
+    print()
+    qr_data = f"feral-pair://{result['token']}"
+    print(f"  QR data: {qr_data}")
+    print("  Pass the token as ?api_key=<token> when connecting to /v1/node")
 
 
 def cmd_wake_test():
@@ -910,6 +957,12 @@ def main():
     sub.add_parser("skills", help="List loaded skills")
     sub.add_parser("identity", help="Show agent identity")
 
+    # feral pair
+    pair_p = sub.add_parser("pair", help="Manage per-node device pairing tokens")
+    pair_p.add_argument("--name", default="", help="Friendly name for the device")
+    pair_p.add_argument("--list", action="store_true", dest="list_devices", help="List paired devices")
+    pair_p.add_argument("--revoke", default="", help="Revoke a device by ID")
+
     # feral wake-test
     sub.add_parser("wake-test", help="Test wake word detection from your microphone")
 
@@ -950,6 +1003,12 @@ def main():
         cmd_skills()
     elif args.subcommand == "identity":
         cmd_identity()
+    elif args.subcommand == "pair":
+        cmd_pair(
+            name=getattr(args, "name", ""),
+            list_devices=getattr(args, "list_devices", False),
+            revoke=getattr(args, "revoke", ""),
+        )
     elif args.subcommand == "wake-test":
         cmd_wake_test()
     elif args.subcommand == "marketplace":

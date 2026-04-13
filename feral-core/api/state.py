@@ -47,6 +47,9 @@ from integrations.calendar import CalendarIntegration
 from integrations.email import EmailIntegration
 from integrations.messaging import MessagingHub
 from integrations.health_platforms import HealthAggregator, WhoopClient, OuraClient
+from integrations.google_drive import GoogleDriveIntegration
+from integrations.google_contacts import GoogleContactsIntegration
+from integrations.microsoft365 import Microsoft365Integration
 from skills.marketplace import MarketplaceClient
 from gateway.protocol import MethodRegistry, GatewaySession, register_core_methods
 from hardware.mesh import HardwareMesh
@@ -126,6 +129,9 @@ class BrainState:
         self.email: Optional[EmailIntegration] = None
         self.messaging: Optional[MessagingHub] = None
         self.health_aggregator: Optional[HealthAggregator] = None
+        self.google_drive: Optional[GoogleDriveIntegration] = None
+        self.google_contacts: Optional[GoogleContactsIntegration] = None
+        self.microsoft365: Optional[Microsoft365Integration] = None
         self.digital_twin = None
         self.location_engine = None
         self.push_channel = None
@@ -201,6 +207,18 @@ class BrainState:
         self.email = EmailIntegration(oauth_manager=self.oauth)
         self.messaging = MessagingHub()
         try:
+            self.google_drive = GoogleDriveIntegration(oauth_manager=self.oauth)
+        except Exception as e:
+            logger.debug(f"Google Drive init skipped: {e}")
+        try:
+            self.google_contacts = GoogleContactsIntegration(oauth_manager=self.oauth)
+        except Exception as e:
+            logger.debug(f"Google Contacts init skipped: {e}")
+        try:
+            self.microsoft365 = Microsoft365Integration(oauth_manager=self.oauth)
+        except Exception as e:
+            logger.debug(f"Microsoft 365 init skipped: {e}")
+        try:
             whoop = WhoopClient(oauth_manager=self.oauth)
             oura = OuraClient()
             self.health_aggregator = HealthAggregator(whoop=whoop, oura=oura)
@@ -253,6 +271,12 @@ class BrainState:
             register_instance("messaging_sms", self.messaging)
         if self.health_aggregator:
             register_instance("health_data", self.health_aggregator)
+        if self.google_drive:
+            register_instance("google_drive", self.google_drive)
+        if self.google_contacts:
+            register_instance("google_contacts", self.google_contacts)
+        if self.microsoft365:
+            register_instance("microsoft365", self.microsoft365)
 
         try:
             self.taskflows = TaskFlowRuntime(memory_store=self.memory)

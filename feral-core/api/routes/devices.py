@@ -1,10 +1,20 @@
-"""Device mesh, session handoff, command ledger, and node health endpoints."""
+"""Device mesh, session handoff, command ledger, node health, and pairing endpoints."""
 
 from fastapi import APIRouter, Request
 
 from api.state import state
+from security.device_pairing import DevicePairingStore
 
 router = APIRouter()
+
+_pairing_store: DevicePairingStore | None = None
+
+
+def _get_pairing_store() -> DevicePairingStore:
+    global _pairing_store
+    if _pairing_store is None:
+        _pairing_store = DevicePairingStore()
+    return _pairing_store
 
 
 @router.get("/api/devices/connected")
@@ -140,3 +150,45 @@ async def nodes_health():
     if not state.hardware_mesh:
         return {"nodes": {}, "error": "hardware mesh not initialised"}
     return {"nodes": state.hardware_mesh.node_health.get_all()}
+
+
+# ─────────────────────────────────────────────
+# Device Pairing REST Endpoints
+# ─────────────────────────────────────────────
+
+
+@router.get("/api/devices/paired")
+async def list_paired_devices():
+    """List all paired edge-node devices."""
+    store = _get_pairing_store()
+    devices = store.list_devices()
+    safe = [
+        {
+            "device_id": d["device_id"],
+            "name": d["name"],
+            "paired_at": d["paired_at"],
+            "last_seen": d["last_seen"],
+        }
+        for d in devices
+    ]
+    return {"devices": safe}
+
+
+@router.post("/api/devices/pair")
+async def pair_device(request: Request):
+    """Pair a new edge-node device.  Returns the device token once."""
+    body = await request.json()
+    name = body.get("name", "unnamed")
+    store = _get_pairing_store()
+    result = store.pair_device(name)
+    return result
+
+
+@router.delete("/api/devices/{device_id}")
+async def revoke_device(device_id: str):
+    """Revoke (un-pair) a device."""
+    store = _get_pairing_store()
+    ok = store.revoke_device(device_id)
+    if not ok:
+        return {"ok": False, "error": "device not found"}
+    return {"ok": True}

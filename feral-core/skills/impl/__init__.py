@@ -83,3 +83,8 @@ try:
     import skills.impl.agentic_computer_use
 except ImportError:
     pass
+
+try:
+    import skills.impl.web_actions
+except ImportError:
+    pass

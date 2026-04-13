@@ -39,6 +39,14 @@ from api.state import state, _log_activity, VISION_MAX_FRAME_KB
 from api.routes.config import _build_greeting
 from api.routes.dashboard import _get_dashboard_data
 
+from security.session_auth import (
+    session_auth_required,
+    verify_session,
+    is_localhost,
+    local_bypass_enabled,
+)
+from security.device_pairing import DevicePairingStore
+
 from api.routes.dashboard import router as dashboard_router
 from api.routes.config import router as config_router
 from api.routes.skills import router as skills_router
@@ -100,6 +108,49 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(RateLimitMiddleware)
+
+
+# ─────────────────────────────────────────────
+# Optional REST API Key Middleware (Part C)
+# ─────────────────────────────────────────────
+
+def _load_api_key() -> str | None:
+    """Return the REST API key from env or ~/.feral/api_key, or None."""
+    key = os.environ.get("FERAL_API_KEY")
+    if key:
+        return key
+    key_path = Path(os.environ.get("FERAL_HOME", str(Path.home() / ".feral"))) / "api_key"
+    if key_path.exists():
+        text = key_path.read_text().strip()
+        return text or None
+    return None
+
+
+_OPEN_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json"})
+
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        api_key = _load_api_key()
+        if api_key is None:
+            return await call_next(request)
+
+        path = request.url.path
+        if path in _OPEN_PATHS or path.startswith("/docs") or path.startswith("/redoc"):
+            return await call_next(request)
+
+        scope_type = request.scope.get("type", "")
+        if scope_type == "websocket":
+            return await call_next(request)
+
+        auth = request.headers.get("authorization", "")
+        if auth == f"Bearer {api_key}":
+            return await call_next(request)
+
+        return JSONResponse({"error": "Unauthorized — provide Authorization: Bearer <key>"}, status_code=401)
+
+
+app.add_middleware(APIKeyMiddleware)
 
 
 # ─────────────────────────────────────────────
@@ -216,8 +267,27 @@ async def shutdown_event():
 # ─────────────────────────────────────────────
 
 @app.websocket("/v1/session")
-async def client_session(ws: WebSocket):
+async def client_session(ws: WebSocket, token: str = Query(default=None)):
     await ws.accept()
+
+    if session_auth_required():
+        client_host = ws.client.host if ws.client else None
+        if is_localhost(client_host) and local_bypass_enabled():
+            pass  # localhost bypass
+        elif token and verify_session(token):
+            pass  # valid query-param token
+        else:
+            try:
+                first_msg = await asyncio.wait_for(ws.receive_json(), timeout=5)
+                if first_msg.get("type") == "auth" and verify_session(first_msg.get("token", "")):
+                    pass  # valid first-message token
+                else:
+                    await ws.close(code=4001, reason="Unauthorized")
+                    return
+            except Exception:
+                await ws.close(code=4001, reason="Unauthorized")
+                return
+
     session_id = str(uuid4())
     state.sessions[session_id] = ws
     logger.info(f"Client connected: {session_id}")
@@ -440,17 +510,29 @@ async def client_session(ws: WebSocket):
 # ─────────────────────────────────────────────
 
 NODE_API_KEY = os.environ.get("NODE_API_KEY", "dev-secret-key")
+_pairing_store: DevicePairingStore | None = None
+
+
+def _get_pairing_store() -> DevicePairingStore:
+    global _pairing_store
+    if _pairing_store is None:
+        _pairing_store = DevicePairingStore()
+    return _pairing_store
+
 
 @app.websocket("/v1/node")
 async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
-    if api_key != NODE_API_KEY:
+    store = _get_pairing_store()
+    paired_device_id = store.verify_device(api_key) if api_key else None
+
+    if paired_device_id is None and api_key != NODE_API_KEY:
         logger.warning("Unauthorized daemon connection attempt rejected")
         await ws.close(code=1008, reason="Unauthorized Edge Node API Key")
         return
 
     await ws.accept()
     node_id = None
-    logger.info("Daemon connecting...")
+    logger.info("Daemon connecting (device_id=%s)...", paired_device_id or "legacy-key")
 
     try:
         while True:

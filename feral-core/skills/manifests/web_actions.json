@@ -1,0 +1,108 @@
+{
+    "skill_id": "web_actions",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Web Actions",
+        "primary_color": "#6c5ce7",
+        "secondary_color": "#a29bfe",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Higher-level browser automation for purchases, bookings, price comparison, and structured data extraction. Always stops before financial commitment and shows a confirmation card.",
+    "trigger_phrases": [
+        "buy",
+        "purchase",
+        "order",
+        "book a reservation",
+        "compare prices",
+        "find the best price",
+        "fill out form",
+        "book a table",
+        "add to cart",
+        "checkout",
+        "extract data from",
+        "scrape"
+    ],
+    "categories": ["browser", "commerce", "automation"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "search_and_compare",
+            "method": "PYTHON",
+            "url": "feral://web_actions/search_and_compare",
+            "description": "Search the web, extract prices and reviews, return structured comparison.",
+            "params": [
+                {"name": "query", "type": "string", "required": true, "description": "Search query (product, service, etc.)"},
+                {"name": "max_results", "type": "integer", "required": false, "default": "5", "description": "Maximum results to return"}
+            ],
+            "returns_description": "{query, results: [{title, url, snippet, prices_found}], screenshot_b64}",
+            "ui_hint": "list"
+        },
+        {
+            "id": "fill_web_form",
+            "method": "PYTHON",
+            "url": "feral://web_actions/fill_web_form",
+            "description": "Navigate to a URL and fill form fields, returning a screenshot for review.",
+            "params": [
+                {"name": "url", "type": "string", "required": true, "description": "URL of the page with the form"},
+                {"name": "form_data", "type": "object", "required": true, "description": "Mapping of selector/field name to value"}
+            ],
+            "returns_description": "{filled, fields_ok, fields_failed, screenshot_b64}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "make_purchase",
+            "method": "PYTHON",
+            "url": "feral://web_actions/make_purchase",
+            "description": "Navigate to product page, extract price — returns SDUI confirmation card. Does NOT complete purchase without explicit user confirmation.",
+            "params": [
+                {"name": "url", "type": "string", "required": true, "description": "Product or checkout URL"},
+                {"name": "item_description", "type": "string", "required": false, "description": "Human-readable item description"}
+            ],
+            "returns_description": "{purchased: false, awaiting_confirmation: true, sdui_card, detected_prices, screenshot_b64}",
+            "ui_hint": "sdui"
+        },
+        {
+            "id": "book_reservation",
+            "method": "PYTHON",
+            "url": "feral://web_actions/book_reservation",
+            "description": "Fill a booking form and return confirmation card. Does NOT submit without explicit user confirmation.",
+            "params": [
+                {"name": "service_url", "type": "string", "required": true, "description": "Booking service URL"},
+                {"name": "details", "type": "object", "required": true, "description": "Reservation details (name, date, time, guests, etc.)"}
+            ],
+            "returns_description": "{booked: false, awaiting_confirmation: true, sdui_card, screenshot_b64}",
+            "ui_hint": "sdui"
+        },
+        {
+            "id": "extract_page_data",
+            "method": "PYTHON",
+            "url": "feral://web_actions/extract_page_data",
+            "description": "Navigate to a URL and extract structured data from the page content.",
+            "params": [
+                {"name": "url", "type": "string", "required": true, "description": "URL to extract data from"},
+                {"name": "what_to_extract", "type": "string", "required": false, "description": "Description of what data to extract"}
+            ],
+            "returns_description": "{extracted, url, title, page_text}",
+            "ui_hint": "detail_card"
+        }
+    ],
+    "flows": [
+        {
+            "id": "compare_and_buy",
+            "description": "Search, compare prices, then initiate purchase with confirmation",
+            "steps": [
+                {"endpoint_id": "search_and_compare"},
+                {"endpoint_id": "make_purchase"}
+            ]
+        }
+    ],
+    "crons": [],
+    "triggers": [],
+    "permissions": ["browser", "commerce"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 50
+}
