@@ -29,7 +29,7 @@ class MainActivity : AppCompatActivity(), FeralBrainDelegate {
         connectBtn.setOnClickListener {
             val host = "10.0.2.2"
             val port = 9090
-            val apiKey = "dev-secret-key"
+            val apiKey = BuildConfig.NODE_API_KEY
             client = FeralBrainClient(host, port, apiKey, delegate = this)
             scope.launch(Dispatchers.IO) {
                 client?.connect()

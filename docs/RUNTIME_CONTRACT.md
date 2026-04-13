@@ -6,7 +6,7 @@ This document defines the deterministic runtime contract for FERAL Brain. Every 
 
 | Variable | Default | Purpose |
 |:---------|:--------|:--------|
-| `FERAL_HOST` | `0.0.0.0` | uvicorn bind address |
+| `FERAL_HOST` | `127.0.0.1` | uvicorn bind address |
 | `FERAL_PORT` | `9090` | uvicorn bind port |
 | `FERAL_PUBLIC_BASE_URL` | `http://localhost:9090` | URL the browser/API client uses to reach the brain |
 | `FERAL_PUBLIC_SCHEME` | `http` | scheme for computed public URL when `FERAL_PUBLIC_BASE_URL` is unset |
@@ -81,7 +81,7 @@ When vision is requested on a model that does not support it, the provider retur
 
 | Variable | Default | Purpose |
 |:---------|:--------|:--------|
-| `NODE_API_KEY` | `dev-secret-key` | Daemon WebSocket auth token |
+| `NODE_API_KEY` | `""` | Daemon WebSocket auth token |
 | `FERAL_MAX_TIER` | `active` | Execution sandbox max tier |
 | `FERAL_KEY_*` | none | Blind vault keys (never exposed to the LLM) |
 
@@ -112,7 +112,7 @@ When vision is requested on a model that does not support it, the provider retur
 
 ## Health Check
 
-`GET /health` returns `{"status": "ok", "version": "1.0.0"}` when the server is ready. Docker HEALTHCHECK and load balancers should poll this endpoint.
+`GET /health` returns `{"status": "ok", "version": "1.2.0"}` when the server is ready. Docker HEALTHCHECK and load balancers should poll this endpoint.
 
 ## Shutdown
 

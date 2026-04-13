@@ -32,7 +32,7 @@ Every HUP device registers with a JSON manifest that describes its identity, cap
 ```json
 {
   "device_id": "wristband-001",
-  "name": "Theora Wristband",
+  "name": "FERAL Wristband",
   "type": "wearable",
   "firmware_version": "2.1.0",
   "capabilities": [

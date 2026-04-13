@@ -4,6 +4,7 @@ import {
   Check, AlertCircle, Loader2, Save, RefreshCw, Trash2, Plus,
   Bluetooth, Wifi, WifiOff, Radio, Smartphone, Glasses, Watch, Bot,
   Sun, Moon, Clock, Play, Pause, ChevronDown, ChevronUp,
+  MessageSquare, Server,
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
@@ -29,6 +30,14 @@ export default function Settings() {
   const [expandedRoutine, setExpandedRoutine] = useState(null);
   const [routineRuns, setRoutineRuns] = useState({});
   const [newRoutine, setNewRoutine] = useState({ description: '', cron_expr: 'every 60m', prompt: '' });
+  const [channelsConfig, setChannelsConfig] = useState({
+    telegram: { enabled: false, bot_token: '' },
+    discord: { enabled: false, bot_token: '' },
+    slack: { enabled: false, bot_token: '', app_token: '' },
+    whatsapp: { enabled: false, access_token: '', phone_number_id: '' },
+  });
+  const [channelStatus, setChannelStatus] = useState({});
+  const [channelsSaving, setChannelsSaving] = useState(false);
 
   const fetchRoutines = () => {
     setRoutinesLoading(true);
@@ -37,10 +46,21 @@ export default function Settings() {
   };
 
   useEffect(() => {
-    fetch(`${API}/api/config`).then(r => r.json()).then(setConfig).catch(() => {});
+    fetch(`${API}/api/config`).then(r => r.json()).then(cfg => {
+      setConfig(cfg);
+      if (cfg.channels) {
+        setChannelsConfig(prev => ({
+          telegram: { ...prev.telegram, ...(cfg.channels.telegram || {}) },
+          discord: { ...prev.discord, ...(cfg.channels.discord || {}) },
+          slack: { ...prev.slack, ...(cfg.channels.slack || {}) },
+          whatsapp: { ...prev.whatsapp, ...(cfg.channels.whatsapp || {}) },
+        }));
+      }
+    }).catch(() => {});
     fetch(`${API}/api/identity`).then(r => r.json()).then(setIdentity).catch(() => {});
     fetch(`${API}/api/devices`).then(r => r.json()).then(d => setDevices(d.devices || [])).catch(() => {});
     fetch(`${API}/api/llm/presets`).then(r => r.json()).then(d => setLlmPresets(d.presets || [])).catch(() => {});
+    fetch(`${API}/api/channels`).then(r => r.json()).then(d => setChannelStatus(d)).catch(() => {});
     fetchPendingSkills();
     fetchRoutines();
   }, []);
@@ -159,10 +179,12 @@ export default function Settings() {
     { id: 'devices', label: 'Devices', icon: Bluetooth },
     { id: 'llm', label: 'AI Model', icon: Sparkles },
     { id: 'features', label: 'Features', icon: Zap },
+    { id: 'channels', label: 'Channels', icon: MessageSquare },
     { id: 'routines', label: 'Routines', icon: Clock },
     { id: 'proposals', label: 'Proposals', icon: AlertCircle },
     { id: 'keys', label: 'API Keys', icon: Key },
     { id: 'security', label: 'Security', icon: Shield },
+    { id: 'server', label: 'Server', icon: Server },
   ];
 
   return (
@@ -354,7 +376,7 @@ export default function Settings() {
               <div className="mt-4 bg-feral-bg border border-feral-border rounded-lg p-3">
                 <label className="text-xs text-feral-text-secondary mb-1 block">Brain Address (for devices to connect)</label>
                 <code className="text-sm text-feral-accent font-mono">
-                  ws://{window.location.hostname}:9090/v1/node?api_key=dev-secret-key
+                  ws://{window.location.hostname}:9090/v1/node?api_key=<em>{'<NODE_API_KEY>'}</em>
                 </code>
               </div>
             </Section>
@@ -402,18 +424,27 @@ export default function Settings() {
                 </div>
               )}
 
-              <div className="grid grid-cols-3 gap-3">
-                {['openai', 'groq', 'ollama'].map(p => (
+              <div className="grid grid-cols-4 gap-3">
+                {[
+                  { id: 'openai', label: 'OpenAI' },
+                  { id: 'anthropic', label: 'Anthropic' },
+                  { id: 'gemini', label: 'Gemini' },
+                  { id: 'openrouter', label: 'OpenRouter' },
+                  { id: 'deepseek', label: 'DeepSeek' },
+                  { id: 'qwen', label: 'Qwen' },
+                  { id: 'groq', label: 'Groq' },
+                  { id: 'ollama', label: 'Ollama' },
+                ].map(p => (
                   <button
-                    key={p}
-                    onClick={() => updateSetting('llm', 'provider', p)}
+                    key={p.id}
+                    onClick={() => updateSetting('llm', 'provider', p.id)}
                     className={`px-4 py-3 rounded-lg border text-sm font-medium transition ${
-                      config.llm?.provider === p
+                      config.llm?.provider === p.id
                         ? 'border-feral-accent bg-feral-accent/10 text-feral-accent'
                         : 'border-feral-border bg-feral-card hover:border-feral-border-bright'
                     }`}
                   >
-                    {p.charAt(0).toUpperCase() + p.slice(1)}
+                    {p.label}
                   </button>
                 ))}
               </div>
@@ -475,6 +506,40 @@ export default function Settings() {
               </div>
             </Section>
 
+            <Section title="Autonomy Mode" icon={Shield}>
+              <p className="text-xs text-feral-text-muted mb-3">
+                Control how much freedom FERAL has to act on your behalf.
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { id: 'strict', label: 'Strict', desc: 'Every action requires your approval' },
+                  { id: 'hybrid', label: 'Hybrid', desc: 'Safe actions auto-execute, risky ones ask first' },
+                  { id: 'loose', label: 'Loose', desc: 'Full autonomy — only blocked actions need approval' },
+                ].map(mode => (
+                  <button
+                    key={mode.id}
+                    onClick={async () => {
+                      setConfig(prev => ({ ...prev, autonomy_mode: mode.id }));
+                      await fetch(`${API}/v1/config`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ autonomy_mode: mode.id }),
+                      });
+                      flash();
+                    }}
+                    className={`text-left px-4 py-3 rounded-lg border transition ${
+                      (config.autonomy_mode || 'hybrid') === mode.id
+                        ? 'border-feral-accent bg-feral-accent/10 text-feral-accent'
+                        : 'border-feral-border bg-feral-card hover:border-feral-border-bright'
+                    }`}
+                  >
+                    <div className="text-sm font-medium">{mode.label}</div>
+                    <div className="text-[11px] text-feral-text-secondary mt-1">{mode.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </Section>
+
             <Section title="Vision" icon={Eye}>
               <div className="space-y-3">
                 <Toggle label="Vision Pipeline" desc="Process camera frames from connected devices" value={config.vision?.enabled} onChange={v => updateSetting('vision', 'enabled', v)} />
@@ -504,6 +569,92 @@ export default function Settings() {
               </div>
             </Section>
           </div>
+        )}
+
+        {/* Channels Tab */}
+        {activeTab === 'channels' && (
+          <Section title="Messaging Channels" icon={MessageSquare}>
+            <p className="text-xs text-feral-text-muted mb-4">
+              Connect FERAL to messaging platforms. Enable channels to interact with your agent from anywhere.
+            </p>
+            <div className="space-y-4">
+              {[
+                { id: 'telegram', label: 'Telegram', fields: [{ key: 'bot_token', label: 'Bot Token', secret: true }] },
+                { id: 'discord', label: 'Discord', fields: [{ key: 'bot_token', label: 'Bot Token', secret: true }] },
+                { id: 'slack', label: 'Slack', fields: [{ key: 'bot_token', label: 'Bot Token', secret: true }, { key: 'app_token', label: 'App Token', secret: true }] },
+                { id: 'whatsapp', label: 'WhatsApp', fields: [{ key: 'access_token', label: 'Access Token', secret: true }, { key: 'phone_number_id', label: 'Phone Number ID', secret: false }] },
+              ].map(ch => {
+                const chCfg = channelsConfig[ch.id] || {};
+                const status = channelStatus?.[ch.id] || channelStatus?.channels?.[ch.id];
+                const isConnected = status?.connected || status?.status === 'connected';
+                return (
+                  <div key={ch.id} className="bg-feral-bg/30 rounded-lg border border-feral-border p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isConnected ? 'bg-green-400' : 'bg-zinc-500'}`} />
+                        <span className="text-sm font-medium">{ch.label}</span>
+                        <span className="text-[10px] text-feral-text-muted">{isConnected ? 'Connected' : 'Disconnected'}</span>
+                      </div>
+                      <button
+                        onClick={() => setChannelsConfig(prev => ({
+                          ...prev,
+                          [ch.id]: { ...prev[ch.id], enabled: !(prev[ch.id]?.enabled) },
+                        }))}
+                        className={`w-12 h-7 rounded-full transition-all flex items-center px-1 ${
+                          chCfg.enabled ? 'bg-feral-accent justify-end' : 'bg-zinc-700 justify-start'
+                        }`}
+                      >
+                        <div className="w-5 h-5 bg-white rounded-full shadow transition-all" />
+                      </button>
+                    </div>
+                    {chCfg.enabled && (
+                      <div className="space-y-2 pt-1">
+                        {ch.fields.map(f => (
+                          <div key={f.key}>
+                            <label className="text-xs text-feral-text-secondary mb-1 block">{f.label}</label>
+                            <input
+                              type={f.secret ? 'password' : 'text'}
+                              className="w-full bg-feral-bg border border-feral-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-feral-accent font-mono"
+                              value={chCfg[f.key] || ''}
+                              onChange={e => setChannelsConfig(prev => ({
+                                ...prev,
+                                [ch.id]: { ...prev[ch.id], [f.key]: e.target.value },
+                              }))}
+                              placeholder={`Enter ${f.label.toLowerCase()}`}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              <button
+                onClick={async () => {
+                  setChannelsSaving(true);
+                  try {
+                    await fetch(`${API}/v1/config`, {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ channels: channelsConfig }),
+                    });
+                    const st = await fetch(`${API}/api/channels`).then(r => r.json());
+                    setChannelStatus(st);
+                    flash();
+                  } catch {
+                  } finally {
+                    setChannelsSaving(false);
+                  }
+                }}
+                disabled={channelsSaving}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-feral-accent text-white rounded-lg font-medium hover:bg-feral-accent/90 transition active:scale-[0.98] disabled:opacity-50"
+              >
+                {channelsSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                Save Channels
+              </button>
+            </div>
+          </Section>
         )}
 
         {/* Routines Tab */}
@@ -785,6 +936,51 @@ export default function Settings() {
               </div>
             </Section>
           </div>
+        )}
+
+        {/* Server Tab */}
+        {activeTab === 'server' && (
+          <Section title="Server Configuration" icon={Server}>
+            <p className="text-xs text-feral-text-muted mb-4">
+              Read-only server settings. These values are derived from your environment and config files.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs text-feral-text-secondary mb-1 block">Bind Address</label>
+                <div className="w-full bg-feral-bg border border-feral-border rounded-lg px-4 py-2.5 text-sm font-mono text-feral-text-muted">
+                  {config.server?.bind_address || config.bind_address || '127.0.0.1'}
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-feral-text-secondary mb-1 block">Brain Port</label>
+                <div className="w-full bg-feral-bg border border-feral-border rounded-lg px-4 py-2.5 text-sm font-mono text-feral-text-muted">
+                  {config.server?.port || config.port || '9090'}
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-feral-text-secondary mb-1 block">CORS Origins</label>
+                <div className="w-full bg-feral-bg border border-feral-border rounded-lg px-4 py-2.5 text-sm font-mono text-feral-text-muted">
+                  {config.server?.cors_origins || config.cors_origins || '*'}
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-feral-text-secondary mb-1 block">Node API Key</label>
+                <input
+                  type="password"
+                  readOnly
+                  className="w-full bg-feral-bg border border-feral-border rounded-lg px-4 py-2.5 text-sm font-mono text-feral-text-muted cursor-default"
+                  value={config.security?.node_api_key || ''}
+                  placeholder="Not configured"
+                />
+              </div>
+            </div>
+            <div className="mt-4 bg-feral-bg/50 border border-feral-border rounded-lg px-4 py-3">
+              <p className="text-xs text-feral-text-secondary flex items-center gap-2">
+                <AlertCircle size={14} className="text-yellow-400 flex-shrink-0" />
+                Server settings require a restart to take effect. Edit your .env file or environment variables directly.
+              </p>
+            </div>
+          </Section>
         )}
       </div>
     </div>

@@ -258,7 +258,7 @@ class PhoneBridgeDaemon:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FERAL phone bridge reference daemon")
     parser.add_argument("--brain", default=os.getenv("FERAL_BRAIN_WS", "ws://localhost:9090"), help="Brain base URL (ws://host:port)")
-    parser.add_argument("--api-key", default=os.getenv("NODE_API_KEY", "dev-secret-key"), help="NODE_API_KEY used by /v1/node")
+    parser.add_argument("--api-key", default=os.getenv("NODE_API_KEY", ""), help="NODE_API_KEY used by /v1/node")
     parser.add_argument("--node-id", default=os.getenv("FERAL_NODE_ID", ""), help="Optional static node id")
     parser.add_argument("--glasses-model", default=os.getenv("FERAL_GLASSES_MODEL", "FERAL-Health-v1"))
     parser.add_argument("--sensor-interval", type=float, default=5.0, help="Telemetry interval in seconds")

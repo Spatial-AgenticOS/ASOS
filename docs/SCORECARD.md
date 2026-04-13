@@ -105,8 +105,16 @@ Brutally honest capability matrix. No marketing spin.
 | BlindVault | Working | Encrypted secret storage |
 | SandboxPolicy | Partial | YAML loads but not enforced everywhere |
 | dangerous_tools Surface Deny | Working | Hard deny list for high-risk tools |
-| Docker Sandbox | Partial | Container isolation exists; not default path |
+| Docker Sandbox | Working | Container isolation; refuses host fallback when Docker unavailable |
 | WASM Sandbox | Partial | Experimental; limited tool coverage |
+
+## Frontend Quality
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| ESLint (`react-hooks/exhaustive-deps`) | Working | Enforced in CI |
+| React Error Boundary | Working | Wraps app root, catches render errors |
+| DOMPurify (XSS sanitization) | Working | Applied to SDUI renderer |
 
 ## Clients
 
@@ -124,7 +132,7 @@ Brutally honest capability matrix. No marketing spin.
 | `pip install feral-ai` | Working | PyPI live |
 | `curl` one-liner | Working | Requires public repo access |
 | Docker Compose | Working | Full stack in one command |
-| CI (lint + tests + build) | Working | All green |
+| CI (lint + tests + build) | Working | 1080 tests passing |
 | `feral doctor` | Working | Environment diagnostics |
 | Docs (Mintlify, 33 pages) | Working | Guides, SDK refs, API docs |
 
@@ -132,7 +140,7 @@ Brutally honest capability matrix. No marketing spin.
 
 | Feature | Status | Notes |
 |:--------|:-------|:------|
-| Baseline Learning Engine | Not Yet | Statistical drift detection over time |
+| Baseline Learning Engine | Working | Biometric anomaly detection via statistical drift |
 | Warehouse / Fleet Control | Not Yet | 100-camera, multi-robot orchestration |
 | Native NixOS Module | Not Yet | Declarative system-level install |
 | GenUI Provider Marketplace (with signing) | Not Yet | Trust + distribution layer for third-party UI providers |

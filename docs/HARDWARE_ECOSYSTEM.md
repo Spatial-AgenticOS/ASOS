@@ -22,7 +22,7 @@ Devices connect to the FERAL Brain as **hardware daemons** over an authenticated
 
 All daemons connect via WebSocket to `wss://{brain_host}:{brain_port}/v1/node?api_key={key}`.
 
-The `api_key` query parameter authenticates the daemon. Default: `dev-secret-key` (override via `NODE_API_KEY` env var for production).
+The `api_key` query parameter authenticates the daemon. Set via the `NODE_API_KEY` environment variable (no default — must be configured before deployment).
 
 ### Layer 2: Device Manifest
 
@@ -227,7 +227,7 @@ import asyncio
 import json
 import websockets
 
-BRAIN_URL = "ws://localhost:9090/v1/node?api_key=dev-secret-key"
+BRAIN_URL = f"ws://localhost:9090/v1/node?api_key={os.environ['NODE_API_KEY']}"
 
 async def main():
     async with websockets.connect(BRAIN_URL) as ws:

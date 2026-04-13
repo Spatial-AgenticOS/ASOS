@@ -10,13 +10,38 @@ description: "Complete reference for the feral command-line tool — all subcomm
 feral <command> [options]
 ```
 
-The `feral` CLI is the primary interface for managing the FERAL brain, dashboard, hardware, and development tools.
+The `feral` CLI is the primary interface for managing the FERAL brain, dashboard, and development tools.
+
+Global connection options apply to all subcommands:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--host` | `localhost` | Brain hostname to connect to |
+| `--port` | `9090` | Brain port to connect to |
 
 ## Commands
 
+### `feral` (no subcommand)
+
+Launch the interactive REPL. Connects to the brain via WebSocket and presents a chat prompt.
+
+```bash
+feral
+```
+
+REPL slash-commands: `/status`, `/devices`, `/skills`, `/identity`, `/quit`.
+
+### `feral "message"`
+
+One-shot mode. Sends a single message to the brain, prints the response, and exits.
+
+```bash
+feral "search the web for FERAL AI reviews"
+```
+
 ### `feral start`
 
-Start the brain, dashboard, and voice pipeline.
+Start the brain, wait for health, optionally open the dashboard in a browser, then drop into the interactive REPL. If this is the first run, the setup wizard launches automatically.
 
 ```bash
 feral start [options]
@@ -24,41 +49,25 @@ feral start [options]
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--no-dashboard` | — | Start brain only, skip the web UI |
-| `--no-voice` | — | Disable voice pipeline |
-| `--port <n>` | `9090` | Brain port |
-| `--dashboard-port <n>` | `3000` | Dashboard port |
-| `--log-level <level>` | `info` | `debug`, `info`, `warn`, `error` |
-| `--detach` | — | Run in background (daemonize) |
+| `--serve-port <n>` | `9090` | Brain server port |
+| `--no-browser` | — | Skip opening the dashboard in the browser |
+| `--demo` | — | Demo mode: simulated hardware, pre-seeded memory |
 
 <CodeGroup>
 ```bash Default
 feral start
 ```
-```bash Brain only, debug mode
-feral start --no-dashboard --no-voice --log-level debug
+```bash Custom port, no browser
+feral start --serve-port 8080 --no-browser
 ```
-```bash Custom ports
-feral start --port 8080 --dashboard-port 4000
-```
-```bash Background
-feral start --detach
+```bash Demo mode
+feral start --demo
 ```
 </CodeGroup>
 
-### `feral stop`
-
-Gracefully stop all running FERAL processes.
-
-```bash
-feral stop
-```
-
-Sends `SIGTERM` to the brain, dashboard, and any voice/hardware processes. Returns exit code `0` on success.
-
 ### `feral serve`
 
-Start only the brain API server (no dashboard, no REPL).
+Start only the brain API server (headless, no REPL, no browser).
 
 ```bash
 feral serve [options]
@@ -66,11 +75,19 @@ feral serve [options]
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--port <n>` | `9090` | API port |
-| `--host <addr>` | `0.0.0.0` | Bind address |
-| `--workers <n>` | `1` | Number of uvicorn workers |
+| `--bind <addr>` | `127.0.0.1` | Bind address |
+| `--serve-port <n>` | `9090` | Server port |
 
 Useful for production deployments or when running the dashboard separately.
+
+<CodeGroup>
+```bash Default
+feral serve
+```
+```bash Public bind, custom port
+feral serve --bind 0.0.0.0 --serve-port 8080
+```
+</CodeGroup>
 
 ### `feral setup`
 
@@ -80,126 +97,169 @@ Run the interactive setup wizard.
 feral setup
 ```
 
-Walks through LLM provider selection, API key storage, USER.md creation, and autonomy mode configuration. Safe to re-run — only overwrites values you change.
+Walks through LLM provider selection, API key storage, USER.md creation, and autonomy mode configuration. Generates a session token on first run. Safe to re-run — only overwrites values you change.
 
 ### `feral status`
 
-Show the current state of all FERAL components.
+Show the current state of the running brain (sessions, devices, skills, LLM, audio, sync, memory).
 
 ```bash
-feral status [--json]
+feral status
 ```
 
-```
-Brain       ● running   ws://localhost:9090   PID 48201
-Dashboard   ● running   http://localhost:3000  PID 48215
-Voice       ● active    wake word listening
-Hardware    ● 2 devices FERAL-Wristband-A3F2, Home-Assistant
-Memory      ● sqlite    ~/.feral/memory.db (142 episodes)
-Autonomy    ● hybrid    3 safe / 2 risky categories
-```
+### `feral devices`
 
-Use `--json` for machine-readable output:
+List all connected hardware devices.
 
 ```bash
-feral status --json
+feral devices
 ```
 
-```json
-{
-  "brain": { "status": "running", "port": 9090, "pid": 48201 },
-  "dashboard": { "status": "running", "port": 3000, "pid": 48215 },
-  "voice": { "status": "active", "mode": "wake_word" },
-  "hardware": { "devices": 2 },
-  "memory": { "backend": "sqlite", "episodes": 142 }
-}
+### `feral skills`
+
+List all loaded skills.
+
+```bash
+feral skills
 ```
+
+### `feral identity`
+
+Show the agent's name, personality, rules, and communication style.
+
+```bash
+feral identity
+```
+
+### `feral pair`
+
+Manage per-node device pairing tokens for session authentication.
+
+```bash
+feral pair [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--name <name>` | Friendly name for the new device (default: "unnamed") |
+| `--list` | List all paired devices |
+| `--revoke <device_id>` | Revoke a device by its ID |
+
+<CodeGroup>
+```bash Pair a new device
+feral pair --name "MacBook Pro"
+```
+```bash List paired devices
+feral pair --list
+```
+```bash Revoke a device
+feral pair --revoke abc123def456
+```
+</CodeGroup>
+
+### `feral wake-test`
+
+Test wake word detection from your microphone for 10 seconds.
+
+```bash
+feral wake-test
+```
+
+Requires `openwakeword` and `pyaudio`. Reports detection count and mode (ML or energy-based fallback).
+
+### `feral marketplace`
+
+Skill marketplace commands.
+
+```bash
+feral marketplace <action> [query]
+```
+
+| Action | Description |
+|--------|-------------|
+| `search [query]` | Search for skills (default action) |
+| `install <skill_id>` | Install a skill by ID |
+| `list` | List installed marketplace skills |
+
+<CodeGroup>
+```bash Search
+feral marketplace search "web scraping"
+```
+```bash Install
+feral marketplace install weather-skill
+```
+```bash List installed
+feral marketplace list
+```
+</CodeGroup>
+
+### `feral sync`
+
+Federated memory sync commands.
+
+```bash
+feral sync <action> [file]
+```
+
+| Action | Description |
+|--------|-------------|
+| `status` | Show sync engine state, node ID, peer count, vector clock (default) |
+| `peers` | List discovered peers |
+| `export [file]` | Export memory bundle to a JSON file (default: `feral_memory_export.json`) |
+| `import <file>` | Import a memory bundle from a JSON file |
+
+<CodeGroup>
+```bash Check sync status
+feral sync status
+```
+```bash List peers
+feral sync peers
+```
+```bash Export memory
+feral sync export backup.json
+```
+```bash Import memory
+feral sync import backup.json
+```
+</CodeGroup>
 
 ### `feral doctor`
 
-Run diagnostic checks and report issues.
+Run comprehensive diagnostics and report what's working, what's missing, and suggested fixes.
 
 ```bash
 feral doctor
 ```
 
-```
-✓ Python 3.11.8
-✓ Node 20.11.0
-✓ pip dependencies satisfied
-✓ Brain port 9090 available
-✓ Dashboard port 3000 available
-✓ Ollama detected at localhost:11434
-✓ BLE adapter available
-✗ Playwright chromium not installed — run: playwright install chromium
-✓ Credentials vault readable
-✓ Memory database accessible
-```
-
-`feral doctor` checks:
-- Python and Node versions
-- All pip/npm dependencies
-- Port availability
-- LLM provider connectivity
-- BLE adapter presence
-- Playwright browser (for computer-use)
-- Credential vault integrity
-- Memory database access
+Checks: Python version, FERAL package, config directory, LLM credentials (keys + Ollama), identity files, memory database, port availability, Playwright/chromium, Node.js, local audio backends (faster-whisper, piper), and core dependencies.
 
 ### `feral demo`
 
-Run a pre-built demo scenario.
+Launch FERAL in demo mode with simulated hardware and pre-seeded data.
 
 ```bash
-feral demo --scenario <name>
+feral demo [options]
 ```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--scenario <name>` | — | Run a specific demo scenario |
+| `--serve-port <n>` | `9090` | Brain server port |
 
 | Scenario | Description |
 |----------|-------------|
 | `morning` | Simulated morning routine with health briefing |
 | `developer` | Developer flow with screen context and proactive help |
 | `mesh` | Multi-device mesh with phone, wristband, glasses |
-| `twin` | Digital twin Q&A session |
 
 ```bash
 feral demo --scenario morning
 ```
-
-### `feral hardware`
-
-Manage hardware devices.
-
-```bash
-feral hardware <subcommand>
-```
-
-| Subcommand | Description |
-|------------|-------------|
-| `scan` | Scan for nearby BLE devices |
-| `scan --type <type>` | Scan for specific type (`wristband`, `glasses`) |
-| `list` | List all connected devices |
-| `pair <device>` | Pair a device by name or ID |
-| `unpair <device>` | Unpair a device |
-
-## Global Options
-
-| Option | Description |
-|--------|-------------|
-| `--version` | Print version and exit |
-| `--help` | Show help for any command |
-| `--config <path>` | Use a specific config file |
-| `--quiet` | Suppress non-error output |
-| `--verbose` | Increase output verbosity |
 
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `1` | General error |
-| `2` | Invalid arguments or usage |
-| `3` | Configuration error (missing key, invalid file) |
-| `4` | Port already in use |
-| `5` | LLM provider unreachable |
-| `6` | Hardware error (BLE adapter missing, device not found) |
+| `1` | General error / connection failure |
 | `130` | Interrupted by `Ctrl+C` |

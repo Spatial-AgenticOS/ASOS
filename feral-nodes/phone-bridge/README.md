@@ -24,7 +24,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-export NODE_API_KEY=dev-secret-key
+export NODE_API_KEY=<your-secret-key>
 python bridge.py --brain ws://localhost:9090
 ```
 

@@ -25,13 +25,9 @@ headers = vault.inject("weather_api", {"X-API-Key": "$CREDENTIAL"})
 
 The LLM sees only a placeholder like `[CREDENTIAL:weather_api]` in tool descriptions. Even if the model tries to exfiltrate it, the raw value is never in its context window.
 
-### Vault CLI
+### Vault Storage
 
-```bash
-feral vault set OPENAI_API_KEY sk-...
-feral vault list
-feral vault rotate OPENAI_API_KEY
-```
+Credentials are stored during setup (`feral setup`) and managed through the `credentials.json` file. The vault injects secrets at the HTTP layer — the LLM never sees raw values.
 
 ## Permission Tiers
 
@@ -186,3 +182,37 @@ if not allowed:
 ```
 
 If the check fails, the orchestrator pauses execution and surfaces an approval request to the user via the active channel (web UI, CLI, Telegram, etc.).
+
+## Hardening (v1.2.1)
+
+The v1.2.1 release addressed a comprehensive security audit. All fixes are defense-in-depth measures that apply by default — no configuration required.
+
+### Path Traversal Protection
+The catch-all route serving the WebUI static files now uses `Path.resolve()` followed by `is_relative_to()` to reject any request that escapes the static directory (e.g. `../../etc/passwd`).
+
+### SQL Injection Whitelist on Sync
+The P2P sync engine only accepts operations targeting a hardcoded whitelist of table names: `notes`, `episodes`, `conversations`, `knowledge`, `wiki_pages`. Any other table name is rejected before query construction.
+
+### CORS Restricted to Localhost
+The default CORS `allow_origins` was changed from wildcard `*` to `localhost:5173,localhost:9090`. Production deployments should set explicit origins via configuration.
+
+### XSS Sanitization via DOMPurify
+The server-driven UI (SDUI) renderer in the React client now passes all HTML content through DOMPurify before rendering. This prevents any LLM-generated or server-pushed markup from executing scripts.
+
+### Docker Sandbox Host Fallback Disabled
+When the Docker sandbox cannot connect to the Docker daemon, it now raises an error instead of falling back to direct host execution. This prevents a missing Docker installation from silently bypassing container isolation.
+
+### Command Injection Blocked in Direct Execution
+The daemon's direct execution path no longer passes raw strings to a shell. Shell metacharacters and injection patterns are rejected by a safety filter before any command is executed.
+
+### Default Bind Address: 127.0.0.1
+The `FERAL_HOST` default was changed from `0.0.0.0` (all interfaces) to `127.0.0.1` (loopback only). This prevents accidental exposure on public networks. Set `FERAL_HOST=0.0.0.0` explicitly if you need LAN/remote access.
+
+### NODE_API_KEY Requires Explicit Configuration
+The WebSocket authentication token (`NODE_API_KEY`) no longer ships with a default value. If unset, daemon-to-brain authentication is effectively disabled — you must configure it explicitly for any multi-node deployment.
+
+### API Keys in Headers, Not URL Parameters
+The Gemini API key is now sent via the `x-goog-api-key` request header instead of as a URL query parameter. This prevents key leakage in server logs, browser history, and referrer headers.
+
+### Tool Safety: CONFIRM Before AUTO
+The tool safety classifier now checks CONFIRM patterns before AUTO patterns. Previously, a tool matching both lists would be auto-executed; now it requires user confirmation first.

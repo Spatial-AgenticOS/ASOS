@@ -251,7 +251,7 @@ async def repl():
 
     except ConnectionRefusedError:
         print(f"  Cannot connect to FERAL Brain at {uri}")
-        print("  Make sure the Brain is running: python api/server.py")
+        print("  Make sure the Brain is running: feral serve")
         sys.exit(1)
     except Exception as e:
         print(f"  Connection error: {e}")
@@ -427,7 +427,7 @@ def cmd_start(port: int | None = None, no_browser: bool = False):
         except Exception:
             print(".", end="", flush=True)
     else:
-        print("\n  Failed to start. Check logs or run: feral serve --verbose")
+        print("\n  Failed to start. Check logs or run: feral doctor")
         sys.exit(1)
 
     # Print status

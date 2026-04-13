@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(n
 logger = logging.getLogger("hardware_daemon")
 
 class HardwareDaemon:
-    def __init__(self, brain_url: str, node_type: str = "glasses", api_key: str = "dev-secret-key"):
+    def __init__(self, brain_url: str, node_type: str = "glasses", api_key: str = ""):
         self.api_key = api_key
         self.brain_ws_url = f"{brain_url}/v1/node?api_key={self.api_key}"
         self.node_id = f"{socket.gethostname()}-{node_type}-{uuid.uuid4().hex[:4]}"
@@ -332,7 +332,7 @@ def main():
     parser = argparse.ArgumentParser(description="FERAL Hardware Daemon")
     parser.add_argument("--brain", default="ws://localhost:9090", help="WebSocket URL of FERAL Brain")
     parser.add_argument("--type", default="glasses", help="Type of hardware node")
-    parser.add_argument("--api-key", default=os.environ.get("NODE_API_KEY", "dev-secret-key"),
+    parser.add_argument("--api-key", default=os.environ.get("NODE_API_KEY", ""),
                         help="API key for Brain authentication (or set NODE_API_KEY env var)")
     args = parser.parse_args()
 

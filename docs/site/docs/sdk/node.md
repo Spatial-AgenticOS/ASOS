@@ -148,7 +148,7 @@ interface NodeConfig {
   nodeType: string;
   capabilities: string[];
   brainUrl?: string;  // default: 'ws://localhost:9090/v1/node'
-  apiKey?: string;     // default: 'dev-secret-key'
+  apiKey?: string;     // default: '' (set via NODE_API_KEY env var)
 }
 ```
 

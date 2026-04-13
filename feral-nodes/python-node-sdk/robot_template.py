@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import argparse
+import os
 import socket
 import uuid
 import time
@@ -147,7 +148,7 @@ class RobotNode:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FERAL Robot Node SDK")
     parser.add_argument("--brain", default="ws://localhost:9090", help="WebSocket URL of FERAL Brain")
-    parser.add_argument("--api-key", default="dev-secret-key", help="Authentication key for Brain connection")
+    parser.add_argument("--api-key", default=os.environ.get("NODE_API_KEY", ""), help="Authentication key for Brain connection (or set NODE_API_KEY env var)")
     args = parser.parse_args()
 
     node = RobotNode(args.brain, args.api_key)

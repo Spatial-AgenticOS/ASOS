@@ -778,7 +778,7 @@ class W300Node:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="W300 Hardware bridge")
     parser.add_argument("--brain", default="ws://localhost:9090")
-    parser.add_argument("--api-key", default="dev-secret-key")
+    parser.add_argument("--api-key", default=os.environ.get("NODE_API_KEY", ""))
     parser.add_argument("--dev-camera", action="store_true", help="Use local webcam as camera fallback for development")
     parser.add_argument("--vision-interval", type=float, default=0, help="Seconds between periodic frame captures (0=disabled)")
     parser.add_argument("--tcp-camera", default="", help="TCP camera endpoint host (e.g. 192.168.1.50)")

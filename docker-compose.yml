@@ -23,7 +23,7 @@ services:
       - FERAL_TTS_PROVIDER=${FERAL_TTS_PROVIDER:-openai}
       - FERAL_TTS_VOICE=${FERAL_TTS_VOICE:-nova}
       - FERAL_WAKE_WORD=${FERAL_WAKE_WORD:-true}
-      - NODE_API_KEY=${NODE_API_KEY:-dev-secret-key}
+      - NODE_API_KEY=${NODE_API_KEY}
     volumes:
       - feral-memory:/root/.feral
       - feral-config:/root/.config/feral

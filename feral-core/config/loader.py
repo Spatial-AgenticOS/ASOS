@@ -367,7 +367,7 @@ class ConfigLoader:
         env["FERAL_PROACTIVE"] = str(features.get("proactive", False)).lower()
         env["FERAL_MULTI_AGENT"] = str(features.get("multi_agent", True)).lower()
 
-        env["NODE_API_KEY"] = self._merged.get("security", {}).get("node_api_key", "dev-secret-key")
+        env["NODE_API_KEY"] = self._merged.get("security", {}).get("node_api_key", "")
 
         # Credentials
         for cred_key in ("OPENAI_API_KEY", "GROQ_API_KEY"):
