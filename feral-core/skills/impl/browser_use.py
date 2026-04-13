@@ -74,11 +74,18 @@ class CDPConnection:
                 return False
 
             import websockets
-            self._ws = await websockets.connect(
-                self._page_ws_url,
-                max_size=50 * 1024 * 1024,
-                ping_interval=20,
-            )
+            for _attempt in range(3):
+                try:
+                    self._ws = await websockets.connect(
+                        self._page_ws_url,
+                        max_size=50 * 1024 * 1024,
+                        ping_interval=20,
+                    )
+                    break
+                except Exception:
+                    if _attempt == 2:
+                        raise
+                    await asyncio.sleep(2 ** _attempt)
             self._connected = True
             self._recv_task = asyncio.create_task(self._receive_loop())
             logger.info(f"CDP connected: {self._page_ws_url}")

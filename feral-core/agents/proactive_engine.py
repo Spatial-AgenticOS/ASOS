@@ -461,32 +461,20 @@ class ProactiveEngine:
             return
 
         try:
-            executor = getattr(self._orchestrator, "executor", None)
-            if not executor:
-                return
+            from skills.impl import get_implementation
 
             if action_type == "set_scene":
                 scene = payload.get("scene", "calming")
-                await executor.execute_tool_call(
-                    session_id="proactive_automation",
-                    tool_call={
-                        "name": "smart_home_hue__set_scene",
-                        "arguments": {"scene": scene},
-                    },
-                    vault_tokens={},
-                )
+                impl = get_implementation("smart_home_hue")
+                if impl:
+                    await impl.execute("set_scene", {"scene": scene}, {})
                 logger.info("Automation executed: set_scene=%s (trigger=%s)", scene, msg.trigger_id)
 
             elif action_type == "breathing_exercise":
                 duration = payload.get("duration_minutes", 3)
-                await executor.execute_tool_call(
-                    session_id="proactive_automation",
-                    tool_call={
-                        "name": "smart_home_hue__set_scene",
-                        "arguments": {"scene": "breathing"},
-                    },
-                    vault_tokens={},
-                )
+                impl = get_implementation("smart_home_hue")
+                if impl:
+                    await impl.execute("set_scene", {"scene": "breathing"}, {})
                 logger.info("Automation executed: breathing exercise %dmin (trigger=%s)", duration, msg.trigger_id)
 
             elif action_type == "notification":

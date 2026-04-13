@@ -24,7 +24,8 @@ def twin():
     identity.load_identity.return_value = "You are Alex. A software engineer who loves coffee."
 
     llm = AsyncMock()
-    llm.chat.return_value = "Mocked LLM answer"
+    llm.chat.return_value = {"choices": [{"message": {"content": "Mocked LLM answer", "tool_calls": []}}]}
+    llm.extract_response = MagicMock(return_value=("Mocked LLM answer", []))
 
     return DigitalTwin(memory=memory, identity_loader=identity, llm=llm)
 
@@ -45,7 +46,8 @@ class TestAsk:
 
     @pytest.mark.asyncio
     async def test_ask_with_dict_response(self, twin):
-        twin._llm.chat.return_value = {"text": "dict answer", "content": ""}
+        twin._llm.chat.return_value = {"choices": [{"message": {"content": "dict answer", "tool_calls": []}}]}
+        twin._llm.extract_response = MagicMock(return_value=("dict answer", []))
         result = await twin.ask("question")
         assert result == "dict answer"
 
@@ -69,7 +71,9 @@ class TestPredictPreference:
             {"content": "Loves jazz music"},
             {"content": "Listens to Coltrane often"},
         ]
-        twin._llm.chat.return_value = '{"preference": "jazz", "confidence": 0.9}'
+        json_text = '{"preference": "jazz", "confidence": 0.9}'
+        twin._llm.chat.return_value = {"choices": [{"message": {"content": json_text, "tool_calls": []}}]}
+        twin._llm.extract_response = MagicMock(return_value=(json_text, []))
         result = await twin.predict_preference("music")
         assert result["category"] == "music"
         assert result["preference"] == "jazz"
@@ -87,7 +91,9 @@ class TestDailyReflection:
         twin._memory.episode_recent.return_value = [
             {"summary": "Had a productive coding session", "timestamp": time.time()}
         ]
-        twin._llm.chat.return_value = "Today was great. I shipped a new feature."
+        reflection_text = "Today was great. I shipped a new feature."
+        twin._llm.chat.return_value = {"choices": [{"message": {"content": reflection_text, "tool_calls": []}}]}
+        twin._llm.extract_response = MagicMock(return_value=(reflection_text, []))
         result = await twin.daily_reflection()
         assert "shipped" in result
 

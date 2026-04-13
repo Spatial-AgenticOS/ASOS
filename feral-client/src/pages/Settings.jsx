@@ -758,10 +758,28 @@ export default function Settings() {
                 Memory data stored at <code className="text-xs bg-feral-bg px-2 py-1 rounded font-mono">~/.feral/memory.db</code>
               </p>
               <div className="flex gap-3 mt-3">
-                <button className="flex items-center gap-2 px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-sm hover:bg-feral-card-hover transition">
+                <button
+                  onClick={() => {
+                    fetch(`${API}/v1/memory/export`)
+                      .then(r => r.blob())
+                      .then(b => {
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(b);
+                        a.download = 'feral-memory.json';
+                        a.click();
+                      });
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-sm hover:bg-feral-card-hover transition"
+                >
                   <Database size={14} /> Export
                 </button>
-                <button className="flex items-center gap-2 px-4 py-2 bg-red-900/30 border border-red-800 rounded-lg text-sm text-red-400 hover:bg-red-900/50 transition">
+                <button
+                  onClick={() => {
+                    if (window.confirm('Clear all memory? This cannot be undone.'))
+                      fetch(`${API}/v1/memory`, { method: 'DELETE' });
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-900/30 border border-red-800 rounded-lg text-sm text-red-400 hover:bg-red-900/50 transition"
+                >
                   <Trash2 size={14} /> Clear All
                 </button>
               </div>

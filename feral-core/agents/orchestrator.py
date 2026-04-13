@@ -119,6 +119,8 @@ class Orchestrator:
         # State
         self.biometric_state: dict[str, dict] = {}
         self.conversation_history: dict[str, list[dict]] = {}
+        self._conversation_max_per_session = 200
+        self._conversation_max_sessions = 500
         self._pending_daemon_results: dict[str, asyncio.Future] = {}
         self._pending_frame_futures: dict[str, asyncio.Future] = {}
         self._pending_confirmations: dict[str, dict] = {}
@@ -442,7 +444,8 @@ class Orchestrator:
             else:
                 break
 
-        self.conversation_history[session_id] = history[-20:]
+        self.conversation_history[session_id] = history[-self._conversation_max_per_session:]
+        self._evict_stale_sessions()
 
         if self.learner:
             asyncio.ensure_future(self.learner.on_message(session_id, "user", text))
@@ -609,7 +612,8 @@ class Orchestrator:
         if not got_final_text:
             await self._send_text(session_id, "I processed your request but have no text response.")
 
-        self.conversation_history[session_id] = history[-20:]
+        self.conversation_history[session_id] = history[-self._conversation_max_per_session:]
+        self._evict_stale_sessions()
         if self.learner:
             asyncio.ensure_future(self.learner.on_message(session_id, "user", text))
 
@@ -660,6 +664,18 @@ class Orchestrator:
             text=f"[SYSTEM PROACTIVE ALERT] {alert_text} Take appropriate action and notify the user.",
             context={"source": "proactive", "alerts": alerts},
         )
+
+    def _evict_stale_sessions(self):
+        """Evict oldest conversation sessions when the dict exceeds max size."""
+        if len(self.conversation_history) <= self._conversation_max_sessions:
+            return
+        sorted_sids = sorted(
+            self.conversation_history,
+            key=lambda sid: len(self.conversation_history[sid]),
+        )
+        to_remove = len(self.conversation_history) - self._conversation_max_sessions
+        for sid in sorted_sids[:to_remove]:
+            del self.conversation_history[sid]
 
     async def on_session_disconnect(self, session_id: str):
         """Called when a client disconnects. Summarize and learn."""

@@ -386,7 +386,17 @@ class SlackChannel(Channel):
                     return
 
             import websockets
-            async with websockets.connect(ws_url) as ws:
+            _ws = None
+            for _attempt in range(3):
+                try:
+                    _ws = await websockets.connect(ws_url)
+                    break
+                except Exception:
+                    if _attempt == 2:
+                        raise
+                    await asyncio.sleep(2 ** _attempt)
+
+            async with _ws as ws:
                 async for raw in ws:
                     if not self._running:
                         break

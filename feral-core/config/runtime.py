@@ -24,7 +24,7 @@ def _int_env(*keys: str, default: int) -> int:
 
 
 def brain_bind_host() -> str:
-    return os.getenv("FERAL_HOST") or os.getenv("FERAL_BIND_HOST") or "0.0.0.0"
+    return os.getenv("FERAL_HOST") or os.getenv("FERAL_BIND_HOST") or "127.0.0.1"
 
 
 def brain_port() -> int:

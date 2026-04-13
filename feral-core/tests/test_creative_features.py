@@ -119,10 +119,9 @@ class TestHealthAutomations:
         from agents.proactive_engine import ProactiveEngine, ProactiveMessage, Priority
 
         engine = ProactiveEngine()
-        mock_executor = AsyncMock()
         engine._orchestrator = MagicMock()
-        engine._orchestrator.executor = mock_executor
 
+        mock_impl = AsyncMock()
         msg = ProactiveMessage(
             trigger_id="hr_elevated",
             priority=Priority.IMPORTANT,
@@ -133,12 +132,11 @@ class TestHealthAutomations:
 
         callback = AsyncMock()
         engine._callbacks.append(callback)
-        await engine._deliver(msg)
+        with patch("skills.impl.get_implementation", return_value=mock_impl) as mock_get:
+            await engine._deliver(msg)
 
-        mock_executor.execute_tool_call.assert_called_once()
-        call_args = mock_executor.execute_tool_call.call_args
-        assert call_args.kwargs["tool_call"]["name"] == "smart_home_hue__set_scene"
-        assert call_args.kwargs["tool_call"]["arguments"]["scene"] == "calming"
+        mock_get.assert_called_once_with("smart_home_hue")
+        mock_impl.execute.assert_called_once_with("set_scene", {"scene": "calming"}, {})
         callback.assert_called_once_with(msg)
 
     @pytest.mark.asyncio
@@ -146,10 +144,9 @@ class TestHealthAutomations:
         from agents.proactive_engine import ProactiveEngine, ProactiveMessage, Priority
 
         engine = ProactiveEngine()
-        mock_executor = AsyncMock()
         engine._orchestrator = MagicMock()
-        engine._orchestrator.executor = mock_executor
 
+        mock_impl = AsyncMock()
         msg = ProactiveMessage(
             trigger_id="spo2_low",
             priority=Priority.CRITICAL,
@@ -158,10 +155,9 @@ class TestHealthAutomations:
             action_payload={"smart_home": "breathing_exercise", "duration_minutes": 3},
         )
 
-        await engine._deliver(msg)
-        mock_executor.execute_tool_call.assert_called_once()
-        call_args = mock_executor.execute_tool_call.call_args
-        assert call_args.kwargs["tool_call"]["arguments"]["scene"] == "breathing"
+        with patch("skills.impl.get_implementation", return_value=mock_impl):
+            await engine._deliver(msg)
+        mock_impl.execute.assert_called_once_with("set_scene", {"scene": "breathing"}, {})
 
     @pytest.mark.asyncio
     async def test_deliver_no_payload_skips_automation(self):

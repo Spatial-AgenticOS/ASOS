@@ -55,7 +55,7 @@ DEFAULT_SETTINGS = {
         "multi_agent": True,
     },
     "security": {
-        "node_api_key": "dev-secret-key",
+        "node_api_key": "",
     },
     "skills": {
         "enabled": [],

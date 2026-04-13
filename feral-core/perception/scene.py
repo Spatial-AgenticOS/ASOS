@@ -307,7 +307,7 @@ class SceneAnalyzer:
 
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/"
-            f"models/{model}:generateContent?key={api_key}"
+            f"models/{model}:generateContent"
         )
         body = {
             "contents": [{"parts": parts}],
@@ -315,7 +315,7 @@ class SceneAnalyzer:
         }
 
         try:
-            resp = await http.post(url, json=body)
+            resp = await http.post(url, json=body, headers={"x-goog-api-key": api_key})
             resp.raise_for_status()
             data = resp.json()
             candidates = data.get("candidates", [])

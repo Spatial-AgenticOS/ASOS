@@ -23,6 +23,11 @@ class SkillRegistry:
     def __init__(self):
         self.skills: dict[str, SkillManifest] = {}
         self._tool_cache: dict[str, list[dict]] = {}  # skill_id → LLM tool defs
+        self._cron_service = None
+
+    def set_cron_service(self, cron_service):
+        """Wire the CronService so _auto_create_routines can register jobs."""
+        self._cron_service = cron_service
 
     def load_builtin_skills(self):
         """Load the default skills that ship with FERAL."""

@@ -59,6 +59,7 @@ from skills.impl.browser_use import BrowserController
 from agents.session_handoff import SessionHandoffManager
 from agents.identity_loader import IdentityLoader
 from agents.baseline_engine import BaselineEngine
+from security.device_pairing import DevicePairingStore
 
 logger = logging.getLogger("feral.brain")
 
@@ -157,6 +158,7 @@ class BrainState:
         self.taskflows: Optional[TaskFlowRuntime] = None
         self.session_handoff: Optional[SessionHandoffManager] = None
         self.baseline_engine: Optional[BaselineEngine] = None
+        self.device_pairing_store: DevicePairingStore = DevicePairingStore()
 
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
@@ -243,8 +245,9 @@ class BrainState:
             self.digital_twin = DigitalTwin(memory=self.memory, identity_loader=_identity_loader, llm=_shared_llm)
 
             from skills.impl.digital_twin_skill import set_twin, DigitalTwinSkillBridge
+            from skills.impl import register_instance as _register_twin
             set_twin(self.digital_twin)
-            register_instance("digital_twin", DigitalTwinSkillBridge())
+            _register_twin("digital_twin", DigitalTwinSkillBridge())
         except Exception as e:
             logger.debug(f"Digital twin skipped: {e}")
         self.event_bus = EventBus()
@@ -409,7 +412,7 @@ class BrainState:
             from agents.scheduler import CronService
             self.cron_service = CronService()
             self.scheduler = self.cron_service
-            self.skill_registry._cron_service = self.cron_service
+            self.skill_registry.set_cron_service(self.cron_service)
             logger.info("Cron scheduler initialized")
         except Exception as e:
             logger.debug(f"Cron scheduler skipped: {e}")

@@ -462,7 +462,8 @@ async def handle_daemon_direct(orchestrator, session_id: str, text: str, _skill)
             executor = "applescript"
             action = 'tell application "System Events" to tell appearance preferences to set dark mode to not dark mode'
         elif "run" in text_lower:
-            action = text_lower.replace("run ", "", 1).strip()
+            await orchestrator._send_text(session_id, "Direct shell commands are disabled for safety. Use a skill or ask me to help.")
+            return
 
     if not action:
         await orchestrator._send_text(session_id, f"Matched Desktop Control but couldn't parse: '{text}'")

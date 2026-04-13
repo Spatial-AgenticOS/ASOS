@@ -19,12 +19,14 @@ def save_note(
     now = time.time()
     tags = tags or []
     conn = sqlite3.connect(store.db_path)
-    conn.execute(
-        "INSERT INTO notes (id, content, tags, importance, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (note_id, content, json.dumps(tags), importance, source, now, now),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            "INSERT INTO notes (id, content, tags, importance, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (note_id, content, json.dumps(tags), importance, source, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     # Embed notes too (not just episodes)
     chunks = chunk_text(content)
@@ -39,7 +41,7 @@ def save_note(
         )
 
     store.knowledge_store(
-        subject="user_note",
+        subject=f"note_{note_id}",
         predicate="says",
         obj=content[:300],
         source=f"notes:{note_id}",
@@ -70,18 +72,20 @@ def save_note(
 def search_notes(store, query: str, limit: int = 10) -> list[dict]:
     conn = store._conn()
     try:
-        rows = conn.execute(
-            """SELECT n.id, n.content, n.tags, n.importance, n.created_at, rank as relevance_score
-               FROM notes_fts f JOIN notes n ON f.rowid = n.rowid
-               WHERE notes_fts MATCH ? ORDER BY rank LIMIT ?""",
-            (query, limit),
-        ).fetchall()
-    except Exception:
-        rows = conn.execute(
-            "SELECT id, content, tags, importance, created_at, 0.5 as relevance_score FROM notes WHERE content LIKE ? ORDER BY created_at DESC LIMIT ?",
-            (f"%{query}%", limit),
-        ).fetchall()
-    conn.close()
+        try:
+            rows = conn.execute(
+                """SELECT n.id, n.content, n.tags, n.importance, n.created_at, rank as relevance_score
+                   FROM notes_fts f JOIN notes n ON f.rowid = n.rowid
+                   WHERE notes_fts MATCH ? ORDER BY rank LIMIT ?""",
+                (query, limit),
+            ).fetchall()
+        except Exception:
+            rows = conn.execute(
+                "SELECT id, content, tags, importance, created_at, 0.5 as relevance_score FROM notes WHERE content LIKE ? ORDER BY created_at DESC LIMIT ?",
+                (f"%{query}%", limit),
+            ).fetchall()
+    finally:
+        conn.close()
     return [
         {
             "id": row["id"],
@@ -97,11 +101,13 @@ def search_notes(store, query: str, limit: int = 10) -> list[dict]:
 
 def list_recent_notes(store, limit: int = 10) -> list[dict]:
     conn = store._conn()
-    rows = conn.execute(
-        "SELECT id, content, tags, importance, created_at FROM notes ORDER BY created_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    conn.close()
+    try:
+        rows = conn.execute(
+            "SELECT id, content, tags, importance, created_at FROM notes ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    finally:
+        conn.close()
     return [
         {
             "id": row["id"],
@@ -116,14 +122,18 @@ def list_recent_notes(store, limit: int = 10) -> list[dict]:
 
 def delete_note(store, note_id: str) -> bool:
     conn = sqlite3.connect(store.db_path)
-    cursor = conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+        conn.commit()
+    finally:
+        conn.close()
     return cursor.rowcount > 0
 
 
 def count_notes(store) -> int:
     conn = sqlite3.connect(store.db_path)
-    count = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
-    conn.close()
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+    finally:
+        conn.close()
     return count

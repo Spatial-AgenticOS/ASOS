@@ -67,6 +67,7 @@ export default function CommandPalette({ open, onClose, onCommand, onToggle }) {
   }, [onClose, onCommand, onToggle, navigate]);
 
   const handleKeyDown = (e) => {
+    if (filtered.length === 0) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setSelected(s => Math.min(s + 1, filtered.length - 1));

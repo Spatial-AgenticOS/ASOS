@@ -62,7 +62,7 @@ export default function App() {
   const sendQuickMessage = (text) => {
     if (!session.wsRef.current || session.wsRef.current.readyState !== WebSocket.OPEN) return;
     session.setMessages(prev => [...prev, { role: 'user', type: 'text', content: text }]);
-    session.wsRef.current.send(JSON.stringify({ type: 'chat', payload: { text } }));
+    session.wsRef.current.send(JSON.stringify({ hop: 'client', type: 'text_command', payload: { text, context: {} } }));
   };
 
   const startRecording = async () => {

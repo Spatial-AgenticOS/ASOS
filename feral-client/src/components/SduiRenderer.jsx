@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import DOMPurify from 'dompurify';
 import * as LucideIcons from 'lucide-react';
 
 const LucideDynamicIcon = ({ name, size = 24, color = "currentColor" }) => {
@@ -359,7 +360,7 @@ const CodeBlock = ({ code, language }) => (
 );
 
 const MarkdownView = ({ content }) => (
-  <div className="prose prose-sm max-w-none text-feral-text prose-headings:text-feral-text prose-a:text-feral-accent prose-strong:text-feral-text prose-code:text-feral-accent" dangerouslySetInnerHTML={{ __html: content }} />
+  <div className="prose prose-sm max-w-none text-feral-text prose-headings:text-feral-text prose-a:text-feral-accent prose-strong:text-feral-text prose-code:text-feral-accent" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content) }} />
 );
 
 const isShellResult = (node) => {

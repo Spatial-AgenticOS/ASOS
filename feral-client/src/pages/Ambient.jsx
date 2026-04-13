@@ -52,6 +52,7 @@ export default function Ambient() {
 
   useEffect(() => {
     const exit = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
       e.preventDefault();
       navigate(-1);
     };

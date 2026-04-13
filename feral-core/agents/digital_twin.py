@@ -72,11 +72,9 @@ class DigitalTwin:
             ]
 
             response = await self._llm.chat(messages)
-            text = response if isinstance(response, str) else (
-                response.get("text", "") or response.get("content", "")
-            )
-            logger.info("Digital twin answered question (len=%d)", len(text))
-            return text
+            text, _ = self._llm.extract_response(response)
+            logger.info("Digital twin answered question (len=%d)", len(text or ""))
+            return text or ""
 
         except Exception as e:
             logger.error("Digital twin ask() failed: %s", e)
@@ -114,9 +112,8 @@ class DigitalTwin:
             ]
 
             response = await self._llm.chat(messages)
-            text = response if isinstance(response, str) else (
-                response.get("text", "") or response.get("content", "")
-            )
+            text, _ = self._llm.extract_response(response)
+            text = text or ""
 
             parsed = self._parse_json_safely(text)
             return {
@@ -162,9 +159,8 @@ class DigitalTwin:
             ]
 
             response = await self._llm.chat(messages)
-            text = response if isinstance(response, str) else (
-                response.get("text", "") or response.get("content", "")
-            )
+            text, _ = self._llm.extract_response(response)
+            text = text or ""
             logger.info("Digital twin daily reflection generated (len=%d)", len(text))
             return text
 

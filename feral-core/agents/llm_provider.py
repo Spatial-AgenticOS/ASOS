@@ -6,6 +6,7 @@ Now with streaming support for real-time token delivery.
 """
 
 from __future__ import annotations
+import asyncio
 import os
 import json
 import logging
@@ -15,6 +16,25 @@ from typing import Optional, AsyncGenerator
 from config.runtime import ollama_base_url, ollama_openai_base_url
 
 logger = logging.getLogger("feral.llm")
+
+MAX_RETRIES = 3
+RETRY_DELAYS = [1, 2, 4]  # seconds
+_RETRIABLE_CODES = ("429", "500", "502", "503", "504", "timeout", "connection")
+
+
+async def _retry_llm_call(coro_factory):
+    """Retry an LLM HTTP call with exponential backoff on transient errors."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            return await coro_factory()
+        except Exception as e:
+            err_str = str(e).lower()
+            retriable = any(code in err_str for code in _RETRIABLE_CODES)
+            if not retriable or attempt == MAX_RETRIES - 1:
+                raise
+            logger.warning("LLM call failed (attempt %d/%d): %s — retrying in %ds",
+                           attempt + 1, MAX_RETRIES, e, RETRY_DELAYS[attempt])
+            await asyncio.sleep(RETRY_DELAYS[attempt])
 
 VISION_READY_OLLAMA_MODELS = (
     "llava",
@@ -235,10 +255,12 @@ class LLMProvider:
             body["tool_choice"] = "auto"
 
         try:
-            resp = await self.client.post("/chat/completions", json=body)
-            resp.raise_for_status()
-            data = resp.json()
-            return data
+            async def _do_chat():
+                resp = await self.client.post("/chat/completions", json=body)
+                resp.raise_for_status()
+                return resp.json()
+
+            return await _retry_llm_call(_do_chat)
         except httpx.HTTPStatusError as e:
             logger.error(f"LLM API error: {e.response.status_code} — {e.response.text[:500]}")
             return {"error": str(e), "choices": []}
@@ -355,9 +377,12 @@ class LLMProvider:
                 body["tools"] = anthropic_tools
 
         try:
-            resp = await self.client.post("/messages", json=body)
-            resp.raise_for_status()
-            data = resp.json()
+            async def _do_anthropic():
+                resp = await self.client.post("/messages", json=body)
+                resp.raise_for_status()
+                return resp.json()
+
+            data = await _retry_llm_call(_do_anthropic)
 
             text_parts = []
             tool_calls = []
@@ -468,51 +493,70 @@ class LLMProvider:
             body["tools"] = clean_tools
             body["tool_choice"] = "auto"
 
+        stream_cm = None
         try:
-            async with self.client.stream("POST", "/chat/completions", json=body) as resp:
-                resp.raise_for_status()
+            for _attempt in range(MAX_RETRIES):
+                try:
+                    stream_cm = self.client.stream("POST", "/chat/completions", json=body)
+                    resp = await stream_cm.__aenter__()
+                    resp.raise_for_status()
+                    break
+                except Exception as e:
+                    if stream_cm:
+                        try:
+                            await stream_cm.__aexit__(type(e), e, e.__traceback__)
+                        except Exception:
+                            pass
+                        stream_cm = None
+                    err_str = str(e).lower()
+                    retriable = any(c in err_str for c in _RETRIABLE_CODES)
+                    if not retriable or _attempt == MAX_RETRIES - 1:
+                        raise
+                    logger.warning("LLM stream connect failed (attempt %d/%d) — retrying",
+                                   _attempt + 1, MAX_RETRIES)
+                    await asyncio.sleep(RETRY_DELAYS[_attempt])
 
-                accumulated_tool_calls: dict[int, dict] = {}
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[6:].strip()
-                    if data_str == "[DONE]":
-                        for _, tc in sorted(accumulated_tool_calls.items()):
-                            try:
-                                tc["args"] = json.loads(tc.get("arguments", "{}"))
-                            except json.JSONDecodeError:
-                                tc["args"] = {}
-                            yield {"type": "tool_call_delta", "tool_call": tc}
-                        yield {"type": "done"}
-                        return
+            accumulated_tool_calls: dict[int, dict] = {}
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:].strip()
+                if data_str == "[DONE]":
+                    for _, tc in sorted(accumulated_tool_calls.items()):
+                        try:
+                            tc["args"] = json.loads(tc.get("arguments", "{}"))
+                        except json.JSONDecodeError:
+                            tc["args"] = {}
+                        yield {"type": "tool_call_delta", "tool_call": tc}
+                    yield {"type": "done"}
+                    return
 
-                    try:
-                        chunk = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
 
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
 
-                    if delta.get("content"):
-                        yield {"type": "text_delta", "content": delta["content"]}
+                if delta.get("content"):
+                    yield {"type": "text_delta", "content": delta["content"]}
 
-                    for tc_delta in delta.get("tool_calls", []):
-                        idx = tc_delta.get("index", 0)
-                        if idx not in accumulated_tool_calls:
-                            accumulated_tool_calls[idx] = {
-                                "id": tc_delta.get("id", ""),
-                                "name": "",
-                                "arguments": "",
-                            }
-                        entry = accumulated_tool_calls[idx]
-                        func = tc_delta.get("function", {})
-                        if func.get("name"):
-                            entry["name"] = func["name"]
-                        if func.get("arguments"):
-                            entry["arguments"] += func["arguments"]
-                        if tc_delta.get("id"):
-                            entry["id"] = tc_delta["id"]
+                for tc_delta in delta.get("tool_calls", []):
+                    idx = tc_delta.get("index", 0)
+                    if idx not in accumulated_tool_calls:
+                        accumulated_tool_calls[idx] = {
+                            "id": tc_delta.get("id", ""),
+                            "name": "",
+                            "arguments": "",
+                        }
+                    entry = accumulated_tool_calls[idx]
+                    func = tc_delta.get("function", {})
+                    if func.get("name"):
+                        entry["name"] = func["name"]
+                    if func.get("arguments"):
+                        entry["arguments"] += func["arguments"]
+                    if tc_delta.get("id"):
+                        entry["id"] = tc_delta["id"]
 
         except httpx.HTTPStatusError as e:
             logger.error(f"LLM stream error: {e.response.status_code}")
@@ -520,6 +564,12 @@ class LLMProvider:
         except Exception as e:
             logger.error(f"LLM stream failed: {e}")
             yield {"type": "error", "content": str(e)}
+        finally:
+            if stream_cm:
+                try:
+                    await stream_cm.__aexit__(None, None, None)
+                except Exception:
+                    pass
 
     async def _chat_stream_anthropic(
         self,

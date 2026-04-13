@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "lint": "eslint src/",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -15,6 +16,7 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
+    "dompurify": "^3.3.3",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.7.0",
     "react": "^18.2.0",
@@ -30,6 +32,8 @@
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.7.0",
     "@vitest/coverage-v8": "^2.0.0",
+    "eslint": "^10.2.0",
+    "eslint-plugin-react-hooks": "^7.0.1",
     "jsdom": "^29.0.2",
     "vite": "^5.4.21",
     "vitest": "^2.1.9"

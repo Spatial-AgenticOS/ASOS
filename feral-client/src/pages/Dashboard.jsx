@@ -65,11 +65,11 @@ export default function Dashboard() {
   const executeQuickAction = async (action) => {
     setQuickActionLoading(action);
     try {
-      const ws = new WebSocket(WS_URL);
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'text_command', payload: { text: action } }));
-        setTimeout(() => ws.close(), 5000);
-      };
+      await fetch(`${API}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hop: 'client', type: 'text_command', payload: { text: action } }),
+      });
     } catch { /* ignore */ }
     setTimeout(() => setQuickActionLoading(null), 3000);
   };

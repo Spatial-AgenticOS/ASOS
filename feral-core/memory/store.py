@@ -82,6 +82,7 @@ class MemoryStore:
         self.db_path = db_path
         self._working: dict[str, deque[dict]] = {}
         self._working_max = 50
+        self._working_max_sessions = 500
         self._sync_engine = None
         self._embedder = EmbeddingProvider()
         self._kg = None
@@ -134,198 +135,214 @@ class MemoryStore:
     # Schema
     # ─────────────────────────────────────────────
 
+    def close(self):
+        """Shut down background tasks and release resources."""
+        try:
+            self._embed_queue.stop()
+        except Exception:
+            pass
+
     def _init_db(self):
         conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS notes (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    tags TEXT DEFAULT '[]',
+                    importance TEXT DEFAULT 'normal',
+                    source TEXT DEFAULT 'user',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts
+                USING fts5(content, tags, tokenize='porter')
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
+                    INSERT INTO notes_fts(rowid, content, tags)
+                    VALUES (new.rowid, new.content, new.tags);
+                END
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
+                    DELETE FROM notes_fts WHERE rowid = old.rowid;
+                END
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS notes_fts_update AFTER UPDATE ON notes BEGIN
+                    DELETE FROM notes_fts WHERE rowid = old.rowid;
+                    INSERT INTO notes_fts(rowid, content, tags) VALUES (new.rowid, new.content, new.tags);
+                END
+            """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS notes (
-                id TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                tags TEXT DEFAULT '[]',
-                importance TEXT DEFAULT 'normal',
-                source TEXT DEFAULT 'user',
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        """)
-        conn.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts
-            USING fts5(content, tags, tokenize='porter')
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-                INSERT INTO notes_fts(rowid, content, tags)
-                VALUES (new.rowid, new.content, new.tags);
-            END
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-                DELETE FROM notes_fts WHERE rowid = old.rowid;
-            END
-        """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS episodes (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    detail TEXT DEFAULT '',
+                    emotions TEXT DEFAULT '[]',
+                    location TEXT DEFAULT '',
+                    participants TEXT DEFAULT '[]',
+                    importance REAL DEFAULT 0.5,
+                    created_at REAL NOT NULL,
+                    decay_factor REAL DEFAULT 1.0
+                )
+            """)
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts
+                USING fts5(summary, detail, tokenize='porter')
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS episodes_ai AFTER INSERT ON episodes BEGIN
+                    INSERT INTO episodes_fts(rowid, summary, detail)
+                    VALUES (new.rowid, new.summary, new.detail);
+                END
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS episodes_ad AFTER DELETE ON episodes BEGIN
+                    DELETE FROM episodes_fts WHERE rowid = old.rowid;
+                END
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_session ON episodes(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_time ON episodes(created_at DESC)")
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS episodes (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                summary TEXT NOT NULL,
-                detail TEXT DEFAULT '',
-                emotions TEXT DEFAULT '[]',
-                location TEXT DEFAULT '',
-                participants TEXT DEFAULT '[]',
-                importance REAL DEFAULT 0.5,
-                created_at REAL NOT NULL,
-                decay_factor REAL DEFAULT 1.0
-            )
-        """)
-        conn.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts
-            USING fts5(summary, detail, tokenize='porter')
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS episodes_ai AFTER INSERT ON episodes BEGIN
-                INSERT INTO episodes_fts(rowid, summary, detail)
-                VALUES (new.rowid, new.summary, new.detail);
-            END
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS episodes_ad AFTER DELETE ON episodes BEGIN
-                DELETE FROM episodes_fts WHERE rowid = old.rowid;
-            END
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_session ON episodes(session_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_time ON episodes(created_at DESC)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS knowledge (
+                    id TEXT PRIMARY KEY,
+                    subject TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    object TEXT NOT NULL,
+                    confidence REAL DEFAULT 1.0,
+                    source TEXT DEFAULT 'user',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
+                USING fts5(subject, predicate, object, tokenize='porter')
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge BEGIN
+                    INSERT INTO knowledge_fts(rowid, subject, predicate, object)
+                    VALUES (new.rowid, new.subject, new.predicate, new.object);
+                END
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS knowledge_ad AFTER DELETE ON knowledge BEGIN
+                    DELETE FROM knowledge_fts WHERE rowid = old.rowid;
+                END
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS knowledge_fts_update AFTER UPDATE ON knowledge BEGIN
+                    DELETE FROM knowledge_fts WHERE rowid = old.rowid;
+                    INSERT INTO knowledge_fts(rowid, subject, predicate, object) VALUES (new.rowid, new.subject, new.predicate, new.object);
+                END
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_subject ON knowledge(subject)")
 
-        # Legacy knowledge triples (kept for backward compat, KG is preferred)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS knowledge (
-                id TEXT PRIMARY KEY,
-                subject TEXT NOT NULL,
-                predicate TEXT NOT NULL,
-                object TEXT NOT NULL,
-                confidence REAL DEFAULT 1.0,
-                source TEXT DEFAULT 'user',
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        """)
-        conn.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
-            USING fts5(subject, predicate, object, tokenize='porter')
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge BEGIN
-                INSERT INTO knowledge_fts(rowid, subject, predicate, object)
-                VALUES (new.rowid, new.subject, new.predicate, new.object);
-            END
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS knowledge_ad AFTER DELETE ON knowledge BEGIN
-                DELETE FROM knowledge_fts WHERE rowid = old.rowid;
-            END
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_subject ON knowledge(subject)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS execution_log (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    skill_id TEXT NOT NULL,
+                    endpoint_id TEXT NOT NULL,
+                    args TEXT DEFAULT '{}',
+                    result_status TEXT NOT NULL,
+                    result_summary TEXT DEFAULT '',
+                    latency_ms REAL DEFAULT 0,
+                    user_feedback TEXT DEFAULT '',
+                    created_at REAL NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_execlog_skill ON execution_log(skill_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_execlog_time ON execution_log(created_at DESC)")
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS execution_log (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                skill_id TEXT NOT NULL,
-                endpoint_id TEXT NOT NULL,
-                args TEXT DEFAULT '{}',
-                result_status TEXT NOT NULL,
-                result_summary TEXT DEFAULT '',
-                latency_ms REAL DEFAULT 0,
-                user_feedback TEXT DEFAULT '',
-                created_at REAL NOT NULL
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_execlog_skill ON execution_log(skill_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_execlog_time ON execution_log(created_at DESC)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS memory_chunks (
+                    id TEXT PRIMARY KEY,
+                    source_table TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    chunk_index INTEGER DEFAULT 0,
+                    text_content TEXT NOT NULL,
+                    embedding BLOB,
+                    created_at REAL NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source ON memory_chunks(source_table, source_id)")
 
-        # Embedding chunks table for vector search
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS memory_chunks (
-                id TEXT PRIMARY KEY,
-                source_table TEXT NOT NULL,
-                source_id TEXT NOT NULL,
-                chunk_index INTEGER DEFAULT 0,
-                text_content TEXT NOT NULL,
-                embedding BLOB,
-                created_at REAL NOT NULL
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source ON memory_chunks(source_table, source_id)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS wiki_pages (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    body_markdown TEXT NOT NULL,
+                    source_refs TEXT DEFAULT '[]',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_kind ON wiki_pages(kind)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_updated ON wiki_pages(updated_at DESC)")
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS wiki_pages_fts
+                USING fts5(title, body_markdown, tokenize='porter')
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS wiki_pages_ai AFTER INSERT ON wiki_pages BEGIN
+                    INSERT INTO wiki_pages_fts(rowid, title, body_markdown)
+                    VALUES (new.rowid, new.title, new.body_markdown);
+                END
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS wiki_pages_au AFTER UPDATE ON wiki_pages BEGIN
+                    DELETE FROM wiki_pages_fts WHERE rowid = old.rowid;
+                    INSERT INTO wiki_pages_fts(rowid, title, body_markdown)
+                    VALUES (new.rowid, new.title, new.body_markdown);
+                END
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS wiki_pages_ad AFTER DELETE ON wiki_pages BEGIN
+                    DELETE FROM wiki_pages_fts WHERE rowid = old.rowid;
+                END
+            """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS wiki_pages (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                body_markdown TEXT NOT NULL,
-                source_refs TEXT DEFAULT '[]',
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_kind ON wiki_pages(kind)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_updated ON wiki_pages(updated_at DESC)")
-        conn.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS wiki_pages_fts
-            USING fts5(title, body_markdown, tokenize='porter')
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS wiki_pages_ai AFTER INSERT ON wiki_pages BEGIN
-                INSERT INTO wiki_pages_fts(rowid, title, body_markdown)
-                VALUES (new.rowid, new.title, new.body_markdown);
-            END
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS wiki_pages_au AFTER UPDATE ON wiki_pages BEGIN
-                DELETE FROM wiki_pages_fts WHERE rowid = old.rowid;
-                INSERT INTO wiki_pages_fts(rowid, title, body_markdown)
-                VALUES (new.rowid, new.title, new.body_markdown);
-            END
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS wiki_pages_ad AFTER DELETE ON wiki_pages BEGIN
-                DELETE FROM wiki_pages_fts WHERE rowid = old.rowid;
-            END
-        """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS session_snapshots (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    branch_name TEXT NOT NULL DEFAULT 'main',
+                    label TEXT NOT NULL DEFAULT '',
+                    working_json TEXT NOT NULL DEFAULT '[]',
+                    history_json TEXT NOT NULL DEFAULT '[]',
+                    source_snapshot_id TEXT,
+                    created_at REAL NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_session ON session_snapshots(session_id, created_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_branch ON session_snapshots(branch_name, created_at DESC)")
 
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS session_snapshots (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                branch_name TEXT NOT NULL DEFAULT 'main',
-                label TEXT NOT NULL DEFAULT '',
-                working_json TEXT NOT NULL DEFAULT '[]',
-                history_json TEXT NOT NULL DEFAULT '[]',
-                source_snapshot_id TEXT,
-                created_at REAL NOT NULL
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_session ON session_snapshots(session_id, created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_branch ON session_snapshots(branch_name, created_at DESC)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL DEFAULT 'New conversation',
+                    preview TEXT NOT NULL DEFAULT '',
+                    messages_json TEXT NOT NULL DEFAULT '[]',
+                    message_count INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)")
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL DEFAULT 'New conversation',
-                preview TEXT NOT NULL DEFAULT '',
-                messages_json TEXT NOT NULL DEFAULT '[]',
-                message_count INTEGER NOT NULL DEFAULT 0,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)")
-
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
 
     # ─────────────────────────────────────────────
     # Tier 1: Working Memory (in-RAM)
@@ -333,6 +350,9 @@ class MemoryStore:
 
     def working_push(self, session_id: str, entry: dict):
         if session_id not in self._working:
+            if len(self._working) >= self._working_max_sessions:
+                oldest = min(self._working, key=lambda s: self._working[s][-1]["ts"] if self._working[s] else 0)
+                del self._working[oldest]
             self._working[session_id] = deque(maxlen=self._working_max)
         self._working[session_id].append({**entry, "ts": time.time()})
 
@@ -383,28 +403,32 @@ class MemoryStore:
         title = title or "New conversation"
 
         conn = self._conn()
-        conn.execute("""
-            INSERT INTO conversations (id, title, preview, messages_json, message_count, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                title = excluded.title,
-                preview = excluded.preview,
-                messages_json = excluded.messages_json,
-                message_count = excluded.message_count,
-                updated_at = excluded.updated_at
-        """, (conversation_id, title, preview, json.dumps(messages[-500:]), len(messages), now, now))
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute("""
+                INSERT INTO conversations (id, title, preview, messages_json, message_count, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    title = excluded.title,
+                    preview = excluded.preview,
+                    messages_json = excluded.messages_json,
+                    message_count = excluded.message_count,
+                    updated_at = excluded.updated_at
+            """, (conversation_id, title, preview, json.dumps(messages[-500:]), len(messages), now, now))
+            conn.commit()
+        finally:
+            conn.close()
         return {"id": conversation_id, "title": title, "message_count": len(messages), "updated_at": now}
 
     def conversation_list(self, limit: int = 50) -> list[dict]:
         """List recent conversations (metadata only)."""
         conn = self._conn()
-        rows = conn.execute(
-            "SELECT id, title, preview, message_count, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
-            (min(limit, 200),),
-        ).fetchall()
-        conn.close()
+        try:
+            rows = conn.execute(
+                "SELECT id, title, preview, message_count, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
+                (min(limit, 200),),
+            ).fetchall()
+        finally:
+            conn.close()
         return [
             {"id": r[0], "title": r[1], "preview": r[2], "message_count": r[3], "created_at": r[4], "updated_at": r[5]}
             for r in rows
@@ -413,11 +437,13 @@ class MemoryStore:
     def conversation_get(self, conversation_id: str) -> dict | None:
         """Load a full conversation with messages."""
         conn = self._conn()
-        row = conn.execute(
-            "SELECT id, title, preview, messages_json, message_count, created_at, updated_at FROM conversations WHERE id = ?",
-            (conversation_id,),
-        ).fetchone()
-        conn.close()
+        try:
+            row = conn.execute(
+                "SELECT id, title, preview, messages_json, message_count, created_at, updated_at FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+        finally:
+            conn.close()
         if not row:
             return None
         return {
@@ -428,9 +454,11 @@ class MemoryStore:
 
     def conversation_delete(self, conversation_id: str) -> bool:
         conn = self._conn()
-        conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+            conn.commit()
+        finally:
+            conn.close()
         return True
 
     def snapshot_session(
@@ -446,25 +474,27 @@ class MemoryStore:
         now = time.time()
         working = list(self._working.get(session_id, deque()))
         conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            INSERT INTO session_snapshots
-            (id, session_id, branch_name, label, working_json, history_json, source_snapshot_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                snapshot_id,
-                session_id,
-                branch_name or "main",
-                label or "",
-                json.dumps(working),
-                json.dumps(history[-200:]),
-                source_snapshot_id or None,
-                now,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                """
+                INSERT INTO session_snapshots
+                (id, session_id, branch_name, label, working_json, history_json, source_snapshot_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot_id,
+                    session_id,
+                    branch_name or "main",
+                    label or "",
+                    json.dumps(working),
+                    json.dumps(history[-200:]),
+                    source_snapshot_id or None,
+                    now,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
         return {
             "snapshot_id": snapshot_id,
             "session_id": session_id,
@@ -485,50 +515,52 @@ class MemoryStore:
     ) -> list[dict]:
         lim = max(1, min(limit, 200))
         conn = self._conn()
-        if session_id and branch_name:
-            rows = conn.execute(
-                """
-                SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
-                FROM session_snapshots
-                WHERE session_id = ? AND branch_name = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (session_id, branch_name, lim),
-            ).fetchall()
-        elif session_id:
-            rows = conn.execute(
-                """
-                SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
-                FROM session_snapshots
-                WHERE session_id = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (session_id, lim),
-            ).fetchall()
-        elif branch_name:
-            rows = conn.execute(
-                """
-                SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
-                FROM session_snapshots
-                WHERE branch_name = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (branch_name, lim),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
-                FROM session_snapshots
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (lim,),
-            ).fetchall()
-        conn.close()
+        try:
+            if session_id and branch_name:
+                rows = conn.execute(
+                    """
+                    SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
+                    FROM session_snapshots
+                    WHERE session_id = ? AND branch_name = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (session_id, branch_name, lim),
+                ).fetchall()
+            elif session_id:
+                rows = conn.execute(
+                    """
+                    SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
+                    FROM session_snapshots
+                    WHERE session_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (session_id, lim),
+                ).fetchall()
+            elif branch_name:
+                rows = conn.execute(
+                    """
+                    SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
+                    FROM session_snapshots
+                    WHERE branch_name = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (branch_name, lim),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
+                    FROM session_snapshots
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (lim,),
+                ).fetchall()
+        finally:
+            conn.close()
         return [
             {
                 "snapshot_id": r["id"],
@@ -543,15 +575,17 @@ class MemoryStore:
 
     def get_snapshot(self, snapshot_id: str) -> Optional[dict]:
         conn = self._conn()
-        row = conn.execute(
-            """
-            SELECT id, session_id, branch_name, label, working_json, history_json, source_snapshot_id, created_at
-            FROM session_snapshots
-            WHERE id = ?
-            """,
-            (snapshot_id,),
-        ).fetchone()
-        conn.close()
+        try:
+            row = conn.execute(
+                """
+                SELECT id, session_id, branch_name, label, working_json, history_json, source_snapshot_id, created_at
+                FROM session_snapshots
+                WHERE id = ?
+                """,
+                (snapshot_id,),
+            ).fetchone()
+        finally:
+            conn.close()
         if not row:
             return None
         return {
@@ -586,15 +620,17 @@ class MemoryStore:
         participants = participants or []
 
         conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """INSERT INTO episodes
-               (id, session_id, event_type, summary, detail, emotions, location, participants, importance, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (eid, session_id, event_type, summary, detail,
-             json.dumps(emotions), location, json.dumps(participants), importance, now),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                """INSERT INTO episodes
+                   (id, session_id, event_type, summary, detail, emotions, location, participants, importance, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (eid, session_id, event_type, summary, detail,
+                 json.dumps(emotions), location, json.dumps(participants), importance, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
         # Queue embedding reliably (retries on failure, updates vec index)
         text = f"{summary}\n{detail}".strip()
@@ -618,67 +654,67 @@ class MemoryStore:
         Uses sqlite-vec indexed search when available, numpy fallback otherwise.
         """
         conn = self._conn()
-
-        # Phase 1: FTS5 text search
-        fts_results = {}
         try:
-            rows = conn.execute(
-                """SELECT e.id, e.session_id, e.event_type, e.summary, e.detail,
-                          e.emotions, e.location, e.importance, e.created_at, e.decay_factor, rank
-                   FROM episodes_fts f JOIN episodes e ON f.rowid = e.rowid
-                   WHERE episodes_fts MATCH ? ORDER BY rank LIMIT ?""",
-                (query, limit * 3),
-            ).fetchall()
-            for r in rows:
-                fts_results[r["id"]] = {
-                    **self._episode_row_to_dict(r),
-                    "fts_score": 1.0 / (1.0 + abs(r["rank"])),
-                }
-        except Exception:
-            pass
-
-        # Phase 2: Vector search (indexed or fallback)
-        vec_results = {}
-        try:
-            query_vec = await self._embedder.embed(query)
-
-            if self._vec_index.indexed:
-                # O(log n) indexed search via sqlite-vec
-                hits = self._vec_index.search_cosine(query_vec, limit=limit * 3)
-                for chunk_id, sim in hits:
-                    if sim < 0.25:
-                        continue
-                    eid = chunk_id.rsplit("_c", 1)[0]
-                    if eid not in vec_results or sim > vec_results[eid]["vec_score"]:
-                        vec_results[eid] = {"id": eid, "vec_score": sim}
-            else:
-                # O(n) brute-force fallback
-                chunks = conn.execute(
-                    "SELECT source_id, embedding FROM memory_chunks "
-                    "WHERE source_table = 'episodes' AND embedding IS NOT NULL"
+            # Phase 1: FTS5 text search
+            fts_results = {}
+            try:
+                rows = conn.execute(
+                    """SELECT e.id, e.session_id, e.event_type, e.summary, e.detail,
+                              e.emotions, e.location, e.importance, e.created_at, e.decay_factor, rank
+                       FROM episodes_fts f JOIN episodes e ON f.rowid = e.rowid
+                       WHERE episodes_fts MATCH ? ORDER BY rank LIMIT ?""",
+                    (query, limit * 3),
                 ).fetchall()
-                for c in chunks:
-                    evec = blob_to_vec(c["embedding"])
-                    sim = cosine_similarity(query_vec, evec)
-                    eid = c["source_id"]
-                    if sim > 0.25 and (eid not in vec_results or sim > vec_results[eid]["vec_score"]):
-                        vec_results[eid] = {"id": eid, "vec_score": sim}
-        except Exception as e:
-            logger.debug(f"Vector search failed: {e}")
+                for r in rows:
+                    fts_results[r["id"]] = {
+                        **self._episode_row_to_dict(r),
+                        "fts_score": 1.0 / (1.0 + abs(r["rank"])),
+                    }
+            except Exception:
+                pass
 
-        # Phase 3: Merge + temporal decay + rank
-        all_ids = set(fts_results.keys()) | set(vec_results.keys())
-        episode_cache = {}
-        if all_ids - set(fts_results.keys()):
-            missing = all_ids - set(fts_results.keys())
-            placeholders = ",".join("?" for _ in missing)
-            rows = conn.execute(
-                f"SELECT * FROM episodes WHERE id IN ({placeholders})", list(missing),
-            ).fetchall()
-            for r in rows:
-                episode_cache[r["id"]] = self._episode_row_to_dict(r)
+            # Phase 2: Vector search (indexed or fallback)
+            vec_results = {}
+            try:
+                query_vec = await self._embedder.embed(query)
 
-        conn.close()
+                if self._vec_index.indexed:
+                    # O(log n) indexed search via sqlite-vec
+                    hits = self._vec_index.search_cosine(query_vec, limit=limit * 3)
+                    for chunk_id, sim in hits:
+                        if sim < 0.25:
+                            continue
+                        eid = chunk_id.rsplit("_c", 1)[0]
+                        if eid not in vec_results or sim > vec_results[eid]["vec_score"]:
+                            vec_results[eid] = {"id": eid, "vec_score": sim}
+                else:
+                    # O(n) brute-force fallback
+                    chunks = conn.execute(
+                        "SELECT source_id, embedding FROM memory_chunks "
+                        "WHERE source_table = 'episodes' AND embedding IS NOT NULL"
+                    ).fetchall()
+                    for c in chunks:
+                        evec = blob_to_vec(c["embedding"])
+                        sim = cosine_similarity(query_vec, evec)
+                        eid = c["source_id"]
+                        if sim > 0.25 and (eid not in vec_results or sim > vec_results[eid]["vec_score"]):
+                            vec_results[eid] = {"id": eid, "vec_score": sim}
+            except Exception as e:
+                logger.debug(f"Vector search failed: {e}")
+
+            # Phase 3: Merge + temporal decay + rank
+            all_ids = set(fts_results.keys()) | set(vec_results.keys())
+            episode_cache = {}
+            if all_ids - set(fts_results.keys()):
+                missing = all_ids - set(fts_results.keys())
+                placeholders = ",".join("?" for _ in missing)
+                rows = conn.execute(
+                    f"SELECT * FROM episodes WHERE id IN ({placeholders})", list(missing),
+                ).fetchall()
+                for r in rows:
+                    episode_cache[r["id"]] = self._episode_row_to_dict(r)
+        finally:
+            conn.close()
         now = time.time()
         merged = []
         for eid in all_ids:
@@ -705,33 +741,37 @@ class MemoryStore:
         """Synchronous FTS-only search (backward compat)."""
         conn = self._conn()
         try:
-            rows = conn.execute(
-                """SELECT e.* FROM episodes_fts f
-                   JOIN episodes e ON f.rowid = e.rowid
-                   WHERE episodes_fts MATCH ? ORDER BY rank LIMIT ?""",
-                (query, limit),
-            ).fetchall()
-        except Exception:
-            rows = conn.execute(
-                """SELECT * FROM episodes WHERE summary LIKE ? OR detail LIKE ?
-                   ORDER BY created_at DESC LIMIT ?""",
-                (f"%{query}%", f"%{query}%", limit),
-            ).fetchall()
-        conn.close()
+            try:
+                rows = conn.execute(
+                    """SELECT e.* FROM episodes_fts f
+                       JOIN episodes e ON f.rowid = e.rowid
+                       WHERE episodes_fts MATCH ? ORDER BY rank LIMIT ?""",
+                    (query, limit),
+                ).fetchall()
+            except Exception:
+                rows = conn.execute(
+                    """SELECT * FROM episodes WHERE summary LIKE ? OR detail LIKE ?
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (f"%{query}%", f"%{query}%", limit),
+                ).fetchall()
+        finally:
+            conn.close()
         return [self._episode_row_to_dict(r) for r in rows]
 
     def episode_recent(self, limit: int = 10, session_id: str = None) -> list[dict]:
         conn = self._conn()
-        if session_id:
-            rows = conn.execute(
-                "SELECT * FROM episodes WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
-                (session_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM episodes ORDER BY created_at DESC LIMIT ?", (limit,),
-            ).fetchall()
-        conn.close()
+        try:
+            if session_id:
+                rows = conn.execute(
+                    "SELECT * FROM episodes WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (session_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM episodes ORDER BY created_at DESC LIMIT ?", (limit,),
+                ).fetchall()
+        finally:
+            conn.close()
         return [self._episode_row_to_dict(r) for r in rows]
 
     @staticmethod
@@ -785,33 +825,29 @@ class MemoryStore:
     ) -> dict:
         conn = sqlite3.connect(self.db_path)
         now = time.time()
+        try:
+            existing = conn.execute(
+                "SELECT id FROM knowledge WHERE subject = ? AND predicate = ?",
+                (subject, predicate),
+            ).fetchone()
 
-        existing = conn.execute(
-            "SELECT id FROM knowledge WHERE subject = ? AND predicate = ?",
-            (subject, predicate),
-        ).fetchone()
+            if existing:
+                kid = existing[0]
+                conn.execute(
+                    "UPDATE knowledge SET object = ?, confidence = ?, source = ?, updated_at = ? WHERE id = ?",
+                    (obj, confidence, source, now, kid),
+                )
+            else:
+                kid = str(uuid4())[:12]
+                conn.execute(
+                    """INSERT INTO knowledge (id, subject, predicate, object, confidence, source, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (kid, subject, predicate, obj, confidence, source, now, now),
+                )
 
-        if existing:
-            kid = existing[0]
-            conn.execute(
-                "UPDATE knowledge SET object = ?, confidence = ?, source = ?, updated_at = ? WHERE id = ?",
-                (obj, confidence, source, now, kid),
-            )
-            conn.execute("DELETE FROM knowledge_fts WHERE rowid = (SELECT rowid FROM knowledge WHERE id = ?)", (kid,))
-            conn.execute(
-                "INSERT INTO knowledge_fts(rowid, subject, predicate, object) "
-                "SELECT rowid, subject, predicate, object FROM knowledge WHERE id = ?", (kid,),
-            )
-        else:
-            kid = str(uuid4())[:12]
-            conn.execute(
-                """INSERT INTO knowledge (id, subject, predicate, object, confidence, source, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (kid, subject, predicate, obj, confidence, source, now, now),
-            )
-
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
         self._log_sync("knowledge", "insert", kid, {
             "id": kid, "subject": subject, "predicate": predicate, "object": obj,
             "confidence": confidence, "source": source, "created_at": now,
@@ -820,19 +856,21 @@ class MemoryStore:
 
     def knowledge_query(self, subject: str = "", predicate: str = "", limit: int = 20) -> list[dict]:
         conn = self._conn()
-        conditions, params = [], []
-        if subject:
-            conditions.append("subject = ?")
-            params.append(subject)
-        if predicate:
-            conditions.append("predicate = ?")
-            params.append(predicate)
-        where = "WHERE " + " AND ".join(conditions) if conditions else ""
-        rows = conn.execute(
-            f"SELECT * FROM knowledge {where} ORDER BY updated_at DESC LIMIT ?",
-            (*params, limit),
-        ).fetchall()
-        conn.close()
+        try:
+            conditions, params = [], []
+            if subject:
+                conditions.append("subject = ?")
+                params.append(subject)
+            if predicate:
+                conditions.append("predicate = ?")
+                params.append(predicate)
+            where = "WHERE " + " AND ".join(conditions) if conditions else ""
+            rows = conn.execute(
+                f"SELECT * FROM knowledge {where} ORDER BY updated_at DESC LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        finally:
+            conn.close()
         return [
             {"id": r["id"], "subject": r["subject"], "predicate": r["predicate"],
              "object": r["object"], "confidence": r["confidence"], "source": r["source"],
@@ -843,19 +881,21 @@ class MemoryStore:
     def knowledge_search(self, query: str, limit: int = 10) -> list[dict]:
         conn = self._conn()
         try:
-            rows = conn.execute(
-                """SELECT k.* FROM knowledge_fts f
-                   JOIN knowledge k ON f.rowid = k.rowid
-                   WHERE knowledge_fts MATCH ? ORDER BY rank LIMIT ?""",
-                (query, limit),
-            ).fetchall()
-        except Exception:
-            rows = conn.execute(
-                """SELECT * FROM knowledge WHERE subject LIKE ? OR object LIKE ?
-                   ORDER BY updated_at DESC LIMIT ?""",
-                (f"%{query}%", f"%{query}%", limit),
-            ).fetchall()
-        conn.close()
+            try:
+                rows = conn.execute(
+                    """SELECT k.* FROM knowledge_fts f
+                       JOIN knowledge k ON f.rowid = k.rowid
+                       WHERE knowledge_fts MATCH ? ORDER BY rank LIMIT ?""",
+                    (query, limit),
+                ).fetchall()
+            except Exception:
+                rows = conn.execute(
+                    """SELECT * FROM knowledge WHERE subject LIKE ? OR object LIKE ?
+                       ORDER BY updated_at DESC LIMIT ?""",
+                    (f"%{query}%", f"%{query}%", limit),
+                ).fetchall()
+        finally:
+            conn.close()
         return [
             {"id": r["id"], "subject": r["subject"], "predicate": r["predicate"],
              "object": r["object"], "confidence": r["confidence"]}
@@ -864,12 +904,14 @@ class MemoryStore:
 
     def knowledge_about(self, entity: str, limit: int = 20) -> list[dict]:
         conn = self._conn()
-        rows = conn.execute(
-            """SELECT * FROM knowledge WHERE subject = ? OR object = ?
-               ORDER BY confidence DESC, updated_at DESC LIMIT ?""",
-            (entity, entity, limit),
-        ).fetchall()
-        conn.close()
+        try:
+            rows = conn.execute(
+                """SELECT * FROM knowledge WHERE subject = ? OR object = ?
+                   ORDER BY confidence DESC, updated_at DESC LIMIT ?""",
+                (entity, entity, limit),
+            ).fetchall()
+        finally:
+            conn.close()
         return [
             {"subject": r["subject"], "predicate": r["predicate"], "object": r["object"],
              "confidence": r["confidence"]}
@@ -887,45 +929,53 @@ class MemoryStore:
         eid = str(uuid4())[:12]
         now = time.time()
         conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """INSERT INTO execution_log
-               (id, session_id, skill_id, endpoint_id, args, result_status, result_summary, latency_ms, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (eid, session_id, skill_id, endpoint_id, json.dumps(args)[:2000],
-             result_status, result_summary[:500], latency_ms, now),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                """INSERT INTO execution_log
+                   (id, session_id, skill_id, endpoint_id, args, result_status, result_summary, latency_ms, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (eid, session_id, skill_id, endpoint_id, json.dumps(args)[:2000],
+                 result_status, result_summary[:500], latency_ms, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
         return eid
 
     def log_feedback(self, execution_id: str, feedback: str):
         conn = sqlite3.connect(self.db_path)
-        conn.execute("UPDATE execution_log SET user_feedback = ? WHERE id = ?", (feedback[:500], execution_id))
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute("UPDATE execution_log SET user_feedback = ? WHERE id = ?", (feedback[:500], execution_id))
+            conn.commit()
+        finally:
+            conn.close()
 
     def log_recent(self, skill_id: str = "", limit: int = 20) -> list[dict]:
         conn = self._conn()
-        if skill_id:
-            rows = conn.execute(
-                "SELECT * FROM execution_log WHERE skill_id = ? ORDER BY created_at DESC LIMIT ?",
-                (skill_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM execution_log ORDER BY created_at DESC LIMIT ?", (limit,),
-            ).fetchall()
-        conn.close()
+        try:
+            if skill_id:
+                rows = conn.execute(
+                    "SELECT * FROM execution_log WHERE skill_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (skill_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM execution_log ORDER BY created_at DESC LIMIT ?", (limit,),
+                ).fetchall()
+        finally:
+            conn.close()
         return [dict(r) for r in rows]
 
     def log_success_rate(self, skill_id: str) -> dict:
         conn = sqlite3.connect(self.db_path)
-        total = conn.execute("SELECT COUNT(*) FROM execution_log WHERE skill_id = ?", (skill_id,)).fetchone()[0]
-        successes = conn.execute(
-            "SELECT COUNT(*) FROM execution_log WHERE skill_id = ? AND result_status = 'success'",
-            (skill_id,),
-        ).fetchone()[0]
-        conn.close()
+        try:
+            total = conn.execute("SELECT COUNT(*) FROM execution_log WHERE skill_id = ?", (skill_id,)).fetchone()[0]
+            successes = conn.execute(
+                "SELECT COUNT(*) FROM execution_log WHERE skill_id = ? AND result_status = 'success'",
+                (skill_id,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
         return {"skill_id": skill_id, "total_executions": total, "successes": successes,
                 "rate": successes / total if total > 0 else 0.0}
 
@@ -1048,18 +1098,20 @@ class MemoryStore:
 
     def stats(self) -> dict:
         conn = sqlite3.connect(self.db_path)
-        notes_count = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
-        episodes_count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
-        knowledge_count = conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0]
-        exec_count = conn.execute("SELECT COUNT(*) FROM execution_log").fetchone()[0]
-        wiki_count = conn.execute("SELECT COUNT(*) FROM wiki_pages").fetchone()[0]
-        snapshot_count = conn.execute("SELECT COUNT(*) FROM session_snapshots").fetchone()[0]
         try:
-            chunk_count = conn.execute("SELECT COUNT(*) FROM memory_chunks").fetchone()[0]
-        except Exception:
-            chunk_count = 0
+            notes_count = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+            episodes_count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            knowledge_count = conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0]
+            exec_count = conn.execute("SELECT COUNT(*) FROM execution_log").fetchone()[0]
+            wiki_count = conn.execute("SELECT COUNT(*) FROM wiki_pages").fetchone()[0]
+            snapshot_count = conn.execute("SELECT COUNT(*) FROM session_snapshots").fetchone()[0]
+            try:
+                chunk_count = conn.execute("SELECT COUNT(*) FROM memory_chunks").fetchone()[0]
+            except Exception:
+                chunk_count = 0
+        finally:
+            conn.close()
         working_sessions = len(self._working)
-        conn.close()
 
         kg_stats = self._kg.stats() if self._kg else {"entities": 0, "relations": 0}
 

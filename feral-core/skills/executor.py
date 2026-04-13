@@ -224,6 +224,9 @@ class SkillExecutor:
                     capture_output=True, text=True, timeout=15,
                 )
             elif path == "shell":
+                BLOCKED_COMMANDS = {"rm ", "rm -", "rmdir", "del ", "format ", "mkfs", "dd ", "> /dev/", "chmod 777"}
+                if any(bc in command.lower() for bc in BLOCKED_COMMANDS):
+                    return {"success": False, "error": "Command blocked by safety filter", "data": {}}
                 quote_err = _check_shell_quotes(command)
                 if quote_err:
                     return {"success": False, "status_code": 400, "data": None, "error": quote_err}

@@ -28,6 +28,8 @@ export function useFeralSession({ voiceEngineRef }) {
   const wsRef = useRef(null);
   const streamBufferRef = useRef('');
   const greetingReceivedRef = useRef(false);
+  const unmountedRef = useRef(false);
+  const reconnectTimerRef = useRef(null);
 
   const playTTSChunk = useCallback((chunk) => {
     try {
@@ -46,16 +48,19 @@ export function useFeralSession({ voiceEngineRef }) {
   }, []);
 
   const connect = () => {
+    if (unmountedRef.current) return;
     const ws = new WebSocket(WS_URL);
 
     ws.onopen = () => {
+      if (unmountedRef.current) { ws.close(); return; }
       setIsConnected(true);
       greetingReceivedRef.current = false;
     };
 
     ws.onclose = () => {
       setIsConnected(false);
-      setTimeout(connect, 3000);
+      if (unmountedRef.current) return;
+      reconnectTimerRef.current = setTimeout(connect, 3000);
     };
 
     ws.onmessage = (event) => {
@@ -182,7 +187,11 @@ export function useFeralSession({ voiceEngineRef }) {
   useEffect(() => {
     connect();
     fetch(`${API_BASE}/api/llm/status`).then(r => r.json()).then(setLlmStatus).catch(() => {});
-    return () => { if (wsRef.current) wsRef.current.close(); };
+    return () => {
+      unmountedRef.current = true;
+      clearTimeout(reconnectTimerRef.current);
+      if (wsRef.current) wsRef.current.close();
+    };
   }, []);
 
   useEffect(() => {

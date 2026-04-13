@@ -143,13 +143,8 @@ class DockerSandbox:
         return await self._stream_command(cmd, cwd=None)
 
     async def _run_on_host(self, script_path: Path, argv_inner: list[str], cwd: str) -> dict[str, Any]:
-        local_argv: list[str] = []
-        for a in argv_inner:
-            if a.startswith("/work/"):
-                local_argv.append(str(Path(cwd) / Path(a).name))
-            else:
-                local_argv.append(a)
-        return await self._stream_command(local_argv, cwd=cwd)
+        logger.warning("Docker unavailable — refusing to execute unsandboxed code")
+        return {"exit_code": 1, "stdout": "", "stderr": "Docker unavailable. Refusing to execute unsandboxed code.", "timed_out": False}
 
     async def execute_shell(self, command: str) -> dict[str, Any]:
         """Run a shell command inside the sandbox image (or host fallback)."""
@@ -166,7 +161,8 @@ class DockerSandbox:
             cmd = self._docker_base_cmd()
             cmd.extend([self._image, "bash", "-c", command])
             return await self._stream_command(cmd, cwd=None)
-        return await self._stream_command(["bash", "-c", command], cwd=None)
+        logger.warning("Docker unavailable — refusing to execute unsandboxed code")
+        return {"exit_code": 1, "stdout": "", "stderr": "Docker unavailable. Refusing to execute unsandboxed code.", "timed_out": False}
 
     async def _stream_command(self, argv: list[str], *, cwd: str | None) -> dict[str, Any]:
         start = time.perf_counter()

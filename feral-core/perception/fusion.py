@@ -152,6 +152,14 @@ class PerceptionEngine:
             self._frames[session_id] = PerceptionFrame()
         return self._frames[session_id]
 
+    @staticmethod
+    def _first_valid(*values):
+        """Return the first value that is not None, preserving valid zeros."""
+        for v in values:
+            if v is not None:
+                return v
+        return None
+
     def update_sensors(self, session_id: str, sensors: dict):
         """Update the perception frame with structured telemetry data."""
         frame = self.get_frame(session_id)
@@ -163,19 +171,33 @@ class PerceptionEngine:
         device = sensors.get("device", {})
         inferred = sensors.get("inferred_state", "")
 
+        _fv = self._first_valid
+
         # Vitals — support both structured and flat
-        frame.heart_rate = vitals.get("ppg_heart_rate") or sensors.get("ppg_heart_rate") or sensors.get("heart_rate_bpm") or frame.heart_rate
-        frame.spo2_pct = vitals.get("spo2_pct") or sensors.get("spo2_pct") or frame.spo2_pct
-        frame.skin_temperature_c = vitals.get("skin_temperature_c") or frame.skin_temperature_c
+        _hr = _fv(vitals.get("ppg_heart_rate"), sensors.get("ppg_heart_rate"), sensors.get("heart_rate_bpm"))
+        if _hr is not None:
+            frame.heart_rate = _hr
+        _spo2 = _fv(vitals.get("spo2_pct"), sensors.get("spo2_pct"))
+        if _spo2 is not None:
+            frame.spo2_pct = _spo2
+        _temp = vitals.get("skin_temperature_c")
+        if _temp is not None:
+            frame.skin_temperature_c = _temp
 
         # IMU
-        frame.head_pose = imu.get("head_pose_euler") or frame.head_pose
+        _pose = imu.get("head_pose_euler")
+        if _pose is not None:
+            frame.head_pose = _pose
 
         # Environment
-        frame.ambient_light_lux = env.get("ambient_light_lux") or frame.ambient_light_lux
+        _lux = env.get("ambient_light_lux")
+        if _lux is not None:
+            frame.ambient_light_lux = _lux
 
         # Device
-        frame.battery_pct = device.get("battery_pct") or sensors.get("battery_pct") or frame.battery_pct
+        _batt = _fv(device.get("battery_pct"), sensors.get("battery_pct"))
+        if _batt is not None:
+            frame.battery_pct = _batt
 
         # Inferred state
         if inferred:

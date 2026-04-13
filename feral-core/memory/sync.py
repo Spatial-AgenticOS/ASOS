@@ -39,6 +39,15 @@ SYNC_PASSPHRASE = os.getenv("FERAL_SYNC_PASSPHRASE", "")
 SERVICE_TYPE = "_feral._tcp.local."
 
 
+def _parse_hlc(hlc_str: str) -> tuple:
+    """Parse HLC string to comparable tuple: (wall_time, counter, node_id)."""
+    parts = hlc_str.split(":", 2)
+    try:
+        return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0, parts[2] if len(parts) > 2 else "")
+    except (ValueError, IndexError):
+        return (0, 0, "")
+
+
 @dataclass
 class SyncOperation:
     """A single write operation to be replicated."""
@@ -75,7 +84,7 @@ class VectorClock:
 
     def update(self, node_id: str, hlc: str):
         current = self.clocks.get(node_id, "0:0:")
-        if hlc > current:
+        if _parse_hlc(hlc) > _parse_hlc(current):
             self.clocks[node_id] = hlc
 
     def to_dict(self) -> dict:
@@ -125,26 +134,29 @@ class SyncWAL:
             conn.close()
 
     def get_changes_since(self, hlc: str, exclude_node: str = "") -> list[SyncOperation]:
+        threshold = _parse_hlc(hlc)
         conn = sqlite3.connect(self._db_path)
         try:
             if exclude_node:
                 rows = conn.execute(
-                    "SELECT op_id, table_name, op_type, row_id, data, hlc, origin_node, timestamp FROM sync_wal WHERE hlc > ? AND origin_node != ? ORDER BY hlc",
-                    (hlc, exclude_node),
+                    "SELECT op_id, table_name, op_type, row_id, data, hlc, origin_node, timestamp FROM sync_wal WHERE origin_node != ?",
+                    (exclude_node,),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT op_id, table_name, op_type, row_id, data, hlc, origin_node, timestamp FROM sync_wal WHERE hlc > ? ORDER BY hlc",
-                    (hlc,),
+                    "SELECT op_id, table_name, op_type, row_id, data, hlc, origin_node, timestamp FROM sync_wal",
                 ).fetchall()
 
-            return [
+            ops = [
                 SyncOperation(
                     op_id=r[0], table=r[1], op_type=r[2], row_id=r[3],
                     data=json.loads(r[4]), hlc=r[5], origin_node=r[6], timestamp=r[7],
                 )
                 for r in rows
+                if _parse_hlc(r[5]) > threshold
             ]
+            ops.sort(key=lambda op: _parse_hlc(op.hlc))
+            return ops
         finally:
             conn.close()
 
@@ -267,6 +279,10 @@ class SyncEngine:
                          d.get("result_summary", ""), d.get("latency_ms", 0), d.get("created_at", time.time())),
                     )
             elif op.op_type == "delete":
+                _SYNC_ALLOWED_TABLES = {"notes", "episodes", "conversations", "knowledge", "wiki_pages"}
+                if op.table not in _SYNC_ALLOWED_TABLES:
+                    logger.warning("Sync rejected: unknown table %s", op.table)
+                    return
                 conn.execute(f"DELETE FROM {op.table} WHERE id=?", (op.row_id,))
 
             conn.commit()
@@ -378,7 +394,17 @@ class SyncEngine:
             port = peer["port"]
             uri = f"ws://{addr}:{port}/sync"
 
-            async with websockets.connect(uri) as ws:
+            ws = None
+            for _attempt in range(3):
+                try:
+                    ws = await websockets.connect(uri)
+                    break
+                except Exception:
+                    if _attempt == 2:
+                        raise
+                    await asyncio.sleep(2 ** _attempt)
+
+            async with ws:
                 await ws.send(json.dumps({
                     "type": "sync_request",
                     "node_id": self.node_id,

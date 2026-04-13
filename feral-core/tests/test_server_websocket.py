@@ -223,10 +223,10 @@ def _node_client(mock: MagicMock, pairing_store: MagicMock, node_api_key: str = 
     """TestClient for /v1/node with pairing store and NODE_API_KEY mocked."""
     if "api.server" in sys.modules:
         del sys.modules["api.server"]
+    mock.device_pairing_store = pairing_store
     with ExitStack() as stack:
         for p in _brain_patchers(mock):
             stack.enter_context(p)
-        stack.enter_context(patch("api.server._get_pairing_store", return_value=pairing_store))
         from api.server import app
 
         stack.enter_context(patch("api.server.NODE_API_KEY", node_api_key))
@@ -412,9 +412,9 @@ def pairing_store_mock():
 class TestNodeWebSocket:
     def test_rejects_invalid_api_key(self, ws_mock_state, pairing_store_mock):
         with _node_client(ws_mock_state, pairing_store_mock) as client:
-            with pytest.raises(WebSocketDisconnect):
-                with client.websocket_connect("/v1/node?api_key=not-valid"):
-                    pass
+            with client.websocket_connect("/v1/node?api_key=not-valid") as ws:
+                msg = ws.receive()
+                assert msg.get("type") == "websocket.close" or msg.get("code") == 4003
 
     def test_accepts_legacy_node_api_key_and_registers(self, ws_mock_state, pairing_store_mock):
         with _node_client(ws_mock_state, pairing_store_mock) as client:

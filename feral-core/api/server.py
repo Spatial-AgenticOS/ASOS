@@ -45,7 +45,7 @@ from security.session_auth import (
     is_localhost,
     local_bypass_enabled,
 )
-from security.device_pairing import DevicePairingStore
+from security.device_pairing import DevicePairingStore  # used in type hint
 
 from api.routes.dashboard import router as dashboard_router
 from api.routes.config import router as config_router
@@ -62,6 +62,7 @@ from api.routes.devices import router as devices_router
 from api.routes.timeline import router as timeline_router
 from api.routes.brain_rest import router as brain_rest_router
 from api.routes.baseline import router as baseline_router
+from api.routes.handoff import router as handoff_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -77,7 +78,7 @@ app = FastAPI(
     version="1.2.0",
 )
 
-CORS_ORIGINS = os.getenv("FERAL_CORS_ORIGINS", "*").split(",")
+CORS_ORIGINS = os.getenv("FERAL_CORS_ORIGINS", "http://localhost:5173,http://localhost:9090").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -90,20 +91,37 @@ app.add_middleware(
 # Rate Limiting Middleware
 # ─────────────────────────────────────────────
 
-_rate_limit_store: dict[str, collections.deque] = {}
+_rate_limit_store: collections.OrderedDict[str, collections.deque] = collections.OrderedDict()
 RATE_LIMIT_RPM = int(os.getenv("FERAL_RATE_LIMIT_RPM", "120"))
+_RATE_LIMIT_MAX_KEYS = 10_000
+_rate_limit_last_cleanup = 0.0
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
+        global _rate_limit_last_cleanup
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
+
+        if now - _rate_limit_last_cleanup > 60:
+            _rate_limit_last_cleanup = now
+            cutoff = now - 60
+            stale = [k for k, v in _rate_limit_store.items() if not v or v[-1] < cutoff]
+            for k in stale:
+                del _rate_limit_store[k]
+
+        if client_ip in _rate_limit_store:
+            _rate_limit_store.move_to_end(client_ip)
         window = _rate_limit_store.setdefault(client_ip, collections.deque())
         while window and window[0] < now - 60:
             window.popleft()
         if len(window) >= RATE_LIMIT_RPM:
             return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
         window.append(now)
+
+        while len(_rate_limit_store) > _RATE_LIMIT_MAX_KEYS:
+            _rate_limit_store.popitem(last=False)
+
         return await call_next(request)
 
 
@@ -172,6 +190,7 @@ app.include_router(devices_router)
 app.include_router(timeline_router)
 app.include_router(brain_rest_router)
 app.include_router(baseline_router)
+app.include_router(handoff_router)
 
 
 # ─────────────────────────────────────────────
@@ -509,28 +528,20 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
 # Daemon WebSocket (for OpenClaw-style nodes)
 # ─────────────────────────────────────────────
 
-NODE_API_KEY = os.environ.get("NODE_API_KEY", "dev-secret-key")
-_pairing_store: DevicePairingStore | None = None
-
-
-def _get_pairing_store() -> DevicePairingStore:
-    global _pairing_store
-    if _pairing_store is None:
-        _pairing_store = DevicePairingStore()
-    return _pairing_store
+NODE_API_KEY = os.environ.get("NODE_API_KEY", "")
 
 
 @app.websocket("/v1/node")
 async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
-    store = _get_pairing_store()
+    store = state.device_pairing_store
     paired_device_id = store.verify_device(api_key) if api_key else None
+
+    await ws.accept()
 
     if paired_device_id is None and api_key != NODE_API_KEY:
         logger.warning("Unauthorized daemon connection attempt rejected")
-        await ws.close(code=1008, reason="Unauthorized Edge Node API Key")
+        await ws.close(code=4003, reason="Unauthorized Edge Node API Key")
         return
-
-    await ws.accept()
     node_id = None
     logger.info("Daemon connecting (device_id=%s)...", paired_device_id or "legacy-key")
 
@@ -957,7 +968,9 @@ a{color:#06b6d4}p{line-height:1.6}</style></head>
 @app.get("/{full_path:path}")
 async def serve_webui_or_fallback(full_path: str = ""):
     if _webui_ready:
-        file_path = _webui_dir / full_path
+        file_path = (_webui_dir / full_path).resolve()
+        if not file_path.is_relative_to(_webui_dir.resolve()):
+            return HTMLResponse("Forbidden", status_code=403)
         if full_path and file_path.is_file():
             return FileResponse(file_path)
         return FileResponse(_webui_dir / "index.html")

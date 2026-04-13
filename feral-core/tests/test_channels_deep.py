@@ -235,6 +235,12 @@ async def test_slack_socket_mode_events_api_acknowledges_and_handles_message():
         def __init__(self):
             self.send = AsyncMock()
 
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
         def __aiter__(self):
             self._gone = False
             return self
@@ -246,10 +252,7 @@ async def test_slack_socket_mode_events_api_acknowledges_and_handles_message():
             return raw
 
     fake_ws = FakeSlackWS()
-
-    @asynccontextmanager
-    async def fake_connect(*_a, **_kw):
-        yield fake_ws
+    fake_connect = AsyncMock(return_value=fake_ws)
 
     socket_client = MagicMock()
     socket_client.post = AsyncMock(

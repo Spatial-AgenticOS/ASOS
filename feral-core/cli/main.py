@@ -164,7 +164,18 @@ async def repl():
     print(BANNER)
     uri = WS_URL
     try:
-        async with websockets.connect(uri) as ws:
+        _ws = None
+        for _attempt in range(3):
+            try:
+                _ws = await websockets.connect(uri)
+                break
+            except Exception:
+                if _attempt == 2:
+                    raise
+                print(f"  Connection failed (attempt {_attempt + 1}/3) — retrying...")
+                await asyncio.sleep(2 ** _attempt)
+
+        async with _ws as ws:
             greeting = await asyncio.wait_for(ws.recv(), timeout=5)
             msg = json.loads(greeting)
             if msg.get("payload", {}).get("text"):
@@ -250,7 +261,17 @@ async def repl():
 async def one_shot(text: str):
     """Send a single command and print the response."""
     try:
-        async with websockets.connect(WS_URL) as ws:
+        _ws = None
+        for _attempt in range(3):
+            try:
+                _ws = await websockets.connect(WS_URL)
+                break
+            except Exception:
+                if _attempt == 2:
+                    raise
+                await asyncio.sleep(2 ** _attempt)
+
+        async with _ws as ws:
             _ = await asyncio.wait_for(ws.recv(), timeout=5)
 
             await ws.send(json.dumps({

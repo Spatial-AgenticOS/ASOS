@@ -87,7 +87,7 @@ class RealtimeSession:
                 "Authorization": f"Bearer {self._api_key}",
                 "OpenAI-Beta": "realtime=v1",
             }
-            self._ws = await websockets.connect(
+            self._ws = await self._connect_with_retry(
                 url,
                 additional_headers=headers,
                 max_size=10 * 1024 * 1024,
@@ -99,6 +99,18 @@ class RealtimeSession:
         except Exception as e:
             logger.error(f"Failed to connect to OpenAI Realtime: {e}")
             self._connected = False
+
+    @staticmethod
+    async def _connect_with_retry(url, **kwargs):
+        import websockets
+        for attempt in range(3):
+            try:
+                return await websockets.connect(url, **kwargs)
+            except Exception:
+                if attempt == 2:
+                    raise
+                logger.warning("OpenAI WS connect failed (attempt %d/3) — retrying", attempt + 1)
+                await asyncio.sleep(2 ** attempt)
 
     async def configure(self, system_prompt: str = "", tools: list[dict] | None = None):
         """Send session.update with system prompt, tools, and voice/VAD config."""

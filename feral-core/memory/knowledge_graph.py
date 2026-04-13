@@ -52,57 +52,64 @@ class KnowledgeGraph:
 
     def _init_schema(self):
         conn = self._conn()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS entities (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                entity_type TEXT DEFAULT 'thing',
-                embedding BLOB,
-                metadata TEXT DEFAULT '{}',
-                mention_count INTEGER DEFAULT 1,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
-            CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
+        try:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS entities (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    entity_type TEXT DEFAULT 'thing',
+                    embedding BLOB,
+                    metadata TEXT DEFAULT '{}',
+                    mention_count INTEGER DEFAULT 1,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+                CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
 
-            CREATE TABLE IF NOT EXISTS entity_aliases (
-                id TEXT PRIMARY KEY,
-                entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-                alias TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_aliases_entity ON entity_aliases(entity_id);
-            CREATE INDEX IF NOT EXISTS idx_aliases_alias ON entity_aliases(alias);
+                CREATE TABLE IF NOT EXISTS entity_aliases (
+                    id TEXT PRIMARY KEY,
+                    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                    alias TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_aliases_entity ON entity_aliases(entity_id);
+                CREATE INDEX IF NOT EXISTS idx_aliases_alias ON entity_aliases(alias);
 
-            CREATE TABLE IF NOT EXISTS relations (
-                id TEXT PRIMARY KEY,
-                source_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-                relation_type TEXT NOT NULL,
-                target_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-                confidence REAL DEFAULT 1.0,
-                evidence_text TEXT DEFAULT '',
-                source_origin TEXT DEFAULT 'conversation',
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_rel_source ON relations(source_id);
-            CREATE INDEX IF NOT EXISTS idx_rel_target ON relations(target_id);
-            CREATE INDEX IF NOT EXISTS idx_rel_type ON relations(relation_type);
+                CREATE TABLE IF NOT EXISTS relations (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                    relation_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                    confidence REAL DEFAULT 1.0,
+                    evidence_text TEXT DEFAULT '',
+                    source_origin TEXT DEFAULT 'conversation',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_rel_source ON relations(source_id);
+                CREATE INDEX IF NOT EXISTS idx_rel_target ON relations(target_id);
+                CREATE INDEX IF NOT EXISTS idx_rel_type ON relations(relation_type);
 
-            CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts
-            USING fts5(name, entity_type, metadata, tokenize='porter');
+                CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts
+                USING fts5(name, entity_type, metadata, tokenize='porter');
 
-            CREATE TRIGGER IF NOT EXISTS entities_ai_fts AFTER INSERT ON entities BEGIN
-                INSERT INTO entities_fts(rowid, name, entity_type, metadata)
-                VALUES (new.rowid, new.name, new.entity_type, new.metadata);
-            END;
-            CREATE TRIGGER IF NOT EXISTS entities_ad_fts AFTER DELETE ON entities BEGIN
-                DELETE FROM entities_fts WHERE rowid = old.rowid;
-            END;
-        """)
-        conn.commit()
-        conn.close()
+                CREATE TRIGGER IF NOT EXISTS entities_ai_fts AFTER INSERT ON entities BEGIN
+                    INSERT INTO entities_fts(rowid, name, entity_type, metadata)
+                    VALUES (new.rowid, new.name, new.entity_type, new.metadata);
+                END;
+                CREATE TRIGGER IF NOT EXISTS entities_ad_fts AFTER DELETE ON entities BEGIN
+                    DELETE FROM entities_fts WHERE rowid = old.rowid;
+                END;
+                CREATE TRIGGER IF NOT EXISTS entities_au_fts AFTER UPDATE ON entities BEGIN
+                    DELETE FROM entities_fts WHERE rowid = old.rowid;
+                    INSERT INTO entities_fts(rowid, name, entity_type, metadata)
+                    VALUES (new.rowid, new.name, new.entity_type, new.metadata);
+                END;
+            """)
+            conn.commit()
+        finally:
+            conn.close()
 
     async def add_entity(
         self,
@@ -128,13 +135,15 @@ class KnowledgeGraph:
         meta_json = json.dumps(metadata or {})
 
         conn = self._conn()
-        conn.execute(
-            """INSERT INTO entities (id, name, entity_type, embedding, metadata, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (eid, name, entity_type, vec_to_blob(embedding), meta_json, now, now),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                """INSERT INTO entities (id, name, entity_type, embedding, metadata, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (eid, name, entity_type, vec_to_blob(embedding), meta_json, now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"Entity added: {name} ({entity_type}) [{eid}]")
         return {"id": eid, "name": name, "entity_type": entity_type}
 
@@ -153,31 +162,33 @@ class KnowledgeGraph:
         target = await self.add_entity(target_name, target_type)
 
         conn = self._conn()
-        existing = conn.execute(
-            """SELECT id, confidence FROM relations
-               WHERE source_id = ? AND relation_type = ? AND target_id = ?""",
-            (source["id"], relation_type, target["id"]),
-        ).fetchone()
+        try:
+            existing = conn.execute(
+                """SELECT id, confidence FROM relations
+                   WHERE source_id = ? AND relation_type = ? AND target_id = ?""",
+                (source["id"], relation_type, target["id"]),
+            ).fetchone()
 
-        now = time.time()
-        if existing:
-            new_conf = min(1.0, (existing["confidence"] + confidence) / 2.0 + 0.1)
-            conn.execute(
-                "UPDATE relations SET confidence = ?, evidence_text = ?, updated_at = ? WHERE id = ?",
-                (new_conf, evidence[:1000], now, existing["id"]),
-            )
-            rid = existing["id"]
-        else:
-            rid = str(uuid4())[:12]
-            conn.execute(
-                """INSERT INTO relations
-                   (id, source_id, relation_type, target_id, confidence, evidence_text, source_origin, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (rid, source["id"], relation_type, target["id"], confidence, evidence[:1000], "conversation", now, now),
-            )
+            now = time.time()
+            if existing:
+                new_conf = min(1.0, (existing["confidence"] + confidence) / 2.0 + 0.1)
+                conn.execute(
+                    "UPDATE relations SET confidence = ?, evidence_text = ?, updated_at = ? WHERE id = ?",
+                    (new_conf, evidence[:1000], now, existing["id"]),
+                )
+                rid = existing["id"]
+            else:
+                rid = str(uuid4())[:12]
+                conn.execute(
+                    """INSERT INTO relations
+                       (id, source_id, relation_type, target_id, confidence, evidence_text, source_origin, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (rid, source["id"], relation_type, target["id"], confidence, evidence[:1000], "conversation", now, now),
+                )
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"Relation: ({source_name}) --[{relation_type}]--> ({target_name})")
         return {
             "id": rid,
@@ -195,53 +206,54 @@ class KnowledgeGraph:
     ) -> list[dict]:
         """Multi-hop graph traversal using recursive CTE."""
         conn = self._conn()
-        entity = conn.execute(
-            "SELECT id, name FROM entities WHERE name = ? COLLATE NOCASE",
-            (start_entity_name,),
-        ).fetchone()
-        if not entity:
-            alias_row = conn.execute(
-                "SELECT entity_id FROM entity_aliases WHERE alias = ? COLLATE NOCASE",
+        try:
+            entity = conn.execute(
+                "SELECT id, name FROM entities WHERE name = ? COLLATE NOCASE",
                 (start_entity_name,),
             ).fetchone()
-            if alias_row:
-                entity = conn.execute(
-                    "SELECT id, name FROM entities WHERE id = ?",
-                    (alias_row["entity_id"],),
+            if not entity:
+                alias_row = conn.execute(
+                    "SELECT entity_id FROM entity_aliases WHERE alias = ? COLLATE NOCASE",
+                    (start_entity_name,),
                 ).fetchone()
-        if not entity:
+                if alias_row:
+                    entity = conn.execute(
+                        "SELECT id, name FROM entities WHERE id = ?",
+                        (alias_row["entity_id"],),
+                    ).fetchone()
+            if not entity:
+                return []
+
+            rows = conn.execute("""
+                WITH RECURSIVE graph_walk(entity_id, entity_name, relation_type, target_id, target_name, depth, path) AS (
+                    SELECT
+                        r.source_id, e_src.name, r.relation_type, r.target_id, e_tgt.name,
+                        1, e_src.name || ' -> ' || r.relation_type || ' -> ' || e_tgt.name
+                    FROM relations r
+                    JOIN entities e_src ON r.source_id = e_src.id
+                    JOIN entities e_tgt ON r.target_id = e_tgt.id
+                    WHERE r.source_id = ? OR r.target_id = ?
+
+                    UNION ALL
+
+                    SELECT
+                        r2.source_id, e2_src.name, r2.relation_type, r2.target_id, e2_tgt.name,
+                        gw.depth + 1,
+                        gw.path || ' | ' || e2_src.name || ' -> ' || r2.relation_type || ' -> ' || e2_tgt.name
+                    FROM relations r2
+                    JOIN entities e2_src ON r2.source_id = e2_src.id
+                    JOIN entities e2_tgt ON r2.target_id = e2_tgt.id
+                    JOIN graph_walk gw ON (r2.source_id = gw.target_id OR r2.target_id = gw.entity_id)
+                    WHERE gw.depth < ?
+                        AND gw.path NOT LIKE '%' || e2_tgt.name || '%'
+                )
+                SELECT DISTINCT entity_name, relation_type, target_name, depth, path
+                FROM graph_walk
+                ORDER BY depth ASC
+                LIMIT ?
+            """, (entity["id"], entity["id"], max_depth, limit)).fetchall()
+        finally:
             conn.close()
-            return []
-
-        rows = conn.execute("""
-            WITH RECURSIVE graph_walk(entity_id, entity_name, relation_type, target_id, target_name, depth, path) AS (
-                SELECT
-                    r.source_id, e_src.name, r.relation_type, r.target_id, e_tgt.name,
-                    1, e_src.name || ' -> ' || r.relation_type || ' -> ' || e_tgt.name
-                FROM relations r
-                JOIN entities e_src ON r.source_id = e_src.id
-                JOIN entities e_tgt ON r.target_id = e_tgt.id
-                WHERE r.source_id = ? OR r.target_id = ?
-
-                UNION ALL
-
-                SELECT
-                    r2.source_id, e2_src.name, r2.relation_type, r2.target_id, e2_tgt.name,
-                    gw.depth + 1,
-                    gw.path || ' | ' || e2_src.name || ' -> ' || r2.relation_type || ' -> ' || e2_tgt.name
-                FROM relations r2
-                JOIN entities e2_src ON r2.source_id = e2_src.id
-                JOIN entities e2_tgt ON r2.target_id = e2_tgt.id
-                JOIN graph_walk gw ON (r2.source_id = gw.target_id OR r2.target_id = gw.entity_id)
-                WHERE gw.depth < ?
-                    AND gw.path NOT LIKE '%' || e2_tgt.name || '%'
-            )
-            SELECT DISTINCT entity_name, relation_type, target_name, depth, path
-            FROM graph_walk
-            ORDER BY depth ASC
-            LIMIT ?
-        """, (entity["id"], entity["id"], max_depth, limit)).fetchall()
-        conn.close()
 
         return [
             {
@@ -257,31 +269,32 @@ class KnowledgeGraph:
     async def search_entities(self, query: str, limit: int = 10) -> list[dict]:
         """Hybrid FTS + embedding search for entities."""
         conn = self._conn()
-
-        # Phase 1: FTS5 text search
-        fts_results = {}
         try:
-            rows = conn.execute(
-                """SELECT e.id, e.name, e.entity_type, e.mention_count, rank
-                   FROM entities_fts f JOIN entities e ON f.rowid = e.rowid
-                   WHERE entities_fts MATCH ? ORDER BY rank LIMIT ?""",
-                (query, limit * 2),
-            ).fetchall()
-            for r in rows:
-                fts_results[r["id"]] = {
-                    "id": r["id"], "name": r["name"], "type": r["entity_type"],
-                    "mentions": r["mention_count"],
-                    "fts_score": 1.0 / (1.0 + abs(r["rank"])),
-                }
-        except Exception:
-            pass
+            # Phase 1: FTS5 text search
+            fts_results = {}
+            try:
+                rows = conn.execute(
+                    """SELECT e.id, e.name, e.entity_type, e.mention_count, rank
+                       FROM entities_fts f JOIN entities e ON f.rowid = e.rowid
+                       WHERE entities_fts MATCH ? ORDER BY rank LIMIT ?""",
+                    (query, limit * 2),
+                ).fetchall()
+                for r in rows:
+                    fts_results[r["id"]] = {
+                        "id": r["id"], "name": r["name"], "type": r["entity_type"],
+                        "mentions": r["mention_count"],
+                        "fts_score": 1.0 / (1.0 + abs(r["rank"])),
+                    }
+            except Exception:
+                pass
 
-        # Phase 2: Vector search — scan only entities (usually small set < 10k)
-        query_vec = await self._embedder.embed(query)
-        all_entities = conn.execute(
-            "SELECT id, name, entity_type, mention_count, embedding FROM entities WHERE embedding IS NOT NULL"
-        ).fetchall()
-        conn.close()
+            # Phase 2: Vector search — scan only entities (usually small set < 10k)
+            query_vec = await self._embedder.embed(query)
+            all_entities = conn.execute(
+                "SELECT id, name, entity_type, mention_count, embedding FROM entities WHERE embedding IS NOT NULL"
+            ).fetchall()
+        finally:
+            conn.close()
 
         vec_results = {}
         for e in all_entities:
@@ -312,29 +325,30 @@ class KnowledgeGraph:
     def get_entity_neighborhood(self, entity_name: str, depth: int = 1) -> dict:
         """Get all relations for an entity and its immediate neighbors."""
         conn = self._conn()
-        entity = conn.execute(
-            "SELECT id, name, entity_type, metadata, mention_count FROM entities WHERE name = ? COLLATE NOCASE",
-            (entity_name,),
-        ).fetchone()
-        if not entity:
+        try:
+            entity = conn.execute(
+                "SELECT id, name, entity_type, metadata, mention_count FROM entities WHERE name = ? COLLATE NOCASE",
+                (entity_name,),
+            ).fetchone()
+            if not entity:
+                return {}
+
+            relations = conn.execute(
+                """SELECT r.*, e_src.name as source_name, e_tgt.name as target_name
+                   FROM relations r
+                   JOIN entities e_src ON r.source_id = e_src.id
+                   JOIN entities e_tgt ON r.target_id = e_tgt.id
+                   WHERE r.source_id = ? OR r.target_id = ?
+                   ORDER BY r.confidence DESC""",
+                (entity["id"], entity["id"]),
+            ).fetchall()
+
+            aliases = conn.execute(
+                "SELECT alias FROM entity_aliases WHERE entity_id = ?",
+                (entity["id"],),
+            ).fetchall()
+        finally:
             conn.close()
-            return {}
-
-        relations = conn.execute(
-            """SELECT r.*, e_src.name as source_name, e_tgt.name as target_name
-               FROM relations r
-               JOIN entities e_src ON r.source_id = e_src.id
-               JOIN entities e_tgt ON r.target_id = e_tgt.id
-               WHERE r.source_id = ? OR r.target_id = ?
-               ORDER BY r.confidence DESC""",
-            (entity["id"], entity["id"]),
-        ).fetchall()
-
-        aliases = conn.execute(
-            "SELECT alias FROM entity_aliases WHERE entity_id = ?",
-            (entity["id"],),
-        ).fetchall()
-        conn.close()
 
         return {
             "entity": {
@@ -449,42 +463,45 @@ class KnowledgeGraph:
         results = []
         now = time.time()
         conn = self._conn()
-        for pattern, subject, predicate, obj_type in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                obj = match.group(1).strip()
-                if not obj or len(obj) < 2:
-                    continue
-                # Direct sync insert for entities and relations
-                for ename, etype in [(subject, "person"), (obj, obj_type)]:
-                    existing = conn.execute(
-                        "SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (ename,)
-                    ).fetchone()
-                    if not existing:
-                        eid = str(uuid4())[:12]
+        try:
+            for pattern, subject, predicate, obj_type in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    obj = match.group(1).strip()
+                    if not obj or len(obj) < 2:
+                        continue
+                    for ename, etype in [(subject, "person"), (obj, obj_type)]:
+                        existing = conn.execute(
+                            "SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (ename,)
+                        ).fetchone()
+                        if not existing:
+                            eid = str(uuid4())[:12]
+                            conn.execute(
+                                "INSERT INTO entities (id, name, entity_type, metadata, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?)",
+                                (eid, ename, etype, now, now),
+                            )
+                    src = conn.execute("SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (subject,)).fetchone()
+                    tgt = conn.execute("SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (obj,)).fetchone()
+                    if src and tgt:
+                        rid = str(uuid4())[:12]
                         conn.execute(
-                            "INSERT INTO entities (id, name, entity_type, metadata, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?)",
-                            (eid, ename, etype, now, now),
+                            "INSERT INTO relations (id, source_id, relation_type, target_id, confidence, evidence_text, source_origin, created_at, updated_at) VALUES (?, ?, ?, ?, 0.8, ?, 'heuristic', ?, ?)",
+                            (rid, src["id"], predicate, tgt["id"], text[:200], now, now),
                         )
-                src = conn.execute("SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (subject,)).fetchone()
-                tgt = conn.execute("SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (obj,)).fetchone()
-                if src and tgt:
-                    rid = str(uuid4())[:12]
-                    conn.execute(
-                        "INSERT INTO relations (id, source_id, relation_type, target_id, confidence, evidence_text, source_origin, created_at, updated_at) VALUES (?, ?, ?, ?, 0.8, ?, 'heuristic', ?, ?)",
-                        (rid, src["id"], predicate, tgt["id"], text[:200], now, now),
-                    )
-                results.append({"source": subject, "relation": predicate, "target": obj})
-        conn.commit()
-        conn.close()
+                    results.append({"source": subject, "relation": predicate, "target": obj})
+            conn.commit()
+        finally:
+            conn.close()
         return results
 
     def stats(self) -> dict:
         conn = self._conn()
-        entity_count = conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
-        relation_count = conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0]
-        alias_count = conn.execute("SELECT COUNT(*) FROM entity_aliases").fetchone()[0]
-        conn.close()
+        try:
+            entity_count = conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+            relation_count = conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0]
+            alias_count = conn.execute("SELECT COUNT(*) FROM entity_aliases").fetchone()[0]
+        finally:
+            conn.close()
         return {
             "entities": entity_count,
             "relations": relation_count,
@@ -493,21 +510,23 @@ class KnowledgeGraph:
 
     async def _find_entity_by_name(self, name: str) -> Optional[dict]:
         conn = self._conn()
-        row = conn.execute(
-            "SELECT id, name, entity_type FROM entities WHERE name = ? COLLATE NOCASE",
-            (name,),
-        ).fetchone()
-        if not row:
-            alias_row = conn.execute(
-                "SELECT entity_id FROM entity_aliases WHERE alias = ? COLLATE NOCASE",
+        try:
+            row = conn.execute(
+                "SELECT id, name, entity_type FROM entities WHERE name = ? COLLATE NOCASE",
                 (name,),
             ).fetchone()
-            if alias_row:
-                row = conn.execute(
-                    "SELECT id, name, entity_type FROM entities WHERE id = ?",
-                    (alias_row["entity_id"],),
+            if not row:
+                alias_row = conn.execute(
+                    "SELECT entity_id FROM entity_aliases WHERE alias = ? COLLATE NOCASE",
+                    (name,),
                 ).fetchone()
-        conn.close()
+                if alias_row:
+                    row = conn.execute(
+                        "SELECT id, name, entity_type FROM entities WHERE id = ?",
+                        (alias_row["entity_id"],),
+                    ).fetchone()
+        finally:
+            conn.close()
         if row:
             return {"id": row["id"], "name": row["name"], "entity_type": row["entity_type"]}
         return None
@@ -518,10 +537,12 @@ class KnowledgeGraph:
             return None
         name_vec = await self._embedder.embed(name)
         conn = self._conn()
-        all_entities = conn.execute(
-            "SELECT id, name, entity_type, embedding FROM entities WHERE embedding IS NOT NULL"
-        ).fetchall()
-        conn.close()
+        try:
+            all_entities = conn.execute(
+                "SELECT id, name, entity_type, embedding FROM entities WHERE embedding IS NOT NULL"
+            ).fetchall()
+        finally:
+            conn.close()
 
         best_match = None
         best_sim = 0.0
@@ -539,26 +560,30 @@ class KnowledgeGraph:
 
     def _bump_mention(self, entity_id: str):
         conn = self._conn()
-        conn.execute(
-            "UPDATE entities SET mention_count = mention_count + 1, updated_at = ? WHERE id = ?",
-            (time.time(), entity_id),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "UPDATE entities SET mention_count = mention_count + 1, updated_at = ? WHERE id = ?",
+                (time.time(), entity_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def _add_alias(self, entity_id: str, alias: str):
         conn = self._conn()
-        existing = conn.execute(
-            "SELECT id FROM entity_aliases WHERE entity_id = ? AND alias = ? COLLATE NOCASE",
-            (entity_id, alias),
-        ).fetchone()
-        if not existing:
-            conn.execute(
-                "INSERT INTO entity_aliases (id, entity_id, alias, created_at) VALUES (?, ?, ?, ?)",
-                (str(uuid4())[:12], entity_id, alias, time.time()),
-            )
-            conn.commit()
-        conn.close()
+        try:
+            existing = conn.execute(
+                "SELECT id FROM entity_aliases WHERE entity_id = ? AND alias = ? COLLATE NOCASE",
+                (entity_id, alias),
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    "INSERT INTO entity_aliases (id, entity_id, alias, created_at) VALUES (?, ?, ?, ?)",
+                    (str(uuid4())[:12], entity_id, alias, time.time()),
+                )
+                conn.commit()
+        finally:
+            conn.close()
 
     @staticmethod
     def _mmr_rerank(results: list[dict], limit: int, diversity: float = 0.3) -> list[dict]:

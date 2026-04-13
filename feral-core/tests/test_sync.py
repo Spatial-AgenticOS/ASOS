@@ -43,15 +43,15 @@ class TestVectorClock:
 
     def test_update(self):
         vc = VectorClock()
-        vc.update("node-a", "2024-01-01T00:00:00.000Z:0:node-a")
+        vc.update("node-a", "1704067200000:0:node-a")
         d = vc.to_dict()
         assert "node-a" in d
 
     def test_later_hlc_wins(self):
         vc = VectorClock()
-        vc.update("node-a", "ts-001")
-        vc.update("node-a", "ts-005")
-        assert vc.to_dict()["node-a"] == "ts-005"
+        vc.update("node-a", "1000:0:node-a")
+        vc.update("node-a", "5000:0:node-a")
+        assert vc.to_dict()["node-a"] == "5000:0:node-a"
 
 
 class TestSyncWAL:
@@ -62,7 +62,7 @@ class TestSyncWAL:
             op = SyncOperation(
                 op_id="op-1", table="notes", op_type="upsert",
                 row_id="r1", data={"key": "test", "value": "hello"},
-                hlc="2024-01-01:0:node-a", origin_node="node-a",
+                hlc="1704067200000:0:node-a", origin_node="node-a",
             )
             wal.append(op)
             ops = wal.get_changes_since("")
@@ -77,10 +77,12 @@ class TestSyncWAL:
                 wal.append(SyncOperation(
                     op_id=f"op-{i}", table="notes", op_type="upsert",
                     row_id=f"r{i}", data={"key": f"k{i}"},
-                    hlc=f"ts-{i:03d}:0:node-a", origin_node="node-a",
+                    hlc=f"{1000 + i}:0:node-a", origin_node="node-a",
                 ))
-            ops = wal.get_changes_since("ts-002:0:node-a")
-            assert all(op.hlc > "ts-002:0:node-a" for op in ops)
+            ops = wal.get_changes_since("1002:0:node-a")
+            from memory.sync import _parse_hlc
+            threshold = _parse_hlc("1002:0:node-a")
+            assert all(_parse_hlc(op.hlc) > threshold for op in ops)
 
 
 class TestSyncEngine:

@@ -71,13 +71,6 @@ class ToolRunner:
         if ("robot_move" in name_lower or "actuator" in name_lower) and args.get("speed", 0) > 80:
             return SafetyLevel.DENY
 
-        auto_patterns = [
-            "search", "query", "get", "list", "current", "now_playing",
-            "forecast", "status", "read", "notes_memory", "web_search",
-        ]
-        if any(p in name_lower for p in auto_patterns):
-            return SafetyLevel.AUTO
-
         confirm_patterns = [
             "send", "post", "create", "delete", "update", "move", "grip",
             "play", "pause", "skip", "volume", "lock", "message", "order",
@@ -85,6 +78,13 @@ class ToolRunner:
         ]
         if any(p in name_lower for p in confirm_patterns):
             return SafetyLevel.CONFIRM
+
+        auto_patterns = [
+            "search", "query", "get", "list", "current", "now_playing",
+            "forecast", "status", "read", "notes_memory", "web_search",
+        ]
+        if any(p in name_lower for p in auto_patterns):
+            return SafetyLevel.AUTO
 
         return SafetyLevel.AUTO
 
