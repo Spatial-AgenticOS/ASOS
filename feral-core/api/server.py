@@ -53,6 +53,7 @@ from api.routes.conversations import router as conversations_router
 from api.routes.devices import router as devices_router
 from api.routes.timeline import router as timeline_router
 from api.routes.brain_rest import router as brain_rest_router
+from api.routes.baseline import router as baseline_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -119,6 +120,7 @@ app.include_router(conversations_router)
 app.include_router(devices_router)
 app.include_router(timeline_router)
 app.include_router(brain_rest_router)
+app.include_router(baseline_router)
 
 
 # ─────────────────────────────────────────────
@@ -398,6 +400,7 @@ async def client_session(ws: WebSocket):
                     if state.orchestrator:
                         state.orchestrator.update_biometric(session_id, bio)
                     state.perception.update_sensors(session_id, bio)
+                    _record_biometrics_to_baseline(bio)
 
             except Exception as msg_err:
                 logger.error(f"Error processing message from {session_id[:8]}: {msg_err}", exc_info=True)
@@ -558,6 +561,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 if node_id:
                     for sid in state.get_sessions_for_daemon(node_id):
                         state.perception.update_sensors(sid, sensors)
+                _record_biometrics_to_baseline(sensors)
 
             elif msg.type == "sensor_telemetry":
                 payload_dict = raw.get("payload", {})
@@ -582,6 +586,22 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 if node_id:
                     for sid in state.get_sessions_for_daemon(node_id):
                         state.perception.update_sensors(sid, readings)
+                _record_biometrics_to_baseline(readings)
+
+            elif msg.type == "heartbeat":
+                if node_id and state.hardware_mesh:
+                    state.hardware_mesh.node_health.record_heartbeat(node_id)
+                    pending = state.hardware_mesh.ledger.get_pending(node_id)
+                    if pending:
+                        unacked_ids = [
+                            r.envelope.command_id for r in pending
+                            if r.state.value == "submitted"
+                        ]
+                        if unacked_ids:
+                            await ws.send_json({
+                                "type": "pending_commands",
+                                "payload": {"command_ids": unacked_ids},
+                            })
 
             elif msg.type == "glasses_status":
                 payload_dict = raw.get("payload", {})
@@ -727,6 +747,48 @@ async def sync_peer_endpoint(ws: WebSocket):
         logger.info("Sync peer disconnected")
     except Exception as e:
         logger.warning(f"Sync peer error: {e}")
+
+
+# ─────────────────────────────────────────────
+# Baseline Biometric Recording
+# ─────────────────────────────────────────────
+
+_BIOMETRIC_KEY_MAP = {
+    "heart_rate": ("hr_resting", "health"),
+    "ppg_heart_rate": ("hr_resting", "health"),
+    "spo2": ("spo2_pct", "health"),
+    "spo2_pct": ("spo2_pct", "health"),
+    "skin_temp_c": ("skin_temp", "health"),
+    "skin_temperature_c": ("skin_temp", "health"),
+    "hrv_ms": ("hrv_ms", "health"),
+    "sleep_hours": ("sleep_hours", "health"),
+    "sleep_score": ("sleep_score", "health"),
+    "steps": ("steps_daily", "activity"),
+    "calories": ("calories_daily", "activity"),
+}
+
+
+def _record_biometrics_to_baseline(data: dict) -> None:
+    """Extract known biometric keys from a sensor payload and record them."""
+    if not state.baseline_engine or not data:
+        return
+    try:
+        flat: dict[str, float] = {}
+        for key, val in data.items():
+            if isinstance(val, dict):
+                for k2, v2 in val.items():
+                    if isinstance(v2, (int, float)) and v2 > 0:
+                        flat[k2] = float(v2)
+            elif isinstance(val, (int, float)) and val > 0:
+                flat[key] = float(val)
+
+        for raw_key, value in flat.items():
+            mapping = _BIOMETRIC_KEY_MAP.get(raw_key)
+            if mapping:
+                metric_id, category = mapping
+                state.baseline_engine.record(metric_id, value, category=category)
+    except Exception as exc:
+        logger.debug("Baseline biometric recording error: %s", exc)
 
 
 # ─────────────────────────────────────────────

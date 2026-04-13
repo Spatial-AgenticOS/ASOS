@@ -11,7 +11,6 @@ Bridges the gap between daemon WebSocket connections and the HUP device registry
 
 from __future__ import annotations
 import asyncio
-import json
 import logging
 import time
 from typing import Optional
@@ -23,6 +22,12 @@ from hardware.protocol import (
     DeviceCapability,
     HUPAction,
     HUPResult,
+)
+from hardware.command_contract import (
+    CommandEnvelope,
+    CommandState,
+    CommandLedger,
+    NodeHealth,
 )
 
 logger = logging.getLogger("feral.hardware.mesh")
@@ -127,11 +132,19 @@ class HardwareMesh:
     Auto-registers daemons as HUP devices and routes commands.
     """
 
-    def __init__(self, device_registry: DeviceRegistry, daemons: dict):
+    def __init__(
+        self,
+        device_registry: DeviceRegistry,
+        daemons: dict,
+        ledger: Optional[CommandLedger] = None,
+        node_health: Optional[NodeHealth] = None,
+    ):
         self._registry = device_registry
         self._daemons = daemons
         self._pending_invokes: dict[str, asyncio.Future] = {}
         self._node_metadata: dict[str, dict] = {}
+        self.ledger: CommandLedger = ledger or CommandLedger()
+        self.node_health: NodeHealth = node_health or NodeHealth()
 
     async def on_node_connected(self, node_id: str, registration_payload: dict):
         """Auto-register a daemon as a HUP device when it connects."""
@@ -168,12 +181,14 @@ class HardwareMesh:
             "node_type": node_type,
             "platform": platform,
         }
+        self.node_health.record_connect(node_id)
         logger.info(f"Node auto-registered as HUP device: {node_id} ({node_type}/{platform})")
 
     def on_node_disconnected(self, node_id: str):
         """Unregister a daemon when it disconnects."""
         self._registry.unregister_device(node_id)
         self._node_metadata.pop(node_id, None)
+        self.node_health.record_disconnect(node_id)
         logger.info(f"Node unregistered from HUP: {node_id}")
 
     async def invoke(
@@ -182,16 +197,45 @@ class HardwareMesh:
         command: str,
         params: dict = None,
         timeout: float = 10.0,
+        correlation_id: str = "",
+        idempotency_key: Optional[str] = None,
+        priority: str = "interactive",
     ) -> dict:
         """
         Send a command to a daemon node and wait for the response.
-        This is the core node.invoke pattern.
+
+        Full command lifecycle:
+          1. Build a CommandEnvelope with a full UUID
+          2. Check idempotency (skip if duplicate)
+          3. Submit to the ledger (SUBMITTED)
+          4. Send over WebSocket
+          5. On response → SUCCEEDED / FAILED
+          6. On timeout  → TIMED_OUT
         """
         ws = self._daemons.get(node_id)
         if not ws:
             return {"success": False, "error": f"Node not connected: {node_id}"}
 
-        request_id = str(uuid4())[:8]
+        envelope = CommandEnvelope(
+            node_id=node_id,
+            action=command,
+            params=params or {},
+            correlation_id=correlation_id or str(uuid4()),
+            idempotency_key=idempotency_key,
+            priority=priority,
+            deadline=time.time() + timeout,
+        )
+
+        if idempotency_key:
+            existing = self.ledger.check_idempotency(idempotency_key)
+            if existing is not None:
+                logger.info(f"Idempotent hit for key={idempotency_key}, returning cached record")
+                return existing.result or {"success": True, "idempotent": True, "command_id": existing.envelope.command_id}
+
+        self.ledger.submit(envelope)
+        self.node_health.increment_commands(node_id)
+
+        request_id = envelope.command_id
         future: asyncio.Future = asyncio.get_event_loop().create_future()
         self._pending_invokes[request_id] = future
 
@@ -205,16 +249,45 @@ class HardwareMesh:
         try:
             await ws.send_json(msg)
             result = await asyncio.wait_for(future, timeout=timeout)
+
+            success = result.get("success", False)
+            new_state = CommandState.SUCCEEDED if success else CommandState.FAILED
+            self.ledger.update_state(
+                request_id, new_state,
+                message=result.get("error", ""),
+                result=result,
+            )
+            if not success:
+                self.node_health.increment_errors(node_id)
             return result
+
         except asyncio.TimeoutError:
             self._pending_invokes.pop(request_id, None)
-            return {"success": False, "error": f"Timeout waiting for {command} on {node_id}"}
+            self.ledger.update_state(
+                request_id, CommandState.TIMED_OUT,
+                message=f"Timeout after {timeout}s waiting for {command}",
+            )
+            return {"success": False, "error": f"Timeout waiting for {command} on {node_id}", "command_id": request_id}
+
         except Exception as e:
             self._pending_invokes.pop(request_id, None)
-            return {"success": False, "error": str(e)}
+            self.ledger.update_state(
+                request_id, CommandState.FAILED, message=str(e),
+            )
+            self.node_health.increment_errors(node_id)
+            return {"success": False, "error": str(e), "command_id": request_id}
 
     def resolve_invoke(self, request_id: str, result: dict):
-        """Called when a daemon sends back an execute_result."""
+        """Called when a daemon sends back an execute_result.
+
+        If the result carries an ``ack`` flag we transition the ledger
+        record to ACKED; otherwise we resolve the pending future which
+        will trigger the SUCCEEDED/FAILED transition in ``invoke()``.
+        """
+        if result.get("ack"):
+            self.ledger.ack(request_id)
+            return
+
         future = self._pending_invokes.pop(request_id, None)
         if future and not future.done():
             future.set_result(result)

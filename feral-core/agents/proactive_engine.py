@@ -78,6 +78,7 @@ class ProactiveEngine:
         llm=None,
         calendar=None,
         health_aggregator=None,
+        baseline_engine=None,
         check_interval_s: float = 15.0,
     ):
         self._perception = perception
@@ -86,6 +87,7 @@ class ProactiveEngine:
         self._llm = llm
         self._calendar = calendar
         self._health = health_aggregator
+        self._baseline = baseline_engine
         self._interval = check_interval_s
         self._running = False
         self._callbacks: list[Callable[[ProactiveMessage], Awaitable[None]]] = []
@@ -258,6 +260,35 @@ class ProactiveEngine:
                             pass
             except Exception as e:
                 logger.debug("Meeting prep check failed: %s", e)
+
+        # --- Baseline Anomaly Detection ---
+        if self._baseline:
+            try:
+                for frame in frames:
+                    if frame.heart_rate > 0:
+                        alert = self._baseline.check_anomaly(
+                            "hr_resting", frame.heart_rate
+                        )
+                        if alert and self._can_fire("baseline_hr"):
+                            messages.append(ProactiveMessage(
+                                trigger_id="baseline_hr",
+                                priority=Priority.IMPORTANT,
+                                title="Heart Rate Anomaly",
+                                body=alert.message,
+                                voice_text=alert.message,
+                            ))
+                for mid in ("sleep_hours", "hrv_ms"):
+                    trend_alert = self._baseline.check_trend(mid)
+                    if trend_alert and self._can_fire(f"baseline_trend_{mid}"):
+                        messages.append(ProactiveMessage(
+                            trigger_id=f"baseline_trend_{mid}",
+                            priority=Priority.SUGGESTION,
+                            title="Trend Detected",
+                            body=trend_alert.message,
+                            voice_text=trend_alert.message,
+                        ))
+            except Exception as e:
+                logger.debug("Baseline check failed: %s", e)
 
         # --- LLM-based evaluation (additive, runs last) ---
         await self._evaluate_with_llm(frames, messages)

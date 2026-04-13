@@ -1,4 +1,4 @@
-"""Device mesh, session handoff, and proactive alert endpoints."""
+"""Device mesh, session handoff, command ledger, and node health endpoints."""
 
 from fastapi import APIRouter, Request
 
@@ -74,3 +74,69 @@ async def run_demo_scenario(request: Request):
         return {"ok": True, "scenario": scenario_name, "status": "started"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ─────────────────────────────────────────────
+# Command Ledger & Node Health endpoints
+# ─────────────────────────────────────────────
+
+
+@router.get("/api/commands/recent")
+async def recent_commands(limit: int = 50):
+    """Recent commands with full lifecycle state."""
+    if not state.hardware_mesh:
+        return {"commands": [], "error": "hardware mesh not initialised"}
+    records = state.hardware_mesh.ledger.get_recent(limit=limit)
+    return {
+        "commands": [
+            {
+                "command_id": r.envelope.command_id,
+                "node_id": r.envelope.node_id,
+                "action": r.envelope.action,
+                "priority": r.envelope.priority,
+                "state": r.state.value,
+                "created_at": r.envelope.created_at,
+                "ack_at": r.ack_at,
+                "completed_at": r.completed_at,
+                "retries": r.retries,
+                "correlation_id": r.envelope.correlation_id,
+            }
+            for r in records
+        ],
+        "stats": state.hardware_mesh.ledger.stats(),
+    }
+
+
+@router.get("/api/commands/{command_id}")
+async def command_detail(command_id: str):
+    """Single command full detail including state history and result."""
+    if not state.hardware_mesh:
+        return {"error": "hardware mesh not initialised"}
+    record = state.hardware_mesh.ledger.get(command_id)
+    if record is None:
+        return {"error": "command not found"}
+    return {
+        "command_id": record.envelope.command_id,
+        "node_id": record.envelope.node_id,
+        "action": record.envelope.action,
+        "params": record.envelope.params,
+        "priority": record.envelope.priority,
+        "state": record.state.value,
+        "state_history": record.state_history,
+        "created_at": record.envelope.created_at,
+        "deadline": record.envelope.deadline,
+        "ack_at": record.ack_at,
+        "completed_at": record.completed_at,
+        "result": record.result,
+        "retries": record.retries,
+        "idempotency_key": record.envelope.idempotency_key,
+        "correlation_id": record.envelope.correlation_id,
+    }
+
+
+@router.get("/api/nodes/health")
+async def nodes_health():
+    """All node health status with heartbeat freshness."""
+    if not state.hardware_mesh:
+        return {"nodes": {}, "error": "hardware mesh not initialised"}
+    return {"nodes": state.hardware_mesh.node_health.get_all()}

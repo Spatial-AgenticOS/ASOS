@@ -55,6 +55,7 @@ from genui.generator import GenUIEngine, ServiceProviderRegistry
 from skills.impl.browser_use import BrowserController
 from agents.session_handoff import SessionHandoffManager
 from agents.identity_loader import IdentityLoader
+from agents.baseline_engine import BaselineEngine
 
 logger = logging.getLogger("feral.brain")
 
@@ -149,6 +150,7 @@ class BrainState:
         self.docker_sandbox = None
         self.taskflows: Optional[TaskFlowRuntime] = None
         self.session_handoff: Optional[SessionHandoffManager] = None
+        self.baseline_engine: Optional[BaselineEngine] = None
 
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
@@ -379,6 +381,14 @@ class BrainState:
         except Exception as e:
             logger.debug(f"Cron scheduler skipped: {e}")
 
+        # Baseline Learning Engine
+        try:
+            _baseline_db = str(feral_home() / "baselines.db")
+            self.baseline_engine = BaselineEngine(db_path=_baseline_db)
+            logger.info("Baseline learning engine initialized (%s)", _baseline_db)
+        except Exception as e:
+            logger.debug(f"Baseline engine skipped: {e}")
+
         # Proactive Intelligence Engine
         try:
             from agents.proactive_engine import ProactiveEngine
@@ -389,6 +399,7 @@ class BrainState:
                 llm=_shared_llm,
                 calendar=self.calendar,
                 health_aggregator=self.health_aggregator,
+                baseline_engine=self.baseline_engine,
             )
 
             async def _proactive_delivery(msg):
