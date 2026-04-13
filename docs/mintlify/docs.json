@@ -58,7 +58,8 @@
           "guides/memory",
           "guides/voice",
           "guides/security",
-          "guides/autonomy"
+          "guides/autonomy",
+          "guides/local-models"
         ]
       },
       {

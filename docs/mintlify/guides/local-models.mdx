@@ -1,0 +1,189 @@
+---
+title: "Running FERAL Fully Offline"
+sidebarTitle: "Local Models"
+description: "Set up FERAL with local LLM, STT, TTS, and vision — no API keys, no cloud, no internet required."
+---
+
+Running FERAL offline means every inference stays on your machine. No API keys
+to rotate, no data leaves your network, and you can unplug the Ethernet cable
+after setup.
+
+## Prerequisites
+
+| Requirement | Minimum | Recommended |
+|-------------|---------|-------------|
+| Python | 3.11+ | 3.12 |
+| RAM | 8 GB (small models) | 16 GB (medium models) |
+| Disk | 10 GB free | 25 GB free |
+| OS | macOS 13+, Ubuntu 22.04+, Windows 11 | Apple Silicon or CUDA GPU |
+
+## Tested Combinations
+
+These combos are regularly tested by the team. Mix and match to fit your
+hardware budget.
+
+| Component | Provider | Model | RAM | Speed |
+|-----------|----------|-------|-----|-------|
+| LLM | Ollama | llama3:8b | 6 GB | Good |
+| LLM | Ollama | qwen2:7b | 5 GB | Good |
+| Vision | Ollama | llava:7b | 5 GB | OK |
+| STT | faster-whisper | base | 1 GB | Fast |
+| STT | faster-whisper | small | 2 GB | Good |
+| TTS | Piper | en_US-lessac-medium | 50 MB | Fast |
+
+<Note>
+  RAM figures are approximate peak usage. When running LLM + STT + TTS
+  simultaneously, add the individual figures together.
+</Note>
+
+## Setup
+
+<Steps>
+
+### Install Ollama
+
+Download from [ollama.com](https://ollama.com) or use your package manager:
+
+```bash
+# macOS
+brew install ollama
+
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Start the Ollama server:
+
+```bash
+ollama serve
+```
+
+### Pull an LLM model
+
+Pick one of the tested models:
+
+```bash
+ollama pull llama3:8b
+# or for lower RAM usage:
+ollama pull qwen2:7b
+```
+
+For vision support, also pull a multimodal model:
+
+```bash
+ollama pull llava:7b
+```
+
+### Install FERAL with local extras
+
+The `stt` and `tts` extras pull in faster-whisper and Piper respectively:
+
+```bash
+pip install "feral-ai[stt,tts]"
+```
+
+If you also want local vision:
+
+```bash
+pip install "feral-ai[stt,tts,vision]"
+```
+
+### Configure environment
+
+Set these environment variables (or add them to `~/.feral/config.env`):
+
+```bash
+export FERAL_LLM_PROVIDER=ollama
+export FERAL_LLM_MODEL=llama3:8b
+
+export FERAL_STT_PROVIDER=local
+export FERAL_TTS_PROVIDER=local
+
+# Optional — vision
+export FERAL_VISION_PROVIDER=ollama
+export FERAL_VISION_MODEL=llava:7b
+
+# Optional — point to a non-default Ollama host
+# export OLLAMA_HOST=http://localhost:11434
+```
+
+### Run FERAL
+
+```bash
+feral start
+```
+
+FERAL will connect to the local Ollama instance and use on-device STT/TTS.
+You can verify the providers in the startup banner:
+
+```
+[FERAL] LLM provider : ollama (llama3:8b)
+[FERAL] STT provider : local (faster-whisper base)
+[FERAL] TTS provider : local (piper en_US-lessac-medium)
+```
+
+</Steps>
+
+## Troubleshooting
+
+### "Connection refused" from Ollama
+
+Make sure `ollama serve` is running. By default it listens on
+`http://localhost:11434`. Check with:
+
+```bash
+curl http://localhost:11434/api/tags
+```
+
+### Slow first response
+
+The first inference after pulling a model is slow because Ollama loads weights
+into memory. Subsequent calls are fast. You can pre-warm with:
+
+```bash
+ollama run llama3:8b "hello" --nowordwrap
+```
+
+### Out of memory
+
+If your machine runs out of RAM:
+
+1. Switch to a smaller model (`qwen2:7b` uses ~1 GB less than `llama3:8b`).
+2. Close other heavy applications.
+3. On Linux, increase swap: `sudo fallocate -l 8G /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`.
+
+### STT not detecting speech
+
+Ensure your microphone is accessible and the correct device is selected:
+
+```bash
+python -c "import sounddevice; print(sounddevice.query_devices())"
+```
+
+Set the device index if needed:
+
+```bash
+export FERAL_STT_DEVICE=1
+```
+
+## Performance Tips
+
+**Choose models based on your hardware:**
+
+- **8 GB RAM (no GPU):** `qwen2:7b` + `faster-whisper base` + Piper — expect
+  2–4 s response times.
+- **16 GB RAM (no GPU):** `llama3:8b` + `faster-whisper small` + Piper —
+  expect 1–3 s response times.
+- **Apple Silicon (M1+):** Ollama uses Metal acceleration automatically.
+  `llama3:8b` runs at ~30 tokens/s on M2.
+- **NVIDIA GPU (8 GB+ VRAM):** Ollama detects CUDA automatically. Expect
+  40–80 tokens/s depending on model and GPU.
+
+**General tips:**
+
+- Keep Ollama running between sessions to avoid cold-start latency.
+- Use `faster-whisper base` unless you need higher accuracy — `small` is 2×
+  slower for a modest accuracy gain.
+- Piper TTS is CPU-only and extremely fast; it won't bottleneck your setup.
+- If you run FERAL on a headless server, disable TTS with
+  `FERAL_TTS_PROVIDER=none` to save resources.

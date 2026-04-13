@@ -95,3 +95,22 @@ jobs:
         run: |
           find . -name '*.py' -not -path './.git/*' -not -path './venv/*' \
             | xargs python -m py_compile
+
+  boundary-check:
+    name: Architecture boundaries
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: feral-core
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check skill boundaries
+        run: |
+          echo "Checking that skill implementations don't import core modules..."
+          VIOLATIONS=$(grep -rn "^from agents\.\|^from api\.\|^from memory\.\|^import agents\|^import api\|^import memory" skills/impl/ --include="*.py" | grep -v "# boundary-ok" | grep -v "__init__.py" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "BOUNDARY VIOLATIONS FOUND:"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "PASS: No boundary violations"
