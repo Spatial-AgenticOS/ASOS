@@ -1,6 +1,5 @@
 """Channel management and WhatsApp webhook endpoints."""
 
-import json
 import logging
 import os
 

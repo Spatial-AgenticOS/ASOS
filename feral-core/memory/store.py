@@ -19,27 +19,43 @@ from __future__ import annotations
 import json
 import logging
 import math
-import re
 import sqlite3
 import time
 from collections import deque
-from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-import numpy as np
-
-from config.loader import feral_data_home, feral_home
+from config.loader import feral_data_home
+from memory.context_builder import (
+    build_context_for_llm as context_build_context_for_llm,
+    build_context_for_llm_async as context_build_context_for_llm_async,
+    compact_session as context_compact_session,
+    heuristic_summarize as context_heuristic_summarize,
+    llm_summarize as context_llm_summarize,
+    search_all as context_search_all,
+)
 from memory.embeddings import (
     EmbeddingProvider,
     VectorIndex,
     EmbedQueue,
     chunk_text,
-    vec_to_blob,
     blob_to_vec,
     cosine_similarity,
-    CHUNK_SIZE,
-    CHUNK_OVERLAP,
+)
+from memory.notes_legacy import (
+    count_notes,
+    delete_note,
+    list_recent_notes,
+    save_note,
+    search_notes,
+)
+from memory.wiki import (
+    wiki_compile as helper_wiki_compile,
+    wiki_get_page as helper_wiki_get_page,
+    wiki_list_pages as helper_wiki_list_pages,
+    wiki_slug as helper_wiki_slug,
+    wiki_stats as helper_wiki_stats,
+    wiki_upsert_page as helper_wiki_upsert_page,
 )
 
 logger = logging.getLogger("feral.memory")
@@ -918,68 +934,20 @@ class MemoryStore:
     # ─────────────────────────────────────────────
 
     async def build_context_for_llm_async(self, session_id: str, query: str = "", max_tokens_budget: int = 2000) -> str:
-        """Async context builder using hybrid search + knowledge graph."""
-        sections = []
-        budget_per_section = max_tokens_budget // 4
-
-        working = self.working_context_string(session_id, limit=8)
-        if working:
-            sections.append(f"## Recent Context\n{working[:budget_per_section]}")
-
-        if query and self._kg:
-            graph_ctx = await self._kg.build_graph_context(query, max_chars=budget_per_section)
-            if graph_ctx:
-                sections.append(graph_ctx)
-        elif query:
-            knowledge = self.knowledge_search(query, limit=5)
-            if knowledge:
-                k_lines = [f"- {k['subject']} {k['predicate']} {k['object']}" for k in knowledge]
-                sections.append("## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
-
-        if query:
-            episodes = await self.episode_search_hybrid(query, limit=3)
-        else:
-            episodes = self.episode_recent(limit=3, session_id=session_id)
-        if episodes:
-            ep_lines = [f"- [{e['event_type']}] {e['summary']}" for e in episodes]
-            sections.append("## Past Events\n" + "\n".join(ep_lines)[:budget_per_section])
-
-        recent_execs = self.log_recent(limit=5)
-        if recent_execs:
-            ex_lines = [f"- {ex.get('skill_id', '?')}: {ex.get('result_status', '?')}" for ex in recent_execs]
-            sections.append("## Recent Actions\n" + "\n".join(ex_lines)[:budget_per_section])
-
-        return "\n\n".join(sections) if sections else ""
+        return await context_build_context_for_llm_async(
+            self,
+            session_id=session_id,
+            query=query,
+            max_tokens_budget=max_tokens_budget,
+        )
 
     def build_context_for_llm(self, session_id: str, query: str = "", max_tokens_budget: int = 2000) -> str:
-        """Synchronous context builder (backward compat)."""
-        sections = []
-        budget_per_section = max_tokens_budget // 4
-
-        working = self.working_context_string(session_id, limit=8)
-        if working:
-            sections.append(f"## Recent Context\n{working[:budget_per_section]}")
-
-        if query:
-            knowledge = self.knowledge_search(query, limit=5)
-            if knowledge:
-                k_lines = [f"- {k['subject']} {k['predicate']} {k['object']}" for k in knowledge]
-                sections.append("## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
-
-        if query:
-            episodes = self.episode_search(query, limit=3)
-        else:
-            episodes = self.episode_recent(limit=3, session_id=session_id)
-        if episodes:
-            ep_lines = [f"- [{e['event_type']}] {e['summary']}" for e in episodes]
-            sections.append("## Past Events\n" + "\n".join(ep_lines)[:budget_per_section])
-
-        recent_execs = self.log_recent(limit=5)
-        if recent_execs:
-            ex_lines = [f"- {ex.get('skill_id', '?')}: {ex.get('result_status', '?')}" for ex in recent_execs]
-            sections.append("## Recent Actions\n" + "\n".join(ex_lines)[:budget_per_section])
-
-        return "\n\n".join(sections) if sections else ""
+        return context_build_context_for_llm(
+            self,
+            session_id=session_id,
+            query=query,
+            max_tokens_budget=max_tokens_budget,
+        )
 
     # ─────────────────────────────────────────────
     # Compaction (multi-stage summarization)
@@ -987,132 +955,28 @@ class MemoryStore:
 
     async def compact_session(self, session_id: str, history: list[dict], llm=None,
                               preserve_last_n: int = 3, max_summary_chars: int = 16000) -> dict:
-        """
-        Multi-stage session compaction. Summarizes older messages while
-        preserving the last N turns and identity context.
-        """
-        if len(history) <= preserve_last_n + 2:
-            return {"compacted": False, "reason": "too_short"}
-
-        preserved = history[-preserve_last_n:]
-        summarizable = history[:-preserve_last_n]
-
-        if not llm or not llm.available:
-            summary = self._heuristic_summarize(summarizable)
-        else:
-            summary = await self._llm_summarize(summarizable, llm, max_summary_chars)
-
-        compacted_history = [
-            {"role": "system", "content": f"[Session Summary]\n{summary}"},
-            *preserved,
-        ]
-
-        if self.kg:
-            try:
-                conversation_text = " ".join(
-                    m.get("content", "") for m in summarizable
-                    if isinstance(m.get("content"), str)
-                )
-                if conversation_text:
-                    await self.kg.extract_and_store(conversation_text[:3000], llm)
-            except Exception as e:
-                logger.debug(f"KG extraction during compaction failed: {e}")
-
-        return {
-            "compacted": True,
-            "original_length": len(history),
-            "new_length": len(compacted_history),
-            "summary_chars": len(summary),
-            "history": compacted_history,
-        }
+        return await context_compact_session(
+            self,
+            session_id=session_id,
+            history=history,
+            llm=llm,
+            preserve_last_n=preserve_last_n,
+            max_summary_chars=max_summary_chars,
+        )
 
     async def _llm_summarize(self, messages: list[dict], llm, max_chars: int) -> str:
-        """Multi-stage LLM summarization of conversation history."""
-        text_parts = []
-        for m in messages:
-            role = m.get("role", "?")
-            content = m.get("content", "")
-            if isinstance(content, str):
-                text_parts.append(f"[{role}] {content[:500]}")
-            elif isinstance(content, list):
-                for c in content:
-                    if isinstance(c, dict) and c.get("type") == "text":
-                        text_parts.append(f"[{role}] {c['text'][:500]}")
-
-        full_text = "\n".join(text_parts)
-
-        chunk_size = 6000
-        if len(full_text) <= chunk_size:
-            chunks = [full_text]
-        else:
-            chunks = [full_text[i:i + chunk_size] for i in range(0, len(full_text), chunk_size)]
-
-        summaries = []
-        for chunk in chunks:
-            prompt = (
-                "Summarize this conversation segment concisely. Preserve:\n"
-                "- Key facts and decisions\n"
-                "- User preferences and personal info\n"
-                "- Tool call results and outcomes\n"
-                "- Any unresolved questions or tasks\n\n"
-                f"{chunk}"
-            )
-            try:
-                response = await llm.chat([{"role": "user", "content": prompt}], tools=None)
-                text, _ = llm.extract_response(response)
-                summaries.append(text)
-            except Exception as e:
-                logger.warning(f"Summarization chunk failed: {e}")
-                summaries.append(chunk[:500])
-
-        result = "\n\n".join(summaries)
-        return result[:max_chars]
+        return await context_llm_summarize(messages=messages, llm=llm, max_chars=max_chars)
 
     @staticmethod
     def _heuristic_summarize(messages: list[dict]) -> str:
-        lines = []
-        for m in messages:
-            role = m.get("role", "?")
-            content = m.get("content", "")
-            if isinstance(content, str) and content:
-                lines.append(f"[{role}] {content[:100]}")
-        return "\n".join(lines[-20:])
+        return context_heuristic_summarize(messages)
 
     # ─────────────────────────────────────────────
     # Unified Hybrid Search
     # ─────────────────────────────────────────────
 
     async def search_all(self, query: str, limit: int = 10) -> list[dict]:
-        """Search across all memory tiers using hybrid ranking."""
-        results = []
-
-        episodes = await self.episode_search_hybrid(query, limit=limit)
-        for e in episodes:
-            results.append({**e, "tier": "episode", "score": e.get("relevance_score", 0)})
-
-        notes = self.search(query, limit=limit)
-        for n in notes:
-            results.append({**n, "tier": "note", "score": n.get("relevance_score", 0.3)})
-
-        knowledge = self.knowledge_search(query, limit=limit)
-        for k in knowledge:
-            results.append({
-                "tier": "knowledge", "score": 0.5,
-                "summary": f"{k['subject']} {k['predicate']} {k['object']}",
-                **k,
-            })
-
-        if self._kg:
-            entities = await self._kg.search_entities(query, limit=5)
-            for e in entities:
-                results.append({
-                    "tier": "entity", "score": e.get("score", 0.5),
-                    "summary": f"Entity: {e['name']} ({e.get('type', 'thing')})",
-                    **e,
-                })
-
-        results.sort(key=lambda x: x.get("score", 0), reverse=True)
-        return results[:limit]
+        return await context_search_all(self, query=query, limit=limit)
 
     # ─────────────────────────────────────────────
     # Memory Wiki (durable markdown knowledge surface)
@@ -1120,8 +984,7 @@ class MemoryStore:
 
     @staticmethod
     def _wiki_slug(value: str) -> str:
-        slug = re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
-        return slug or "unknown"
+        return helper_wiki_slug(value)
 
     def wiki_upsert_page(
         self,
@@ -1132,124 +995,23 @@ class MemoryStore:
         body_markdown: str,
         source_refs: list[dict] | None = None,
     ) -> dict:
-        now = time.time()
-        refs = source_refs or []
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            INSERT INTO wiki_pages (id, title, kind, body_markdown, source_refs, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              title=excluded.title,
-              kind=excluded.kind,
-              body_markdown=excluded.body_markdown,
-              source_refs=excluded.source_refs,
-              updated_at=excluded.updated_at
-            """,
-            (page_id, title, kind, body_markdown, json.dumps(refs), now, now),
+        return helper_wiki_upsert_page(
+            self,
+            page_id=page_id,
+            title=title,
+            kind=kind,
+            body_markdown=body_markdown,
+            source_refs=source_refs,
         )
-        conn.commit()
-        conn.close()
-        return {
-            "id": page_id,
-            "title": title,
-            "kind": kind,
-            "updated_at": now,
-            "source_refs": refs,
-        }
 
     def wiki_get_page(self, page_id: str) -> Optional[dict]:
-        conn = self._conn()
-        row = conn.execute(
-            "SELECT id, title, kind, body_markdown, source_refs, created_at, updated_at FROM wiki_pages WHERE id = ?",
-            (page_id,),
-        ).fetchone()
-        conn.close()
-        if not row:
-            return None
-        return {
-            "id": row["id"],
-            "title": row["title"],
-            "kind": row["kind"],
-            "body_markdown": row["body_markdown"],
-            "source_refs": json.loads(row["source_refs"] or "[]"),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
+        return helper_wiki_get_page(self, page_id=page_id)
 
     def wiki_list_pages(self, *, query: str = "", kind: str = "", limit: int = 50) -> list[dict]:
-        lim = max(1, min(limit, 200))
-        conn = self._conn()
-        rows = []
-        if query.strip():
-            if kind:
-                rows = conn.execute(
-                    """
-                    SELECT w.id, w.title, w.kind, w.source_refs, w.updated_at
-                    FROM wiki_pages_fts f
-                    JOIN wiki_pages w ON f.rowid = w.rowid
-                    WHERE wiki_pages_fts MATCH ? AND w.kind = ?
-                    ORDER BY rank, w.updated_at DESC
-                    LIMIT ?
-                    """,
-                    (query.strip(), kind, lim),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT w.id, w.title, w.kind, w.source_refs, w.updated_at
-                    FROM wiki_pages_fts f
-                    JOIN wiki_pages w ON f.rowid = w.rowid
-                    WHERE wiki_pages_fts MATCH ?
-                    ORDER BY rank, w.updated_at DESC
-                    LIMIT ?
-                    """,
-                    (query.strip(), lim),
-                ).fetchall()
-        elif kind:
-            rows = conn.execute(
-                """
-                SELECT id, title, kind, source_refs, updated_at
-                FROM wiki_pages
-                WHERE kind = ?
-                ORDER BY updated_at DESC
-                LIMIT ?
-                """,
-                (kind, lim),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT id, title, kind, source_refs, updated_at
-                FROM wiki_pages
-                ORDER BY updated_at DESC
-                LIMIT ?
-                """,
-                (lim,),
-            ).fetchall()
-        conn.close()
-        return [
-            {
-                "id": r["id"],
-                "title": r["title"],
-                "kind": r["kind"],
-                "source_refs": json.loads(r["source_refs"] or "[]"),
-                "updated_at": r["updated_at"],
-            }
-            for r in rows
-        ]
+        return helper_wiki_list_pages(self, query=query, kind=kind, limit=limit)
 
     def wiki_stats(self) -> dict:
-        conn = self._conn()
-        total = conn.execute("SELECT COUNT(*) FROM wiki_pages").fetchone()[0]
-        kinds = conn.execute(
-            "SELECT kind, COUNT(*) AS count FROM wiki_pages GROUP BY kind ORDER BY count DESC"
-        ).fetchall()
-        conn.close()
-        return {
-            "pages": total,
-            "kinds": [{"kind": row["kind"], "count": row["count"]} for row in kinds],
-        }
+        return helper_wiki_stats(self)
 
     def wiki_compile(
         self,
@@ -1258,255 +1020,31 @@ class MemoryStore:
         episodes_limit: int = 200,
         knowledge_limit: int = 400,
     ) -> dict:
-        conn = self._conn()
-        notes = conn.execute(
-            """
-            SELECT id, content, tags, importance, source, created_at, updated_at
-            FROM notes
-            ORDER BY updated_at DESC
-            LIMIT ?
-            """,
-            (max(1, notes_limit),),
-        ).fetchall()
-        episodes = conn.execute(
-            """
-            SELECT id, session_id, event_type, summary, detail, created_at
-            FROM episodes
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (max(1, episodes_limit),),
-        ).fetchall()
-        triples = conn.execute(
-            """
-            SELECT id, subject, predicate, object, confidence, source, updated_at
-            FROM knowledge
-            ORDER BY updated_at DESC
-            LIMIT ?
-            """,
-            (max(1, knowledge_limit),),
-        ).fetchall()
-        conn.close()
-
-        note_pages = 0
-        for row in notes:
-            tags = json.loads(row["tags"] or "[]")
-            title = f"Note {row['id']}"
-            body = (
-                f"# {title}\n\n"
-                f"{row['content']}\n\n"
-                f"## Metadata\n"
-                f"- Importance: {row['importance']}\n"
-                f"- Source: {row['source']}\n"
-                f"- Tags: {', '.join(tags) if tags else 'none'}\n"
-                f"- Updated: {row['updated_at']}\n"
-            )
-            self.wiki_upsert_page(
-                page_id=f"note.{row['id']}",
-                title=title,
-                kind="note",
-                body_markdown=body,
-                source_refs=[
-                    {"type": "note", "id": row["id"], "updated_at": row["updated_at"]},
-                ],
-            )
-            note_pages += 1
-
-        episode_pages = 0
-        for row in episodes:
-            title = f"Episode {row['id']} ({row['event_type']})"
-            body = (
-                f"# {title}\n\n"
-                f"## Summary\n{row['summary']}\n\n"
-                f"## Detail\n{row['detail'] or '-'}\n\n"
-                f"## Metadata\n"
-                f"- Session: {row['session_id']}\n"
-                f"- Created: {row['created_at']}\n"
-            )
-            self.wiki_upsert_page(
-                page_id=f"episode.{row['id']}",
-                title=title,
-                kind="episode",
-                body_markdown=body,
-                source_refs=[
-                    {
-                        "type": "episode",
-                        "id": row["id"],
-                        "session_id": row["session_id"],
-                        "created_at": row["created_at"],
-                    },
-                ],
-            )
-            episode_pages += 1
-
-        triples_by_subject: dict[str, list[dict]] = {}
-        for row in triples:
-            triples_by_subject.setdefault(row["subject"], []).append(
-                {
-                    "id": row["id"],
-                    "predicate": row["predicate"],
-                    "object": row["object"],
-                    "confidence": row["confidence"],
-                    "source": row["source"],
-                    "updated_at": row["updated_at"],
-                }
-            )
-
-        entity_pages = 0
-        for subject, items in triples_by_subject.items():
-            page_id = f"entity.{self._wiki_slug(subject)}"
-            title = f"Entity: {subject}"
-            lines = [f"# {title}", "", "## Facts"]
-            for item in items[:200]:
-                lines.append(
-                    f"- {subject} **{item['predicate']}** {item['object']} "
-                    f"(confidence={item['confidence']:.2f}, source={item['source']})"
-                )
-            body = "\n".join(lines)
-            refs = [
-                {
-                    "type": "knowledge",
-                    "id": item["id"],
-                    "subject": subject,
-                    "updated_at": item["updated_at"],
-                }
-                for item in items
-            ]
-            self.wiki_upsert_page(
-                page_id=page_id,
-                title=title,
-                kind="entity",
-                body_markdown=body,
-                source_refs=refs,
-            )
-            entity_pages += 1
-
-        identity_page_written = False
-        memory_md = feral_home() / "MEMORY.md"
-        if memory_md.exists():
-            memory_text = memory_md.read_text(encoding="utf-8", errors="replace")
-            self.wiki_upsert_page(
-                page_id="identity.memory",
-                title="Identity Memory",
-                kind="identity",
-                body_markdown=memory_text or "# Identity Memory\n\n(empty)",
-                source_refs=[
-                    {"type": "identity_file", "path": str(memory_md)},
-                ],
-            )
-            identity_page_written = True
-
-        index_lines = [
-            "# FERAL Memory Wiki",
-            "",
-            "## Summary",
-            f"- Notes compiled: {note_pages}",
-            f"- Episodes compiled: {episode_pages}",
-            f"- Entity pages compiled: {entity_pages}",
-            f"- Identity page: {'yes' if identity_page_written else 'no'}",
-            "",
-            "## How to use",
-            "- Search pages with `q` in `/api/wiki/pages`.",
-            "- Fetch full page content from `/api/wiki/pages/{page_id}`.",
-            "- Recompile after new memory writes using `/api/wiki/compile`.",
-        ]
-        self.wiki_upsert_page(
-            page_id="index",
-            title="Wiki Index",
-            kind="index",
-            body_markdown="\n".join(index_lines),
-            source_refs=[],
+        return helper_wiki_compile(
+            self,
+            notes_limit=notes_limit,
+            episodes_limit=episodes_limit,
+            knowledge_limit=knowledge_limit,
         )
-
-        stats = self.wiki_stats()
-        return {
-            "compiled": True,
-            "notes_pages": note_pages,
-            "episode_pages": episode_pages,
-            "entity_pages": entity_pages,
-            "identity_page": identity_page_written,
-            "total_pages": stats["pages"],
-            "kinds": stats["kinds"],
-        }
 
     # ─────────────────────────────────────────────
     # Legacy Notes API (backward compat)
     # ─────────────────────────────────────────────
 
     def save(self, content: str, tags: list[str] = None, importance: str = "normal", source: str = "user") -> dict:
-        note_id = str(uuid4())[:8]
-        now = time.time()
-        tags = tags or []
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            "INSERT INTO notes (id, content, tags, importance, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (note_id, content, json.dumps(tags), importance, source, now, now),
-        )
-        conn.commit()
-        conn.close()
-
-        # Embed notes too (not just episodes)
-        chunks = chunk_text(content)
-        for i, chunk in enumerate(chunks):
-            self._embed_queue.enqueue(
-                chunk_id=f"note_{note_id}_c{i}", text=chunk,
-                source_table="notes", source_id=note_id,
-                chunk_index=i, db_path=self.db_path,
-            )
-
-        self.knowledge_store(subject="user_note", predicate="says", obj=content[:300], source=f"notes:{note_id}")
-        self._log_sync("notes", "insert", note_id, {
-            "id": note_id, "content": content, "tags": json.dumps(tags),
-            "importance": importance, "source": source, "created_at": now,
-        })
-        return {"id": note_id, "content": content, "tags": tags, "importance": importance, "created_at": now, "status": "saved"}
+        return save_note(self, content=content, tags=tags, importance=importance, source=source)
 
     def search(self, query: str, limit: int = 10) -> list[dict]:
-        conn = self._conn()
-        try:
-            rows = conn.execute(
-                """SELECT n.id, n.content, n.tags, n.importance, n.created_at, rank as relevance_score
-                   FROM notes_fts f JOIN notes n ON f.rowid = n.rowid
-                   WHERE notes_fts MATCH ? ORDER BY rank LIMIT ?""",
-                (query, limit),
-            ).fetchall()
-        except Exception:
-            rows = conn.execute(
-                "SELECT id, content, tags, importance, created_at, 0.5 as relevance_score FROM notes WHERE content LIKE ? ORDER BY created_at DESC LIMIT ?",
-                (f"%{query}%", limit),
-            ).fetchall()
-        conn.close()
-        return [
-            {"id": r["id"], "content": r["content"], "tags": json.loads(r["tags"]),
-             "importance": r["importance"], "created_at": r["created_at"],
-             "relevance_score": abs(r["relevance_score"])}
-            for r in rows
-        ]
+        return search_notes(self, query=query, limit=limit)
 
     def list_recent(self, limit: int = 10) -> list[dict]:
-        conn = self._conn()
-        rows = conn.execute(
-            "SELECT id, content, tags, importance, created_at FROM notes ORDER BY created_at DESC LIMIT ?", (limit,),
-        ).fetchall()
-        conn.close()
-        return [
-            {"id": r["id"], "content": r["content"], "tags": json.loads(r["tags"]),
-             "importance": r["importance"], "created_at": r["created_at"]}
-            for r in rows
-        ]
+        return list_recent_notes(self, limit=limit)
 
     def delete(self, note_id: str) -> bool:
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-        conn.commit()
-        conn.close()
-        return cursor.rowcount > 0
+        return delete_note(self, note_id=note_id)
 
     def count(self) -> int:
-        conn = sqlite3.connect(self.db_path)
-        count = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
-        conn.close()
-        return count
+        return count_notes(self)
 
     def stats(self) -> dict:
         conn = sqlite3.connect(self.db_path)

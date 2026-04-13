@@ -125,7 +125,7 @@ class SkillRegistry:
                     "trigger_event": event,
                     "condition": getattr(tdef, 'condition', None),
                 }
-                svc.create_job(JobType.TRIGGERED, f"every 1m", desc, payload, "")
+                svc.create_job(JobType.TRIGGERED, "every 1m", desc, payload, "")
                 logger.info("Auto-created routine for trigger: %s in skill %s", event, manifest.skill_id)
         except Exception as e:
             logger.debug("Skip auto-routine creation for %s: %s", manifest.skill_id, e)

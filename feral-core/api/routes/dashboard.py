@@ -1,9 +1,7 @@
 """Dashboard, system info, health, and activity endpoints."""
 
-import os
 import time
 from fastapi import APIRouter
-from pathlib import Path
 
 from api.state import state
 from config.loader import feral_home

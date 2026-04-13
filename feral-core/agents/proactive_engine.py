@@ -209,7 +209,7 @@ class ProactiveEngine:
                             priority=Priority.SUGGESTION,
                             title="Sleep Trend Declining",
                             body=f"Your sleep has been declining — {hr_str}. Want to set up a wind-down routine?",
-                            voice_text=f"I noticed your sleep has been trending down the last few nights. Want to set up a wind-down routine?",
+                            voice_text="I noticed your sleep has been trending down the last few nights. Want to set up a wind-down routine?",
                             action="Set up routine",
                         ))
             except Exception as e:

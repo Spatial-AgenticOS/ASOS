@@ -214,7 +214,7 @@ class ConfigLoader:
         # Skill-specific keys from FERAL_KEY_* pattern
         for key, value in os.environ.items():
             if key.startswith("FERAL_KEY_"):
-                skill_id = key[11:].lower()  # FERAL_KEY_web_search → web_search
+                skill_id = key[10:].lower()  # FERAL_KEY_web_search -> web_search
                 if "skill_keys" not in self._credentials:
                     self._credentials["skill_keys"] = {}
                 self._credentials["skill_keys"][skill_id] = value

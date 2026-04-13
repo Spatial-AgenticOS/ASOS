@@ -104,8 +104,8 @@ class DigitalTwin:
                 f"Based on these memory fragments about '{category}', determine the "
                 f"user's likely preference. Be specific and concise.\n\n"
                 f"Memories:\n" + "\n".join(f"- {e}" for e in evidence[:10]) + "\n\n"
-                f"Return a JSON object with keys: preference (string), confidence (0.0-1.0).\n"
-                f"ONLY return valid JSON, nothing else."
+                "Return a JSON object with keys: preference (string), confidence (0.0-1.0).\n"
+                "ONLY return valid JSON, nothing else."
             )
 
             messages = [
@@ -223,7 +223,7 @@ class DigitalTwin:
         text = text.strip()
         if text.startswith("```"):
             lines = text.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
+            lines = [line for line in lines if not line.strip().startswith("```")]
             text = "\n".join(lines).strip()
         try:
             return json.loads(text)
