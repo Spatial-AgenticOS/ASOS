@@ -34,9 +34,14 @@ class PushChannel:
     def __init__(self) -> None:
         self._firebase_creds_path: str = os.environ.get("FERAL_FIREBASE_CREDENTIALS", "")
         self._apns_key_path: str = os.environ.get("FERAL_APNS_KEY_PATH", "")
+        self._apns_team_id: str = os.environ.get("FERAL_APNS_TEAM_ID", "")
+        self._apns_key_id: str = os.environ.get("FERAL_APNS_KEY_ID", "")
+        self._apns_environment: str = os.environ.get("FERAL_APNS_ENVIRONMENT", "production")
         self._firebase_project_id: Optional[str] = None
         self._firebase_token: Optional[str] = None
         self._firebase_token_expiry: float = 0.0
+        self._apns_token: Optional[str] = None
+        self._apns_token_expiry: float = 0.0
         self._lock = threading.Lock()
 
         self._conn = sqlite3.connect(str(_db_path()), check_same_thread=False)
@@ -199,27 +204,76 @@ class PushChannel:
 
     # ─── APNs HTTP/2 ───
 
+    def _get_apns_token(self) -> Optional[str]:
+        """Return a cached APNs JWT, refreshing when older than 50 minutes."""
+        if self._apns_token and time.time() < self._apns_token_expiry:
+            return self._apns_token
+
+        if not self._apns_team_id or not self._apns_key_id:
+            logger.warning("FERAL_APNS_TEAM_ID or FERAL_APNS_KEY_ID not set")
+            return None
+
+        try:
+            import jwt
+        except ImportError:
+            logger.warning("PyJWT not installed — cannot sign APNs token")
+            return None
+
+        key_path = Path(self._apns_key_path)
+        if not key_path.exists():
+            logger.warning(f"APNs .p8 key not found at {self._apns_key_path}")
+            return None
+
+        try:
+            private_key = key_path.read_text()
+            now = int(time.time())
+            token = jwt.encode(
+                {"iss": self._apns_team_id, "iat": now},
+                private_key,
+                algorithm="ES256",
+                headers={"kid": self._apns_key_id},
+            )
+            self._apns_token = token
+            self._apns_token_expiry = time.time() + 3000  # 50 min cache
+            logger.info("APNs JWT signed and cached")
+            return self._apns_token
+        except Exception as exc:
+            logger.error(f"APNs JWT signing failed: {exc}")
+            return None
+
     def _send_apns(
         self, token: str, title: str, body: str, data: Optional[dict[str, str]],
     ) -> dict[str, Any]:
         if not self._apns_key_path or not Path(self._apns_key_path).exists():
             return {"success": False, "error": "APNs key not configured"}
 
+        bearer = self._get_apns_token()
+        if not bearer:
+            return {"success": False, "error": "Could not obtain APNs bearer token"}
+
         payload: dict[str, Any] = {
             "aps": {"alert": {"title": title, "body": body}, "sound": "default"},
         }
         if data:
-            payload["custom"] = data
+            for k, v in data.items():
+                payload[k] = v
+
+        if self._apns_environment == "sandbox":
+            host = "api.sandbox.push.apple.com"
+        else:
+            host = "api.push.apple.com"
 
         try:
             import httpx
-            url = f"https://api.push.apple.com/3/device/{token}"
+            url = f"https://{host}/3/device/{token}"
+            headers = {
+                "Authorization": f"bearer {bearer}",
+                "apns-topic": data.get("bundle_id", "com.feral.app") if data else "com.feral.app",
+                "apns-push-type": "alert",
+                "apns-priority": "10",
+            }
             with httpx.Client(http2=True, timeout=10.0) as client:
-                resp = client.post(
-                    url,
-                    json=payload,
-                    headers={"apns-topic": data.get("bundle_id", "com.feral.app") if data else "com.feral.app"},
-                )
+                resp = client.post(url, json=payload, headers=headers)
             if resp.status_code == 200:
                 logger.info(f"APNs push sent to token={token[:12]}…")
                 return {"success": True, "platform": "apns", "status_code": resp.status_code}

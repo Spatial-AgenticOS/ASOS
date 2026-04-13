@@ -16,6 +16,7 @@ from typing import Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from security.exec_approvals import ApprovalManager
+from security.dangerous_tools import is_tool_allowed
 
 if TYPE_CHECKING:
     from agents.orchestrator import Orchestrator
@@ -87,11 +88,19 @@ class ToolRunner:
 
         return SafetyLevel.AUTO
 
-    def enforce_safety(self, tool_name: str, args: dict, session_id: str = "") -> Optional[dict]:
+    def enforce_safety(self, tool_name: str, args: dict, session_id: str = "", surface: str = "websocket") -> Optional[dict]:
         """
         Returns a denial dict if the action should be blocked, a pending-approval
         dict if the user must confirm, or None if the action is allowed.
         """
+        if not is_tool_allowed(tool_name, surface):
+            return {
+                "status": "PermissionOutcome::Deny",
+                "error": "Surface Policy: Tool Blocked",
+                "note": f"Tool '{tool_name}' is denied on surface '{surface}'.",
+                "safety_level": "deny",
+            }
+
         level = self.classify_safety(tool_name, args)
 
         if level == SafetyLevel.DENY:
@@ -260,6 +269,10 @@ class ToolRunner:
 
         mcp_client = self._orch._mcp_client
         if tool_name.startswith("mcp_") and mcp_client:
+            denial = self.enforce_safety(tool_name, args, session_id=session_id)
+            if denial:
+                logger.warning(f"Safety gate ({denial.get('status')}): {tool_name}")
+                return denial
             logger.info(f"  MCP tool: {tool_name}")
             result = await mcp_client.call_tool(tool_name, args)
             content = result.get("content", [])
@@ -273,6 +286,10 @@ class ToolRunner:
 
         skill_id, endpoint_id = parts
         if skill_id == "subagent" and endpoint_id == "spawn_subagent":
+            denial = self.enforce_safety(tool_name, args, session_id=session_id)
+            if denial:
+                logger.warning(f"Safety gate ({denial.get('status')}): {tool_name}")
+                return denial
             return await self.spawn_subagents(session_id, args)
 
         logger.info(f"  Tool executing: {skill_id}__{endpoint_id}")
@@ -344,6 +361,19 @@ class ToolRunner:
             return
 
         skill_id, endpoint_id = parts
+
+        denial = self.enforce_safety(tool_name, args, session_id=session_id)
+        if denial:
+            status = denial.get("status", "blocked")
+            note = denial.get("note", denial.get("error", "Action blocked by safety policy."))
+            if status == "pending_approval":
+                await self._orch._send_text(
+                    session_id,
+                    f"Approval required for '{tool_name}'. Request ID: {denial.get('request_id')}",
+                )
+            else:
+                await self._orch._send_text(session_id, note)
+            return
 
         if skill_id.startswith("daemon_"):
             await self.execute_daemon_command(session_id, skill_id, endpoint_id, args)
