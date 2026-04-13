@@ -1,5 +1,5 @@
 """
-FERAL Brain — Universal Agentic OS Core
+FERAL Brain — Unleashed AI Core
 ==========================================
 The local-first agentic brain. Runs on the user's machine.
 Clients (phone, web, daemon, glasses, robots) connect via WebSocket.

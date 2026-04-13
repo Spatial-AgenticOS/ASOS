@@ -3,7 +3,7 @@
 FERAL Node SDK — Robot Actuator Template
 ========================================
 This template allows you to connect any physical robot (ROS, serial, I2C, etc.) 
-to the Spatial-AgenticOS Brain.
+to the FERAL Brain.
 
 To run:
     python3 robot_template.py --brain ws://localhost:9090

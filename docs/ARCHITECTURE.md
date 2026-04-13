@@ -1,6 +1,6 @@
 # FERAL Architecture Overview
 
-Spatial-AgenticOS (FERAL) decouples the reasoning engine (Brain) from the physical executors (Nodes) and visual layer (Client).
+FERAL decouples the reasoning engine (Brain) from the physical executors (Nodes) and visual layer (Client).
 
 ## The Tri-Node Paradigm
 

@@ -6,11 +6,11 @@ const config = {
   tagline: 'The open-source AI operating system for your devices',
   favicon: 'img/favicon.ico',
 
-  url: 'https://docs.feral.io',
+  url: 'https://feral.sh',
   baseUrl: '/',
 
-  organizationName: 'Spatial-AgenticOS',
-  projectName: 'ASOS',
+  organizationName: 'FERAL-AI',
+  projectName: 'FERAL-AI',
 
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',

@@ -32,7 +32,7 @@ DEFAULT_REGISTRY_URL = market_registry_url()
 
 GITHUB_INDEX_URL = os.getenv(
     "FERAL_MARKETPLACE_GITHUB",
-    "https://raw.githubusercontent.com/Spatial-AgenticOS/feral-skills/main/index.json",
+    "https://raw.githubusercontent.com/FERAL-AI/feral-skills/main/index.json",
 )
 
 
