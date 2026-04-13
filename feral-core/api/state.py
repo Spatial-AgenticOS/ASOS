@@ -161,6 +161,9 @@ class BrainState:
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
 
+        # Collectors for channel-based sessions (no WebSocket)
+        self._channel_collectors: dict[str, list[str]] = {}
+
     @property
     def skill_executor(self):
         return self.orchestrator.executor if self.orchestrator else None
@@ -238,6 +241,10 @@ class BrainState:
             from agents.digital_twin import DigitalTwin
             _identity_loader = IdentityLoader(memory=self.memory)
             self.digital_twin = DigitalTwin(memory=self.memory, identity_loader=_identity_loader, llm=_shared_llm)
+
+            from skills.impl.digital_twin_skill import set_twin, DigitalTwinSkillBridge
+            set_twin(self.digital_twin)
+            register_instance("digital_twin", DigitalTwinSkillBridge())
         except Exception as e:
             logger.debug(f"Digital twin skipped: {e}")
         self.event_bus = EventBus()
@@ -449,6 +456,9 @@ class BrainState:
             self.proactive = None
             logger.debug(f"Proactive engine skipped: {e}")
 
+        # Wire inbound channels to the orchestrator
+        await self._start_channels()
+
         # Demo mode initialization
         self._demo = None
         if os.environ.get("FERAL_DEMO", "").lower() in ("1", "true", "yes"):
@@ -491,6 +501,87 @@ class BrainState:
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
             f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
         )
+
+    async def _start_channels(self):
+        """Wire inbound channel messages to the orchestrator and start configured channels."""
+        if not self.channel_manager or not self.orchestrator:
+            return
+
+        brain = self
+
+        async def _channel_message_handler(channel_msg: ChannelMessage) -> ChannelResponse:
+            channel_session_id = f"channel_{channel_msg.channel_type}_{channel_msg.user_id}"
+            text = channel_msg.text or ""
+            if not text:
+                return ChannelResponse(text="")
+
+            if brain.memory and brain.sessions:
+                desktop_sid = next(iter(brain.sessions), None)
+                if desktop_sid:
+                    history = brain.memory.working_get(desktop_sid, limit=10)
+                    if history:
+                        brain.memory.working_replace(channel_session_id, list(history))
+
+            if brain.session_handoff:
+                brain.session_handoff.register_device(
+                    channel_session_id,
+                    "phone",
+                    node_id=f"{channel_msg.channel_type}_{channel_msg.user_id}",
+                )
+
+            brain._channel_collectors[channel_session_id] = []
+            try:
+                await brain.orchestrator.handle_command(channel_session_id, text, context={
+                    "source": "channel",
+                    "channel": channel_msg.channel_type,
+                    "user_id": channel_msg.user_id,
+                    "username": channel_msg.username,
+                })
+            except Exception as e:
+                logger.warning(f"Channel command failed: {e}")
+                return ChannelResponse(text=f"Error: {e}")
+            finally:
+                collected = brain._channel_collectors.pop(channel_session_id, [])
+
+            response_text = "\n".join(collected) if collected else "Done."
+            return ChannelResponse(text=response_text)
+
+        self.channel_manager.set_handler(_channel_message_handler)
+
+        channel_configs = {
+            "telegram": {
+                "bot_token": os.environ.get("FERAL_TELEGRAM_BOT_TOKEN", ""),
+                "enabled": bool(os.environ.get("FERAL_TELEGRAM_BOT_TOKEN")),
+            },
+            "discord": {
+                "bot_token": os.environ.get("FERAL_DISCORD_BOT_TOKEN", ""),
+                "enabled": bool(os.environ.get("FERAL_DISCORD_BOT_TOKEN")),
+            },
+            "slack": {
+                "bot_token": os.environ.get("FERAL_SLACK_BOT_TOKEN", ""),
+                "app_token": os.environ.get("FERAL_SLACK_APP_TOKEN", ""),
+                "enabled": bool(os.environ.get("FERAL_SLACK_BOT_TOKEN")),
+            },
+            "whatsapp": {
+                "access_token": os.environ.get("FERAL_WHATSAPP_ACCESS_TOKEN", ""),
+                "phone_number_id": os.environ.get("FERAL_WHATSAPP_PHONE_NUMBER_ID", ""),
+                "enabled": bool(os.environ.get("FERAL_WHATSAPP_ACCESS_TOKEN")),
+            },
+        }
+
+        started = []
+        for ch_type, ch_config in channel_configs.items():
+            if ch_config.get("enabled"):
+                try:
+                    await self.channel_manager.start_channel(ch_type, ch_config)
+                    started.append(ch_type)
+                except Exception as e:
+                    logger.warning(f"Channel {ch_type} start failed: {e}")
+
+        if started:
+            logger.info(f"Channels started: {', '.join(started)}")
+        else:
+            logger.debug("No messaging channels configured (set FERAL_TELEGRAM_BOT_TOKEN etc.)")
 
     def _register_browser_skill(self):
         """Register browser control as a skill the agent can call via tool use."""
@@ -647,6 +738,11 @@ class BrainState:
         ws = self.sessions.get(session_id)
         if ws:
             await ws.send_json(msg.model_dump())
+        elif session_id in self._channel_collectors:
+            payload = msg.payload or {}
+            text = payload.get("text", "")
+            if text:
+                self._channel_collectors[session_id].append(text)
 
     async def broadcast_event(self, event_type: str, data: dict):
         """Push a state update to all connected WebSocket clients."""

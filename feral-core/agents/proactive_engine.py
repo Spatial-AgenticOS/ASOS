@@ -166,6 +166,8 @@ class ProactiveEngine:
                         title="Low Blood Oxygen",
                         body=f"Your SpO2 is {frame.spo2_pct}%. This is below normal. Please take some deep breaths and consider moving to fresh air.",
                         voice_text=f"Your blood oxygen is at {frame.spo2_pct} percent, which is low. Please take some deep breaths.",
+                        action="Start breathing exercise",
+                        action_payload={"smart_home": "breathing_exercise", "duration_minutes": 3},
                     ))
 
         # --- Screen Context Triggers ---
@@ -438,8 +440,57 @@ class ProactiveEngine:
 
     async def _deliver(self, msg: ProactiveMessage):
         logger.info("Proactive [%s] %s: %s", msg.priority.name, msg.trigger_id, msg.title)
+
+        if msg.action_payload:
+            await self._execute_automation(msg)
+
         for cb in self._callbacks:
             try:
                 await cb(msg)
             except Exception as e:
                 logger.warning("Proactive delivery error: %s", e)
+
+    async def _execute_automation(self, msg: ProactiveMessage):
+        """Execute smart home / automation actions attached to proactive alerts."""
+        if not self._orchestrator:
+            return
+
+        payload = msg.action_payload
+        action_type = payload.get("smart_home") or payload.get("action_type")
+        if not action_type:
+            return
+
+        try:
+            executor = getattr(self._orchestrator, "executor", None)
+            if not executor:
+                return
+
+            if action_type == "set_scene":
+                scene = payload.get("scene", "calming")
+                await executor.execute_tool_call(
+                    session_id="proactive_automation",
+                    tool_call={
+                        "name": "smart_home_hue__set_scene",
+                        "arguments": {"scene": scene},
+                    },
+                    vault_tokens={},
+                )
+                logger.info("Automation executed: set_scene=%s (trigger=%s)", scene, msg.trigger_id)
+
+            elif action_type == "breathing_exercise":
+                duration = payload.get("duration_minutes", 3)
+                await executor.execute_tool_call(
+                    session_id="proactive_automation",
+                    tool_call={
+                        "name": "smart_home_hue__set_scene",
+                        "arguments": {"scene": "breathing"},
+                    },
+                    vault_tokens={},
+                )
+                logger.info("Automation executed: breathing exercise %dmin (trigger=%s)", duration, msg.trigger_id)
+
+            elif action_type == "notification":
+                logger.info("Automation: notification-only for trigger=%s", msg.trigger_id)
+
+        except Exception as e:
+            logger.warning("Automation execution failed for %s: %s", msg.trigger_id, e)

@@ -29,7 +29,7 @@
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.7.0",
-    "@vitest/coverage-v8": "^4.1.4",
+    "@vitest/coverage-v8": "^2.0.0",
     "jsdom": "^29.0.2",
     "vite": "^5.4.21",
     "vitest": "^2.1.9"

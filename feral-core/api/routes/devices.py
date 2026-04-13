@@ -40,8 +40,8 @@ async def session_handoff(request: Request):
     if not state.session_handoff:
         return {"ok": False, "error": "Session handoff manager not available"}
 
-    success = await state.session_handoff.handoff(from_session, to_node_type)
-    return {"ok": success}
+    result = await state.session_handoff.handoff(from_session, to_node_type)
+    return {"ok": bool(result.get("success")), **result}
 
 
 @router.post("/api/proactive/dismiss")

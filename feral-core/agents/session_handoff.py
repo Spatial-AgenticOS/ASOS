@@ -48,6 +48,11 @@ class SessionHandoffManager:
         self._send_to_session = send_to_session
 
         self._device_registry: dict[str, ConnectedDevice] = {}
+        # Target node_type (normalized) -> (source_session_id, history_depth)
+        self._pending: dict[str, tuple[str, int]] = {}
+
+    def _normalize_node_type(self, node_type: str) -> str:
+        return node_type if node_type in NODE_TYPES else "desktop"
 
     def register_device(
         self,
@@ -86,33 +91,21 @@ class SessionHandoffManager:
 
     def _find_session_for_node_type(self, node_type: str) -> Optional[str]:
         """Find a live session ID that matches the requested node type."""
+        want = self._normalize_node_type(node_type)
         for dev in self._device_registry.values():
-            if dev.node_type == node_type:
+            if dev.node_type == want:
                 if dev.session_id in self._sessions:
                     return dev.session_id
         return None
 
-    async def handoff(
+    async def _apply_transfer(
         self,
         from_session_id: str,
+        to_session_id: str,
         to_node_type: str,
-        history_depth: int = DEFAULT_HISTORY_DEPTH,
+        history_depth: int,
     ) -> dict:
-        """
-        Transfer working-memory context from *from_session_id* to a session
-        that matches *to_node_type*.
-
-        Returns a status dict with ``success``, ``to_session_id``, and
-        ``messages_transferred``.
-        """
-        to_session_id = self._find_session_for_node_type(to_node_type)
-        if not to_session_id:
-            return {
-                "success": False,
-                "error": f"No active {to_node_type} session found",
-                "available_devices": [d["node_type"] for d in self.get_active_devices()],
-            }
-
+        """Copy working memory and notify both ends."""
         if to_session_id == from_session_id:
             return {"success": False, "error": "Source and target are the same device"}
 
@@ -134,11 +127,72 @@ class SessionHandoffManager:
 
         return {
             "success": True,
+            "pending": False,
             "from_session_id": from_session_id,
             "to_session_id": to_session_id,
             "to_node_type": to_node_type,
             "messages_transferred": messages_transferred,
         }
+
+    async def on_session_registered(
+        self,
+        session_id: str,
+        node_type: str,
+        node_id: str = "",
+    ) -> Optional[dict]:
+        """
+        Register this WebSocket session for handoff tracking and, if a handoff
+        was queued for this device type, apply it to this session.
+        """
+        self.register_device(session_id, node_type, node_id=node_id)
+        want = self._normalize_node_type(node_type)
+        pending = self._pending.pop(want, None)
+        if not pending:
+            return None
+        from_session_id, history_depth = pending
+        if from_session_id == session_id:
+            self._pending[want] = pending
+            return None
+        if from_session_id not in self._sessions:
+            logger.info("Pending handoff dropped: source session no longer connected")
+            return {"success": False, "error": "Source session disconnected before handoff"}
+        return await self._apply_transfer(
+            from_session_id, session_id, want, history_depth,
+        )
+
+    async def handoff(
+        self,
+        from_session_id: str,
+        to_node_type: str,
+        history_depth: int = DEFAULT_HISTORY_DEPTH,
+    ) -> dict:
+        """
+        Transfer working-memory context from *from_session_id* to a session
+        that matches *to_node_type*.
+
+        Returns a status dict with ``success``, ``to_session_id``, and
+        ``messages_transferred``.
+        """
+        want = self._normalize_node_type(to_node_type)
+        to_session_id = self._find_session_for_node_type(want)
+        if not to_session_id:
+            self._pending[want] = (from_session_id, history_depth)
+            logger.info(
+                "Handoff queued until a %s session connects (from %s)",
+                want, from_session_id[:8],
+            )
+            return {
+                "success": True,
+                "pending": True,
+                "from_session_id": from_session_id,
+                "to_node_type": want,
+                "messages_transferred": 0,
+                "available_devices": [d["node_type"] for d in self.get_active_devices()],
+            }
+
+        return await self._apply_transfer(
+            from_session_id, to_session_id, want, history_depth,
+        )
 
     async def _notify_old_device(self, session_id: str, target_type: str):
         """Tell the old device that its session has been handed off."""

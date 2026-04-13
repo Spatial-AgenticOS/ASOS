@@ -1,0 +1,78 @@
+{
+    "skill_id": "digital_twin",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Digital Twin",
+        "primary_color": "#8b5cf6",
+        "secondary_color": "#c4b5fd",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Your cognitive replica. Ask 'What would I do?' to consult your digital twin — it reasons through your schedule, energy, past decisions, and personality to give answers as you would.",
+    "trigger_phrases": [
+        "what would I do",
+        "what should I do",
+        "digital twin",
+        "ask my twin",
+        "what would I think",
+        "how would I handle",
+        "what's my preference",
+        "predict my preference",
+        "daily reflection",
+        "end of day reflection",
+        "decide for me",
+        "what would I say",
+        "consult myself"
+    ],
+    "categories": ["identity", "memory", "reasoning"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "ask",
+            "method": "PYTHON",
+            "url": "feral://digital_twin/ask",
+            "description": "Ask a question and get an answer as the user would give it, based on their full memory, identity, personality, and knowledge graph.",
+            "params": [
+                {"name": "question", "type": "string", "required": true, "description": "The question to reason about as the user"}
+            ],
+            "returns_description": "{answer, reasoning_sources}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "predict_preference",
+            "method": "PYTHON",
+            "url": "feral://digital_twin/predict_preference",
+            "description": "Predict the user's preference in a given category by analyzing their memory and past behavior.",
+            "params": [
+                {"name": "category", "type": "string", "required": true, "description": "Category to predict preference for (e.g. 'restaurants', 'music', 'work habits')"}
+            ],
+            "returns_description": "{category, preference, confidence, evidence}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "daily_reflection",
+            "method": "PYTHON",
+            "url": "feral://digital_twin/daily_reflection",
+            "description": "Generate an end-of-day reflection from the twin's perspective — what went well, what was hard, what's on your mind.",
+            "params": [],
+            "returns_description": "{reflection}",
+            "ui_hint": "detail_card"
+        }
+    ],
+    "flows": [],
+    "crons": [
+        {
+            "id": "nightly_reflection",
+            "description": "Generate a daily reflection at 9pm",
+            "schedule": "0 21 * * *",
+            "endpoint_id": "daily_reflection"
+        }
+    ],
+    "triggers": [],
+    "permissions": ["memory", "identity"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 30
+}

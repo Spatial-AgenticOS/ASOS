@@ -276,6 +276,12 @@ class VisionQueryPayload(BaseModel):
     force: bool = True
 
 
+class HandoffRequestPayload(BaseModel):
+    """Client asks to move working-memory context to another device class."""
+    to_node_type: str = "desktop"
+    history_depth: int = Field(default=20, ge=1, le=500)
+
+
 # ─────────────────────────────────────────────
 # Message Type Registry — Maps type strings to payload models
 # ─────────────────────────────────────────────
@@ -287,6 +293,7 @@ MESSAGE_TYPES = {
     "biometric": BiometricPayload,
     "ui_event": UIEventPayload,
     "device_register": DeviceRegisterPayload,
+    "handoff_request": HandoffRequestPayload,
 
     # Brain → Client
     "transcript": TranscriptPayload,
