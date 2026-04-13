@@ -74,7 +74,7 @@ function showStarting() {
         ${BRAIN_SVG}
       </div>
       <div class="splash-title">FERAL</div>
-      <div class="splash-subtitle">Local-First Agentic OS</div>
+      <div class="splash-subtitle">One brain. Every device.</div>
       <div class="splash-dots"><span></span><span></span><span></span></div>
       <div class="splash-status">Initializing brain on localhost:9090 …</div>
     </div>

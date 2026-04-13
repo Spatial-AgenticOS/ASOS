@@ -34,7 +34,7 @@
 
 ## The Idea
 
-FERAL is a **Spatial Agentic OS** — a single AI brain for your entire physical and digital life. It connects to every device, every app, every sensor you own. It learns your daily baseline across all of them. And it proactively manages hardware, software, health data, and your environment through natural language and intent.
+FERAL is **one local brain for every device you own**. It connects to your wristband, your smart glasses, your home, your computer, your phone, your robots — every device, every app, every sensor. It learns your daily baseline across all of them. And it proactively manages hardware, software, health data, and your environment through natural language and intent.
 
 ```mermaid
 flowchart TD
