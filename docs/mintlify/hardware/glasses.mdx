@@ -1,0 +1,189 @@
+---
+title: "Smart Glasses"
+sidebarTitle: "Smart Glasses"
+description: "Stream video from smart glasses for scene analysis, AR overlays, and hands-free voice interaction."
+---
+
+## Overview
+
+FERAL's smart glasses integration enables real-time video streaming, scene analysis via the vision pipeline, AR overlay commands, and hands-free voice interaction. The glasses act as a first-person sensor for the brain — providing continuous visual context about your environment.
+
+## Supported Devices
+
+| Device | Connection | Features |
+|--------|-----------|----------|
+| FERAL Glasses (reference) | BLE + Wi-Fi | Video, audio, AR overlay, touch |
+| Meta Ray-Ban | Companion app bridge | Photo capture, audio, voice |
+| Vuzix Blade 2 | Wi-Fi direct | Video, AR overlay |
+| Custom ESP32-CAM builds | BLE / Wi-Fi | Video stream, basic audio |
+
+<Note>
+  Third-party glasses support varies. The FERAL reference glasses support the full feature set. Other devices may only support a subset.
+</Note>
+
+## Connection Setup
+
+<Steps>
+  <Step title="Enable the glasses adapter">
+    ```json settings.json
+    {
+      "hardware": {
+        "glasses": {
+          "enabled": true,
+          "stream_resolution": "720p",
+          "stream_fps": 15,
+          "ar_overlay": true
+        }
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Pair the glasses">
+    Put your glasses in pairing mode (varies by device) and scan:
+
+    ```bash
+    feral hardware scan --type glasses
+    ```
+
+    ```
+    Scanning for smart glasses…
+    ✓ FERAL-Glasses-X1     BLE + Wi-Fi    Battery: 72%
+    ? Pair this device? (Y/n)
+    ✓ Paired. Video stream available.
+    ```
+  </Step>
+
+  <Step title="Start the video stream">
+    The video stream starts automatically once paired. Verify:
+
+    ```bash
+    feral status
+    ```
+
+    ```
+    Hardware    ● 1 device   FERAL-Glasses-X1 (streaming 720p @ 15fps)
+    ```
+  </Step>
+</Steps>
+
+## Video Streaming Protocol
+
+Glasses stream video to the brain over Wi-Fi using a lightweight protocol:
+
+```
+Glasses → Wi-Fi (MJPEG/H.264) → FERAL Brain → Vision Pipeline → LLM Context
+```
+
+| Setting | Default | Options |
+|---------|---------|---------|
+| `stream_resolution` | `720p` | `480p`, `720p`, `1080p` |
+| `stream_fps` | `15` | `5` – `30` |
+| `codec` | `mjpeg` | `mjpeg`, `h264` |
+| `vision_interval` | `2s` | How often frames are sent to the vision model |
+
+<Tip>
+  Lower resolution and FPS extend battery life. Use `480p` at `10fps` for all-day wear.
+</Tip>
+
+## Scene Analysis Pipeline
+
+The brain processes video frames through a multi-stage pipeline:
+
+<Steps>
+  <Step title="Frame capture">
+    Frames are sampled at the configured `vision_interval` (default: every 2 seconds).
+  </Step>
+  <Step title="Object detection">
+    Local YOLO model identifies objects, people, and text in the scene.
+  </Step>
+  <Step title="Scene description">
+    The vision LLM generates a natural-language description of the current scene.
+  </Step>
+  <Step title="Context injection">
+    The scene description is added to the brain's context window, available for queries and proactive reasoning.
+  </Step>
+</Steps>
+
+Example scene context:
+
+```json
+{
+  "type": "scene_analysis",
+  "timestamp": "2026-04-12T14:30:00Z",
+  "description": "Indoor office. Monitor displaying VS Code with Python file. Coffee mug on left. Two people in background near whiteboard.",
+  "objects": ["monitor", "keyboard", "coffee_mug", "person", "whiteboard"],
+  "text_detected": ["def process_data(", "TODO: fix auth"]
+}
+```
+
+## AR Overlay Commands
+
+Send visual overlays to the glasses display:
+
+```bash
+curl -X POST http://localhost:9090/api/hardware/glasses/overlay \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "notification",
+    "title": "Meeting in 5 min",
+    "body": "Team standup — Conference Room B",
+    "duration_ms": 5000,
+    "position": "top_right"
+  }'
+```
+
+| Overlay Type | Description |
+|-------------|-------------|
+| `notification` | Toast-style message in corner |
+| `hud` | Persistent heads-up data (HR, time, next event) |
+| `highlight` | Outline a detected object in the scene |
+| `navigation` | Turn-by-turn directional arrows |
+| `text` | Arbitrary text at a specified position |
+
+## Hands-Free Voice
+
+With glasses connected, FERAL's voice pipeline uses the glasses microphone and speaker:
+
+- Wake word detection runs on-device (glasses)
+- Audio streams to the brain for processing
+- Responses play through the glasses speaker or bone conduction
+
+```
+"Hey FERAL, what am I looking at?"
+→ "You're looking at a whiteboard with a system architecture diagram.
+   I can see boxes labeled 'API Gateway', 'Auth Service', and 'Database'."
+```
+
+## Privacy Controls
+
+```json settings.json
+{
+  "hardware": {
+    "glasses": {
+      "auto_record": false,
+      "blur_faces": true,
+      "store_frames": false,
+      "vision_only_on_request": false
+    }
+  }
+}
+```
+
+<Warning>
+  When `store_frames` is `true`, video frames are saved locally for memory recall. This uses significant disk space (~2 GB/day at 720p). Frames never leave your machine.
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Video stream not connecting">
+    Ensure the glasses and FERAL host are on the same Wi-Fi network. Check firewall rules for the streaming port.
+  </Accordion>
+  <Accordion title="High latency on scene analysis">
+    Reduce `stream_fps` and `stream_resolution`. If using a cloud vision model, latency depends on your internet connection — switch to a local model for faster results.
+  </Accordion>
+  <Accordion title="AR overlay not displaying">
+    Verify `ar_overlay` is `true` in settings and that your glasses model supports overlays.
+  </Accordion>
+</AccordionGroup>

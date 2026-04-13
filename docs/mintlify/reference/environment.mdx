@@ -1,0 +1,127 @@
+---
+title: "Environment Variables"
+sidebarTitle: "Environment Variables"
+description: "Complete reference of every FERAL_* environment variable — LLM keys, feature flags, security, hardware, and more."
+---
+
+## Overview
+
+Environment variables are the highest-priority configuration source — they override everything in `settings.json`. Set them in your shell profile, `.env` file, or container environment.
+
+## LLM Provider Keys
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | — | Anthropic Claude API key |
+| `OPENAI_API_KEY` | — | OpenAI API key (GPT-4, Realtime) |
+| `OPENROUTER_API_KEY` | — | OpenRouter multi-model gateway key |
+| `GOOGLE_API_KEY` | — | Google Gemini API key |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL (local models) |
+| `FERAL_LLM_PROVIDER` | `ollama` | Default provider: `anthropic`, `openai`, `openrouter`, `gemini`, `ollama` |
+| `FERAL_LLM_MODEL` | `llama3` | Default model identifier |
+| `FERAL_LLM_TEMPERATURE` | `0.7` | Default sampling temperature |
+| `FERAL_LLM_MAX_TOKENS` | `4096` | Maximum tokens per response |
+
+## Core Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_HOME` | `~/.feral` | Root directory for all FERAL data (config, memory, logs) |
+| `FERAL_BRAIN_PORT` | `9090` | Brain WebSocket and API port |
+| `FERAL_BRAIN_HOST` | `0.0.0.0` | Brain bind address |
+| `FERAL_DASHBOARD_PORT` | `3000` | Web dashboard port |
+| `FERAL_LOG_LEVEL` | `info` | Logging level: `debug`, `info`, `warn`, `error` |
+
+## Autonomy & Security
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_AUTONOMY_MODE` | `hybrid` | `strict`, `hybrid`, or `loose` |
+| `FERAL_SANDBOX_ENABLED` | `true` | Enable WASM sandbox for skill execution |
+| `FERAL_APPROVAL_TIMEOUT` | `30` | Seconds to wait for user approval before timing out |
+| `FERAL_VAULT_KEY` | — | Override vault encryption key (not recommended) |
+
+## Voice
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_VOICE_ENABLED` | `true` | Enable voice pipeline |
+| `FERAL_VOICE_PROVIDER` | `openai_realtime` | `openai_realtime`, `gemini_live`, `whisper_local` |
+| `FERAL_WAKE_WORD` | `hey feral` | Wake word trigger phrase |
+| `FERAL_VOICE_LANGUAGE` | `en` | Language code for speech recognition |
+
+## Vision & Perception
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_VISION_ENABLED` | `true` | Enable vision pipeline (screen + glasses) |
+| `FERAL_SCREEN_CAPTURE` | `true` | Allow screen capture for computer-use features |
+| `FERAL_VISION_MODEL` | `local` | Vision model: `local` (YOLO), `openai`, `gemini` |
+| `FERAL_VISION_INTERVAL` | `2` | Seconds between vision frame analysis |
+
+## Audio
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_AUDIO_INPUT` | `default` | Audio input device name or `default` |
+| `FERAL_AUDIO_OUTPUT` | `default` | Audio output device name or `default` |
+| `FERAL_AUDIO_SAMPLE_RATE` | `16000` | Audio sample rate in Hz |
+
+## Channels
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_TELEGRAM_BOT_TOKEN` | — | Telegram bot token from BotFather |
+| `FERAL_SLACK_BOT_TOKEN` | — | Slack bot user OAuth token (`xoxb-`) |
+| `FERAL_SLACK_APP_TOKEN` | — | Slack app-level token for Socket Mode (`xapp-`) |
+| `FERAL_DISCORD_BOT_TOKEN` | — | Discord bot token |
+| `FERAL_FCM_SERVICE_ACCOUNT_PATH` | — | Path to Firebase service account JSON |
+| `FERAL_APNS_KEY_PATH` | — | Path to APNs `.p8` key file |
+| `FERAL_APNS_KEY_ID` | — | APNs key ID |
+| `FERAL_APNS_TEAM_ID` | — | Apple Developer Team ID |
+| `FERAL_APNS_BUNDLE_ID` | `com.feral.app` | iOS app bundle identifier |
+| `FERAL_APNS_ENVIRONMENT` | `production` | `sandbox` or `production` |
+
+## Hardware
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_BLE_ENABLED` | `true` | Enable Bluetooth device scanning |
+| `FERAL_HUP_PORT` | `9091` | Hardware Unified Protocol WebSocket port |
+| `FERAL_HA_URL` | — | Home Assistant URL (e.g., `http://192.168.1.50:8123`) |
+| `FERAL_HA_TOKEN` | — | Home Assistant long-lived access token |
+
+## Memory
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_MEMORY_BACKEND` | `sqlite` | Memory storage: `sqlite`, `postgres` |
+| `FERAL_MEMORY_PATH` | `~/.feral/memory.db` | Path to the memory database file |
+| `FERAL_VECTOR_STORE` | `chroma` | Vector store for semantic search: `chroma`, `qdrant` |
+| `FERAL_MEMORY_SYNC` | `false` | Enable P2P memory sync across devices |
+
+## Integrations
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_GOOGLE_CREDENTIALS` | — | Path to Google OAuth credentials JSON (Calendar, Gmail) |
+| `FERAL_SPOTIFY_CLIENT_ID` | — | Spotify app client ID |
+| `FERAL_SPOTIFY_CLIENT_SECRET` | — | Spotify app client secret |
+| `FERAL_NOTION_TOKEN` | — | Notion integration token |
+| `FERAL_WHOOP_CLIENT_ID` | — | Whoop API client ID |
+| `FERAL_WHOOP_CLIENT_SECRET` | — | Whoop API client secret |
+| `FERAL_OURA_PAT` | — | Oura Ring personal access token |
+
+## Feature Flags
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_PROACTIVE_ENABLED` | `true` | Enable proactive intelligence engine |
+| `FERAL_GENUI_ENABLED` | `true` | Enable server-driven UI generation |
+| `FERAL_DIGITAL_TWIN` | `true` | Enable digital twin reasoning |
+| `FERAL_COMPUTER_USE` | `true` | Enable computer-use (screen, browser, files) |
+| `FERAL_LOCATION_TRACKING` | `false` | Enable GPS geofencing triggers |
+
+<Tip>
+  Set feature flags to `false` to disable subsystems you don't need — this reduces memory usage and startup time.
+</Tip>

@@ -1,0 +1,164 @@
+---
+title: "Configuration"
+sidebarTitle: "Configuration"
+description: "Configure FERAL via settings files, environment variables, and the credential vault."
+---
+
+## Config File Location
+
+FERAL reads its primary configuration from a JSON file at:
+
+```
+~/.feral/settings.json
+```
+
+You can override this path by setting the `FERAL_HOME` environment variable:
+
+```bash
+export FERAL_HOME=/path/to/my/feral
+```
+
+When set, FERAL reads `$FERAL_HOME/settings.json` instead.
+
+## Configuration Hierarchy
+
+FERAL merges configuration from four sources, each overriding the previous:
+
+<Steps>
+  <Step title="User config (lowest priority)">
+    `~/.feral/settings.json` — your global defaults.
+  </Step>
+  <Step title="Project config">
+    `.feral/settings.json` in the current working directory — project-specific overrides.
+  </Step>
+  <Step title="Local config">
+    `.feral/settings.local.json` in the current directory — personal overrides not checked into version control.
+  </Step>
+  <Step title="Environment variables (highest priority)">
+    Any `FERAL_*` env var overrides the equivalent setting. See the [Environment Variables](/reference/environment) reference.
+  </Step>
+</Steps>
+
+<Tip>
+  Add `.feral/settings.local.json` to your `.gitignore` to keep personal overrides out of version control.
+</Tip>
+
+## Settings File Format
+
+```json settings.json
+{
+  "llm": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514",
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "voice": {
+    "enabled": true,
+    "wake_word": "hey feral",
+    "provider": "openai_realtime"
+  },
+  "autonomy": {
+    "mode": "hybrid",
+    "safe_categories": ["information", "media", "smart_home"],
+    "risky_categories": ["email", "file_delete", "purchase"]
+  },
+  "dashboard": {
+    "port": 3000,
+    "theme": "dark"
+  },
+  "brain": {
+    "port": 9090,
+    "host": "0.0.0.0"
+  },
+  "memory": {
+    "backend": "sqlite",
+    "vector_store": "chroma",
+    "path": "~/.feral/memory.db"
+  },
+  "hardware": {
+    "ble_enabled": true,
+    "home_assistant_url": null,
+    "hup_port": 9091
+  }
+}
+```
+
+## Credentials Vault
+
+Sensitive values (API keys, tokens) are stored separately in an encrypted vault:
+
+```
+~/.feral/credentials.json
+```
+
+This file is AES-256 encrypted at rest using a key derived from your system keychain. FERAL decrypts it in memory at startup.
+
+<Warning>
+  Never commit `credentials.json` to version control. The setup wizard creates it automatically.
+</Warning>
+
+### Managing credentials
+
+```bash
+feral setup                     # interactive wizard — sets keys and encrypts
+```
+
+You can also set credentials via environment variables, which always take precedence over the vault:
+
+<CodeGroup>
+```bash Anthropic
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+```bash OpenAI
+export OPENAI_API_KEY=sk-...
+```
+```bash OpenRouter
+export OPENROUTER_API_KEY=sk-or-...
+```
+```bash Ollama (local)
+# No key needed — Ollama is auto-detected on localhost:11434
+```
+</CodeGroup>
+
+## Key Settings Reference
+
+| Setting Path | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `llm.provider` | string | `"ollama"` | LLM backend: `anthropic`, `openai`, `openrouter`, `ollama`, `gemini` |
+| `llm.model` | string | `"llama3"` | Model identifier for the chosen provider |
+| `autonomy.mode` | string | `"hybrid"` | `strict`, `hybrid`, or `loose` |
+| `voice.enabled` | bool | `true` | Enable voice pipeline |
+| `voice.wake_word` | string | `"hey feral"` | Trigger phrase for hands-free activation |
+| `brain.port` | int | `9090` | Brain WebSocket/API port |
+| `dashboard.port` | int | `3000` | Web dashboard port |
+| `memory.backend` | string | `"sqlite"` | Storage backend for episodic memory |
+| `hardware.ble_enabled` | bool | `true` | Enable Bluetooth device scanning |
+
+## Example: Minimal Cloud Config
+
+```json settings.json
+{
+  "llm": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514"
+  },
+  "autonomy": { "mode": "strict" }
+}
+```
+
+## Example: Fully Local Config
+
+```json settings.json
+{
+  "llm": {
+    "provider": "ollama",
+    "model": "llama3:70b"
+  },
+  "voice": {
+    "provider": "whisper_local"
+  },
+  "autonomy": { "mode": "loose" },
+  "dashboard": { "port": 3000 }
+}
+```

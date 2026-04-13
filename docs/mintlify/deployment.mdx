@@ -1,0 +1,239 @@
+---
+title: "Deployment & Operations"
+sidebarTitle: "Deployment"
+description: "Run FERAL in production with Docker Compose, systemd, reverse proxy, and monitoring."
+---
+
+# Deployment & Operations
+
+This guide covers running FERAL in production — Docker Compose, environment variables, systemd services, reverse proxy, and a production checklist.
+
+## Docker Compose
+
+The recommended production setup uses Docker Compose to run the Brain, web UI, and optional services.
+
+```yaml
+# docker-compose.yml
+version: "3.9"
+
+services:
+  brain:
+    image: ghcr.io/feral-ai/feral-brain:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - feral-data:/data
+      - ./config:/config:ro
+    env_file: .env
+    environment:
+      FERAL_DATA_DIR: /data
+      FERAL_CONFIG_DIR: /config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web:
+    image: ghcr.io/feral-ai/feral-web:latest
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_URL: http://brain:9090
+    depends_on:
+      brain:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  feral-data:
+  redis-data:
+```
+
+```bash
+cp .env.example .env    # fill in API keys
+docker compose up -d
+docker compose logs -f brain
+```
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|:---------|:---------|:--------|:------------|
+| `FERAL_LLM_PROVIDER` | yes | — | `openai`, `anthropic`, `gemini`, `groq`, `ollama` |
+| `OPENAI_API_KEY` | if openai | — | OpenAI API key |
+| `ANTHROPIC_API_KEY` | if anthropic | — | Anthropic API key |
+| `GEMINI_API_KEY` | if gemini | — | Google AI API key |
+| `GROQ_API_KEY` | if groq | — | Groq API key |
+| `OLLAMA_BASE_URL` | if ollama | `http://localhost:11434` | Ollama endpoint |
+| `FERAL_DATA_DIR` | no | `~/.feral` | Data directory |
+| `FERAL_CONFIG_DIR` | no | `~/.feral` | Config directory |
+| `FERAL_PORT` | no | `9090` | Brain HTTP/WS port |
+| `FERAL_HOST` | no | `0.0.0.0` | Bind address |
+| `FERAL_AUTONOMY` | no | `hybrid` | `strict`, `hybrid`, `loose` |
+| `FERAL_LOG_LEVEL` | no | `info` | `debug`, `info`, `warning`, `error` |
+| `FERAL_VOICE_MODE` | no | `disabled` | `realtime`, `whisper`, `disabled` |
+| `FERAL_CORS_ORIGINS` | no | `*` | Comma-separated allowed origins |
+| `TELEGRAM_BOT_TOKEN` | no | — | Telegram channel token |
+| `SLACK_BOT_TOKEN` | no | — | Slack bot token |
+| `SLACK_APP_TOKEN` | no | — | Slack app-level token |
+| `DISCORD_BOT_TOKEN` | no | — | Discord bot token |
+| `REDIS_URL` | no | — | Redis URL for caching/pubsub |
+
+## Production Checklist
+
+Before going live:
+
+- [ ] Set `FERAL_AUTONOMY=strict` or `hybrid` (never `loose` in multi-user)
+- [ ] Store all API keys via `feral vault` or env vars — never in config files
+- [ ] Set `FERAL_CORS_ORIGINS` to your actual domains
+- [ ] Enable HTTPS via reverse proxy (see below)
+- [ ] Set `FERAL_LOG_LEVEL=warning` to reduce log volume
+- [ ] Mount `feral-data` on persistent storage with backups
+- [ ] Set resource limits on Docker containers
+- [ ] Enable health checks for orchestrator restarts
+- [ ] Review the [Security Model](/guides/security) and configure a SandboxPolicy
+- [ ] Test channel integrations (Telegram, Slack) in a staging environment first
+
+## Systemd Service
+
+For bare-metal deployments without Docker:
+
+```ini
+# /etc/systemd/system/feral.service
+[Unit]
+Description=FERAL AI Brain
+After=network.target
+
+[Service]
+Type=exec
+User=feral
+Group=feral
+WorkingDirectory=/opt/feral
+EnvironmentFile=/opt/feral/.env
+ExecStart=/opt/feral/venv/bin/feral start --host 127.0.0.1 --port 9090
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/feral/data
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now feral
+sudo journalctl -u feral -f
+```
+
+## Reverse Proxy
+
+### Nginx
+
+```nginx
+# /etc/nginx/sites-available/feral
+upstream feral_brain {
+    server 127.0.0.1:9090;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name feral.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/feral.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/feral.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://feral_brain;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # WebSocket endpoints
+    location ~ ^/(v1/session|v1/node|sync) {
+        proxy_pass http://feral_brain;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400;
+    }
+}
+```
+
+### Caddy
+
+```
+feral.example.com {
+    reverse_proxy localhost:9090
+}
+```
+
+Caddy handles TLS automatically via Let's Encrypt and upgrades WebSocket connections without extra configuration.
+
+## Monitoring
+
+FERAL exposes a health endpoint and optional Prometheus metrics:
+
+```bash
+# Health check
+curl http://localhost:9090/health
+# {"status": "healthy", "uptime_seconds": 3600, "active_sessions": 2}
+
+# Prometheus metrics (if enabled)
+curl http://localhost:9090/metrics
+```
+
+Enable metrics in config:
+
+```yaml
+# ~/.feral/config.yaml
+monitoring:
+  prometheus: true
+  port: 9091           # separate metrics port (optional)
+```
+
+Key metrics exported:
+
+| Metric | Type | Description |
+|:-------|:-----|:------------|
+| `feral_requests_total` | counter | Total API requests by endpoint |
+| `feral_llm_latency_seconds` | histogram | LLM call duration |
+| `feral_tool_executions_total` | counter | Tool calls by name and status |
+| `feral_active_sessions` | gauge | Current open sessions |
+| `feral_memory_entries` | gauge | Memory entries by tier |
+| `feral_device_connections` | gauge | Connected HUP devices |
+
+## Backup & Restore
+
+```bash
+# Backup memory and config
+feral backup create --output /backups/feral-$(date +%F).tar.gz
+
+# Restore
+feral backup restore /backups/feral-2025-06-15.tar.gz
+
+# Automated daily backup (cron)
+0 3 * * * /opt/feral/venv/bin/feral backup create --output /backups/feral-$(date +\%F).tar.gz
+```
+
+The backup includes `memory.db`, `config.yaml`, `identity.yaml`, `credentials.json` (encrypted), wiki pages, and skill manifests.

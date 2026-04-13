@@ -1,0 +1,171 @@
+---
+title: "WebSocket Protocol"
+sidebarTitle: "WebSocket Protocol"
+description: "Reference for FERAL's WebSocket protocols — /v1/session for clients and /v1/node for hardware daemons."
+---
+
+## Overview
+
+FERAL uses two WebSocket endpoints:
+
+| Endpoint | Port | Purpose |
+|----------|------|---------|
+| `/v1/session` | 9090 | Client connections (dashboard, desktop, mobile) |
+| `/v1/node` | 9091 | Hardware node connections (wristband, glasses, robots) |
+
+Both use JSON-encoded `FeralMessage` frames.
+
+## FeralMessage Format
+
+Every message over either WebSocket follows this envelope:
+
+```json
+{
+  "id": "msg_a1b2c3d4",
+  "type": "text_command",
+  "timestamp": "2026-04-12T14:30:00Z",
+  "source": "dashboard",
+  "target": "brain",
+  "payload": { ... },
+  "metadata": { ... }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique message ID (UUID or prefixed) |
+| `type` | string | Message type (see tables below) |
+| `timestamp` | ISO 8601 | When the message was created |
+| `source` | string | Sender identifier (`dashboard`, `brain`, `wristband_a3f2`, etc.) |
+| `target` | string | Intended recipient (`brain`, `dashboard`, `*` for broadcast) |
+| `payload` | object | Type-specific data |
+| `metadata` | object | Optional context (session ID, trace ID, etc.) |
+
+## Client Protocol (`/v1/session`)
+
+### Connection Lifecycle
+
+<Steps>
+  <Step title="Connect">
+    ```javascript
+    const ws = new WebSocket("ws://localhost:9090/v1/session");
+    ```
+  </Step>
+  <Step title="Handshake">
+    The brain sends a `session_init` message with capabilities and current context.
+
+    ```json
+    {
+      "type": "session_init",
+      "payload": {
+        "session_id": "sess_abc123",
+        "brain_version": "0.9.0",
+        "capabilities": ["text", "voice", "sdui", "hardware"],
+        "autonomy_mode": "hybrid"
+      }
+    }
+    ```
+  </Step>
+  <Step title="Exchange messages">
+    Client sends commands, brain responds. Both sides can initiate.
+  </Step>
+  <Step title="Disconnect">
+    Either side can close the socket. The brain persists the session in memory.
+  </Step>
+</Steps>
+
+### Client → Brain Message Types
+
+| Type | Description | Payload |
+|------|-------------|---------|
+| `text_command` | Text input from the user | `{ "text": "..." }` |
+| `audio_chunk` | Streamed audio bytes (base64) | `{ "data": "...", "format": "pcm_16k" }` |
+| `audio_end` | End of audio stream | `{}` |
+| `sdui_action` | User clicked an SDUI button/form | `{ "component_id": "...", "action": "...", "value": "..." }` |
+| `approval_response` | User approved/denied an action | `{ "request_id": "...", "approved": true }` |
+| `context_update` | Client sends ambient context (screen, location) | `{ "screen": "...", "location": {...} }` |
+
+### Brain → Client Message Types
+
+| Type | Description | Payload |
+|------|-------------|---------|
+| `text_response` | Text reply from the brain | `{ "text": "...", "sources": [...] }` |
+| `text_delta` | Streaming text token | `{ "delta": "..." }` |
+| `audio_chunk` | Streamed audio response (base64) | `{ "data": "...", "format": "pcm_16k" }` |
+| `audio_end` | End of audio response | `{}` |
+| `sdui` | Server-driven UI component | `{ "component": "chart", "props": {...} }` |
+| `approval_request` | Action needs user approval | `{ "request_id": "...", "action": "...", "risk": "medium" }` |
+| `status_update` | Brain state change | `{ "event": "...", "data": {...} }` |
+| `error` | Error message | `{ "code": "...", "message": "..." }` |
+
+## Hardware Protocol (`/v1/node`)
+
+### Connection Lifecycle
+
+<Steps>
+  <Step title="Connect">
+    ```python
+    ws = await websockets.connect("ws://localhost:9091/v1/node")
+    ```
+  </Step>
+  <Step title="Register">
+    The node sends its device manifest immediately after connection.
+
+    ```json
+    {
+      "type": "node_register",
+      "payload": {
+        "device_id": "wristband_a3f2",
+        "device_type": "wristband",
+        "name": "FERAL Wristband",
+        "capabilities": ["heart_rate", "spo2", "skin_temp"],
+        "protocol_version": "1.0"
+      }
+    }
+    ```
+  </Step>
+  <Step title="Stream data">
+    The node pushes sensor data; the brain sends commands.
+  </Step>
+  <Step title="Disconnect">
+    Node closes the socket. The brain marks the device as offline.
+  </Step>
+</Steps>
+
+### Node → Brain Message Types
+
+| Type | Description |
+|------|-------------|
+| `node_register` | Device manifest on connect |
+| `sensor_data` | Periodic sensor readings |
+| `command_result` | Response to a brain command |
+| `node_status` | Battery, connectivity, error states |
+
+### Brain → Node Message Types
+
+| Type | Description |
+|------|-------------|
+| `node_accepted` | Registration acknowledged |
+| `device_command` | Command to execute (move, grip, set_light, etc.) |
+| `config_update` | Push new settings to the device |
+| `ping` | Keep-alive (node must respond with `pong`) |
+
+## Example: Full Client Conversation
+
+```json
+// 1. Client sends text command
+→ { "id": "m1", "type": "text_command", "source": "dashboard",
+    "payload": { "text": "What's my heart rate?" } }
+
+// 2. Brain streams response
+← { "id": "m2", "type": "text_delta", "source": "brain",
+    "payload": { "delta": "Your heart " } }
+← { "id": "m2", "type": "text_delta", "source": "brain",
+    "payload": { "delta": "rate is 72 bpm." } }
+← { "id": "m2", "type": "text_response", "source": "brain",
+    "payload": { "text": "Your heart rate is 72 bpm.", "sources": ["wristband_a3f2"] } }
+```
+
+## Keep-Alive
+
+Both protocols use ping/pong frames. The brain sends a `ping` every 30 seconds. Nodes and clients must respond within 10 seconds or the connection is considered dead.

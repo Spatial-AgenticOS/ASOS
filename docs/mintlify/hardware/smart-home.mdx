@@ -1,0 +1,170 @@
+---
+title: "Smart Home"
+sidebarTitle: "Smart Home"
+description: "Control lights, thermostats, locks, and appliances through Home Assistant or the direct HUP mesh."
+---
+
+## Overview
+
+FERAL integrates with your smart home through two paths: **Home Assistant** for broad device compatibility, and **direct HUP mesh** for low-latency local control of supported devices. Both paths let you control hardware via natural language.
+
+## Home Assistant Integration
+
+<Steps>
+  <Step title="Ensure Home Assistant is running">
+    FERAL connects to Home Assistant's WebSocket API. Your HA instance must be accessible on the local network.
+  </Step>
+
+  <Step title="Create a long-lived access token">
+    In Home Assistant, go to your profile → **Long-Lived Access Tokens** → **Create Token**. Copy the token.
+  </Step>
+
+  <Step title="Configure FERAL">
+    ```json settings.json
+    {
+      "hardware": {
+        "home_assistant": {
+          "enabled": true,
+          "url": "http://192.168.1.50:8123",
+          "token": "eyJhbGciOiJIUzI1NiIs..."
+        }
+      }
+    }
+    ```
+
+    Or via environment variables:
+
+    ```bash
+    export FERAL_HA_URL="http://192.168.1.50:8123"
+    export FERAL_HA_TOKEN="eyJhbGciOiJIUzI1NiIs..."
+    ```
+  </Step>
+
+  <Step title="Verify device discovery">
+    ```bash
+    feral hardware list
+    ```
+
+    ```
+    Home Assistant (192.168.1.50)
+      ● light.living_room       Living Room Light       on  brightness: 80%
+      ● climate.thermostat       Thermostat             heat  temp: 22°C
+      ● lock.front_door          Front Door Lock         locked
+      ● switch.coffee_machine    Coffee Machine          off
+      ● media_player.tv          Living Room TV          idle
+    ```
+  </Step>
+</Steps>
+
+## Direct HUP Mesh Control
+
+For supported devices, FERAL can bypass Home Assistant and control hardware directly over the local network or BLE using the Hardware Unified Protocol.
+
+```json settings.json
+{
+  "hardware": {
+    "hup_port": 9091,
+    "mesh_devices": [
+      {
+        "id": "hue_bridge",
+        "type": "philips_hue",
+        "host": "192.168.1.42"
+      },
+      {
+        "id": "smart_plug_1",
+        "type": "tasmota",
+        "host": "192.168.1.88"
+      }
+    ]
+  }
+}
+```
+
+<Tip>
+  Direct mesh control has lower latency than Home Assistant (~50ms vs ~200ms) because it eliminates the middleware hop.
+</Tip>
+
+## Supported Device Types
+
+| Category | Devices | Actions |
+|----------|---------|---------|
+| **Lights** | Philips Hue, LIFX, Tasmota, any HA light | On/off, brightness, color, color temp, scenes |
+| **Thermostat** | Nest, Ecobee, any HA climate | Set temp, mode (heat/cool/auto), fan |
+| **Locks** | August, Yale, any HA lock | Lock, unlock, status check |
+| **Appliances** | Smart plugs, switches | On/off, power monitoring |
+| **Media** | TVs, speakers, any HA media_player | Play, pause, volume, source selection |
+| **Sensors** | Motion, door/window, temperature, humidity | Read-only monitoring and triggers |
+
+## Natural Language Control
+
+Once connected, you can control devices through conversation:
+
+<CodeGroup>
+```text Lights
+"Dim the living room lights to 30%"
+"Set the bedroom lights to warm white"
+"Turn off all lights"
+```
+```text Thermostat
+"Set the temperature to 72°F"
+"Switch to cooling mode"
+"What's the current temperature?"
+```
+```text Locks
+"Lock the front door"
+"Is the back door locked?"
+```
+```text Scenes
+"Movie time" → dims lights, turns on TV, sets volume
+"Goodnight" → locks doors, turns off all lights, sets thermostat to 68°F
+```
+</CodeGroup>
+
+## Scenes and Automations
+
+Define custom scenes in your settings that FERAL can trigger by name:
+
+```json settings.json
+{
+  "hardware": {
+    "scenes": {
+      "movie_time": [
+        { "entity": "light.living_room", "action": "turn_on", "brightness": 15 },
+        { "entity": "media_player.tv", "action": "turn_on" }
+      ],
+      "goodnight": [
+        { "entity": "lock.front_door", "action": "lock" },
+        { "entity": "light.*", "action": "turn_off" },
+        { "entity": "climate.thermostat", "action": "set_temperature", "temperature": 20 }
+      ]
+    }
+  }
+}
+```
+
+## Proactive Smart Home
+
+With the proactive engine enabled, FERAL can act on smart-home devices automatically:
+
+- **Sleep detected** (from wristband) → dim lights, lock doors, lower thermostat
+- **Heart rate spike during rest** → adjust lighting to calming colors
+- **Calendar: meeting in 5 min** → mute media players
+- **Leaving home** (geofence exit) → turn off lights, lock all doors
+
+<Note>
+  Proactive smart-home actions respect your autonomy level. In **strict** mode, you'll get an approval card before any action executes.
+</Note>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Home Assistant connection refused">
+    Verify the URL and token. Ensure HA is running and the API is accessible: `curl -H "Authorization: Bearer YOUR_TOKEN" http://HA_IP:8123/api/`.
+  </Accordion>
+  <Accordion title="Device not found">
+    Run `feral hardware list` to refresh. If using HA, make sure the device is exposed and not hidden in the HA UI.
+  </Accordion>
+  <Accordion title="Commands execute with delay">
+    If latency exceeds 500ms, consider switching to direct HUP mesh control for supported devices.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,142 @@
+---
+title: "Slack"
+sidebarTitle: "Slack"
+description: "Connect FERAL to your Slack workspace using Socket Mode for real-time messaging."
+---
+
+## Overview
+
+FERAL's Slack channel uses Socket Mode (WebSocket) to receive events without exposing a public URL. The bot appears as a workspace member and can respond in channels, threads, and DMs.
+
+## Setup
+
+<Steps>
+  <Step title="Create a Slack App">
+    Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App** → **From scratch**.
+
+    Name it `FERAL` and select your workspace.
+  </Step>
+
+  <Step title="Enable Socket Mode">
+    In the app settings sidebar, go to **Socket Mode** and toggle it on. Slack generates an **App-Level Token** — create one with the `connections:write` scope.
+
+    Copy the token (starts with `xapp-`).
+  </Step>
+
+  <Step title="Configure Bot Token Scopes">
+    Go to **OAuth & Permissions** and add these **Bot Token Scopes**:
+
+    | Scope | Purpose |
+    |-------|---------|
+    | `chat:write` | Send messages |
+    | `channels:read` | List public channels |
+    | `channels:history` | Read channel messages |
+    | `groups:read` | List private channels the bot is in |
+    | `groups:history` | Read private channel messages |
+    | `im:read` | Read DMs |
+    | `im:history` | Read DM history |
+    | `im:write` | Send DMs |
+    | `app_mentions:read` | React to @mentions |
+    | `files:read` | Read shared files |
+  </Step>
+
+  <Step title="Enable Event Subscriptions">
+    Go to **Event Subscriptions** → toggle on. Under **Subscribe to bot events**, add:
+
+    - `message.channels`
+    - `message.groups`
+    - `message.im`
+    - `app_mention`
+  </Step>
+
+  <Step title="Install the app to your workspace">
+    Go to **Install App** and click **Install to Workspace**. Authorize the permissions. Copy the **Bot User OAuth Token** (starts with `xoxb-`).
+  </Step>
+
+  <Step title="Set FERAL tokens">
+    <CodeGroup>
+    ```bash Environment variables
+    export FERAL_SLACK_BOT_TOKEN="xoxb-..."
+    export FERAL_SLACK_APP_TOKEN="xapp-..."
+    ```
+    ```json settings.json
+    {
+      "channels": {
+        "slack": {
+          "enabled": true,
+          "bot_token": "xoxb-...",
+          "app_token": "xapp-..."
+        }
+      }
+    }
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Configure channel behavior (optional)">
+    ```json
+    {
+      "channels": {
+        "slack": {
+          "enabled": true,
+          "allowed_channels": ["C01ABCDEF", "C02GHIJKL"],
+          "respond_to_mentions_only": true,
+          "thread_replies": true
+        }
+      }
+    }
+    ```
+
+    | Setting | Default | Description |
+    |---------|---------|-------------|
+    | `allowed_channels` | `[]` (all) | Restrict to specific channel IDs |
+    | `respond_to_mentions_only` | `true` | Only respond when @mentioned in channels |
+    | `thread_replies` | `true` | Reply in threads instead of top-level |
+  </Step>
+
+  <Step title="Restart and test">
+    ```bash
+    feral stop && feral start
+    ```
+
+    In any allowed Slack channel, type:
+
+    ```
+    @FERAL what's the status of my open tasks?
+    ```
+  </Step>
+</Steps>
+
+## How It Works
+
+```
+Slack workspace → Socket Mode (WebSocket) → FERAL Brain → Response → Slack API
+```
+
+Socket Mode means FERAL doesn't need a public URL or ngrok tunnel. The brain maintains a persistent WebSocket connection to Slack's servers.
+
+## DM vs. Channel Behavior
+
+| Context | Trigger | Response Style |
+|---------|---------|----------------|
+| **DM** | Any message | Full conversational response |
+| **Channel** | `@FERAL` mention | Threaded reply (if `thread_replies` is on) |
+| **Channel** | Direct message (if `respond_to_mentions_only` is off) | Top-level reply |
+
+<Note>
+  Invite the bot to a channel with `/invite @FERAL` before it can read or respond there.
+</Note>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Bot appears offline in Slack">
+    Check that `FERAL_SLACK_APP_TOKEN` is set correctly. The app-level token powers Socket Mode. Run `feral doctor` to validate.
+  </Accordion>
+  <Accordion title="not_in_channel error">
+    The bot must be invited to each channel. Use `/invite @FERAL` in the target channel.
+  </Accordion>
+  <Accordion title="Missing scopes error">
+    Re-visit **OAuth & Permissions** and add any missing scopes, then reinstall the app to your workspace.
+  </Accordion>
+</AccordionGroup>

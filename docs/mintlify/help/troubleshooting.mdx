@@ -1,0 +1,224 @@
+---
+title: "Troubleshooting"
+sidebarTitle: "Troubleshooting"
+description: "Solutions for common FERAL issues — installation errors, connection problems, and runtime failures."
+---
+
+## Diagnostic Tool
+
+Before diving into specific issues, run the built-in diagnostic:
+
+```bash
+feral doctor
+```
+
+This checks Python/Node versions, dependencies, port availability, LLM connectivity, BLE adapters, and more. Fix any items marked with `✗` first.
+
+## Common Issues
+
+### `command not found: feral`
+
+The `feral` binary is not on your PATH.
+
+<Tabs>
+  <Tab title="One-liner install">
+    The installer creates a virtual environment at `~/.feral-env`. Activate it:
+
+    ```bash
+    source ~/.feral-env/bin/activate
+    ```
+
+    To make this permanent, add the line to your shell profile:
+
+    <CodeGroup>
+    ```bash ~/.zshrc
+    echo 'source ~/.feral-env/bin/activate' >> ~/.zshrc
+    ```
+    ```bash ~/.bashrc
+    echo 'source ~/.feral-env/bin/activate' >> ~/.bashrc
+    ```
+    </CodeGroup>
+  </Tab>
+  <Tab title="Git clone install">
+    Ensure `feral-core` is installed in your active Python environment:
+
+    ```bash
+    cd FERAL-AI/feral-core
+    pip install -e ".[llm]"
+    which feral
+    ```
+  </Tab>
+  <Tab title="Docker">
+    The `feral` CLI is not available on the host with Docker installs. Use `docker compose exec` instead:
+
+    ```bash
+    docker compose exec brain feral status
+    ```
+  </Tab>
+</Tabs>
+
+### No LLM Key Configured
+
+```
+Error: No LLM provider configured. Run 'feral setup' to set one up.
+```
+
+Run the setup wizard to choose a provider and enter your API key:
+
+```bash
+feral setup
+```
+
+For quick configuration without the wizard:
+
+<CodeGroup>
+```bash Anthropic
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+```bash OpenAI
+export OPENAI_API_KEY=sk-...
+```
+```bash Ollama (local, no key needed)
+# Just ensure Ollama is running:
+ollama serve
+```
+</CodeGroup>
+
+<Tip>
+  Ollama is auto-detected on `localhost:11434` and requires no API key. It's the fastest way to get running.
+</Tip>
+
+### Port 9090 Already in Use
+
+```
+Error: Port 9090 is already in use. (exit code 4)
+```
+
+Another process is occupying the brain's default port.
+
+```bash
+# Find what's using the port
+lsof -i :9090
+
+# Option 1: Kill the process
+kill -9 <PID>
+
+# Option 2: Use a different port
+feral start --port 9091
+```
+
+### WebSocket Connection Refused
+
+The dashboard or a client can't connect to the brain.
+
+**Checklist:**
+1. Is the brain running? → `feral status`
+2. Correct port? → Default is `9090`, check `--port` flag or `FERAL_BRAIN_PORT`
+3. Firewall blocking? → Allow `localhost:9090` in your firewall
+4. Docker networking? → Use `host.docker.internal` instead of `localhost` from containers
+
+```bash
+# Quick connectivity test
+curl http://localhost:9090/api/dashboard/status
+```
+
+### Playwright Chromium Missing
+
+```
+Error: Browser not found. Run 'playwright install chromium'.
+```
+
+FERAL uses Playwright for computer-use features (browser automation, screen capture). Install the browser:
+
+```bash
+playwright install chromium
+```
+
+<Note>
+  If you don't need computer-use features, disable them to skip the Playwright requirement:
+  ```bash
+  export FERAL_COMPUTER_USE=false
+  ```
+</Note>
+
+### pip Install Failures
+
+**Symptom:** Dependency resolution errors or build failures during install.
+
+<Steps>
+  <Step title="Upgrade pip">
+    ```bash
+    pip install --upgrade pip setuptools wheel
+    ```
+  </Step>
+  <Step title="Use the LLM extras">
+    ```bash
+    pip install -e ".[llm]"
+    ```
+  </Step>
+  <Step title="Install system dependencies (Linux)">
+    Some packages need system libraries:
+    ```bash
+    sudo apt install build-essential libffi-dev libssl-dev portaudio19-dev
+    ```
+  </Step>
+  <Step title="Try a fresh virtual environment">
+    ```bash
+    python3.11 -m venv ~/.feral-env-fresh
+    source ~/.feral-env-fresh/bin/activate
+    pip install -e ".[llm]"
+    ```
+  </Step>
+</Steps>
+
+### BLE Adapter Not Found
+
+```
+Warning: No BLE adapter detected. Hardware scanning disabled.
+```
+
+- **macOS:** BLE is built-in. Grant Bluetooth permission to your terminal app in System Settings → Privacy & Security → Bluetooth.
+- **Linux:** Install BlueZ: `sudo apt install bluez`. Ensure the adapter is up: `sudo hciconfig hci0 up`.
+- **Docker:** BLE is not available in Docker containers. Use a native install for hardware features.
+
+### Memory Database Locked
+
+```
+Error: database is locked
+```
+
+Another FERAL process is holding the SQLite lock. Stop all instances and retry:
+
+```bash
+feral stop
+feral start
+```
+
+If the issue persists, the database file may be corrupted:
+
+```bash
+cp ~/.feral/memory.db ~/.feral/memory.db.backup
+sqlite3 ~/.feral/memory.db "PRAGMA integrity_check;"
+```
+
+### Voice Not Activating
+
+**Checklist:**
+1. Voice enabled? → `FERAL_VOICE_ENABLED=true`
+2. Microphone permission granted to terminal?
+3. Wake word set? → Default is `"hey feral"`
+4. Audio input device correct? → `FERAL_AUDIO_INPUT=default`
+
+Test audio input:
+
+```bash
+python -c "import pyaudio; p = pyaudio.PyAudio(); print(p.get_default_input_device_info())"
+```
+
+## Still Stuck?
+
+If none of the above resolves your issue:
+
+1. Run `feral doctor` and copy the full output
+2. Check logs at `~/.feral/logs/brain.log`
+3. Open an issue on [GitHub](https://github.com/FERAL-AI/FERAL-AI/issues) with the doctor output and relevant logs

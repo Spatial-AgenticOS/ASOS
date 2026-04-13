@@ -1,0 +1,145 @@
+---
+title: "Python SDK"
+sidebarTitle: "Python"
+description: "Talk to a running FERAL Brain, build plugins, and create hardware device adapters."
+---
+
+# Python SDK
+
+The `feral-sdk` package lets you talk to a running FERAL Brain, build plugins, and create hardware device adapters — all from Python.
+
+```bash
+pip install feral-sdk
+```
+
+## FeralClient
+
+`FeralClient` is an async HTTP + WebSocket client for the Brain API.
+
+```python
+from feral_sdk import FeralClient
+
+async with FeralClient("http://localhost:9090") as client:
+    # Health check
+    health = await client.health()
+
+    # Chat
+    reply = await client.chat("Summarize my last meeting notes")
+    print(reply)
+
+    # Dashboard data
+    dashboard = await client.get_dashboard()
+    print(dashboard["skills_count"])
+
+    # Memory search
+    results = await client.search_memory("project deadlines")
+
+    # List skills
+    skills = await client.list_skills()
+
+    # Create a memory note
+    await client.create_note("Deploy to staging by Friday", tags=["work"])
+
+    # Invoke a skill directly
+    data = await client.invoke_skill("weather", "current", {"city": "Berlin"})
+```
+
+### Constructor
+
+```python
+FeralClient(base_url: str = "http://localhost:9090")
+```
+
+### Methods
+
+| Method | Return | Description |
+|:-------|:-------|:------------|
+| `health()` | `dict` | Brain health status |
+| `get_dashboard()` | `dict` | Aggregated dashboard data |
+| `get_system_info()` | `dict` | Version, memory stats, provider info |
+| `chat(message, session_id=None)` | `str` | Send a message, wait for the full response |
+| `list_skills()` | `list[dict]` | All registered skills |
+| `search_memory(query, limit=10)` | `list[dict]` | Search the agent's memory |
+| `create_note(content, tags=[])` | `dict` | Create a persistent memory note |
+| `list_conversations(limit=20)` | `list[dict]` | Conversation history |
+| `invoke_skill(skill_id, endpoint, args={})` | `dict` | Directly invoke a skill endpoint |
+
+## FeralPlugin
+
+Build agent tools as Python classes. Decorate methods with `@feral_tool` to expose them.
+
+```python
+from feral_sdk import FeralPlugin, feral_tool
+
+class WeatherPlugin(FeralPlugin):
+    name = "weather"
+    description = "Real-time weather data"
+    version = "0.1.0"
+
+    @feral_tool(description="Get current weather for a city")
+    async def current(self, city: str) -> dict:
+        return {"city": city, "temp_f": 72, "condition": "sunny"}
+
+    @feral_tool(description="Get 5-day forecast")
+    async def forecast(self, city: str) -> dict:
+        return {"city": city, "days": 5, "forecast": ["sunny", "cloudy", "rain", "sunny", "sunny"]}
+```
+
+### Plugin Lifecycle
+
+| Method | When Called |
+|:-------|:-----------|
+| `on_load()` | Brain loads the plugin at startup |
+| `on_unload()` | Brain shuts down or hot-reloads |
+| `execute(endpoint_id, args, vault)` | Brain invokes a tool — called automatically |
+| `to_manifest()` | Generates a FERAL skill manifest from decorated methods |
+
+### @feral_tool Decorator
+
+```python
+@feral_tool(
+    description="Human-readable description for the LLM",
+    name="optional_override",          # defaults to method name
+    parameters={"city": {"type": "string", "description": "City name"}},
+)
+async def my_tool(self, city: str) -> dict:
+    ...
+```
+
+## HUPDevice
+
+Create device adapters that connect physical hardware to the Brain's device mesh.
+
+```python
+from feral_sdk import HUPDevice
+
+class WristbandAdapter(HUPDevice):
+    device_type = "wearable"
+    device_name = "Feral Wristband"
+    capabilities = ["heart_rate", "spo2", "skin_temp"]
+    telemetry_interval_s = 5.0
+
+    async def read_telemetry(self) -> dict:
+        return {"heart_rate": 72, "spo2": 98, "skin_temp_c": 36.5}
+
+    async def execute_action(self, action: str, params: dict) -> dict:
+        if action == "vibrate":
+            return {"ok": True}
+        return {"error": f"Unknown action: {action}"}
+
+import asyncio
+adapter = WristbandAdapter()
+asyncio.run(adapter.run("ws://localhost:9090/v1/daemon"))
+```
+
+### HUPDevice Methods
+
+| Method | Description |
+|:-------|:------------|
+| `connect(brain_url)` | Connect to the Brain's hardware mesh |
+| `run(brain_url)` | Connect + start telemetry and command loops |
+| `read_telemetry()` | Override: return current sensor data |
+| `execute_action(action, params)` | Override: handle commands from the Brain |
+| `get_manifest()` | Returns the device's HUP manifest |
+
+See the [Device Adapters guide](/guides/devices) for a full walkthrough.

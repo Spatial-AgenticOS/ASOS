@@ -1,0 +1,171 @@
+---
+title: "Push Notifications"
+sidebarTitle: "Push Notifications"
+description: "Configure FCM (Android) and APNs (iOS) push notifications so FERAL can reach you on mobile."
+---
+
+## Overview
+
+Push notifications let FERAL send proactive alerts to your phone — health warnings, calendar reminders, smart-home events — even when the app isn't in the foreground. FERAL supports both Firebase Cloud Messaging (FCM) for Android and Apple Push Notification service (APNs) for iOS.
+
+## Firebase Cloud Messaging (Android)
+
+<Steps>
+  <Step title="Create a Firebase project">
+    Go to the [Firebase Console](https://console.firebase.google.com/) and create a new project (or use an existing one).
+  </Step>
+
+  <Step title="Generate a service account key">
+    Go to **Project Settings** → **Service Accounts** → **Generate new private key**. This downloads a JSON file.
+  </Step>
+
+  <Step title="Configure FERAL">
+    <CodeGroup>
+    ```bash Environment variable
+    export FERAL_FCM_SERVICE_ACCOUNT_PATH="/path/to/firebase-service-account.json"
+    ```
+    ```json settings.json
+    {
+      "channels": {
+        "push": {
+          "fcm": {
+            "enabled": true,
+            "service_account_path": "/path/to/firebase-service-account.json"
+          }
+        }
+      }
+    }
+    ```
+    </CodeGroup>
+
+    <Warning>
+      The service account JSON contains sensitive credentials. Store it outside your project directory and never commit it to version control.
+    </Warning>
+  </Step>
+
+  <Step title="Register device tokens">
+    Your Android app registers its FCM device token with FERAL's API:
+
+    ```bash
+    curl -X POST http://localhost:9090/api/channels/push/register \
+      -H "Content-Type: application/json" \
+      -d '{
+        "platform": "android",
+        "device_token": "fMx7Q3...",
+        "device_name": "Pixel 8 Pro"
+      }'
+    ```
+
+    Response:
+
+    ```json
+    {
+      "status": "registered",
+      "device_id": "dev_abc123"
+    }
+    ```
+  </Step>
+</Steps>
+
+## Apple Push Notification service (iOS)
+
+<Steps>
+  <Step title="Create an APNs key">
+    In [Apple Developer](https://developer.apple.com/account/resources/authkeys/list) → **Keys** → **Create a Key**. Enable **Apple Push Notifications service (APNs)**.
+
+    Download the `.p8` key file. Note the **Key ID** shown on the page.
+  </Step>
+
+  <Step title="Find your Team ID">
+    Your Team ID is in the top-right of the Apple Developer portal, or under **Membership Details**.
+  </Step>
+
+  <Step title="Configure FERAL">
+    <CodeGroup>
+    ```bash Environment variables
+    export FERAL_APNS_KEY_PATH="/path/to/AuthKey_XXXXXXXXXX.p8"
+    export FERAL_APNS_KEY_ID="XXXXXXXXXX"
+    export FERAL_APNS_TEAM_ID="YYYYYYYYYY"
+    export FERAL_APNS_BUNDLE_ID="com.feral.app"
+    export FERAL_APNS_ENVIRONMENT="production"  # or "sandbox"
+    ```
+    ```json settings.json
+    {
+      "channels": {
+        "push": {
+          "apns": {
+            "enabled": true,
+            "key_path": "/path/to/AuthKey_XXXXXXXXXX.p8",
+            "key_id": "XXXXXXXXXX",
+            "team_id": "YYYYYYYYYY",
+            "bundle_id": "com.feral.app",
+            "environment": "production"
+          }
+        }
+      }
+    }
+    ```
+    </CodeGroup>
+
+    <Tip>
+      Use `"sandbox"` for development builds and `"production"` for TestFlight / App Store builds.
+    </Tip>
+  </Step>
+
+  <Step title="Register device tokens">
+    Your iOS app registers its APNs device token with FERAL:
+
+    ```bash
+    curl -X POST http://localhost:9090/api/channels/push/register \
+      -H "Content-Type: application/json" \
+      -d '{
+        "platform": "ios",
+        "device_token": "a1b2c3d4e5...",
+        "device_name": "iPhone 15 Pro"
+      }'
+    ```
+  </Step>
+</Steps>
+
+## Notification Types
+
+FERAL sends different notification categories depending on context:
+
+| Category | Priority | Example |
+|----------|----------|---------|
+| `health_alert` | High | "Your heart rate spiked to 142 bpm during rest" |
+| `calendar` | Normal | "Team standup in 15 minutes" |
+| `smart_home` | Normal | "Front door unlocked at 11:42 PM" |
+| `proactive` | Low | "Based on your sleep score, consider an earlier bedtime" |
+| `approval` | High | "FERAL wants to send an email — approve?" |
+
+## Device Management API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/channels/push/register` | Register a device token |
+| `GET` | `/api/channels/push/devices` | List registered devices |
+| `DELETE` | `/api/channels/push/devices/:id` | Unregister a device |
+| `POST` | `/api/channels/push/test` | Send a test notification |
+
+### Test a notification
+
+```bash
+curl -X POST http://localhost:9090/api/channels/push/test \
+  -H "Content-Type: application/json" \
+  -d '{ "device_id": "dev_abc123", "title": "Hello", "body": "Push is working!" }'
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Notifications not arriving on Android">
+    Verify the service account JSON path is correct and the file is readable. Check `feral doctor` for FCM connectivity status.
+  </Accordion>
+  <Accordion title="Notifications not arriving on iOS">
+    Ensure you're using the correct environment (`sandbox` for dev, `production` for release). Confirm the bundle ID matches your app.
+  </Accordion>
+  <Accordion title="Invalid device token errors">
+    Device tokens expire when the app is reinstalled or the OS rotates them. Re-register the token from the mobile app.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,153 @@
+---
+title: "Wristband"
+sidebarTitle: "Wristband"
+description: "Pair a BLE wristband to stream heart rate, SpO2, skin temperature, and sleep data to the FERAL brain."
+---
+
+## Overview
+
+FERAL's wristband integration provides real-time biometric streaming over Bluetooth Low Energy. The brain uses this data for health baselines, proactive coaching, anomaly detection, and digital twin enrichment.
+
+## Supported Metrics
+
+| Metric | Update Frequency | Unit | Description |
+|--------|-----------------|------|-------------|
+| Heart Rate | 1 Hz | bpm | Continuous PPG-based heart rate |
+| SpO2 | Every 30s | % | Blood oxygen saturation |
+| Skin Temperature | Every 60s | °C | Wrist skin temperature |
+| Sleep Stages | Post-sleep | enum | Wake / Light / Deep / REM classification |
+| Steps | Continuous | count | Daily step accumulation |
+| HRV | Every 5 min | ms | Heart rate variability (RMSSD) |
+
+## BLE Pairing Flow
+
+<Steps>
+  <Step title="Enable BLE in FERAL">
+    Ensure BLE is enabled in your configuration:
+
+    ```json settings.json
+    {
+      "hardware": {
+        "ble_enabled": true
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Put the wristband in pairing mode">
+    Hold the side button for 3 seconds until the LED flashes blue. The wristband advertises as `FERAL-Wristband-XXXX`.
+  </Step>
+
+  <Step title="Scan and pair">
+    ```bash
+    feral hardware scan
+    ```
+
+    Output:
+
+    ```
+    Scanning for BLE devices…
+    ✓ FERAL-Wristband-A3F2  RSSI: -42  Services: HR, SpO2, Temp
+    ✓ FERAL-Wristband-B1C8  RSSI: -67  Services: HR, SpO2, Temp
+
+    ? Select a device to pair: FERAL-Wristband-A3F2
+    ✓ Paired successfully. Streaming to brain.
+    ```
+
+    Or pair programmatically via the API:
+
+    ```bash
+    curl -X POST http://localhost:9090/api/hardware/ble/pair \
+      -H "Content-Type: application/json" \
+      -d '{ "device_name": "FERAL-Wristband-A3F2" }'
+    ```
+  </Step>
+
+  <Step title="Verify the data stream">
+    ```bash
+    feral status
+    ```
+
+    ```
+    Hardware    ● 1 device   FERAL-Wristband-A3F2 (streaming)
+      HR: 72 bpm | SpO2: 98% | Temp: 36.4°C | Battery: 84%
+    ```
+  </Step>
+</Steps>
+
+## Data Format
+
+The wristband streams data as HUP (Hardware Unified Protocol) messages over the `/v1/node` WebSocket:
+
+```json
+{
+  "type": "sensor_data",
+  "device_id": "wristband_a3f2",
+  "timestamp": "2026-04-12T08:30:00Z",
+  "payload": {
+    "heart_rate": 72,
+    "spo2": 98,
+    "skin_temp": 36.4,
+    "hrv_rmssd": 42.1,
+    "steps": 3421,
+    "battery": 84
+  }
+}
+```
+
+## Real-Time Streaming to Brain
+
+The brain aggregates wristband data into a rolling health context window. This data is:
+
+- Available to the LLM for health-related queries ("What's my heart rate?")
+- Fed into the proactive engine for anomaly detection
+- Stored in episodic memory for trend analysis
+- Used by the digital twin to model your physical state
+
+<Note>
+  Data stays local. Biometric readings are stored in your local memory database and never leave your machine.
+</Note>
+
+## Whoop & Oura Integration
+
+FERAL aggregates wristband data with third-party wearables for a unified health view.
+
+<CodeGroup>
+```json Whoop
+{
+  "integrations": {
+    "whoop": {
+      "enabled": true,
+      "client_id": "your_whoop_client_id",
+      "client_secret": "your_whoop_client_secret"
+    }
+  }
+}
+```
+```json Oura Ring
+{
+  "integrations": {
+    "oura": {
+      "enabled": true,
+      "personal_access_token": "your_oura_pat"
+    }
+  }
+}
+```
+</CodeGroup>
+
+When both the wristband and a third-party wearable are connected, the brain cross-references data for higher accuracy — e.g., comparing PPG heart rate from the wristband with optical HR from Whoop.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Wristband not found during scan">
+    Ensure the wristband is in pairing mode (flashing blue LED) and within ~5 meters. Check that `ble_enabled` is `true` in settings.
+  </Accordion>
+  <Accordion title="Data stream drops intermittently">
+    BLE range is ~10m. Move closer to the machine running FERAL. Walls and interference can reduce range.
+  </Accordion>
+  <Accordion title="Heart rate shows 0 bpm">
+    Ensure the wristband is worn snugly on the wrist. Loose fit causes poor PPG signal.
+  </Accordion>
+</AccordionGroup>

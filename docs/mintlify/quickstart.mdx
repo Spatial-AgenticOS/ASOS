@@ -1,0 +1,95 @@
+---
+title: "Getting Started"
+sidebarTitle: "Quickstart"
+description: "Get FERAL running locally in under five minutes."
+---
+
+# Getting Started
+
+Get FERAL running locally in under five minutes. By the end of this page you will have a brain server, a web dashboard, and your first conversation.
+
+## Prerequisites
+
+- **Python 3.11+** — `python3 --version`
+- An LLM API key (OpenAI, Anthropic, Gemini, Groq) **or** a local [Ollama](https://ollama.ai) instance
+
+## Install
+
+```bash
+pip install feral-ai[llm]
+```
+
+This installs the `feral` CLI, the FastAPI brain server, and the bundled web UI.
+
+## Setup
+
+Run the interactive setup wizard:
+
+```bash
+feral setup
+```
+
+The wizard walks you through:
+
+| Step | What It Configures |
+|:-----|:-------------------|
+| **LLM Provider** | Choose OpenAI, Anthropic, Gemini, Groq, or Ollama (free/local). API key is validated live. |
+| **Agent Identity** | Name, personality, voice settings, and behavioral rules. |
+| **Skills & Tools** | Enable computer use, web search, vision, hardware control. Add keys for Tavily, Spotify, etc. |
+| **Features** | Voice mode (realtime / whisper / disabled), streaming, proactive behavior, wake word. |
+
+All configuration is written to `~/.feral/`. No cloud account needed.
+
+## Start
+
+```bash
+feral start
+```
+
+This launches the brain and serves the web dashboard at [http://localhost:9090](http://localhost:9090).
+
+Open the URL in your browser. Type a message or click the microphone for voice.
+
+## First Chat (CLI)
+
+You can also talk to FERAL from the terminal:
+
+```bash
+feral "What files are in my home directory?"
+feral "Search the web for latest AI news"
+feral "Remember that my favorite color is blue"
+feral "What's my favorite color?"
+```
+
+## First Chat (SDK)
+
+```python
+from feral_sdk import FeralClient
+
+async with FeralClient("http://localhost:9090") as client:
+    reply = await client.chat("Hello! What can you do?")
+    print(reply)
+```
+
+## Docker Alternative
+
+If you prefer Docker:
+
+```bash
+git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
+cp .env.example .env   # fill in your API keys
+docker compose up -d
+```
+
+| Service | URL |
+|:--------|:----|
+| Brain + API | http://localhost:9090 |
+| Web UI | http://localhost:3000 |
+| Skill Registry | http://localhost:8080 |
+
+## What's Next
+
+- [Architecture](/architecture) — understand how the brain, memory, and device mesh fit together
+- [Python SDK](/sdk/python) — build plugins and automate FERAL programmatically
+- [Write a Skill](/guides/skills) — add new capabilities to your agent
+- [Connect a Device](/guides/devices) — bring hardware into the mesh

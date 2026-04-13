@@ -1,0 +1,205 @@
+---
+title: "CLI Reference"
+sidebarTitle: "CLI Reference"
+description: "Complete reference for the feral command-line tool — all subcommands, options, and exit codes."
+---
+
+## Synopsis
+
+```bash
+feral <command> [options]
+```
+
+The `feral` CLI is the primary interface for managing the FERAL brain, dashboard, hardware, and development tools.
+
+## Commands
+
+### `feral start`
+
+Start the brain, dashboard, and voice pipeline.
+
+```bash
+feral start [options]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--no-dashboard` | — | Start brain only, skip the web UI |
+| `--no-voice` | — | Disable voice pipeline |
+| `--port <n>` | `9090` | Brain port |
+| `--dashboard-port <n>` | `3000` | Dashboard port |
+| `--log-level <level>` | `info` | `debug`, `info`, `warn`, `error` |
+| `--detach` | — | Run in background (daemonize) |
+
+<CodeGroup>
+```bash Default
+feral start
+```
+```bash Brain only, debug mode
+feral start --no-dashboard --no-voice --log-level debug
+```
+```bash Custom ports
+feral start --port 8080 --dashboard-port 4000
+```
+```bash Background
+feral start --detach
+```
+</CodeGroup>
+
+### `feral stop`
+
+Gracefully stop all running FERAL processes.
+
+```bash
+feral stop
+```
+
+Sends `SIGTERM` to the brain, dashboard, and any voice/hardware processes. Returns exit code `0` on success.
+
+### `feral serve`
+
+Start only the brain API server (no dashboard, no REPL).
+
+```bash
+feral serve [options]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--port <n>` | `9090` | API port |
+| `--host <addr>` | `0.0.0.0` | Bind address |
+| `--workers <n>` | `1` | Number of uvicorn workers |
+
+Useful for production deployments or when running the dashboard separately.
+
+### `feral setup`
+
+Run the interactive setup wizard.
+
+```bash
+feral setup
+```
+
+Walks through LLM provider selection, API key storage, USER.md creation, and autonomy mode configuration. Safe to re-run — only overwrites values you change.
+
+### `feral status`
+
+Show the current state of all FERAL components.
+
+```bash
+feral status [--json]
+```
+
+```
+Brain       ● running   ws://localhost:9090   PID 48201
+Dashboard   ● running   http://localhost:3000  PID 48215
+Voice       ● active    wake word listening
+Hardware    ● 2 devices FERAL-Wristband-A3F2, Home-Assistant
+Memory      ● sqlite    ~/.feral/memory.db (142 episodes)
+Autonomy    ● hybrid    3 safe / 2 risky categories
+```
+
+Use `--json` for machine-readable output:
+
+```bash
+feral status --json
+```
+
+```json
+{
+  "brain": { "status": "running", "port": 9090, "pid": 48201 },
+  "dashboard": { "status": "running", "port": 3000, "pid": 48215 },
+  "voice": { "status": "active", "mode": "wake_word" },
+  "hardware": { "devices": 2 },
+  "memory": { "backend": "sqlite", "episodes": 142 }
+}
+```
+
+### `feral doctor`
+
+Run diagnostic checks and report issues.
+
+```bash
+feral doctor
+```
+
+```
+✓ Python 3.11.8
+✓ Node 20.11.0
+✓ pip dependencies satisfied
+✓ Brain port 9090 available
+✓ Dashboard port 3000 available
+✓ Ollama detected at localhost:11434
+✓ BLE adapter available
+✗ Playwright chromium not installed — run: playwright install chromium
+✓ Credentials vault readable
+✓ Memory database accessible
+```
+
+`feral doctor` checks:
+- Python and Node versions
+- All pip/npm dependencies
+- Port availability
+- LLM provider connectivity
+- BLE adapter presence
+- Playwright browser (for computer-use)
+- Credential vault integrity
+- Memory database access
+
+### `feral demo`
+
+Run a pre-built demo scenario.
+
+```bash
+feral demo --scenario <name>
+```
+
+| Scenario | Description |
+|----------|-------------|
+| `morning` | Simulated morning routine with health briefing |
+| `developer` | Developer flow with screen context and proactive help |
+| `mesh` | Multi-device mesh with phone, wristband, glasses |
+| `twin` | Digital twin Q&A session |
+
+```bash
+feral demo --scenario morning
+```
+
+### `feral hardware`
+
+Manage hardware devices.
+
+```bash
+feral hardware <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `scan` | Scan for nearby BLE devices |
+| `scan --type <type>` | Scan for specific type (`wristband`, `glasses`) |
+| `list` | List all connected devices |
+| `pair <device>` | Pair a device by name or ID |
+| `unpair <device>` | Unpair a device |
+
+## Global Options
+
+| Option | Description |
+|--------|-------------|
+| `--version` | Print version and exit |
+| `--help` | Show help for any command |
+| `--config <path>` | Use a specific config file |
+| `--quiet` | Suppress non-error output |
+| `--verbose` | Increase output verbosity |
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | General error |
+| `2` | Invalid arguments or usage |
+| `3` | Configuration error (missing key, invalid file) |
+| `4` | Port already in use |
+| `5` | LLM provider unreachable |
+| `6` | Hardware error (BLE adapter missing, device not found) |
+| `130` | Interrupted by `Ctrl+C` |

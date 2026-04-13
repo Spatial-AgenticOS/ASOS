@@ -1,0 +1,129 @@
+---
+title: "Telegram"
+sidebarTitle: "Telegram"
+description: "Connect FERAL to Telegram so you can chat with your brain from any device."
+---
+
+## Overview
+
+The Telegram channel lets you interact with FERAL through direct messages or group chats. Messages are relayed to the brain over WebSocket — FERAL responds with text, SDUI cards, or voice notes depending on context.
+
+## Setup
+
+<Steps>
+  <Step title="Create a bot with BotFather">
+    Open Telegram and message [@BotFather](https://t.me/BotFather):
+
+    ```
+    /newbot
+    ```
+
+    Follow the prompts to name your bot. BotFather returns a token like:
+
+    ```
+    7204381:AAH3k9-_xBcMnRqJFfQ2PzL5t...
+    ```
+
+    Copy this token — you'll need it in the next step.
+  </Step>
+
+  <Step title="Set the bot token">
+    <CodeGroup>
+    ```bash Environment variable
+    export FERAL_TELEGRAM_BOT_TOKEN="7204381:AAH3k9-_xBcMnRqJFfQ2PzL5t..."
+    ```
+    ```json settings.json
+    {
+      "channels": {
+        "telegram": {
+          "enabled": true,
+          "bot_token": "7204381:AAH3k9-_xBcMnRqJFfQ2PzL5t..."
+        }
+      }
+    }
+    ```
+    </CodeGroup>
+
+    <Tip>
+      Prefer the environment variable or credential vault over putting the token directly in `settings.json`.
+    </Tip>
+  </Step>
+
+  <Step title="Configure bot settings (optional)">
+    Customize behavior in `settings.json`:
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "enabled": true,
+          "allowed_user_ids": [123456789],
+          "allow_groups": true,
+          "group_trigger": "@feralbot",
+          "max_message_length": 4096,
+          "send_typing_indicator": true
+        }
+      }
+    }
+    ```
+
+    | Setting | Default | Description |
+    |---------|---------|-------------|
+    | `allowed_user_ids` | `[]` (all) | Restrict access to specific Telegram user IDs |
+    | `allow_groups` | `false` | Whether the bot responds in group chats |
+    | `group_trigger` | `"@feralbot"` | Mention prefix required in groups |
+    | `send_typing_indicator` | `true` | Show "typing..." while the brain processes |
+  </Step>
+
+  <Step title="Restart FERAL">
+    ```bash
+    feral stop && feral start
+    ```
+  </Step>
+
+  <Step title="Test the connection">
+    Open Telegram and send a DM to your bot:
+
+    ```
+    Hey FERAL, what's my schedule today?
+    ```
+
+    You should see a response within a few seconds. Check the REPL or dashboard for the relayed message.
+  </Step>
+</Steps>
+
+## Group Chat Usage
+
+When `allow_groups` is `true`, add the bot to any Telegram group. By default, the bot only responds when mentioned:
+
+```
+@feralbot dim the lights to 20%
+```
+
+<Note>
+  To let the bot read all group messages (for proactive suggestions), disable privacy mode via BotFather: `/setprivacy` → Disable.
+</Note>
+
+## Supported Message Types
+
+| Type | Direction | Description |
+|------|-----------|-------------|
+| Text | Both | Standard messages |
+| Photos | Incoming | FERAL can analyze images via its vision pipeline |
+| Voice notes | Incoming | Transcribed via Whisper, then processed as text |
+| SDUI cards | Outgoing | Rendered as formatted messages with inline buttons |
+| Documents | Incoming | Parsed and stored in memory if relevant |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Bot doesn't respond">
+    Run `feral status` and verify the Telegram channel shows as connected. Check that `FERAL_TELEGRAM_BOT_TOKEN` is set and valid.
+  </Accordion>
+  <Accordion title="Bot responds in DMs but not groups">
+    Ensure `allow_groups` is `true` and the bot's privacy mode is disabled in BotFather.
+  </Accordion>
+  <Accordion title="Unauthorized user errors in logs">
+    If `allowed_user_ids` is set, only listed IDs can interact. Find your Telegram user ID by messaging [@userinfobot](https://t.me/userinfobot).
+  </Accordion>
+</AccordionGroup>

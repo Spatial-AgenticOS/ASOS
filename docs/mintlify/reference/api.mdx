@@ -1,0 +1,162 @@
+---
+title: "REST API"
+sidebarTitle: "REST API"
+description: "Reference for FERAL's HTTP API — dashboard, skills, memory, identity, hardware, and channels endpoints."
+---
+
+## Base URL
+
+```
+http://localhost:9090/api
+```
+
+All endpoints require the brain to be running (`feral start`). Responses are JSON.
+
+## Dashboard
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/dashboard/status` | Brain status, uptime, connected devices |
+| `GET` | `/api/dashboard/context` | Current context window (health, scene, calendar) |
+| `GET` | `/api/dashboard/timeline` | Recent events and conversations |
+| `POST` | `/api/dashboard/command` | Send a text command to the brain |
+
+### Example: Send a command
+
+```bash
+curl -X POST http://localhost:9090/api/dashboard/command \
+  -H "Content-Type: application/json" \
+  -d '{ "text": "What is my heart rate?" }'
+```
+
+```json
+{
+  "response": "Your heart rate is 72 bpm, measured 3 seconds ago from your wristband.",
+  "sdui": null,
+  "sources": ["wristband_a3f2"]
+}
+```
+
+## Skills
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/skills` | List all registered skills |
+| `GET` | `/api/skills/:id` | Get skill manifest and status |
+| `POST` | `/api/skills/:id/execute` | Manually trigger a skill |
+| `POST` | `/api/skills/install` | Install a skill from URL or local path |
+| `DELETE` | `/api/skills/:id` | Uninstall a skill |
+
+### Example: List skills
+
+```bash
+curl http://localhost:9090/api/skills
+```
+
+```json
+{
+  "skills": [
+    { "id": "weather", "name": "Weather", "version": "1.2.0", "status": "active" },
+    { "id": "calendar", "name": "Google Calendar", "version": "2.0.1", "status": "active" },
+    { "id": "smart_home", "name": "Smart Home Control", "version": "1.0.0", "status": "active" }
+  ]
+}
+```
+
+## Memory
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/memory/episodes` | List episodic memories (paginated) |
+| `GET` | `/api/memory/search` | Semantic search across all memory tiers |
+| `POST` | `/api/memory/note` | Store a note in the knowledge base |
+| `GET` | `/api/memory/knowledge` | Query the knowledge graph |
+| `DELETE` | `/api/memory/episodes/:id` | Delete a specific episode |
+
+### Example: Semantic search
+
+```bash
+curl "http://localhost:9090/api/memory/search?q=last+time+I+went+running&limit=5"
+```
+
+```json
+{
+  "results": [
+    {
+      "id": "ep_2026_0410_morning",
+      "timestamp": "2026-04-10T07:15:00Z",
+      "summary": "Morning 5K run in Prospect Park. Avg HR 145 bpm, pace 5:20/km.",
+      "relevance": 0.94
+    }
+  ]
+}
+```
+
+## Identity
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/identity/user` | Get current USER.md content |
+| `PUT` | `/api/identity/user` | Update USER.md |
+| `GET` | `/api/identity/soul` | Get SOUL.md (system persona) |
+| `GET` | `/api/identity/twin` | Query the digital twin |
+| `POST` | `/api/identity/twin/ask` | Ask the digital twin a question |
+
+### Example: Ask the digital twin
+
+```bash
+curl -X POST http://localhost:9090/api/identity/twin/ask \
+  -H "Content-Type: application/json" \
+  -d '{ "question": "Would I enjoy this job offer?" }'
+```
+
+```json
+{
+  "answer": "Based on your preference for remote work, interest in systems programming, and past dissatisfaction with large-company bureaucracy, this startup role aligns well. However, the on-call rotation conflicts with your sleep optimization goals.",
+  "confidence": 0.82
+}
+```
+
+## Hardware
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/hardware/devices` | List all connected hardware nodes |
+| `POST` | `/api/hardware/ble/scan` | Scan for nearby BLE devices |
+| `POST` | `/api/hardware/ble/pair` | Pair a BLE device |
+| `POST` | `/api/hardware/command` | Send a command to a hardware device |
+| `GET` | `/api/hardware/health` | Latest aggregated health metrics |
+| `POST` | `/api/hardware/glasses/overlay` | Push an AR overlay to glasses |
+
+## Channels
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/channels` | List all channel statuses |
+| `GET` | `/api/channels/:name/status` | Status of a specific channel (telegram, slack, etc.) |
+| `POST` | `/api/channels/push/register` | Register a push notification device token |
+| `GET` | `/api/channels/push/devices` | List registered push devices |
+| `DELETE` | `/api/channels/push/devices/:id` | Unregister a push device |
+| `POST` | `/api/channels/push/test` | Send a test push notification |
+
+## Error Format
+
+All errors follow a consistent shape:
+
+```json
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Skill 'invalid_id' not found.",
+    "details": null
+  }
+}
+```
+
+| HTTP Code | Meaning |
+|-----------|---------|
+| `400` | Bad request — invalid parameters |
+| `401` | Unauthorized — missing or invalid token |
+| `404` | Resource not found |
+| `409` | Conflict — device already paired, skill already installed |
+| `500` | Internal brain error |

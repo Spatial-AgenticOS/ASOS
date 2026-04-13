@@ -1,0 +1,186 @@
+---
+title: "Robots"
+sidebarTitle: "Robots"
+description: "Connect robotic actuators to FERAL via the Python SDK, ROS bridge, or serial/I2C adapters."
+---
+
+## Overview
+
+FERAL treats robots as first-class hardware nodes. Any actuator — robotic arms, mobile platforms, drones, custom builds — can connect to the brain through the Hardware Unified Protocol (HUP). The brain sends commands, receives sensor data, and can orchestrate multi-robot workflows through natural language.
+
+## Architecture
+
+```
+Voice / Text Command → FERAL Brain → HUP Protocol → Robot Node → Actuators
+                                          ↑
+                              Sensor data / Status
+```
+
+## Robot Node Template
+
+The Python SDK includes a robot template that handles HUP registration, command dispatch, and sensor reporting:
+
+```python robot_node.py
+from feral_sdk.hardware import HUPNode, DeviceManifest
+
+manifest = DeviceManifest(
+    device_id="robot_arm_01",
+    device_type="robot",
+    name="Desktop Robot Arm",
+    capabilities=["move", "grip", "home", "status"],
+    sensors=["position", "force", "temperature"],
+)
+
+node = HUPNode(
+    brain_url="ws://localhost:9091/v1/node",
+    manifest=manifest,
+)
+
+@node.on_command("move")
+async def handle_move(params):
+    x, y, z = params["x"], params["y"], params["z"]
+    speed = params.get("speed", 50)
+    await robot.move_to(x, y, z, speed=speed)
+    return {"status": "moved", "position": [x, y, z]}
+
+@node.on_command("grip")
+async def handle_grip(params):
+    force = params.get("force", 30)
+    await robot.set_gripper(force)
+    return {"status": "gripped", "force": force}
+
+@node.on_command("home")
+async def handle_home(params):
+    await robot.home()
+    return {"status": "homed"}
+
+node.run()
+```
+
+<Tip>
+  The template is at `sdk/python-node-sdk/robot_template.py` in the FERAL repo. Copy it as a starting point for your robot.
+</Tip>
+
+## HUP Device Manifest
+
+Every robot must declare a manifest when it connects to the brain:
+
+```json
+{
+  "device_id": "robot_arm_01",
+  "device_type": "robot",
+  "name": "Desktop Robot Arm",
+  "protocol_version": "1.0",
+  "capabilities": [
+    {
+      "name": "move",
+      "description": "Move end effector to XYZ coordinates",
+      "params": {
+        "x": { "type": "float", "unit": "mm" },
+        "y": { "type": "float", "unit": "mm" },
+        "z": { "type": "float", "unit": "mm" },
+        "speed": { "type": "int", "unit": "percent", "default": 50 }
+      }
+    },
+    {
+      "name": "grip",
+      "description": "Close gripper with specified force",
+      "params": {
+        "force": { "type": "int", "unit": "percent", "default": 30 }
+      }
+    }
+  ],
+  "sensors": ["position", "force", "temperature"]
+}
+```
+
+The brain uses the manifest to understand what the robot can do and exposes those capabilities to the LLM for natural-language control.
+
+## ROS Bridge
+
+For ROS-based robots, FERAL provides a bridge node that translates between HUP and ROS topics:
+
+```bash
+pip install feral-ros-bridge
+```
+
+```bash
+feral-ros-bridge \
+  --brain ws://localhost:9091/v1/node \
+  --ros-master http://localhost:11311 \
+  --device-id "turtlebot_01" \
+  --cmd-topic /cmd_vel \
+  --sensor-topics /odom,/scan,/camera/image
+```
+
+| Flag | Description |
+|------|-------------|
+| `--brain` | FERAL brain HUP endpoint |
+| `--ros-master` | ROS master URI |
+| `--device-id` | Unique device identifier |
+| `--cmd-topic` | ROS topic for movement commands |
+| `--sensor-topics` | Comma-separated sensor topics to stream |
+
+## Serial & I2C Adapters
+
+For microcontroller-based robots (Arduino, ESP32), use the serial or I2C adapter:
+
+<CodeGroup>
+```python Serial (USB)
+from feral_sdk.hardware import SerialAdapter
+
+adapter = SerialAdapter(
+    port="/dev/ttyUSB0",
+    baud=115200,
+    brain_url="ws://localhost:9091/v1/node",
+    device_id="arduino_bot",
+)
+adapter.run()
+```
+```python I2C (Raspberry Pi)
+from feral_sdk.hardware import I2CAdapter
+
+adapter = I2CAdapter(
+    bus=1,
+    address=0x42,
+    brain_url="ws://localhost:9091/v1/node",
+    device_id="i2c_sensor_array",
+)
+adapter.run()
+```
+</CodeGroup>
+
+## Example: Commanding a Robot Arm
+
+Once connected, control the robot through natural language:
+
+```
+> "Move the robot arm to pick up the cup on the left"
+
+FERAL Brain:
+  1. Queries glasses vision → identifies cup at position (120, 45, 30)mm
+  2. Sends HUP command: move(x=120, y=45, z=50) → approach from above
+  3. Sends HUP command: move(x=120, y=45, z=30) → descend to cup
+  4. Sends HUP command: grip(force=40) → grasp
+  5. Sends HUP command: move(x=120, y=45, z=100) → lift
+
+Response: "Done — I've picked up the cup."
+```
+
+<Note>
+  Multi-step robot operations require **hybrid** or **loose** autonomy mode. In **strict** mode, each step requires approval.
+</Note>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Robot node won't connect to brain">
+    Verify the brain is running with `feral status` and that `hup_port` (default 9091) is accessible. Check firewall rules.
+  </Accordion>
+  <Accordion title="Commands time out">
+    The default command timeout is 10 seconds. For slow actuators, increase it in the node config or return an async acknowledgment.
+  </Accordion>
+  <Accordion title="ROS bridge can't find topics">
+    Ensure `roscore` is running and the topics exist. Run `rostopic list` to verify.
+  </Accordion>
+</AccordionGroup>

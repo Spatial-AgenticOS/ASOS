@@ -1,0 +1,70 @@
+---
+title: "FERAL — Unleashed AI"
+sidebarTitle: "Introduction"
+description: "The open-source Spatial Agentic OS. One brain for your entire device ecosystem."
+---
+
+<img src="/images/feral-banner.png" alt="FERAL" />
+
+# What is FERAL?
+
+FERAL is a **Spatial Agentic OS** — a single AI brain that connects to every device, every app, and every sensor in your physical and digital life. It runs locally on your machine, learns your baseline across all your devices, and proactively manages your world through natural language.
+
+**Who is it for?** Developers and power users who want an AI that actually understands their life — not just answers questions, but connects to their wristband, controls their home, automates their computer, and acts on their behalf.
+
+**What makes it different?**
+
+- **Spatial**: connects to hardware (wristbands, glasses, robots, smart home) and software (calendar, email, Slack, Spotify) simultaneously
+- **Agentic**: doesn't wait for commands — observes your baseline, detects anomalies, acts proactively
+- **OS-level**: memory, identity, autonomy levels, voice, GenUI — not a chatbot wrapper
+- **Local-first**: all data and inference on your machine, zero cloud dependency
+- **Open source**: brain, client, mobile bridges, SDKs, desktop app — all Apache 2.0
+
+## Quick start
+
+<CodeGroup>
+```bash One-liner
+curl -sSL https://raw.githubusercontent.com/FERAL-AI/FERAL-AI/main/scripts/install.sh | bash
+```
+
+```bash Clone
+git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
+make install
+feral start
+```
+
+```bash Docker
+git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
+docker compose up
+```
+</CodeGroup>
+
+## What it connects to
+
+| Category | Devices / Services | Data |
+|----------|-------------------|------|
+| **Wearables** | Whoop, Oura Ring, BLE wristbands | Heart rate, sleep, SpO2, skin temp |
+| **Smart Home** | Lights, thermostat, locks, appliances | Direct local mesh control |
+| **Smart Glasses** | Video stream, AR overlay | Scene understanding, hands-free |
+| **Robots** | ROS, serial, I2C, any actuator | Motor control, sensor fusion |
+| **Computer** | Screen, browser, files, terminal | Capture, automation, file ops |
+| **Phone** | iOS/Android bridges | Push notifications, location, camera |
+| **Software** | Calendar, email, Slack, Spotify, Notion | Morning briefings, auto-responses |
+| **Voice** | Wake word, 3 providers | Sub-200ms, interrupt-and-resume |
+
+## Start here
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/getting-started/installation">
+    Three install paths with step-by-step guides.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    How the brain, clients, and hardware mesh work together.
+  </Card>
+  <Card title="Writing Skills" icon="puzzle-piece" href="/guides/skills">
+    Build plugins that extend FERAL's capabilities.
+  </Card>
+  <Card title="Hardware Mesh" icon="microchip" href="/guides/hardware">
+    Connect physical devices via the HUP protocol.
+  </Card>
+</CardGroup>

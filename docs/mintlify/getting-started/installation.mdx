@@ -1,0 +1,155 @@
+---
+title: "Installation"
+sidebarTitle: "Installation"
+description: "Install FERAL using the one-liner script, a manual git clone, or Docker."
+---
+
+## Prerequisites
+
+Before installing FERAL, make sure you have the following:
+
+| Dependency | Minimum Version | Check Command |
+|------------|-----------------|---------------|
+| **Python** | 3.11+ | `python3 --version` |
+| **Node.js** | 20+ | `node --version` |
+| **pip** | Latest | `pip --version` |
+| **Git** | Any recent | `git --version` |
+
+<Note>
+  macOS users can install prerequisites with `brew install python@3.11 node`. Linux users should use their system package manager.
+</Note>
+
+## Choose Your Install Path
+
+<Tabs>
+  <Tab title="One-Liner (Recommended)">
+    The install script creates a virtual environment at `~/.feral-env`, installs all dependencies, and adds `feral` to your PATH.
+
+    <Steps>
+      <Step title="Run the installer">
+        ```bash
+        curl -sSL https://raw.githubusercontent.com/FERAL-AI/FERAL-AI/main/scripts/install.sh | bash
+        ```
+      </Step>
+      <Step title="Activate the environment">
+        ```bash
+        source ~/.feral-env/bin/activate
+        ```
+      </Step>
+      <Step title="Verify the install">
+        ```bash
+        feral --version
+        feral doctor
+        ```
+      </Step>
+    </Steps>
+
+    <Tip>
+      Add `source ~/.feral-env/bin/activate` to your `.bashrc` or `.zshrc` so FERAL is always available.
+    </Tip>
+  </Tab>
+
+  <Tab title="Git Clone">
+    Clone the repo and install manually for full control.
+
+    <Steps>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/FERAL-AI/FERAL-AI.git
+        cd FERAL-AI
+        ```
+      </Step>
+      <Step title="Install the brain (feral-core)">
+        <CodeGroup>
+        ```bash Make (recommended)
+        make install
+        ```
+        ```bash pip (manual)
+        cd feral-core
+        pip install -e ".[llm]"
+        ```
+        </CodeGroup>
+      </Step>
+      <Step title="Install the dashboard (feral-client)">
+        ```bash
+        cd feral-client
+        npm install
+        ```
+      </Step>
+      <Step title="Verify the install">
+        ```bash
+        feral --version
+        feral doctor
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Docker">
+    Run everything in containers — no local Python or Node needed.
+
+    <Steps>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/FERAL-AI/FERAL-AI.git
+        cd FERAL-AI
+        ```
+      </Step>
+      <Step title="Start the containers">
+        ```bash
+        docker compose up
+        ```
+        This starts the brain on port `9090` and the dashboard on port `3000`.
+      </Step>
+      <Step title="Open the dashboard">
+        Navigate to [http://localhost:3000](http://localhost:3000) in your browser.
+      </Step>
+    </Steps>
+
+    <Warning>
+      Docker mode does not support direct BLE hardware connections. Use the native install for wristband or smart-home control.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Post-Install
+
+After any install path, run the setup wizard to configure your LLM provider and identity:
+
+```bash
+feral setup
+```
+
+This walks you through choosing a model provider, setting API keys, and creating your `USER.md` identity file. See [First Run](/getting-started/first-run) for a full walkthrough.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="command not found: feral">
+    The `feral` binary is not on your PATH. If you used the one-liner, activate the environment:
+    ```bash
+    source ~/.feral-env/bin/activate
+    ```
+    If you installed via git clone, ensure `feral-core` is installed in your active Python environment.
+  </Accordion>
+  <Accordion title="pip install fails with resolver errors">
+    Pin your pip to the latest version and retry:
+    ```bash
+    pip install --upgrade pip
+    pip install -e ".[llm]"
+    ```
+  </Accordion>
+  <Accordion title="Node.js version too old">
+    FERAL's dashboard requires Node 20+. Use `nvm` to manage versions:
+    ```bash
+    nvm install 20
+    nvm use 20
+    ```
+  </Accordion>
+  <Accordion title="Docker compose fails to build">
+    Make sure Docker Desktop is running and you have at least 4 GB of RAM allocated. Pull fresh base images:
+    ```bash
+    docker compose build --no-cache
+    ```
+  </Accordion>
+</AccordionGroup>

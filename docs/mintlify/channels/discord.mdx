@@ -1,0 +1,155 @@
+---
+title: "Discord"
+sidebarTitle: "Discord"
+description: "Connect FERAL to a Discord server as a bot with full messaging and voice channel support."
+---
+
+## Overview
+
+FERAL's Discord channel uses the Gateway API with WebSocket to receive messages in real time. The bot can respond to commands, mentions, and DMs across any server it's invited to.
+
+## Setup
+
+<Steps>
+  <Step title="Create a Discord Application">
+    Go to the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**. Name it `FERAL`.
+  </Step>
+
+  <Step title="Create a Bot user">
+    In the application settings, go to **Bot** and click **Add Bot**. Under the bot settings:
+
+    - Toggle **Message Content Intent** to ON (required to read message text)
+    - Toggle **Server Members Intent** to ON (optional, for member-aware features)
+    - Toggle **Presence Intent** to OFF (not needed)
+
+    <Warning>
+      The **Message Content Intent** is required. Without it, FERAL receives empty message bodies for non-mention messages.
+    </Warning>
+  </Step>
+
+  <Step title="Copy the bot token">
+    Click **Reset Token** to generate a new token. Copy it immediately — Discord only shows it once.
+  </Step>
+
+  <Step title="Invite the bot to your server">
+    Go to **OAuth2** → **URL Generator**. Select scopes:
+
+    - `bot`
+    - `applications.commands`
+
+    Select bot permissions:
+
+    - Send Messages
+    - Read Message History
+    - Embed Links
+    - Attach Files
+    - Use Slash Commands
+
+    Copy the generated URL and open it in your browser to invite the bot.
+  </Step>
+
+  <Step title="Set the bot token in FERAL">
+    <CodeGroup>
+    ```bash Environment variable
+    export FERAL_DISCORD_BOT_TOKEN="MTEyMzQ1Njc4OTAxMjM0NTY3OA..."
+    ```
+    ```json settings.json
+    {
+      "channels": {
+        "discord": {
+          "enabled": true,
+          "bot_token": "MTEyMzQ1Njc4OTAxMjM0NTY3OA..."
+        }
+      }
+    }
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Configure channel restrictions (optional)">
+    ```json
+    {
+      "channels": {
+        "discord": {
+          "enabled": true,
+          "allowed_channel_ids": ["1123456789012345678"],
+          "allowed_guild_ids": ["9876543210987654321"],
+          "respond_to_mentions_only": false,
+          "prefix": "!feral"
+        }
+      }
+    }
+    ```
+
+    | Setting | Default | Description |
+    |---------|---------|-------------|
+    | `allowed_channel_ids` | `[]` (all) | Restrict to specific text channels |
+    | `allowed_guild_ids` | `[]` (all) | Restrict to specific servers |
+    | `respond_to_mentions_only` | `false` | Only respond when @mentioned |
+    | `prefix` | `null` | Command prefix (e.g., `!feral status`) |
+  </Step>
+
+  <Step title="Restart and test">
+    ```bash
+    feral stop && feral start
+    ```
+
+    In any allowed Discord channel:
+
+    ```
+    @FERAL what's my heart rate?
+    ```
+  </Step>
+</Steps>
+
+## Gateway Intents
+
+FERAL requests these gateway intents when connecting:
+
+| Intent | Required | Purpose |
+|--------|----------|---------|
+| `GUILDS` | Yes | Track servers and channels |
+| `GUILD_MESSAGES` | Yes | Receive channel messages |
+| `MESSAGE_CONTENT` | Yes | Read message text (privileged) |
+| `DIRECT_MESSAGES` | Yes | Receive DMs |
+| `GUILD_MEMBERS` | No | Member-aware features |
+
+<Note>
+  If your bot is in more than 100 servers, Discord requires verification to use privileged intents. For personal use this is not an issue.
+</Note>
+
+## Message Handling
+
+| Trigger | Behavior |
+|---------|----------|
+| DM to bot | Always responds |
+| `@FERAL` in channel | Responds with full context |
+| Prefix command (`!feral ...`) | Responds if prefix is configured |
+| Any message in allowed channel | Responds if `respond_to_mentions_only` is `false` |
+
+FERAL formats responses using Discord embeds for rich output — charts, health summaries, and SDUI cards are rendered as embedded messages.
+
+## Slash Commands
+
+FERAL automatically registers these slash commands when it connects:
+
+| Command | Description |
+|---------|-------------|
+| `/feral ask <question>` | Ask FERAL anything |
+| `/feral status` | Show brain and hardware status |
+| `/feral briefing` | Get your morning briefing |
+| `/feral health` | Latest health metrics |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Bot is online but doesn't respond">
+    Verify that **Message Content Intent** is enabled in the developer portal. Without it, the bot receives events but message content is empty.
+  </Accordion>
+  <Accordion title="Bot not appearing in server">
+    Re-generate the OAuth2 invite URL with the correct scopes (`bot`, `applications.commands`) and re-invite.
+  </Accordion>
+  <Accordion title="Rate limited by Discord">
+    FERAL includes automatic rate limit handling. If you see 429 errors in logs, reduce message frequency or restrict to fewer channels.
+  </Accordion>
+</AccordionGroup>

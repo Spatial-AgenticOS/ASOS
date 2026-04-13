@@ -1,0 +1,157 @@
+---
+title: "First Run"
+sidebarTitle: "First Run"
+description: "What happens when you launch FERAL for the first time — setup wizard, LLM selection, and your first conversation."
+---
+
+## Starting FERAL
+
+After [installation](/getting-started/installation), start everything with a single command:
+
+```bash
+feral start
+```
+
+This launches three components simultaneously:
+
+| Component | Description | Default Address |
+|-----------|-------------|-----------------|
+| **Brain** | Python backend — LLM orchestration, memory, skills, hardware mesh | `ws://localhost:9090` |
+| **Dashboard** | React web UI — The Orb, timeline, ambient strip, SDUI renderer | `http://localhost:3000` |
+| **REPL** | Interactive terminal session for text commands | Your terminal |
+
+<Note>
+  On first launch, FERAL detects that no configuration exists and automatically runs the setup wizard.
+</Note>
+
+## The Setup Wizard
+
+If you haven't configured FERAL yet, run the wizard explicitly:
+
+```bash
+feral setup
+```
+
+<Steps>
+  <Step title="Choose your LLM provider">
+    The wizard lists available providers. Pick one:
+
+    ```
+    ? Select your LLM provider:
+      ❯ Ollama (local, no API key needed)
+        Anthropic (Claude)
+        OpenAI (GPT-4)
+        OpenRouter (multi-model gateway)
+        Google Gemini
+    ```
+
+    <Tip>
+      Select **Ollama** for a fully local setup with zero cloud dependency. FERAL auto-detects Ollama running on `localhost:11434`.
+    </Tip>
+  </Step>
+
+  <Step title="Enter your API key (if applicable)">
+    For cloud providers, paste your key. It gets encrypted and stored in `~/.feral/credentials.json`.
+
+    ```
+    ? Enter your Anthropic API key: sk-ant-••••••••
+    ✓ Key validated and stored in credential vault.
+    ```
+  </Step>
+
+  <Step title="Create your identity (USER.md)">
+    FERAL asks for your name, preferences, and context. This becomes your `USER.md` file — the foundation of how FERAL personalizes responses.
+
+    ```
+    ? Your name: Alex
+    ? How should FERAL address you? Alex
+    ? Describe yourself in a sentence: Software engineer, night owl, into running.
+    ✓ USER.md created at ~/.feral/USER.md
+    ```
+
+    You can edit `USER.md` at any time to refine your identity.
+  </Step>
+
+  <Step title="Configure autonomy level">
+    Choose how much freedom FERAL has:
+
+    ```
+    ? Autonomy mode:
+      ❯ Hybrid (safe actions auto-execute, risky ones ask first)
+        Strict (everything requires approval)
+        Loose (full autopilot)
+    ```
+  </Step>
+
+  <Step title="Hardware scan (optional)">
+    FERAL scans for nearby BLE devices and Home Assistant instances:
+
+    ```
+    Scanning for hardware…
+    ✓ Found: FERAL-Wristband-A3F2 (BLE)
+    ✓ Found: Home Assistant at 192.168.1.50:8123
+    ? Connect to these devices now? (Y/n)
+    ```
+  </Step>
+</Steps>
+
+## Your First Conversation
+
+Once setup completes, you are dropped into the REPL. Try these:
+
+<CodeGroup>
+```bash Say hello
+> Hey FERAL, what can you do?
+```
+```bash Check your health
+> What's my heart rate right now?
+```
+```bash Control your home
+> Dim the living room lights to 40%
+```
+```bash Morning briefing
+> Give me my morning briefing
+```
+</CodeGroup>
+
+Open the dashboard at [http://localhost:3000](http://localhost:3000) to see The Orb — FERAL's visual presence — react to your conversation in real time.
+
+## What's Running
+
+Use `feral status` to check all active components:
+
+```bash
+$ feral status
+
+  Brain       ● running   ws://localhost:9090   PID 48201
+  Dashboard   ● running   http://localhost:3000  PID 48215
+  Voice       ● active    wake word listening
+  Hardware    ● 2 devices FERAL-Wristband-A3F2, Home-Assistant
+  Memory      ● sqlite    ~/.feral/memory.db (24 episodes)
+  Autonomy    ● hybrid    3 safe / 2 risky categories
+```
+
+## Stopping FERAL
+
+```bash
+feral stop          # graceful shutdown of all components
+```
+
+Or press `Ctrl+C` in the REPL to stop the brain and dashboard together.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/getting-started/configuration">
+    Customize settings, swap LLM models, tune autonomy.
+  </Card>
+  <Card title="Voice Setup" icon="microphone" href="/guides/voice">
+    Configure wake word detection and streaming voice providers.
+  </Card>
+  <Card title="Connect Hardware" icon="microchip" href="/hardware/wristband">
+    Pair your wristband and start streaming biometrics.
+  </Card>
+  <Card title="Build Skills" icon="puzzle-piece" href="/guides/skills">
+    Extend FERAL with custom plugins.
+  </Card>
+</CardGroup>

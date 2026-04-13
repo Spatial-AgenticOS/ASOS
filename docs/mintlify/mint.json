@@ -1,0 +1,135 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "FERAL",
+  "logo": {
+    "dark": "/images/feral-banner.png",
+    "light": "/images/feral-banner.png",
+    "href": "https://feral.sh"
+  },
+  "favicon": "/images/favicon.svg",
+  "colors": {
+    "primary": "#06b6d4",
+    "light": "#22d3ee",
+    "dark": "#0891b2",
+    "anchors": {
+      "from": "#06b6d4",
+      "to": "#0891b2"
+    }
+  },
+  "topbarLinks": [
+    {
+      "name": "Website",
+      "url": "https://feral.sh"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "GitHub",
+    "url": "https://github.com/FERAL-AI/FERAL-AI"
+  },
+  "anchors": [
+    {
+      "name": "GitHub",
+      "icon": "github",
+      "url": "https://github.com/FERAL-AI/FERAL-AI"
+    },
+    {
+      "name": "Website",
+      "icon": "globe",
+      "url": "https://feral.sh"
+    }
+  ],
+  "navigation": [
+    {
+      "group": "Overview",
+      "pages": [
+        "introduction",
+        "quickstart",
+        "architecture"
+      ]
+    },
+    {
+      "group": "Getting Started",
+      "pages": [
+        "getting-started/installation",
+        "getting-started/configuration",
+        "getting-started/first-run"
+      ]
+    },
+    {
+      "group": "Guides",
+      "pages": [
+        "guides/skills",
+        "guides/genui",
+        "guides/memory",
+        "guides/voice",
+        "guides/security",
+        "guides/autonomy"
+      ]
+    },
+    {
+      "group": "Hardware",
+      "pages": [
+        "guides/hardware",
+        "guides/devices",
+        "hardware/wristband",
+        "hardware/smart-home",
+        "hardware/glasses",
+        "hardware/robots"
+      ]
+    },
+    {
+      "group": "Channels",
+      "pages": [
+        "guides/channels",
+        "channels/telegram",
+        "channels/slack",
+        "channels/discord",
+        "channels/push"
+      ]
+    },
+    {
+      "group": "SDKs",
+      "pages": [
+        "sdk/python",
+        "sdk/node"
+      ]
+    },
+    {
+      "group": "Reference",
+      "pages": [
+        "reference/api",
+        "reference/websocket",
+        "reference/environment",
+        "reference/cli"
+      ]
+    },
+    {
+      "group": "Help",
+      "pages": [
+        "help/troubleshooting",
+        "help/faq"
+      ]
+    },
+    {
+      "group": "Community",
+      "pages": [
+        "contributing",
+        "deployment"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "github": "https://github.com/FERAL-AI/FERAL-AI",
+    "website": "https://feral.sh"
+  },
+  "metadata": {
+    "og:site_name": "FERAL Docs",
+    "og:image": "/images/feral-banner.png",
+    "twitter:site": "@feral_ai"
+  },
+  "openapi": [],
+  "feedback": {
+    "thumbsRating": true,
+    "suggestEdit": true
+  }
+}
