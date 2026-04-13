@@ -2,7 +2,8 @@
   <img src="feral-banner.png" width="640" alt="FERAL — Unleashed AI" />
 </p>
 
-<h3 align="center">The AI that lives on your devices, not someone else's cloud.</h3>
+<h3 align="center">One brain. Every device. Your entire life.</h3>
+<p align="center"><em>The open-source AI that connects to everything you own — wristband, glasses, home, computer, phone, robots — learns your baseline, and runs things the way you would. Locally. Privately. No cloud.</em></p>
 
 <p align="center">
   <a href="#the-idea">The Idea</a> &nbsp;·&nbsp;
@@ -25,7 +26,7 @@
 
 > **OpenAI built a chatbot. Apple built Siri. Google built an ad machine. Meta open-sourced some weights and called it a day.**
 >
-> None of them built an AI that actually lives on *your* devices, knows your heartbeat, controls your home, remembers your entire life, and works when the WiFi dies.
+> None of them built an AI that connects to your wristband, your smart glasses, your thermostat, your robot arm, your computer, and your phone — learns your routines, builds your baseline, and proactively manages your physical and digital world. All locally. All privately.
 >
 > **We did.** And we open-sourced all of it.
 
@@ -33,20 +34,22 @@
 
 ## The Idea
 
-FERAL is not another chatbot. It's an **AI brain that sits at the center of your entire life** — connected to everything you own, understanding everything about you, acting on your behalf.
+FERAL is a **Spatial Agentic OS** — a single AI brain for your entire physical and digital life. It connects to every device, every app, every sensor you own. It learns your daily baseline across all of them. And it proactively manages hardware, software, health data, and your environment through natural language and intent.
 
 ```mermaid
 flowchart TD
-    CAL["Calendar\nEmail\nMessaging"] --- BRAIN
-    HEALTH["Whoop\nOura Ring\nWristband"] --- BRAIN
-    HOME["Smart Lights\nThermostat\nAppliances"] --- BRAIN
+    CAL["Calendar\nEmail\nSlack\nSpotify\nNotion"] --- BRAIN
+    HEALTH["Whoop\nOura Ring\nWristband\nHR · SpO2 · Sleep"] --- BRAIN
+    HOME["Smart Lights\nThermostat\nAppliances\nLocks"] --- BRAIN
+    GLASSES["Smart Glasses\nVideo Stream\nAR Overlay"] --- BRAIN
     BRAIN["FERAL Brain\n---\nMemory · Identity\nAutonomy · Voice\nProactive Intelligence"]
-    BRAIN --- COMPUTER["Your Computer\nScreen Capture\nBrowser Control\nFile Operations"]
-    BRAIN --- PHONE["Your Phone\nPush Notifications\nLocation\nCamera"]
-    BRAIN --- VOICE["Voice\nWake Word\nRealtime Streaming\nSub-200ms Latency"]
+    BRAIN --- COMPUTER["Your Computer\nScreen · Browser\nFiles · Terminal"]
+    BRAIN --- PHONE["Your Phone\nPush · Location\nCamera"]
+    BRAIN --- ROBOTS["Robots\nROS · Serial\nI2C · Actuators"]
+    BRAIN --- VOICE["Voice\nWake Word\n3 Providers\nSub-200ms"]
 ```
 
-It connects to **all your gadgets** and fetches data from them — Whoop, Oura, smart glasses, wristbands, anything. It **controls your home** and smart appliances. It's the **brain for automating your life's tasks** on your computer. It's **on your phone** too — you get notified by GenUI on the phone or the computer. It **understands everything about you** through persistent memory and identity files. And it does things based on the **level of autonomy you choose**:
+It talks to **every device** — wristbands, smart glasses, home appliances, robots, your computer, your phone. It integrates with **every app** — calendar, email, Telegram, Slack, Spotify, Notion. It builds a **living model** of your routines and health through persistent memory. And it acts based on the **level of autonomy you choose**:
 
 | Mode | Behavior |
 |------|----------|
