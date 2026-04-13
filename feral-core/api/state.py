@@ -54,6 +54,7 @@ from identity.workspace import IdentityWorkspace
 from genui.generator import GenUIEngine, ServiceProviderRegistry
 from skills.impl.browser_use import BrowserController
 from agents.session_handoff import SessionHandoffManager
+from agents.identity_loader import IdentityLoader
 
 logger = logging.getLogger("feral.brain")
 
@@ -215,7 +216,8 @@ class BrainState:
             logger.debug(f"Push channel skipped: {e}")
         try:
             from agents.digital_twin import DigitalTwin
-            self.digital_twin = DigitalTwin(memory=self.memory, identity_loader=None, llm=_shared_llm)
+            _identity_loader = IdentityLoader(memory=self.memory)
+            self.digital_twin = DigitalTwin(memory=self.memory, identity_loader=_identity_loader, llm=_shared_llm)
         except Exception as e:
             logger.debug(f"Digital twin skipped: {e}")
         self.event_bus = EventBus()
@@ -352,13 +354,6 @@ class BrainState:
 
         self.browser = BrowserController()
         self._register_browser_skill()
-
-        self.session_handoff = SessionHandoffManager(
-            sessions=self.sessions,
-            daemons=self.daemons,
-            memory=self.memory,
-            send_to_session=self.send_to_session,
-        )
 
         try:
             from security.exec_approvals import ApprovalManager

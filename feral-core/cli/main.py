@@ -437,114 +437,232 @@ def _open_browser(port: int):
 
 
 def cmd_doctor():
-    """Run diagnostics and report what's working."""
-    print("\n  FERAL Doctor")
-    print("  " + "=" * 40)
+    """Run comprehensive diagnostics and report what's working."""
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+    except ImportError:
+        print("rich is required for the doctor command: pip install rich")
+        sys.exit(1)
 
-    # Python
-    print(f"  Python:        {sys.version.split()[0]}")
-    pkg_version, pkg_location = _installed_pkg_info()
-    print(f"  Package:       feral-ai {pkg_version}")
-    print(f"  Package path:  {pkg_location}")
-    print(f"  Python bin:    {sys.executable}")
-    print(f"  FERAL bin:    {shutil.which('feral') or 'not found'}")
+    console = Console()
+    passed = 0
+    warnings = 0
+    failures = 0
+    fixes: list[str] = []
 
-    # Brain connection
-    data = _http_get("/health")
-    if "error" in data:
-        print("  Brain:         NOT RUNNING")
-        print("                 Start with: feral start")
+    def _pass(label: str, detail: str = ""):
+        nonlocal passed
+        passed += 1
+        msg = f"[green]✔[/green]  {label}"
+        if detail:
+            msg += f"  [dim]{detail}[/dim]"
+        console.print(msg)
+
+    def _warn(label: str, detail: str = "", fix: str = ""):
+        nonlocal warnings
+        warnings += 1
+        msg = f"[yellow]⚠[/yellow]  {label}"
+        if detail:
+            msg += f"  [dim]{detail}[/dim]"
+        console.print(msg)
+        if fix:
+            fixes.append(fix)
+
+    def _fail(label: str, detail: str = "", fix: str = ""):
+        nonlocal failures
+        failures += 1
+        msg = f"[red]✘[/red]  {label}"
+        if detail:
+            msg += f"  [dim]{detail}[/dim]"
+        console.print(msg)
+        if fix:
+            fixes.append(fix)
+
+    console.print(Panel("[bold]FERAL Doctor[/bold] — installation health check", border_style="cyan"))
+    console.print()
+
+    # ── 1. Python version ──
+    py_ver = sys.version_info
+    ver_str = f"{py_ver.major}.{py_ver.minor}.{py_ver.micro}"
+    if (py_ver.major, py_ver.minor) >= (3, 11):
+        _pass("Python version", ver_str)
     else:
-        print(f"  Brain:         RUNNING (v{data.get('version', '?')})")
+        _fail("Python version", f"{ver_str} (need >= 3.11)", "Install Python 3.11+: https://python.org")
 
-    # API keys — check both env and credentials.json
-    keys = {
-        "OPENAI_API_KEY": "OpenAI",
-        "ANTHROPIC_API_KEY": "Anthropic",
-        "GOOGLE_API_KEY": "Gemini",
-        "OPENROUTER_API_KEY": "OpenRouter",
-        "DEEPSEEK_API_KEY": "DeepSeek",
-        "MOONSHOT_API_KEY": "Kimi/Moonshot",
-        "DASHSCOPE_API_KEY": "Qwen/Alibaba",
-        "GROQ_API_KEY": "Groq",
-        "EXA_API_KEY": "EXA Search",
-        "TAVILY_API_KEY": "Tavily Search",
-        "SERPER_API_KEY": "Serper",
-        "BRAVE_API_KEY": "Brave Search",
-        "OPENWEATHER_API_KEY": "Weather",
-        "GITHUB_TOKEN": "GitHub",
-        "SPOTIFY_CLIENT_ID": "Spotify",
-    }
-    creds_data = {}
-    creds = feral_home() / "credentials.json"
-    if creds.exists():
+    # ── 2. FERAL package importable ──
+    try:
+        pkg_version, pkg_location = _installed_pkg_info()
+        if pkg_version != "unknown":
+            _pass("FERAL package", f"feral-ai {pkg_version}  ({pkg_location})")
+        else:
+            _warn("FERAL package", "installed from source (no pip metadata)")
+    except Exception as exc:
+        _fail("FERAL package", str(exc), "pip install -e '.[all]'")
+
+    # ── 3. Config directory ──
+    home = feral_home()
+    if home.exists() and home.is_dir():
+        _pass("Config directory", str(home))
+    else:
+        _fail("Config directory", f"{home} does not exist", "Run: feral setup")
+
+    # ── 4. Credentials — at least one LLM key or Ollama reachable ──
+    llm_keys = [
+        "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY",
+    ]
+    creds_data: dict = {}
+    creds_path = home / "credentials.json"
+    if creds_path.exists():
         try:
-            import json as _json
-            creds_data = _json.loads(creds.read_text())
+            creds_data = json.loads(creds_path.read_text())
         except Exception:
             pass
 
-    print()
-    print("  API Keys:")
-    any_key = False
-    for env, name in keys.items():
-        val = os.environ.get(env, "") or creds_data.get(env, "")
-        if val:
-            masked = val[:8] + "..." + val[-4:] if len(val) > 12 else "***"
-            print(f"    {name:20s} {masked}")
-            any_key = True
-    if not any_key:
-        if creds.exists():
-            print(f"    (credentials file found at {creds} but no keys set)")
+    has_llm_key = any(
+        os.environ.get(k) or creds_data.get(k) for k in llm_keys
+    )
+    ollama_ok = False
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:11434/api/version", timeout=2) as resp:
+            if resp.status == 200:
+                ollama_ok = True
+    except Exception:
+        pass
+
+    if has_llm_key:
+        providers = [k.replace("_API_KEY", "").replace("_", " ").title()
+                     for k in llm_keys if os.environ.get(k) or creds_data.get(k)]
+        _pass("LLM credentials", ", ".join(providers))
+    elif ollama_ok:
+        _pass("LLM credentials", "Ollama running locally")
+    else:
+        _fail("LLM credentials", "No API key and Ollama not reachable",
+              "Run: feral setup  (or start Ollama: ollama serve)")
+
+    # ── 5. Identity files — USER.md ──
+    user_md = home / "USER.md"
+    if user_md.exists():
+        content = user_md.read_text().strip()
+        if len(content) > 10:
+            _pass("Identity (USER.md)", f"{len(content)} chars")
         else:
-            print("    NONE — run: feral setup")
+            _warn("Identity (USER.md)", "file exists but is nearly empty",
+                  "Edit ~/.feral/USER.md with info about yourself")
+    else:
+        _warn("Identity (USER.md)", "not found — agent won't know who you are",
+              "Run: feral setup  (creates ~/.feral/USER.md)")
 
-    # Dependencies
-    print()
-    print("  Core deps:")
-    for pkg, desc in [
-        ("openai", "OpenAI SDK"),
-        ("numpy", "NumPy (embeddings)"),
-        ("sqlite_vec", "Vector search index"),
-        ("pyautogui", "Desktop automation"),
-    ]:
+    # ── 6. Memory database ──
+    from config.loader import feral_data_home
+    mem_db = feral_data_home() / "memory.db"
+    if mem_db.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(mem_db))
+            conn.execute("SELECT 1")
+            conn.close()
+            size_kb = mem_db.stat().st_size // 1024
+            _pass("Memory database", f"{mem_db}  ({size_kb} KB)")
+        except Exception as exc:
+            _fail("Memory database", f"exists but not accessible: {exc}",
+                  "Check permissions on ~/.feral/memory.db")
+    else:
+        _warn("Memory database", "not created yet — will be created on first run")
+
+    # ── 7. Port availability ──
+    import socket
+    port = int(brain_port())
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(1)
+        sock.connect(("127.0.0.1", port))
+        sock.close()
+        health = _http_get("/health")
+        if "error" not in health:
+            _pass("Port availability", f":{port} — FERAL brain already running")
+        else:
+            _warn("Port availability", f":{port} in use by another process",
+                  f"Kill the process on port {port} or set FERAL_PORT to another value")
+    except (ConnectionRefusedError, OSError):
+        _pass("Port availability", f":{port} is free")
+    finally:
+        sock.close()
+
+    # ── 8. Playwright / chromium ──
+    try:
+        from playwright.sync_api import sync_playwright
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.launch(headless=True)
+            browser.close()
+            _pass("Playwright (chromium)", "installed and launchable")
+        except Exception:
+            _fail("Playwright (chromium)", "package found but chromium not installed",
+                  "Run: playwright install chromium")
+        finally:
+            pw.stop()
+    except ImportError:
+        _warn("Playwright (chromium)", "not installed — browser automation unavailable",
+              "pip install playwright && playwright install chromium")
+
+    # ── 9. Node.js ──
+    node_bin = shutil.which("node")
+    if node_bin:
+        import subprocess
+        try:
+            ver_out = subprocess.check_output([node_bin, "--version"], text=True).strip()
+            major = int(ver_out.lstrip("v").split(".")[0])
+            if major >= 20:
+                _pass("Node.js", ver_out)
+            else:
+                _warn("Node.js", f"{ver_out} (recommend >= 20 for client dev)",
+                      "Install Node 20+: https://nodejs.org")
+        except Exception:
+            _warn("Node.js", "found but could not determine version")
+    else:
+        _warn("Node.js", "not found — needed for client/webui development",
+              "Install Node 20+: https://nodejs.org")
+
+    # ── 10. Key dependencies ──
+    console.print()
+    console.print("[bold]Dependencies[/bold]")
+    dep_pkgs = [
+        ("fastapi", "FastAPI", True),
+        ("uvicorn", "Uvicorn", True),
+        ("websockets", "WebSockets", True),
+        ("httpx", "HTTPX", True),
+        ("pydantic", "Pydantic", True),
+    ]
+    for pkg, label, critical in dep_pkgs:
         try:
             __import__(pkg)
-            print(f"    {desc:20s} installed")
+            _pass(label, "importable")
         except ImportError:
-            print(f"    {desc:20s} NOT INSTALLED — pip install feral-ai[llm]")
+            if critical:
+                _fail(label, "not installed", f"pip install {pkg}")
+            else:
+                _warn(label, "not installed")
 
-    print()
-    print("  Optional deps:")
-    for pkg, desc in [
-        ("sentence_transformers", "Local embeddings"),
-        ("wasmtime", "WASM sandbox"),
-        ("zeroconf", "mDNS discovery"),
-        ("duckduckgo_search", "DuckDuckGo search"),
-        ("PIL", "Image processing"),
-        ("exa", "EXA neural search"),
-    ]:
-        try:
-            __import__(pkg)
-            print(f"    {desc:20s} installed")
-        except ImportError:
-            print(f"    {desc:20s} not installed")
+    # ── Summary ──
+    console.print()
+    parts = []
+    if passed:
+        parts.append(f"[green]{passed} passed[/green]")
+    if warnings:
+        parts.append(f"[yellow]{warnings} warnings[/yellow]")
+    if failures:
+        parts.append(f"[red]{failures} failures[/red]")
+    console.print(Panel(", ".join(parts), title="Summary", border_style="cyan"))
 
-    # Docker
-    if shutil.which("docker"):
-        print(f"    {'Docker':20s} available")
-    else:
-        print(f"    {'Docker':20s} not installed (sandboxed exec disabled)")
-
-    # Web UI
-    from pathlib import Path as _Path
-    _webui = _Path(__file__).parent.parent / "webui"
-    if _webui.is_dir() and (_webui / "index.html").exists():
-        print(f"    {'Web Dashboard':20s} bundled")
-    else:
-        print(f"    {'Web Dashboard':20s} NOT BUNDLED — run: make bundle-webui")
-
-    print()
+    if fixes:
+        console.print()
+        console.print("[bold]Suggested fixes:[/bold]")
+        for i, fix in enumerate(fixes, 1):
+            console.print(f"  {i}. {fix}")
+        console.print()
 
 
 def cmd_setup():

@@ -1,48 +1,140 @@
 # FERAL Capability Scorecard
 
-This scorecard tracks parity and demo readiness across FERAL capability planes.
+Brutally honest capability matrix. No marketing spin.
 
-Legend:
-- **Status**: `Shipped`, `Partial`, `Planned`
-- **Works E2E**: `Yes`, `Partial`, `No`
-- **Demo-ready**: `Yes`, `Partial`, `No`
+**Legend**
 
-| Feature | Status | Works E2E | Demo-ready | Notes |
-|:--------|:-------|:----------|:-----------|:------|
-| Voice (Realtime) | Shipped | Yes | Yes | Web client + brain realtime routing are integrated; depends on configured provider/key. |
-| Voice (Classic) | Shipped | Yes | Partial | Works with standard STT/TTS path; less polished than realtime flow. |
-| Wake Word | Shipped | Partial | Partial | Runtime support exists; device/environment-dependent in live demos. |
-| Browser Use (CDP) | Shipped | Partial | Partial | Skill is registered and tested; requires CDP/browser runtime available at demo time. |
-| Computer Use (shell/file/search/web) | Shipped | Yes | Yes | Core tool set is integrated in orchestrator + chat paths. |
-| Memory (notes/episodes/knowledge graph) | Shipped | Yes | Yes | Local SQLite tiers operational and queryable. |
-| Memory Wiki (compile/browse/search) | Shipped | Yes | Yes | UI overlay + API endpoints are live. |
-| Memory Wiki ingest (repo/pdf/text) | Shipped | Yes | Yes | New ingest pipeline + endpoints + UI controls added. |
-| TaskFlows runtime | Shipped | Yes | Yes | Persistent runner + API + client page with resume/cancel and step timelines. |
-| Session snapshots/branch/restore | Shipped | Yes | Yes | API + chat toolbar UI added for snapshot, branch, restore. |
-| Local Models (Ollama text) | Shipped | Yes | Yes | Preset-backed local text path. |
-| Local Vision (Ollama VLM) | Shipped | Yes | Yes | `ollama_vision` preset and model capability guards implemented. |
-| Provider presets | Shipped | Yes | Yes | Backend presets API + Settings picker. |
-| Channels (Telegram/Discord/Slack/WhatsApp) | Partial | Partial | Partial | Channel manager and APIs exist; live connectivity depends on credentials/config. |
-| Hardware node plane | Partial | Partial | Partial | Device registry and node WebSocket path are active; breadth depends on adapters. |
-| GenUI renderer (cards/maps/charts/forms/media) | Shipped | Yes | Yes | Client renderer supports broad SDUI set plus provider surface contracts with fixed-layout caching. |
-| Provider/channel status cards | Shipped | Yes | Yes | Dashboard now surfaces provider/channel/device status panel. |
-| MCP Server | Shipped | Yes | Yes | `/mcp` endpoint and tool exposure are available. |
-| MCP Client | Shipped | Partial | Partial | External MCP connectivity exists; demo readiness depends on remote servers. |
-| Security (vault/sandbox/policy/approvals) | Shipped | Partial | Partial | Core controls are implemented; Linux permission plane is next-wave work. |
-| Setup wizard (CLI + Web) | Shipped | Yes | Yes | Both setup paths are operational and route-gated in client. |
-| Managed browser runtime | Planned | No | No | Explicitly sequenced in second-wave execution. |
-| Linux permission plane | Planned | No | No | Sequenced in second-wave execution. |
-| Installer and first boot productization | Planned | No | No | Sequenced after second-wave foundations stabilize. |
+| Status | Meaning |
+|:-------------|:--------|
+| **Working** | Code exists, tested, usable today |
+| **Partial** | Code exists but incomplete, untested in prod, or depends on external setup |
+| **Scaffolding** | Template/stub only — not functional |
+| **Not Yet** | Does not exist |
 
-## Immediate Demo Baseline
+---
 
-Current baseline for the 10-beat platform demo:
-- Setup and identity: ready
-- Voice/text conversation: ready
-- Computer/browser actions: ready (browser path is environment-dependent)
-- Repo/PDF/text ingest into wiki: ready
-- TaskFlow create/wait/resume: ready
-- Session snapshot/branch/restore: ready
-- Local vision + GenUI output: ready (requires Ollama VLM model installed)
-- Hardware daemon telemetry + control: ready (requires a running daemon)
-- Provider-defined GenUI surface: ready (no external dependencies)
+## Core Brain
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| LLM Orchestration (9 providers) | Working | OpenAI, Anthropic, Gemini, Ollama, Groq, Mistral, Cohere, DeepSeek, OpenRouter |
+| Skill Registry + Executor | Working | Dynamic registration, discovery, execution loop |
+| Tool Safety / Autonomy Modes | Working | strict/hybrid/loose enforced on all paths |
+| MCP Client | Working | Connects to external MCP servers |
+| MCP Server | Working | Exposes FERAL tools over `/mcp` endpoint |
+
+## Memory
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Working Memory (per-session) | Working | In-process, scoped to session lifetime |
+| Episodic Memory (SQLite + FTS) | Working | Full-text search over past interactions |
+| Knowledge Graph | Working | Entity/relation store, queryable |
+| Execution Log | Working | Persisted skill/tool execution history |
+| P2P Sync | Partial | Code exists, not battle-tested across real nodes |
+| Wiki Compilation | Working | Ingest repo/PDF/text, browse, search |
+
+## Perception
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Screen Capture | Working | macOS only; no Windows/Linux support |
+| Audio Pipeline | Partial | Depends on provider; no unified abstraction |
+| Scene Analysis | Partial | LLM-based vision; no SLAM, no 3D understanding |
+| Sensor Fusion (PerceptionFrame) | Working | Merges multi-modal inputs into unified frame |
+| Wake Word | Partial | openwakeword integration; quality varies by environment |
+| Location / Geofencing | Partial | Needs GPS feed from phone; no native desktop GPS |
+
+## Voice
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| OpenAI Realtime | Working | WebSocket streaming, function calling |
+| Gemini Live | Working | Bidirectional audio streaming |
+| Whisper / Classic STT | Working | Standard transcription path |
+| Wake Word Detection | Partial | See Perception — same openwakeword dependency |
+| TTS | Working | Via provider backends (OpenAI, Gemini, etc.) |
+
+## Hardware / HUP
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Device Registration | Working | Registry API, persistent device records |
+| WebSocket Daemon Protocol | Working | Bidirectional command/telemetry channel |
+| Hardware Mesh | Working | Request/response correlation across nodes |
+| Wristband Adapter | Partial | Reference implementation; not production-hardened |
+| Smart Home Adapter | Partial | Home Assistant bridge; basic control only |
+| Robot Adapter | Scaffolding | Template only — no real actuator integration |
+| Smart Glasses Adapter | Scaffolding | Template only — no hardware tested |
+| Daemon Reliability (idempotency, retries, heartbeats) | Not Yet | No retry logic, no heartbeat monitoring |
+| Safety Interlocks (E-stop, workspace bounds) | Not Yet | No emergency stop, no physical safety checks |
+
+## GenUI / SDUI
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| GenUI Generator | Working | LLM-driven UI component generation |
+| Provider Registration | Working | Dynamic provider surface contracts |
+| SDUI React Renderer | Working | Cards, maps, charts, forms, media |
+| Provider Signing / Review | Not Yet | No code signing or review workflow |
+| Third-Party Provider Marketplace | Not Yet | No discovery, distribution, or trust layer |
+
+## Integrations
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Calendar (Google) | Working | Needs OAuth credentials configured |
+| Email (Gmail / IMAP) | Working | Needs OAuth credentials configured |
+| Telegram | Working | Needs bot token |
+| Slack | Working | Needs app token |
+| Discord | Working | Needs bot token |
+| Spotify | Partial | Basic playback; limited API surface |
+| Notion | Partial | Read/write pages; incomplete block support |
+| Home Assistant | Partial | See Hardware — basic bridge only |
+| Whoop | Working | Needs OAuth credentials configured |
+| Oura | Working | Needs OAuth credentials configured |
+| Push Notifications (FCM) | Working | Firebase Cloud Messaging |
+| Push Notifications (APNs) | Working | JWT signing implemented |
+
+## Autonomy & Security
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Strict / Hybrid / Loose Modes | Working | Enforced across all execution paths |
+| ApprovalManager | Working | Blocks dangerous ops until user confirms |
+| BlindVault | Working | Encrypted secret storage |
+| SandboxPolicy | Partial | YAML loads but not enforced everywhere |
+| dangerous_tools Surface Deny | Working | Hard deny list for high-risk tools |
+| Docker Sandbox | Partial | Container isolation exists; not default path |
+| WASM Sandbox | Partial | Experimental; limited tool coverage |
+
+## Clients
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Web Dashboard (React) | Working | Primary client; full feature coverage |
+| Desktop App (Tauri) | Partial | Builds and runs; missing feature parity with web |
+| iOS Bridge | Scaffolding | API contract defined; no functional app |
+| Android Bridge | Scaffolding | API contract defined; no functional app |
+
+## Install & Ops
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| `pip install feral-ai` | Working | PyPI live |
+| `curl` one-liner | Working | Requires public repo access |
+| Docker Compose | Working | Full stack in one command |
+| CI (lint + tests + build) | Working | All green |
+| `feral doctor` | Working | Environment diagnostics |
+| Docs (Mintlify, 33 pages) | Working | Guides, SDK refs, API docs |
+
+## Not Yet Built (Future)
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Baseline Learning Engine | Not Yet | Statistical drift detection over time |
+| Warehouse / Fleet Control | Not Yet | 100-camera, multi-robot orchestration |
+| Native NixOS Module | Not Yet | Declarative system-level install |
+| GenUI Provider Marketplace (with signing) | Not Yet | Trust + distribution layer for third-party UI providers |
+| Formal Command State Machine for HUP | Not Yet | Deterministic state transitions for hardware commands |
+| Multi-Tenant / RBAC | Not Yet | Role-based access, org-level isolation |

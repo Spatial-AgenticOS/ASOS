@@ -78,12 +78,21 @@ async def try_genui_for_result(orchestrator, session_id: str, tool_call: dict, r
     ui_hint = endpoint.ui_hint if endpoint else None
 
     try:
-        sdui = orchestrator.genui.generate(
-            data=display_data,
-            skill_brand=skill.brand.model_dump(),
-            ui_hint=ui_hint,
-            endpoint_id=endpoint_id,
-        )
+        engine = getattr(orchestrator, "_genui_engine", None)
+        if engine is not None:
+            sdui = await engine.generate_for_data(
+                data=display_data,
+                skill_brand=skill.brand.model_dump(),
+                ui_hint=ui_hint,
+                endpoint_id=endpoint_id,
+            )
+        else:
+            sdui = orchestrator.genui.generate(
+                data=display_data,
+                skill_brand=skill.brand.model_dump(),
+                ui_hint=ui_hint,
+                endpoint_id=endpoint_id,
+            )
         if sdui and "type" in sdui:
             await orchestrator.send(
                 session_id,
