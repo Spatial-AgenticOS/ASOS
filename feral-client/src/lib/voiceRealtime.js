@@ -5,12 +5,21 @@
  * PCM16 at 24kHz, base64 chunks over WebSocket.
  * Includes energy-based VAD to skip sending silence.
  * Supports live transcription captions and tool-call status display.
+ *
+ * Features:
+ *  - Automatic reconnection with exponential backoff
+ *  - Push-to-talk mode (external toggle via muteMic / unmuteMic)
+ *  - Visual state callback for "reconnecting" UI
  */
 
 const TARGET_SAMPLE_RATE = 24000;
 const WORKLET_NAME = 'pcm-capture-processor';
 const VAD_ENERGY_THRESHOLD = 0.005;
 const VAD_SILENCE_FRAMES = 15; // ~1.5s of silence before stopping send
+
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 16000;
+const RECONNECT_MAX_ATTEMPTS = 8;
 
 const WORKLET_CODE = `
 class PCMCaptureProcessor extends AudioWorkletProcessor {
@@ -52,8 +61,9 @@ registerProcessor('${WORKLET_NAME}', PCMCaptureProcessor);
 
 
 export class RealtimeVoiceEngine {
-  constructor(ws, callbacks = {}) {
-    this._ws = ws;
+  constructor(wsOrFactory, callbacks = {}) {
+    this._wsFactory = typeof wsOrFactory === 'function' ? wsOrFactory : null;
+    this._ws = typeof wsOrFactory === 'function' ? null : wsOrFactory;
     this._audioCtx = null;
     this._stream = null;
     this._workletNode = null;
@@ -66,28 +76,111 @@ export class RealtimeVoiceEngine {
     this._isSpeaking = false;
     this._chunkIndex = 0;
     this._provider = 'openai';
+    this._micMuted = false;
+    this._reconnectAttempts = 0;
+    this._reconnectTimer = null;
+    this._degraded = false;
 
     this.onTranscript = callbacks.onTranscript || null;
     this.onToolCall = callbacks.onToolCall || null;
     this.onSpeechStarted = callbacks.onSpeechStarted || null;
     this.onError = callbacks.onError || null;
     this.onVADChange = callbacks.onVADChange || null;
+    this.onStateChange = callbacks.onStateChange || null; // 'active' | 'reconnecting' | 'degraded' | 'off'
   }
 
   get active() { return this._active; }
   get speaking() { return this._isSpeaking; }
+  get degraded() { return this._degraded; }
+
+  _setWs(ws) {
+    this._ws = ws;
+    this._reconnectAttempts = 0;
+    if (this._degraded) {
+      this._degraded = false;
+      if (this.onStateChange) this.onStateChange('active');
+    }
+
+    ws.addEventListener('close', () => {
+      if (this._active) this._attemptReconnect();
+    });
+    ws.addEventListener('error', () => {
+      if (this._active) this._attemptReconnect();
+    });
+  }
+
+  _attemptReconnect() {
+    if (!this._active || this._reconnectTimer) return;
+    if (this._reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
+      this._degraded = true;
+      if (this.onStateChange) this.onStateChange('degraded');
+      if (this.onError) this.onError('reconnect', 'Voice connection failed — falling back to text input');
+      return;
+    }
+
+    if (this.onStateChange) this.onStateChange('reconnecting');
+
+    const delay = Math.min(
+      RECONNECT_BASE_MS * Math.pow(2, this._reconnectAttempts),
+      RECONNECT_MAX_MS,
+    );
+    this._reconnectAttempts++;
+
+    this._reconnectTimer = setTimeout(async () => {
+      this._reconnectTimer = null;
+      try {
+        if (this._wsFactory) {
+          const ws = await this._wsFactory();
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            this._setWs(ws);
+            this._sendVoiceConfig();
+            if (this.onStateChange) this.onStateChange('active');
+            return;
+          }
+        }
+        // WS still connected? Just re-send config.
+        if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+          this._sendVoiceConfig();
+          this._reconnectAttempts = 0;
+          if (this.onStateChange) this.onStateChange('active');
+          return;
+        }
+      } catch { /* ignore */ }
+      this._attemptReconnect();
+    }, delay);
+  }
+
+  _sendVoiceConfig() {
+    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+      this._ws.send(JSON.stringify({
+        hop: 'client',
+        type: 'voice_config',
+        payload: { mode: 'realtime', provider: this._provider, supports_realtime: true },
+      }));
+    }
+  }
 
   async start(provider = 'openai') {
     this._active = true;
     this._provider = provider;
     this._chunkIndex = 0;
     this._silenceCount = 0;
+    this._micMuted = false;
+    this._degraded = false;
+    this._reconnectAttempts = 0;
 
-    this._ws.send(JSON.stringify({
-      hop: 'client',
-      type: 'voice_config',
-      payload: { mode: 'realtime', provider, supports_realtime: true },
-    }));
+    if (!this._ws && this._wsFactory) {
+      this._setWs(await this._wsFactory());
+    }
+
+    this._sendVoiceConfig();
+    if (this.onStateChange) this.onStateChange('active');
+
+    if (this._ws) {
+      this._ws.addEventListener('close', () => {
+        if (this._active) this._attemptReconnect();
+      });
+    }
 
     this._stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -112,11 +205,10 @@ export class RealtimeVoiceEngine {
 
     this._workletNode = new AudioWorkletNode(this._audioCtx, WORKLET_NAME);
     this._workletNode.port.onmessage = (e) => {
-      if (!this._active || e.data.type !== 'audio') return;
+      if (!this._active || this._micMuted || e.data.type !== 'audio') return;
 
       const energy = e.data.energy || 0;
 
-      // VAD: skip sending pure silence to save bandwidth and API cost
       if (energy < VAD_ENERGY_THRESHOLD) {
         this._silenceCount++;
         if (this._isSpeaking && this._silenceCount > VAD_SILENCE_FRAMES) {
@@ -133,7 +225,7 @@ export class RealtimeVoiceEngine {
       }
 
       const b64 = this._arrayBufferToBase64(e.data.pcm16);
-      if (this._ws.readyState === WebSocket.OPEN) {
+      if (this._ws && this._ws.readyState === WebSocket.OPEN) {
         this._ws.send(JSON.stringify({
           hop: 'client',
           type: 'audio_chunk',
@@ -150,18 +242,32 @@ export class RealtimeVoiceEngine {
     };
 
     this._source.connect(this._workletNode);
-    // Don't connect worklet to destination — we don't want to hear our own mic
-    // this._workletNode.connect(this._audioCtx.destination);
 
     this._playbackCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
     this._nextPlayTime = 0;
+  }
+
+  /** Mute the mic (push-to-talk release). */
+  muteMic() {
+    this._micMuted = true;
+  }
+
+  /** Unmute the mic (push-to-talk press). */
+  unmuteMic() {
+    this._micMuted = false;
+    this._silenceCount = 0;
   }
 
   stop() {
     this._active = false;
     this._isSpeaking = false;
 
-    if (this._ws.readyState === WebSocket.OPEN) {
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+
+    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify({
         hop: 'client',
         type: 'voice_config',
@@ -192,6 +298,7 @@ export class RealtimeVoiceEngine {
     }
     this._isPlaying = false;
     this._nextPlayTime = 0;
+    if (this.onStateChange) this.onStateChange('off');
   }
 
   handleAudioResponse(payload) {

@@ -17,6 +17,7 @@
 */
 
 import Foundation
+import CoreLocation
 
 // MARK: - Protocol
 
@@ -53,6 +54,57 @@ enum FeralSensorType: String {
     case gesture = "gesture"
 }
 
+// MARK: - Location Manager
+
+class FeralLocationManager: NSObject, CLLocationManagerDelegate {
+    private let locationManager = CLLocationManager()
+    private weak var brainClient: FeralBrainClient?
+    private var sendInterval: TimeInterval = 60.0
+    private var lastSent: Date = .distantPast
+    
+    init(brainClient: FeralBrainClient) {
+        self.brainClient = brainClient
+        super.init()
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        locationManager.distanceFilter = 100
+    }
+    
+    func start() {
+        locationManager.requestWhenInUseAuthorization()
+        locationManager.startUpdatingLocation()
+    }
+    
+    func stop() {
+        locationManager.stopUpdatingLocation()
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last,
+              Date().timeIntervalSince(lastSent) >= sendInterval else { return }
+        lastSent = Date()
+        
+        let payload: [String: Any] = [
+            "latitude": location.coordinate.latitude,
+            "longitude": location.coordinate.longitude,
+            "altitude": location.altitude,
+            "accuracy": location.horizontalAccuracy,
+            "speed": location.speed,
+            "timestamp": location.timestamp.timeIntervalSince1970,
+        ]
+        brainClient?.sendSensorData(type: "location", data: payload)
+    }
+}
+
+// MARK: - QR Code Pairing
+
+struct PairingInfo: Codable {
+    let host: String
+    let port: Int
+    let apiKey: String
+    let nodeName: String
+}
+
 // MARK: - Client
 
 class FeralBrainClient: NSObject {
@@ -63,6 +115,7 @@ class FeralBrainClient: NSObject {
     private let port: Int
     private let nodeId: String
     private var apiKey: String = ""
+    var useTLS: Bool = false
     
     private var urlSession: URLSession?
     private var webSocket: URLSessionWebSocketTask?
@@ -77,13 +130,20 @@ class FeralBrainClient: NSObject {
     private let bufferFlushInterval: TimeInterval = 2.0
     private var flushTimer: Timer?
     
+    private var offlineQueue: [[String: Any]] = []
+    private let maxQueueSize = 1000
+    
+    private(set) var locationManager: FeralLocationManager?
+    
     private let sendQueue = DispatchQueue(label: "com.feral.brain.send", qos: .userInitiated)
     
-    init(host: String = "localhost", port: Int = 9090, nodeId: String? = nil) {
+    init(host: String = "localhost", port: Int = 9090, nodeId: String? = nil, useTLS: Bool = false) {
         self.host = host
         self.port = port
         self.nodeId = nodeId ?? "feral-iphone-\(UIDevice.current.name.lowercased().replacingOccurrences(of: " ", with: "-"))"
+        self.useTLS = useTLS
         super.init()
+        self.locationManager = FeralLocationManager(brainClient: self)
     }
     
     // MARK: - Connection
@@ -96,7 +156,8 @@ class FeralBrainClient: NSObject {
         config.waitsForConnectivity = true
         urlSession = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         
-        let urlString = "ws://\(host):\(port)/v1/node?api_key=\(apiKey)"
+        let scheme = useTLS ? "wss" : "ws"
+        let urlString = "\(scheme)://\(host):\(port)/v1/node?api_key=\(apiKey)"
         guard let url = URL(string: urlString) else {
             state = .disconnected
             return
@@ -108,12 +169,14 @@ class FeralBrainClient: NSObject {
         webSocket = urlSession?.webSocketTask(with: request)
         webSocket?.resume()
         
+        locationManager?.start()
         startReceiving()
     }
     
     func disconnect() {
         reconnectTimer?.invalidate()
         flushTimer?.invalidate()
+        locationManager?.stop()
         webSocket?.cancel(with: .normalClosure, reason: nil)
         state = .disconnected
     }
@@ -186,6 +249,58 @@ class FeralBrainClient: NSObject {
             ]
         ]
         sendJSON(batch)
+    }
+    
+    // MARK: - Generic Sensor Data (with offline queue)
+    
+    func sendSensorData(type: String, data: [String: Any]) {
+        let message: [String: Any] = [
+            "hop": "node",
+            "type": "sensor_telemetry",
+            "payload": [
+                "node_id": nodeId,
+                "sensor_type": type,
+                "data": data,
+                "timestamp": ISO8601DateFormatter().string(from: Date())
+            ]
+        ]
+        
+        guard isConnected else {
+            if offlineQueue.count < maxQueueSize {
+                offlineQueue.append(message)
+            }
+            return
+        }
+        
+        for queued in offlineQueue {
+            sendJSON(queued)
+        }
+        offlineQueue.removeAll()
+        
+        sendJSON(message)
+    }
+    
+    // MARK: - QR Code Pairing
+    
+    func generatePairingQR() -> Data? {
+        let info = PairingInfo(host: host, port: port, apiKey: apiKey, nodeName: nodeId)
+        guard let jsonData = try? JSONEncoder().encode(info) else { return nil }
+        
+        let filter = CIFilter(name: "CIQRCodeGenerator")!
+        filter.setValue(jsonData, forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        
+        guard let ciImage = filter.outputImage else { return nil }
+        let transform = CGAffineTransform(scaleX: 10, y: 10)
+        let scaledImage = ciImage.transformed(by: transform)
+        
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(scaledImage, from: scaledImage.extent) else { return nil }
+        return UIImage(cgImage: cgImage).pngData()
+    }
+    
+    static func parsePairingQR(_ data: Data) -> PairingInfo? {
+        return try? JSONDecoder().decode(PairingInfo.self, from: data)
     }
     
     // MARK: - Camera Frames

@@ -80,6 +80,16 @@ except ImportError:
     pass
 
 try:
+    import skills.impl.coding_tools
+except ImportError:
+    pass
+
+try:
+    import skills.impl.gui_computer_use
+except ImportError:
+    pass
+
+try:
     import skills.impl.agentic_computer_use
 except ImportError:
     pass

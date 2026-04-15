@@ -49,11 +49,14 @@ Brutally honest capability matrix. No marketing spin.
 
 | Feature | Status | Notes |
 |:--------|:-------|:------|
-| OpenAI Realtime | Working | WebSocket streaming, function calling |
+| OpenAI Realtime | Working | WebSocket streaming, function calling, reconnection with exponential backoff |
 | Gemini Live | Working | Bidirectional audio streaming |
 | Whisper / Classic STT | Working | Standard transcription path |
 | Wake Word Detection | Partial | See Perception — same openwakeword dependency |
 | TTS | Working | Via provider backends (OpenAI, Gemini, etc.) |
+| Push-to-Talk | Working | Hold Space to talk; toggle/PTT mode selection in Settings |
+| Provider Selection | Working | Switch between OpenAI, Gemini, and Local providers in Settings |
+| WebSocket Reconnection | Working | Exponential backoff on connection loss |
 
 ## Hardware / HUP
 
@@ -68,6 +71,17 @@ Brutally honest capability matrix. No marketing spin.
 | Smart Glasses Adapter | Scaffolding | Template only — no hardware tested |
 | Daemon Reliability (idempotency, retries, heartbeats) | Not Yet | No retry logic, no heartbeat monitoring |
 | Safety Interlocks (E-stop, workspace bounds) | Not Yet | No emergency stop, no physical safety checks |
+
+## Skills
+
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Computer Use | Working | Anthropic-style GUI primitives + coding tools |
+| Browser Use | Working | CDP + Playwright, cookie persistence, network interception, iframe support |
+| PDF | Working | Tables, images, OCR, metadata, layout preservation |
+| Code Interpreter | Working | Docker sandbox with network/memory/CPU isolation |
+| Search | Working | 7 providers with failover, caching, deduplication |
+| Cron | Working | Timezone, priorities, missed-job catch-up, concurrent limits |
 
 ## GenUI / SDUI
 
@@ -122,8 +136,8 @@ Brutally honest capability matrix. No marketing spin.
 |:--------|:-------|:------|
 | Web Dashboard (React) | Working | Primary client; full feature coverage |
 | Desktop App (Tauri) | Partial | Builds and runs; missing feature parity with web |
-| iOS Bridge | Scaffolding | API contract defined; no functional app |
-| Android Bridge | Scaffolding | API contract defined; no functional app |
+| iOS Bridge | Working | Location forwarding (CLLocationManager), QR code pairing (CIQRCodeGenerator), TLS (wss://), offline sensor queue |
+| Android Bridge | Working | Camera capture (CameraX), location forwarding (FusedLocationProvider), QR code pairing (ZXing), wake word (RMS energy + duration gating) |
 
 ## Install & Ops
 

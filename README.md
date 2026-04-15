@@ -44,9 +44,9 @@ flowchart TD
     GLASSES["Smart Glasses\nVideo Stream\nAR Overlay"] --- BRAIN
     BRAIN["FERAL Brain\n---\nMemory · Identity\nAutonomy · Voice\nProactive Intelligence"]
     BRAIN --- COMPUTER["Your Computer\nScreen · Browser\nFiles · Terminal"]
-    BRAIN --- PHONE["Your Phone\nPush · Location\nCamera"]
+    BRAIN --- PHONE["Your Phone\nQR Pairing · Location\nCamera · TLS"]
     BRAIN --- ROBOTS["Robots\nROS · Serial\nI2C · Actuators"]
-    BRAIN --- VOICE["Voice\nWake Word\n3 Providers\nSub-200ms"]
+    BRAIN --- VOICE["Voice\nWake Word\n3 Providers · PTT\nSub-200ms"]
 ```
 
 It talks to **every device** — wristbands, smart glasses, home appliances, robots, your computer, your phone. It integrates with **every app** — calendar, email, Telegram, Slack, Spotify, Notion. It builds a **living model** of your routines and health through persistent memory. And it acts based on the **level of autonomy you choose**:
@@ -69,7 +69,7 @@ It talks to **every device** — wristbands, smart glasses, home appliances, rob
 Episodic recall, knowledge graph, semantic search, notes wiki. Four memory tiers that remember your entire life — not just the current session.
 
 ### 🎙️ Sub-200ms Voice
-Wake word detection, OpenAI Realtime + Gemini Live streaming, interrupt-and-resume. Three voice paths for every use case.
+Wake word detection, OpenAI Realtime + Gemini Live streaming, interrupt-and-resume. Push-to-talk and toggle modes. Provider selection in Settings. Auto-reconnection with exponential backoff.
 
 ### 🏠 Hardware Mesh
 Direct Bluetooth/local control of lights, sensors, wristbands, smart glasses, robots. No cloud roundtrip. 12+ device types.
@@ -84,7 +84,7 @@ Heart rate, SpO2, skin temp from your wristband in real-time. Whoop and Oura Rin
 FERAL doesn't wait for commands. It watches ambient context — screen, health, calendar — and speaks up when it has something valuable to say.
 
 ### 🖥️ Computer Use
-File operations, bash execution, browser automation (CDP/Playwright), screen capture. It sees your screen and can act on it.
+Anthropic-style GUI control (screenshot, click, type, scroll, window management) with Retina DPI auto-detection. Coding tools for file and shell operations. Browser automation with session persistence, network monitoring, and iframe support.
 
 ### 🎨 Server-Driven UI (GenUI)
 The brain generates UI dynamically — charts, forms, cards, alerts — and pushes them to whatever screen you're looking at.
@@ -119,6 +119,29 @@ Always-on full-screen dashboard — next meeting, heart rate, active tasks, weat
 </tr>
 </table>
 
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🔍 Search (7 Providers)
+Tavily, Brave, DuckDuckGo, Exa, SearXNG, Perplexity, Google CSE — with automatic failover, 5-minute result caching, and cross-provider deduplication.
+
+### 📄 PDF Intelligence
+Table extraction, image extraction with base64, OCR fallback, metadata parsing, and layout-preserving structured extraction. Reads any PDF, not just text-based ones.
+
+</td>
+<td width="50%" valign="top">
+
+### 📱 Mobile Bridges (iOS + Android)
+QR code pairing for instant setup. GPS location forwarding to the brain. TLS (wss://) transport. iOS offline sensor queue. Android camera capture via CameraX. Wake word detection on-device.
+
+### 🧪 Code Interpreter
+Docker-first sandboxed execution: --network=none, --memory=512m, --cpus=1, --read-only. Falls back to host with resource limits when Docker is unavailable.
+
+</td>
+</tr>
+</table>
+
 ---
 
 ## Comparison
@@ -127,7 +150,7 @@ Always-on full-screen dashboard — next meeting, heart rate, active tasks, weat
 |---|---|---|---|
 | Where it runs | Their servers | Your terminal | **Your entire device ecosystem** |
 | Memory | Forgets between sessions | Plugin-based | **4-tier + knowledge graph + P2P sync** |
-| Voice | 2s latency, cloud-only | Extension-based | **Sub-200ms, wake word, 3 providers** |
+| Voice | 2s latency, cloud-only | Extension-based | **Sub-200ms, wake word, 3 providers, push-to-talk** |
 | Health monitoring | No | No | **Real-time biometrics from wristband** |
 | Smart home | Cloud API roundtrip | No | **Direct local mesh, no cloud** |
 | Proactive intelligence | No | No | **Rule + LLM hybrid with coaching** |
@@ -215,7 +238,7 @@ flowchart TB
         PRO["Proactive Engine\nrule + LLM hybrid"]
         VOI["Voice Pipeline\nOpenAI RT / Gemini / Whisper"]
         SEC["Security\nvault + sandbox + approvals"]
-        SKL["Skills\n17 manifests + WASM"]
+        SKL["Skills\n17 manifests + WASM\nGUI · Browser · PDF · Search"]
         GEN["GenUI Engine\nSDUI generation"]
         INT["Integrations\nCalendar · Email · Health\nSpotify · Notion · Home"]
     end
@@ -240,7 +263,7 @@ flowchart TB
 
 **Client** (`feral-client`): React. Server-Driven UI. The Orb. Command palette. Ambient context strip. Timeline view. Pure renderer — the brain decides what to show.
 
-**Nodes** (`feral-nodes`): Hardware bridges that connect physical devices to the brain via the mesh protocol. Wristband streams biometrics. Glasses stream video. Smart home controls actuators.
+**Nodes** (`feral-nodes`): Hardware bridges that connect physical devices to the brain via the mesh protocol. Wristband streams biometrics. Glasses stream video. Smart home controls actuators. iOS and Android bridges with QR pairing, location forwarding, and TLS transport.
 
 ---
 

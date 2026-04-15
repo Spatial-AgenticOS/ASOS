@@ -2,6 +2,55 @@
 
 All notable changes to FERAL are documented here.
 
+## [2026.4.16] - 2026-04-15
+
+### Added
+- Anthropic-style GUI Computer Use: 11 endpoints (screenshot, mouse_click, type_text, key_press, scroll, cursor_position, window_list, window_focus) with Retina DPI auto-detection
+- Coding Tools: renamed from computer_use to clarify it's file/shell tools, not GUI control
+- Browser session persistence: cookie save/restore across restarts via CDP
+- Browser network interception: CDP-based request monitoring with filter
+- Browser iframe support: list iframes, execute JS in iframe context
+- Browser file download management: configurable download path via CDP
+- Docker-first code interpreter sandbox: --network=none, --memory=512m, --cpus=1, --read-only
+- PDF table extraction via PyMuPDF find_tables()
+- PDF image extraction with base64 encoding
+- PDF layout-preserving structured extraction (heading detection, block structure)
+- PDF metadata extraction (title, author, dates, keywords)
+- PDF OCR fallback (pytesseract + PyMuPDF built-in)
+- 4 new search providers: Exa (semantic), SearXNG (self-hosted), Perplexity (AI-powered), Google CSE
+- Search result caching (5-minute TTL, 200 entry max)
+- Search result deduplication across providers
+- Cron timezone support via zoneinfo
+- Cron missed-job catch-up on boot
+- Cron concurrent job execution limits
+- Cron job priority levels (low/normal/high)
+- Voice WebSocket reconnection with exponential backoff
+- Push-to-talk mode (hold Space)
+- Voice provider selection in Settings (OpenAI/Gemini/Local)
+- Voice input mode selection (Toggle/Push-to-Talk)
+- iOS location forwarding via CLLocationManager
+- iOS QR code pairing with CIQRCodeGenerator
+- iOS TLS (wss://) support
+- iOS offline sensor queue (buffer when disconnected)
+- Android camera capture via CameraX
+- Android location forwarding via FusedLocationProvider
+- Android QR code pairing via ZXing
+- Android wake word detection improvement (RMS energy + duration gating)
+
+### Fixed
+- Retina DPI coordinate bug in agentic computer use (coordinates no longer 2x off on HiDPI displays)
+- Linux support for agentic computer use (gnome-screenshot/scrot/import fallback)
+- pyautogui typewrite/write logic for Unicode text (was backwards)
+- Code interpreter Docker fallback when daemon is installed but not running
+- Browser navigate now supports configurable wait strategies (load, domcontentloaded, networkidle)
+- Agentic computer use now uses structured action parsing instead of fragile JSON extraction
+
+### Changed
+- Code interpreter always attempts Docker sandbox first, falls back to host with resource limits
+- Search engine now supports 7 providers (up from 3): Tavily, Brave, DuckDuckGo, Exa, SearXNG, Perplexity, Google CSE
+- PDF reader upgraded to v2.0 with tables, images, OCR, metadata, layout preservation
+- Cron scheduler now sorts due jobs by priority DESC
+
 ## [1.2.1] - 2026-04-09
 
 ### Security

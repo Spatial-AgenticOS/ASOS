@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Callable, Optional
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from config.loader import feral_data_home
 
@@ -48,6 +49,8 @@ class ScheduledJob:
     enabled: bool
     run_count: int
     recurring: bool = True
+    priority: int = 1
+    tz_name: str = "UTC"
 
 
 def _default_db_path() -> str:
@@ -56,16 +59,23 @@ def _default_db_path() -> str:
     return str(base / "scheduled_jobs.db")
 
 
-def _compute_next_run(cron_expr: str, from_time: float) -> float:
+def _compute_next_run(cron_expr: str, from_time: float, tz: timezone | ZoneInfo | None = None) -> float:
     """
-    Compute the next run timestamp (UTC epoch seconds) strictly after from_time.
+    Compute the next run timestamp (epoch seconds) strictly after *from_time*.
+
+    *tz* is used for wall-clock anchored schedules (``daily HH:MM`` and
+    cron fields with specific hour/minute).  Interval-only schedules
+    (``every Nm``, ``every Nh``, ``*/N * * * *``) are timezone-agnostic.
 
     Supported forms:
     - "every Nm" / "every N m" — every N minutes
     - "every Nh" / "every N h" — every N hours
-    - "daily HH:MM" — once per day at HH:MM (24h, UTC)
+    - "daily HH:MM" — once per day at HH:MM
     - 5-field cron (subset): */N * * * *, M H * * *, etc.
     """
+    if tz is None:
+        tz = timezone.utc
+
     raw = cron_expr.strip()
     if not raw:
         return from_time + 60.0
@@ -87,7 +97,7 @@ def _compute_next_run(cron_expr: str, from_time: float) -> float:
     if m:
         hh = int(m.group(1)) % 24
         mm = int(m.group(2)) % 60
-        dt = datetime.fromtimestamp(from_time, tz=timezone.utc)
+        dt = datetime.fromtimestamp(from_time, tz=tz)
         target = dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
         if target.timestamp() <= from_time:
             target = target + timedelta(days=1)
@@ -114,7 +124,7 @@ def _compute_next_run(cron_expr: str, from_time: float) -> float:
             step = max(1, int(minute[2:]))
             return float(from_time + step * 60.0)
 
-        # */N * * * * for hours: 0 */N * * *
+        # 0 */N * * * -> every N hours
         if (
             minute == "0"
             and hour.startswith("*/")
@@ -129,11 +139,11 @@ def _compute_next_run(cron_expr: str, from_time: float) -> float:
 
         # M H * * * -> daily at H:M
         if dom == month == dow == "*":
-            mm = _parse_field(minute, 0, 59)
-            hh = _parse_field(hour, 0, 23)
-            if mm is not None and hh is not None:
-                dt = datetime.fromtimestamp(from_time, tz=timezone.utc)
-                target = dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            mm_val = _parse_field(minute, 0, 59)
+            hh_val = _parse_field(hour, 0, 23)
+            if mm_val is not None and hh_val is not None:
+                dt = datetime.fromtimestamp(from_time, tz=tz)
+                target = dt.replace(hour=hh_val, minute=mm_val, second=0, microsecond=0)
                 if target.timestamp() <= from_time:
                     target = target + timedelta(days=1)
                 return target.timestamp()
@@ -146,16 +156,20 @@ class CronService:
     """Background-friendly scheduler with a SQLite job store."""
 
     @staticmethod
-    def _compute_next_run(cron_expr: str, from_time: float) -> float:
+    def _compute_next_run(cron_expr: str, from_time: float, tz: timezone | ZoneInfo | None = None) -> float:
         """Delegate to module parser; kept on the class for discovery/testing."""
-        return _compute_next_run(cron_expr, from_time)
+        return _compute_next_run(cron_expr, from_time, tz=tz)
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, config: Optional[dict] = None):
+        config = config or {}
         self._db_path = db_path or _default_db_path()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._callback: Optional[Callable[[ScheduledJob], None]] = None
+        self._timezone: ZoneInfo = ZoneInfo(config.get("timezone", "UTC"))
+        self._max_concurrent: int = int(config.get("max_concurrent_jobs", 5))
+        self._running_jobs: set[int] = set()
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_db()
@@ -177,14 +191,21 @@ class CronService:
                     next_run REAL NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
                     run_count INTEGER NOT NULL DEFAULT 0,
-                    recurring INTEGER NOT NULL DEFAULT 1
+                    recurring INTEGER NOT NULL DEFAULT 1,
+                    priority INTEGER NOT NULL DEFAULT 1,
+                    tz_name TEXT NOT NULL DEFAULT 'UTC'
                 )
                 """
             )
-            try:
-                conn.execute("ALTER TABLE scheduled_jobs ADD COLUMN recurring INTEGER NOT NULL DEFAULT 1")
-            except sqlite3.OperationalError:
-                pass
+            for col, default in [
+                ("recurring", "INTEGER NOT NULL DEFAULT 1"),
+                ("priority", "INTEGER NOT NULL DEFAULT 1"),
+                ("tz_name", "TEXT NOT NULL DEFAULT 'UTC'"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE scheduled_jobs ADD COLUMN {col} {default}")
+                except sqlite3.OperationalError:
+                    pass
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sched_next ON scheduled_jobs (next_run)"
             )
@@ -218,6 +239,14 @@ class CronService:
             recurring = bool(row["recurring"])
         except (IndexError, KeyError):
             recurring = True
+        try:
+            priority = int(row["priority"])
+        except (IndexError, KeyError):
+            priority = 1
+        try:
+            tz_name = row["tz_name"] or "UTC"
+        except (IndexError, KeyError):
+            tz_name = "UTC"
         return ScheduledJob(
             id=row["id"],
             job_type=JobType(row["job_type"]),
@@ -231,6 +260,8 @@ class CronService:
             enabled=bool(row["enabled"]),
             run_count=row["run_count"],
             recurring=recurring,
+            priority=priority,
+            tz_name=tz_name,
         )
 
     def create_job(
@@ -241,11 +272,15 @@ class CronService:
         payload: dict[str, Any],
         session_id: str,
         recurring: bool = True,
+        priority: int = 1,
+        tz_name: str | None = None,
     ) -> ScheduledJob:
         if isinstance(job_type, str):
             job_type = JobType(job_type)
+        tz_name = tz_name or str(self._timezone)
+        tz = ZoneInfo(tz_name)
         now = time.time()
-        nxt = CronService._compute_next_run(cron_expr, now)
+        nxt = CronService._compute_next_run(cron_expr, now, tz=tz)
         payload_json = json.dumps(payload)
         with self._lock:
             conn = self._conn
@@ -253,8 +288,9 @@ class CronService:
                 """
                 INSERT INTO scheduled_jobs
                 (job_type, cron_expr, description, payload, session_id,
-                 created_at, last_run, next_run, enabled, run_count, recurring)
-                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 1, 0, ?)
+                 created_at, last_run, next_run, enabled, run_count, recurring,
+                 priority, tz_name)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 1, 0, ?, ?, ?)
                 """,
                 (
                     job_type.value,
@@ -265,6 +301,8 @@ class CronService:
                     now,
                     nxt,
                     int(recurring),
+                    priority,
+                    tz_name,
                 ),
             )
             jid = cur.lastrowid
@@ -306,7 +344,7 @@ class CronService:
                 """
                 SELECT * FROM scheduled_jobs
                 WHERE enabled = 1 AND next_run <= ?
-                ORDER BY next_run ASC
+                ORDER BY priority DESC, next_run ASC
                 """,
                 (now,),
             ).fetchall()
@@ -329,7 +367,11 @@ class CronService:
 
             if is_recurring:
                 cron = row["cron_expr"]
-                nxt = CronService._compute_next_run(cron, now)
+                try:
+                    tz = ZoneInfo(row["tz_name"] or "UTC")
+                except (KeyError, IndexError):
+                    tz = self._timezone
+                nxt = CronService._compute_next_run(cron, now, tz=tz)
                 conn.execute(
                     """
                     UPDATE scheduled_jobs
@@ -362,11 +404,15 @@ class CronService:
         now = time.time()
         with self._lock:
             row = self._conn.execute(
-                "SELECT cron_expr FROM scheduled_jobs WHERE id = ?", (job_id,)
+                "SELECT cron_expr, tz_name FROM scheduled_jobs WHERE id = ?", (job_id,)
             ).fetchone()
             if not row:
                 return False
-            nxt = CronService._compute_next_run(row["cron_expr"], now)
+            try:
+                tz = ZoneInfo(row["tz_name"] or "UTC")
+            except (KeyError, IndexError):
+                tz = self._timezone
+            nxt = CronService._compute_next_run(row["cron_expr"], now, tz=tz)
             self._conn.execute(
                 "UPDATE scheduled_jobs SET enabled = 1, next_run = ? WHERE id = ?",
                 (nxt, job_id),
@@ -604,15 +650,43 @@ class CronService:
             logger.info(f"Deleted automation job_id={job_id}")
         return deleted
 
+    def _catchup_missed_jobs(self) -> None:
+        """On boot, fire jobs whose next_run passed while the brain was down."""
+        now = time.time()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, description, next_run, cron_expr FROM scheduled_jobs WHERE enabled = 1 AND next_run < ?",
+                (now,),
+            ).fetchall()
+        for row in rows:
+            job_id, name, next_run, _cron = row["id"], row["description"], row["next_run"], row["cron_expr"]
+            logger.info("Missed job '%s' (id=%d, was due %.0fs ago) — queuing now", name, job_id, now - next_run)
+            job = self.get_job(job_id)
+            if job and self._callback:
+                try:
+                    self._callback(job)
+                finally:
+                    self.mark_completed(job_id)
+
     def _loop(self) -> None:
+        self._catchup_missed_jobs()
         while not self._stop.wait(30.0):
             if self._callback is None:
                 continue
             due = self.get_due_jobs()
             for job in due:
+                if len(self._running_jobs) >= self._max_concurrent:
+                    logger.warning(
+                        "Max concurrent jobs (%d) reached, deferring job %d",
+                        self._max_concurrent,
+                        job.id,
+                    )
+                    break
+                self._running_jobs.add(job.id)
                 try:
                     self._callback(job)
                 finally:
+                    self._running_jobs.discard(job.id)
                     self.mark_completed(job.id)
 
     def start(self, callback: Callable[[ScheduledJob], None]) -> None:

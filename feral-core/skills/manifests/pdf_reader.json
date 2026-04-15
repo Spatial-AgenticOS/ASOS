@@ -1,6 +1,6 @@
 {
     "skill_id": "pdf_reader",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "author": "feral-core",
     "brand": {
         "name": "PDF Reader",
@@ -9,13 +9,16 @@
         "logo_url": "",
         "icon_set": "sf_symbols"
     },
-    "description": "Read local PDF files and extract text for analysis, summaries, and Q&A.",
+    "description": "Production-grade PDF reader: layout-preserving text, markdown tables, embedded images, OCR fallback, and metadata extraction.",
     "trigger_phrases": [
         "read this pdf",
         "extract pdf text",
         "summarize this document",
         "what does this pdf say",
-        "open pdf"
+        "open pdf",
+        "get pdf metadata",
+        "extract images from pdf",
+        "extract tables from pdf"
     ],
     "categories": ["documents", "analysis", "productivity"],
     "auth": {
@@ -26,7 +29,7 @@
             "id": "extract_text",
             "method": "PYTHON",
             "url": "",
-            "description": "Extract text from a local PDF file. Supports page ranges and max character limits.",
+            "description": "Extract rich text from a local PDF file with layout-preserving structure, markdown tables, and optional images. Falls back to OCR for scanned pages.",
             "params": [
                 {
                     "name": "path",
@@ -51,9 +54,65 @@
                     "type": "integer",
                     "required": false,
                     "description": "Maximum number of characters to return (default 60000)"
+                },
+                {
+                    "name": "include_images",
+                    "type": "boolean",
+                    "required": false,
+                    "description": "Whether to extract embedded images as base64 (default false)"
                 }
             ],
-            "returns_description": "Extracted text with page metadata and truncation flag",
+            "returns_description": "Structured text with page metadata, markdown tables, optional images, and truncation flag",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "metadata",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Extract PDF metadata: title, author, creation date, page count, keywords, etc.",
+            "params": [
+                {
+                    "name": "path",
+                    "type": "string",
+                    "required": true,
+                    "description": "Absolute or relative path to a PDF file"
+                }
+            ],
+            "returns_description": "PDF metadata fields (title, author, subject, dates, page count)",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "extract_images",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Extract embedded images from PDF pages as base64-encoded PNGs.",
+            "params": [
+                {
+                    "name": "path",
+                    "type": "string",
+                    "required": true,
+                    "description": "Absolute or relative path to a PDF file"
+                },
+                {
+                    "name": "page_start",
+                    "type": "integer",
+                    "required": false,
+                    "description": "1-based page number to start from (default 1)"
+                },
+                {
+                    "name": "page_end",
+                    "type": "integer",
+                    "required": false,
+                    "description": "1-based page number to end at (default: last page)"
+                },
+                {
+                    "name": "max_images",
+                    "type": "integer",
+                    "required": false,
+                    "description": "Maximum number of images to extract (default 10, max 50)"
+                }
+            ],
+            "returns_description": "Array of base64-encoded PNG images with dimensions and page numbers",
             "ui_hint": "detail_card"
         }
     ],

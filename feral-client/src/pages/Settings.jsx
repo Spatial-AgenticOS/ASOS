@@ -607,6 +607,73 @@ export default function Settings() {
                 </div>
               </div>
             </Section>
+
+            <Section title="Voice Provider" icon={Volume2}>
+              <p className="text-xs text-feral-text-muted mb-3">
+                Choose which realtime voice backend powers voice conversations.
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { id: 'openai', label: 'OpenAI Realtime', desc: 'GPT-4o realtime voice API' },
+                  { id: 'gemini', label: 'Gemini Live', desc: 'Google Gemini multimodal live' },
+                  { id: 'local', label: 'Local (Whisper + Piper)', desc: 'On-device STT/TTS — no API key needed' },
+                ].map(vp => (
+                  <button
+                    key={vp.id}
+                    onClick={async () => {
+                      setConfig(prev => ({ ...prev, voice_provider: vp.id }));
+                      await fetch(`${API}/v1/config`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ voice_provider: vp.id }),
+                      });
+                      flash();
+                    }}
+                    className={`text-left px-4 py-3 rounded-lg border transition ${
+                      (config.voice_provider || 'openai') === vp.id
+                        ? 'border-feral-accent bg-feral-accent/10 text-feral-accent'
+                        : 'border-feral-border bg-feral-card hover:border-feral-border-bright'
+                    }`}
+                  >
+                    <div className="text-sm font-medium">{vp.label}</div>
+                    <div className="text-[11px] text-feral-text-secondary mt-1">{vp.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </Section>
+
+            <Section title="Voice Input Mode" icon={Volume2}>
+              <p className="text-xs text-feral-text-muted mb-3">
+                Choose how the microphone is activated during voice sessions.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { id: 'toggle', label: 'Toggle Voice', desc: 'Click to start/stop — always-on mic during voice session' },
+                  { id: 'push_to_talk', label: 'Push-to-Talk', desc: 'Hold Space to speak, release to send' },
+                ].map(m => (
+                  <button
+                    key={m.id}
+                    onClick={async () => {
+                      setConfig(prev => ({ ...prev, voice_input_mode: m.id }));
+                      await fetch(`${API}/v1/config`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ voice_input_mode: m.id }),
+                      });
+                      flash();
+                    }}
+                    className={`text-left px-4 py-3 rounded-lg border transition ${
+                      (config.voice_input_mode || 'toggle') === m.id
+                        ? 'border-feral-accent bg-feral-accent/10 text-feral-accent'
+                        : 'border-feral-border bg-feral-card hover:border-feral-border-bright'
+                    }`}
+                  >
+                    <div className="text-sm font-medium">{m.label}</div>
+                    <div className="text-[11px] text-feral-text-secondary mt-1">{m.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </Section>
           </div>
         )}
 

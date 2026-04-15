@@ -1,15 +1,18 @@
 """
 FERAL Code Interpreter Skill
 =============================
-Run Python/Node snippets and capture generated artifacts (CSV/images/etc.).
+Run Python/Node snippets in a Docker sandbox (preferred) or with
+host-level resource limits, and capture generated artifacts.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import mimetypes
 import os
+import platform
 import shutil
 import tempfile
 import uuid
@@ -20,12 +23,106 @@ from config.loader import feral_data_home
 from skills.base import BaseSkill
 from skills.impl import register_skill
 
+logger = logging.getLogger("feral.code_interpreter")
+
 MAX_OUTPUT = 80_000
 MAX_ARTIFACTS = 25
 MAX_INLINE_IMAGE_BYTES = 2_000_000
 MAX_INLINE_TEXT_BYTES = 200_000
 TEXT_EXTS = {".txt", ".md", ".csv", ".tsv", ".json", ".html", ".xml", ".log"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+DOCKER_AVAILABLE = bool(shutil.which("docker"))
+
+
+async def _run_sandboxed(code: str, language: str, work_dir: str, timeout: int = 300) -> dict:
+    """Run code in Docker container with strict isolation."""
+    if not DOCKER_AVAILABLE:
+        return await _run_unsandboxed(code, language, work_dir, timeout)
+
+    image = "python:3.12-slim" if language == "python" else "node:22-slim"
+    script_name = "script.py" if language == "python" else "script.js"
+    script_path = Path(work_dir) / script_name
+    script_path.write_text(code)
+
+    cmd = [
+        "docker", "run", "--rm",
+        "--network=none",
+        "--memory=512m",
+        "--cpus=1",
+        "--read-only",
+        "--tmpfs", "/tmp:rw,size=100m",
+        "-v", f"{work_dir}:/workspace:rw",
+        "-w", "/workspace",
+        "--user", "nobody",
+        image,
+        "python3" if language == "python" else "node",
+        f"/workspace/{script_name}",
+    ]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stderr_str = stderr.decode(errors="replace")[:10000]
+        if proc.returncode != 0 and ("docker" in stderr_str.lower() and ("daemon" in stderr_str.lower() or "connect" in stderr_str.lower())):
+            logger.warning("Docker daemon not reachable — falling back to unsandboxed execution")
+            return await _run_unsandboxed(code, language, work_dir, timeout)
+        return {
+            "exit_code": proc.returncode,
+            "stdout": stdout.decode(errors="replace")[:50000],
+            "stderr": stderr_str,
+            "sandboxed": True,
+        }
+    except (asyncio.TimeoutError, OSError) as e:
+        if isinstance(e, asyncio.TimeoutError):
+            proc.kill()
+            return {"exit_code": -1, "stdout": "", "stderr": "Execution timed out", "sandboxed": True}
+        logger.warning(f"Docker execution failed: {e} — falling back to unsandboxed")
+        return await _run_unsandboxed(code, language, work_dir, timeout)
+
+
+async def _run_unsandboxed(code: str, language: str, work_dir: str, timeout: int = 300) -> dict:
+    """Fallback: run with resource limits on Linux, bare subprocess otherwise."""
+    script_name = "script.py" if language == "python" else "script.js"
+    script_path = Path(work_dir) / script_name
+    if not script_path.exists():
+        script_path.write_text(code)
+
+    argv = ["python3", script_name] if language == "python" else ["node", script_name]
+
+    preexec = None
+    if platform.system() == "Linux":
+        import resource
+
+        def _set_limits() -> None:
+            resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+            resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))
+            resource.setrlimit(resource.RLIMIT_FSIZE, (100 * 1024 * 1024, 100 * 1024 * 1024))
+
+        preexec = _set_limits
+
+    logger.warning("Docker unavailable — executing code on host with best-effort limits")
+
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        cwd=work_dir,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        preexec_fn=preexec,
+    )
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return {
+            "exit_code": proc.returncode if proc.returncode is not None else -1,
+            "stdout": (stdout_b or b"").decode(errors="replace")[:50000],
+            "stderr": (stderr_b or b"").decode(errors="replace")[:10000],
+            "sandboxed": False,
+        }
+    except asyncio.TimeoutError:
+        proc.kill()
+        return {"exit_code": -1, "stdout": "", "stderr": "Execution timed out", "sandboxed": False}
 
 
 @register_skill
@@ -58,22 +155,16 @@ class CodeInterpreterSkill(BaseSkill):
         timeout = max(1, min(int(args.get("timeout", 45) or 45), 300))
         run_id = str(uuid.uuid4())[:10]
         temp_dir = Path(tempfile.mkdtemp(prefix=f"feral_code_{run_id}_"))
-        script_name = "main.py" if language == "python" else "main.js"
-        script_path = temp_dir / script_name
-        script_path.write_text(code, encoding="utf-8")
+        script_name = "script.py" if language == "python" else "script.js"
 
-        argv = ["python3", script_name] if language == "python" else ["node", script_name]
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                cwd=str(temp_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            stdout = (stdout_b or b"").decode(errors="replace")[:MAX_OUTPUT]
-            stderr = (stderr_b or b"").decode(errors="replace")[:MAX_OUTPUT]
-            exit_code = proc.returncode if proc.returncode is not None else -1
+            result = await _run_sandboxed(code, language, str(temp_dir), timeout)
+
+            stdout = result.get("stdout", "")[:MAX_OUTPUT]
+            stderr = result.get("stderr", "")[:MAX_OUTPUT]
+            exit_code = int(result.get("exit_code", -1))
+            sandboxed = result.get("sandboxed", False)
+
             artifacts = self._collect_artifacts(temp_dir, script_name=script_name, run_id=run_id)
             return {
                 "success": exit_code == 0,
@@ -84,25 +175,12 @@ class CodeInterpreterSkill(BaseSkill):
                     "stdout": stdout,
                     "stderr": stderr,
                     "exit_code": exit_code,
+                    "sandboxed": sandboxed,
                     "artifact_count": len(artifacts),
                     "artifacts": artifacts,
                     "artifact_dir": str(self._artifacts_root / run_id) if artifacts else None,
                 },
                 "error": stderr if exit_code != 0 else None,
-            }
-        except asyncio.TimeoutError:
-            artifacts = self._collect_artifacts(temp_dir, script_name=script_name, run_id=run_id)
-            return {
-                "success": False,
-                "status_code": 408,
-                "data": {
-                    "language": language,
-                    "run_id": run_id,
-                    "artifact_count": len(artifacts),
-                    "artifacts": artifacts,
-                    "artifact_dir": str(self._artifacts_root / run_id) if artifacts else None,
-                },
-                "error": f"Execution timed out after {timeout}s",
             }
         except FileNotFoundError as e:
             return {

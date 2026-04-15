@@ -7,6 +7,23 @@ export default function VoiceWaveform({ mode = 'idle' }) {
 
   if (mode === 'idle') return null;
 
+  if (mode === 'reconnecting') {
+    return (
+      <div className="flex items-center justify-center gap-2 h-8">
+        <span className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+        <span className="text-xs text-amber-400 animate-pulse">Reconnecting voice...</span>
+      </div>
+    );
+  }
+
+  if (mode === 'degraded') {
+    return (
+      <div className="flex items-center justify-center gap-2 h-8">
+        <span className="text-xs text-rose-400">Voice unavailable — use text input</span>
+      </div>
+    );
+  }
+
   if (mode === 'listening') {
     return (
       <div className="flex items-center justify-center gap-[3px] h-8">

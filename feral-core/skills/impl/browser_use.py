@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Optional, Callable
 from uuid import uuid4
 
@@ -174,6 +175,9 @@ class BrowserController:
         self._aria_refs: dict[str, dict] = {}
         self._console_logs: list[dict] = []
         self._console_listener_attached = False
+        self._network_log: list[dict] = []
+        self._network_monitoring = False
+        self._max_network_log = 500
 
     @property
     def connected(self) -> bool:
@@ -217,6 +221,11 @@ class BrowserController:
             logger.info("Playwright connected via CDP")
         except Exception as e:
             logger.info(f"Playwright not available (CDP-only mode): {e}")
+
+        try:
+            await self.restore_cookies()
+        except Exception:
+            pass
 
         return True
 
@@ -355,6 +364,15 @@ class BrowserController:
                 "timestamp": entry.get("timestamp"),
                 "url": entry.get("url"),
             })
+        elif method == "Network.requestWillBeSent" and self._network_monitoring:
+            self._network_log.append({
+                "url": params.get("request", {}).get("url", ""),
+                "method": params.get("request", {}).get("method", ""),
+                "type": params.get("type", ""),
+                "timestamp": params.get("timestamp", 0),
+            })
+            if len(self._network_log) > self._max_network_log:
+                self._network_log = self._network_log[-self._max_network_log:]
 
     def _append_console_log(self, entry: dict):
         if not entry.get("text"):
@@ -363,11 +381,13 @@ class BrowserController:
         if len(self._console_logs) > 500:
             self._console_logs = self._console_logs[-500:]
 
-    async def navigate(self, url: str) -> dict:
-        """Navigate to a URL and wait for load."""
+    async def navigate(self, url: str, wait_until: str = "domcontentloaded") -> dict:
+        """Navigate with configurable wait strategy: load, domcontentloaded, networkidle."""
         try:
+            if wait_until not in ("load", "domcontentloaded", "networkidle", "commit"):
+                wait_until = "domcontentloaded"
             if self._page:
-                resp = await self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                resp = await self._page.goto(url, wait_until=wait_until, timeout=30000)
                 status = resp.status if resp else 0
             else:
                 await self._cdp.send_command("Page.enable")
@@ -642,6 +662,102 @@ class BrowserController:
             except Exception:
                 pass
 
+    # ── Cookie / Session Persistence ─────────────────────────────────
+
+    async def save_cookies(self, profile: str = "default") -> dict:
+        """Save all cookies to disk for session persistence."""
+        cookies_dir = Path.home() / ".feral" / "browser" / "cookies"
+        cookies_dir.mkdir(parents=True, exist_ok=True)
+        cookies_path = cookies_dir / f"{profile}.json"
+
+        if self._cdp.connected:
+            result = await self._cdp.send_command("Network.getAllCookies")
+            cookies = result.get("cookies", [])
+            cookies_path.write_text(json.dumps(cookies, indent=2))
+            return {"success": True, "count": len(cookies), "path": str(cookies_path)}
+        elif self._page:
+            ctx = self._page.context
+            cookies = await ctx.cookies()
+            cookies_path.write_text(json.dumps(cookies, indent=2))
+            return {"success": True, "count": len(cookies), "path": str(cookies_path)}
+        return {"success": False, "error": "No browser connection"}
+
+    async def restore_cookies(self, profile: str = "default") -> dict:
+        """Restore cookies from disk."""
+        cookies_path = Path.home() / ".feral" / "browser" / "cookies" / f"{profile}.json"
+        if not cookies_path.exists():
+            return {"success": False, "error": "No saved cookies"}
+
+        cookies = json.loads(cookies_path.read_text())
+        if self._cdp.connected:
+            await self._cdp.send_command("Network.setCookies", {"cookies": cookies})
+        elif self._page:
+            await self._page.context.add_cookies(cookies)
+        else:
+            return {"success": False, "error": "No browser connection"}
+        return {"success": True, "count": len(cookies)}
+
+    # ── Network Request Interception ─────────────────────────────────
+
+    async def enable_network_monitor(self) -> dict:
+        """Enable network request monitoring via CDP."""
+        if not self._cdp.connected:
+            return {"success": False, "error": "CDP not connected"}
+
+        self._network_log = []
+        self._network_monitoring = True
+        await self._cdp.send_command("Network.enable")
+        return {"success": True}
+
+    async def get_network_log(self, filter_type: str = "") -> dict:
+        """Get captured network requests, optionally filtered by type."""
+        log = self._network_log
+        if filter_type:
+            log = [e for e in log if filter_type.lower() in e.get("type", "").lower()]
+        return {"success": True, "requests": log[-100:], "total": len(log)}
+
+    # ── Iframe Support ───────────────────────────────────────────────
+
+    async def list_iframes(self) -> dict:
+        """List all iframes on the current page."""
+        if self._page:
+            frames = self._page.frames
+            return {"success": True, "frames": [
+                {"name": f.name, "url": f.url, "index": i}
+                for i, f in enumerate(frames)
+            ]}
+        elif self._cdp.connected:
+            result = await self._cdp.send_command("Target.getTargets")
+            iframes = [t for t in result.get("targetInfos", []) if t.get("type") == "iframe"]
+            return {"success": True, "frames": [
+                {"title": f.get("title", ""), "url": f.get("url", ""), "targetId": f.get("targetId")}
+                for f in iframes
+            ]}
+        return {"success": False, "error": "No browser connection"}
+
+    async def execute_in_iframe(self, frame_index: int, script: str) -> dict:
+        """Execute JavaScript in a specific iframe."""
+        if self._page:
+            frames = self._page.frames
+            if 0 <= frame_index < len(frames):
+                result = await frames[frame_index].evaluate(script)
+                return {"success": True, "result": str(result)[:5000]}
+        return {"success": False, "error": "Frame not found or CDP-only"}
+
+    # ── File Download Management ─────────────────────────────────────
+
+    async def set_download_path(self, path: str = "") -> dict:
+        """Configure file download behavior."""
+        download_dir = path or str(Path.home() / ".feral" / "browser" / "downloads")
+        Path(download_dir).mkdir(parents=True, exist_ok=True)
+
+        if self._cdp.connected:
+            await self._cdp.send_command("Browser.setDownloadBehavior", {
+                "behavior": "allow",
+                "downloadPath": download_dir,
+            })
+        return {"success": True, "download_path": download_dir}
+
     def _build_aria_text(self, nodes: list[dict], max_depth: int = 10) -> str:
         """Convert AX tree nodes to readable text with assigned refs."""
         lines = []
@@ -742,6 +858,7 @@ def get_browser_skill_manifest() -> dict:
         "endpoints": [
             {"id": "navigate", "description": "Navigate to a URL", "params": [
                 {"name": "url", "type": "string", "required": True, "description": "URL to navigate to"},
+                {"name": "wait_until", "type": "string", "required": False, "description": "Wait strategy: load, domcontentloaded, networkidle, commit"},
             ]},
             {"id": "screenshot", "description": "Capture a screenshot of the current page", "params": [
                 {"name": "full_page", "type": "boolean", "required": False, "description": "Capture full scrollable page"},
@@ -785,6 +902,24 @@ def get_browser_skill_manifest() -> dict:
             ]},
             {"id": "close_tab", "description": "Close a browser tab", "params": [
                 {"name": "tab_id", "type": "string", "required": True, "description": "Tab id to close"},
+            ]},
+            {"id": "save_session", "description": "Save browser cookies/session to disk", "params": [
+                {"name": "profile", "type": "string", "required": False, "description": "Session profile name (default: 'default')"},
+            ]},
+            {"id": "restore_session", "description": "Restore browser cookies/session from disk", "params": [
+                {"name": "profile", "type": "string", "required": False, "description": "Session profile name (default: 'default')"},
+            ]},
+            {"id": "network_monitor_start", "description": "Start capturing network requests via CDP", "params": []},
+            {"id": "network_log", "description": "Get captured network requests", "params": [
+                {"name": "filter_type", "type": "string", "required": False, "description": "Filter by resource type (e.g. XHR, Fetch, Script)"},
+            ]},
+            {"id": "list_iframes", "description": "List all iframes on the current page", "params": []},
+            {"id": "execute_in_iframe", "description": "Execute JavaScript in a specific iframe", "params": [
+                {"name": "frame_index", "type": "integer", "required": True, "description": "Index of the iframe from list_iframes"},
+                {"name": "script", "type": "string", "required": True, "description": "JavaScript to execute"},
+            ]},
+            {"id": "set_download_path", "description": "Configure browser file download directory", "params": [
+                {"name": "path", "type": "string", "required": False, "description": "Download directory path (default: ~/.feral/browser/downloads)"},
             ]},
         ],
     }

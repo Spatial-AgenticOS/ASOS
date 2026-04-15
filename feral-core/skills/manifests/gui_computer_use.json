@@ -1,0 +1,160 @@
+{
+    "skill_id": "gui_computer_use",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "GUI Computer Use",
+        "primary_color": "#e84393",
+        "secondary_color": "#2d3436",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Anthropic-style GUI computer use primitives: screenshot, mouse clicks, typing, key combos, scrolling, and window management. Supports Retina/HiDPI scaling automatically.",
+    "trigger_phrases": [
+        "screenshot", "take screenshot", "capture screen",
+        "click", "mouse click", "click on",
+        "double click", "right click",
+        "move mouse", "mouse move",
+        "type text", "type into", "enter text",
+        "press key", "keyboard shortcut", "key combo", "hotkey",
+        "scroll", "scroll down", "scroll up",
+        "cursor position", "mouse position",
+        "list windows", "open windows", "window list",
+        "focus window", "switch window", "bring to front",
+        "computer use", "gui control", "desktop automation"
+    ],
+    "categories": ["system", "automation", "computer_use"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "screenshot",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Capture the current screen. Returns a base64 JPEG image resized to max 1920px width. Reports the DPI scale factor.",
+            "params": [],
+            "returns_description": "Base64-encoded JPEG screenshot, image format, and DPI scale factor",
+            "ui_hint": "image"
+        },
+        {
+            "id": "mouse_click",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Left-click at the given (x, y) coordinates. Coordinates are in screenshot-space and automatically adjusted for DPI scaling.",
+            "params": [
+                {"name": "x", "type": "integer", "required": true, "description": "X coordinate in screenshot space"},
+                {"name": "y", "type": "integer", "required": true, "description": "Y coordinate in screenshot space"}
+            ],
+            "returns_description": "Confirmation of click action",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "mouse_double_click",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Double-click at the given (x, y) coordinates.",
+            "params": [
+                {"name": "x", "type": "integer", "required": true, "description": "X coordinate in screenshot space"},
+                {"name": "y", "type": "integer", "required": true, "description": "Y coordinate in screenshot space"}
+            ],
+            "returns_description": "Confirmation of double-click action",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "mouse_right_click",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Right-click at the given (x, y) coordinates.",
+            "params": [
+                {"name": "x", "type": "integer", "required": true, "description": "X coordinate in screenshot space"},
+                {"name": "y", "type": "integer", "required": true, "description": "Y coordinate in screenshot space"}
+            ],
+            "returns_description": "Confirmation of right-click action",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "mouse_move",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Move the mouse cursor to (x, y) without clicking.",
+            "params": [
+                {"name": "x", "type": "integer", "required": true, "description": "X coordinate in screenshot space"},
+                {"name": "y", "type": "integer", "required": true, "description": "Y coordinate in screenshot space"}
+            ],
+            "returns_description": "Confirmation of move action",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "type_text",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Type a text string. Handles Unicode via pyperclip+Cmd/Ctrl+V fallback for non-ASCII characters.",
+            "params": [
+                {"name": "text", "type": "string", "required": true, "description": "The text to type"}
+            ],
+            "returns_description": "Confirmation of text typed",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "key_press",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Press a key combination. Use '+' to separate modifiers (e.g. 'cmd+c', 'ctrl+shift+t', 'enter', 'tab').",
+            "params": [
+                {"name": "keys", "type": "string", "required": true, "description": "Key combo (e.g. 'cmd+c', 'ctrl+shift+t', 'enter')"}
+            ],
+            "returns_description": "Confirmation of key press",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "scroll",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Scroll at a given position. If x/y are omitted, scrolls at the current cursor position.",
+            "params": [
+                {"name": "x", "type": "integer", "required": false, "description": "X coordinate in screenshot space"},
+                {"name": "y", "type": "integer", "required": false, "description": "Y coordinate in screenshot space"},
+                {"name": "direction", "type": "string", "required": true, "description": "'up' or 'down'"},
+                {"name": "amount", "type": "integer", "required": false, "description": "Number of scroll clicks (default 3)"}
+            ],
+            "returns_description": "Confirmation of scroll action",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "cursor_position",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Return the current mouse cursor position.",
+            "params": [],
+            "returns_description": "Current x, y coordinates and DPI scale",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "window_list",
+            "method": "PYTHON",
+            "url": "",
+            "description": "List all visible windows with their titles and bounds.",
+            "params": [],
+            "returns_description": "Array of window objects",
+            "ui_hint": "list"
+        },
+        {
+            "id": "window_focus",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Bring a window to the front by its title or application name.",
+            "params": [
+                {"name": "title", "type": "string", "required": true, "description": "Window title or application name to focus"}
+            ],
+            "returns_description": "Confirmation of window focus",
+            "ui_hint": "detail_card"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": ["screen_capture", "input_control", "accessibility"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 5000
+}

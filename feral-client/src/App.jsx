@@ -21,11 +21,14 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [voiceMode, setVoiceMode] = useState('off');
+  const [voiceState, setVoiceState] = useState('off'); // 'active' | 'reconnecting' | 'degraded' | 'off'
+  const [pushToTalk, setPushToTalk] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sessionStartTime] = useState(Date.now());
   const [attachedFiles, setAttachedFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
+  const pttActiveRef = useRef(false);
 
   const voiceEngineRef = useRef(null);
   const visionRef = useRef(null);
@@ -50,6 +53,38 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [session.messages, session.isThinking]);
+
+  // Push-to-talk: hold Space to unmute, release to mute
+  useEffect(() => {
+    if (!pushToTalk || !isRecording) return;
+
+    const onKeyDown = (e) => {
+      if (e.code !== 'Space' || e.repeat) return;
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      e.preventDefault();
+      if (!pttActiveRef.current && voiceEngineRef.current) {
+        pttActiveRef.current = true;
+        voiceEngineRef.current.unmuteMic();
+      }
+    };
+
+    const onKeyUp = (e) => {
+      if (e.code !== 'Space') return;
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      e.preventDefault();
+      if (pttActiveRef.current && voiceEngineRef.current) {
+        pttActiveRef.current = false;
+        voiceEngineRef.current.muteMic();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [pushToTalk, isRecording]);
 
   const handleSend = async (e) => {
     e.preventDefault();
@@ -87,12 +122,22 @@ export default function App() {
   const startRecording = async () => {
     if (!session.wsRef.current || session.wsRef.current.readyState !== WebSocket.OPEN) return;
     try {
-      const engine = new RealtimeVoiceEngine(session.wsRef.current);
+      const engine = new RealtimeVoiceEngine(session.wsRef.current, {
+        onStateChange: (state) => setVoiceState(state),
+        onError: (kind, msg) => {
+          if (kind === 'reconnect') {
+            session.setMessages(prev => [...prev, { role: 'system', type: 'text', content: msg }]);
+          }
+        },
+      });
       voiceEngineRef.current = engine;
       await engine.start();
+      if (pushToTalk) engine.muteMic();
       setIsRecording(true);
       setVoiceMode('realtime');
-      session.setMessages(prev => [...prev, { role: 'system', type: 'text', content: 'Voice conversation started. Speak naturally — your agent can hear you and use tools.' }]);
+      setVoiceState('active');
+      const modeLabel = pushToTalk ? 'Push-to-talk active. Hold Space to speak.' : 'Speak naturally — your agent can hear you and use tools.';
+      session.setMessages(prev => [...prev, { role: 'system', type: 'text', content: `Voice conversation started. ${modeLabel}` }]);
     } catch (err) {
       session.setMessages(prev => [...prev, { role: 'system', type: 'text', content: `Mic access denied: ${err.message}` }]);
     }
@@ -105,6 +150,7 @@ export default function App() {
     }
     setIsRecording(false);
     setVoiceMode('off');
+    setVoiceState('off');
   };
 
   const toggleCamera = async () => {

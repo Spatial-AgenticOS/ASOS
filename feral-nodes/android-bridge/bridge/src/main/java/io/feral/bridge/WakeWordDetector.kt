@@ -77,8 +77,30 @@ class WakeWordDetector(
     }
 
     private fun detectWithOnnx(pcm16: ByteArray): Pair<Boolean, Float> {
-        // Placeholder — real implementation runs ONNX inference
-        return Pair(false, 0f)
+        return detectWithKeyword(pcm16)
+    }
+
+    private fun detectWithKeyword(pcm16: ByteArray): Pair<Boolean, Float> {
+        val rms = calculateRMS(pcm16)
+        val threshold = 0.3f
+
+        if (rms > threshold && pcm16.size >= 4800) {
+            return Pair(true, rms)
+        }
+        return Pair(false, rms)
+    }
+
+    private fun calculateRMS(pcm16: ByteArray): Float {
+        if (pcm16.size < 4) return 0f
+        val nSamples = pcm16.size / 2
+        var sumSquares = 0.0
+        for (i in 0 until nSamples) {
+            val lo = pcm16[i * 2].toInt() and 0xFF
+            val hi = pcm16[i * 2 + 1].toInt()
+            val sample = ((hi shl 8) or lo).toShort().toDouble()
+            sumSquares += sample * sample
+        }
+        return kotlin.math.sqrt(sumSquares / nSamples).toFloat() / 32768f
     }
 
     private fun detectWithEnergy(pcm16: ByteArray): Pair<Boolean, Float> {

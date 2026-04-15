@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import time as _time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -13,6 +15,48 @@ from skills.base import BaseSkill
 from skills.impl import register_skill
 
 logger = logging.getLogger("feral.skills.web_search")
+
+
+# ---------------------------------------------------------------------------
+# Result cache + deduplication
+# ---------------------------------------------------------------------------
+
+class SearchCache:
+    """TTL-bounded, size-bounded cache keyed on normalised query text."""
+
+    def __init__(self, ttl_seconds: int = 300, max_size: int = 200):
+        self._cache: dict[str, tuple[float, list[dict]]] = {}
+        self._ttl = ttl_seconds
+        self._max_size = max_size
+
+    def get(self, query: str) -> list[dict] | None:
+        key = hashlib.md5(query.lower().strip().encode()).hexdigest()
+        if key in self._cache:
+            ts, results = self._cache[key]
+            if _time.time() - ts < self._ttl:
+                return results
+            del self._cache[key]
+        return None
+
+    def set(self, query: str, results: list[dict]) -> None:
+        if len(self._cache) >= self._max_size:
+            oldest = min(self._cache, key=lambda k: self._cache[k][0])
+            del self._cache[oldest]
+        key = hashlib.md5(query.lower().strip().encode()).hexdigest()
+        self._cache[key] = (_time.time(), results)
+
+
+def _deduplicate(results: list[SearchResult]) -> list[SearchResult]:
+    """Remove duplicate URLs while preserving order; keep URL-less items."""
+    seen_urls: set[str] = set()
+    deduped: list[SearchResult] = []
+    for r in results:
+        if r.url and r.url in seen_urls:
+            continue
+        if r.url:
+            seen_urls.add(r.url)
+        deduped.append(r)
+    return deduped
 
 
 @dataclass
@@ -218,34 +262,205 @@ class DuckDuckGoProvider(SearchProvider):
         return out[:max_results]
 
 
+class ExaSearchProvider(SearchProvider):
+    """Exa — semantic search API."""
+
+    name = "exa"
+
+    def __init__(self, api_key: str):
+        self._api_key = api_key
+        self._client = httpx.AsyncClient(base_url="https://api.exa.ai", timeout=15)
+
+    async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+        response = await self._client.post(
+            "/search",
+            json={
+                "query": query,
+                "numResults": max_results,
+                "type": "auto",
+                "useAutoprompt": True,
+                "contents": {"text": {"maxCharacters": 1000}},
+            },
+            headers={
+                "x-api-key": self._api_key,
+                "Content-Type": "application/json",
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        return [
+            SearchResult(
+                title=r.get("title", ""),
+                url=r.get("url", ""),
+                snippet=(r.get("text", "") or "")[:500],
+                score=float(max(0, len(data.get("results", [])) - i)),
+            )
+            for i, r in enumerate(data.get("results", []))
+        ]
+
+
+class SearXNGProvider(SearchProvider):
+    """SearXNG — self-hosted meta-search."""
+
+    name = "searxng"
+
+    def __init__(self, base_url: str = "http://localhost:8080"):
+        self._client = httpx.AsyncClient(base_url=base_url, timeout=15)
+
+    async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+        response = await self._client.get(
+            "/search",
+            params={"q": query, "format": "json", "pageno": 1},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return [
+            SearchResult(
+                title=r.get("title", ""),
+                url=r.get("url", ""),
+                snippet=(r.get("content", "") or "")[:500],
+                score=float(max(0, max_results - i)),
+            )
+            for i, r in enumerate(data.get("results", [])[:max_results])
+        ]
+
+
+class PerplexityProvider(SearchProvider):
+    """Perplexity — AI-powered search."""
+
+    name = "perplexity"
+
+    def __init__(self, api_key: str):
+        self._api_key = api_key
+        self._client = httpx.AsyncClient(
+            base_url="https://api.perplexity.ai", timeout=30,
+        )
+
+    async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+        response = await self._client.post(
+            "/chat/completions",
+            json={
+                "model": "sonar",
+                "messages": [{"role": "user", "content": query}],
+            },
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        citations = data.get("citations", [])
+        if citations:
+            return [
+                SearchResult(
+                    title=f"Perplexity Result {i + 1}",
+                    url=c,
+                    snippet=content[:500] if i == 0 else "",
+                    score=float(max(0, len(citations) - i)),
+                )
+                for i, c in enumerate(citations[:max_results])
+            ]
+        return [
+            SearchResult(
+                title="Perplexity Answer",
+                url="",
+                snippet=content[:1000],
+                score=1.0,
+            )
+        ]
+
+
+class GoogleCSEProvider(SearchProvider):
+    """Google Custom Search Engine."""
+
+    name = "google_cse"
+
+    def __init__(self, api_key: str, cse_id: str):
+        self._api_key = api_key
+        self._cse_id = cse_id
+        self._client = httpx.AsyncClient(timeout=15)
+
+    async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+        response = await self._client.get(
+            "https://www.googleapis.com/customsearch/v1",
+            params={
+                "key": self._api_key,
+                "cx": self._cse_id,
+                "q": query,
+                "num": min(max_results, 10),
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        return [
+            SearchResult(
+                title=r.get("title", ""),
+                url=r.get("link", ""),
+                snippet=r.get("snippet", ""),
+                score=float(max(0, len(data.get("items", [])) - i)),
+            )
+            for i, r in enumerate(data.get("items", []))
+        ]
+
+
 class WebSearchEngine:
-    """Ordered search providers with failover."""
+    """Ordered search providers with failover and result caching."""
 
     def __init__(self, providers: list[SearchProvider]):
         self.providers = providers
+        self._cache = SearchCache()
 
     @classmethod
     def from_env(cls, vault: Optional[Dict[str, str]] = None) -> "WebSearchEngine":
         vault = vault or {}
         providers: list[SearchProvider] = []
+
         tavily_key = vault.get("web_search") or os.environ.get("TAVILY_API_KEY")
         brave_key = os.environ.get("BRAVE_API_KEY")
+        exa_key = os.environ.get("EXA_API_KEY")
+        pplx_key = os.environ.get("PERPLEXITY_API_KEY")
+        google_key = os.environ.get("GOOGLE_API_KEY")
+        google_cse = os.environ.get("GOOGLE_CSE_ID")
+        searxng_url = os.environ.get("SEARXNG_URL")
+
         if tavily_key:
             providers.append(TavilyProvider(tavily_key))
         if brave_key:
             providers.append(BraveProvider(brave_key))
-        if not providers:
-            providers.append(DuckDuckGoProvider())
-        else:
-            providers.append(DuckDuckGoProvider())
+        if exa_key:
+            providers.append(ExaSearchProvider(exa_key))
+        if pplx_key:
+            providers.append(PerplexityProvider(pplx_key))
+        if google_key and google_cse:
+            providers.append(GoogleCSEProvider(google_key, google_cse))
+        if searxng_url:
+            providers.append(SearXNGProvider(searxng_url))
+
+        providers.append(DuckDuckGoProvider())
         return cls(providers)
 
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+        cached = self._cache.get(query)
+        if cached is not None:
+            logger.debug("search cache hit for %r", query)
+            return [SearchResult(**r) for r in cached]
+
         last_err: Optional[Exception] = None
         for p in self.providers:
             try:
                 results = await p.search(query, max_results=max_results)
                 if results:
+                    results = _deduplicate(results)
+                    self._cache.set(
+                        query,
+                        [{"title": r.title, "url": r.url, "snippet": r.snippet, "score": r.score} for r in results],
+                    )
                     return results
             except Exception as e:
                 last_err = e
@@ -260,7 +475,7 @@ class WebSearchEngine:
             if isinstance(p, TavilyProvider):
                 try:
                     results, answer = await p.search_with_answer(query, max_results=max_results)
-                    return results, answer
+                    return _deduplicate(results), answer
                 except Exception as e:
                     logger.debug("tavily instant: %s", e)
         for p in self.providers:
@@ -268,7 +483,7 @@ class WebSearchEngine:
                 try:
                     ans = await p.instant_answer_only(query)
                     results = await p.search(query, max_results=max_results)
-                    return results, ans
+                    return _deduplicate(results), ans
                 except Exception as e:
                     logger.debug("ddg instant: %s", e)
         results = await self.search(query, max_results=max_results)
@@ -290,7 +505,8 @@ def _results_to_payload(results: list[SearchResult]) -> list[dict[str, Any]]:
 @register_skill
 class WebSearchSkill(BaseSkill):
     """
-    Web search with multi-provider failover: Tavily, Brave, then DuckDuckGo.
+    Web search with multi-provider failover: Tavily, Brave, Exa, Perplexity,
+    Google CSE, SearXNG, then DuckDuckGo.  Results are cached and deduplicated.
     """
 
     def __init__(self) -> None:

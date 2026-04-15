@@ -15,12 +15,23 @@ import base64
 import json
 import logging
 import os
+import platform
+import re
+import shutil
 import subprocess
 import time
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field, ValidationError
 
 from skills.base import BaseSkill
 from skills.impl import register_skill
+from skills.impl.gui_computer_use import (
+    capture_screenshot_bytes,
+    detect_dpi_scale,
+    scale_coordinates,
+)
 
 logger = logging.getLogger("feral.agentic_cu")
 
@@ -53,6 +64,113 @@ Rules:
 """
 
 
+# ── Pydantic models for structured VLM action parsing ─────────────
+
+class ClickAction(BaseModel):
+    action: str
+    x: int
+    y: int
+    description: str = ""
+
+class TypeAction(BaseModel):
+    action: str
+    text: str
+    description: str = ""
+
+class KeyAction(BaseModel):
+    action: str
+    keys: str
+    description: str = ""
+
+class ScrollAction(BaseModel):
+    action: str
+    direction: str
+    amount: int = 3
+    description: str = ""
+
+class ShellAction(BaseModel):
+    action: str
+    command: str
+    description: str = ""
+
+class DoneAction(BaseModel):
+    action: str
+    summary: str = ""
+
+class FailedAction(BaseModel):
+    action: str
+    reason: str = ""
+
+
+_ACTION_JSON_RE = re.compile(r'\{[^{}]*"action"\s*:\s*"[^"]+?"[^{}]*\}', re.DOTALL)
+
+_ACTION_MODELS = {
+    "click": ClickAction,
+    "double_click": ClickAction,
+    "right_click": ClickAction,
+    "type": TypeAction,
+    "key": KeyAction,
+    "scroll": ScrollAction,
+    "shell": ShellAction,
+    "done": DoneAction,
+    "failed": FailedAction,
+}
+
+
+def parse_vlm_action(raw_text: str) -> Optional[dict]:
+    """Parse a VLM response into a validated action dict.
+
+    Strategy:
+    1. Try to parse the full text as JSON directly.
+    2. Strip markdown fences and retry.
+    3. Regex-extract the first JSON object containing "action".
+    4. Validate with the appropriate Pydantic model.
+    """
+    cleaned = raw_text.strip()
+
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        start = 1
+        if lines[0].strip().startswith("```"):
+            start = 1
+        end = len(lines)
+        for i in range(len(lines) - 1, 0, -1):
+            if lines[i].strip() == "```":
+                end = i
+                break
+        inner = lines[start:end]
+        if inner and inner[0].strip().lower().startswith("json"):
+            inner = inner[1:]
+        cleaned = "\n".join(inner).strip()
+
+    candidates: List[str] = [cleaned]
+
+    regex_matches = _ACTION_JSON_RE.findall(raw_text)
+    candidates.extend(regex_matches)
+
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        if not isinstance(data, dict) or "action" not in data:
+            continue
+
+        action_type = data["action"]
+        model_cls = _ACTION_MODELS.get(action_type)
+        if model_cls is None:
+            return data
+
+        try:
+            validated = model_cls.model_validate(data)
+            return validated.model_dump()
+        except (ValidationError, Exception):
+            return data
+
+    return None
+
+
 @register_skill
 class AgenticComputerUseSkill(BaseSkill):
     name = "Agentic Computer Use"
@@ -61,6 +179,14 @@ class AgenticComputerUseSkill(BaseSkill):
 
     def __init__(self) -> None:
         super().__init__(skill_id="agentic_computer_use")
+        self._dpi_scale: Optional[float] = None
+
+    @property
+    def dpi_scale(self) -> float:
+        if self._dpi_scale is None:
+            self._dpi_scale = detect_dpi_scale()
+            logger.info("Agentic CU DPI scale: %.1f", self._dpi_scale)
+        return self._dpi_scale
 
     async def execute(self, endpoint_id: str, args: Dict[str, Any], vault: Dict[str, str]) -> Dict[str, Any]:
         if endpoint_id == "execute_task":
@@ -146,37 +272,10 @@ class AgenticComputerUseSkill(BaseSkill):
     async def _capture_screen(self) -> Optional[str]:
         """Capture the screen and return base64-encoded JPEG."""
         try:
-            import platform
-            if platform.system() == "Darwin":
-                import tempfile
-                tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-                tmp.close()
-                proc = await asyncio.create_subprocess_exec(
-                    "screencapture", "-x", "-t", "jpg", tmp.name,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                )
-                await proc.wait()
-                with open(tmp.name, "rb") as f:
-                    data = f.read()
-                os.unlink(tmp.name)
-
-                try:
-                    from PIL import Image
-                    import io
-                    img = Image.open(io.BytesIO(data))
-                    if img.width > 1920:
-                        ratio = 1920 / img.width
-                        img = img.resize((1920, int(img.height * ratio)), Image.LANCZOS)
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=70)
-                    data = buf.getvalue()
-                except ImportError:
-                    pass
-
-                return base64.b64encode(data).decode()
-            else:
-                logger.warning("Agentic computer use: unsupported platform for screenshot")
+            raw = await capture_screenshot_bytes()
+            if raw is None:
                 return None
+            return base64.b64encode(raw).decode()
         except Exception as e:
             logger.error(f"Screenshot failed: {e}")
             return None
@@ -215,14 +314,7 @@ class AgenticComputerUseSkill(BaseSkill):
             if not text:
                 return None
 
-            cleaned = text.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("```")[1]
-                if cleaned.startswith("json"):
-                    cleaned = cleaned[4:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            return json.loads(cleaned.strip())
+            return parse_vlm_action(text)
         except Exception as e:
             logger.warning(f"VLM action decision failed: {e}")
             return None
@@ -251,39 +343,66 @@ class AgenticComputerUseSkill(BaseSkill):
             return f"Action failed: {e}"
 
     async def _do_click(self, x: int, y: int, clicks: int = 1, button: str = "left") -> str:
+        sx, sy = scale_coordinates(x, y, self.dpi_scale)
         try:
             import pyautogui
-            pyautogui.click(x, y, clicks=clicks, button=button)
-            return f"Clicked ({x}, {y})"
+            await asyncio.to_thread(pyautogui.click, sx, sy, clicks=clicks, button=button)
+            return f"Clicked ({sx}, {sy}) [raw=({x},{y}), scale={self.dpi_scale}]"
         except ImportError:
-            script = f'tell application "System Events" to click at {{{x}, {y}}}'
-            proc = await asyncio.create_subprocess_exec(
-                "osascript", "-e", script,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.wait()
-            return f"Clicked ({x}, {y}) via AppleScript"
+            if platform.system() == "Darwin":
+                script = f'tell application "System Events" to click at {{{sx}, {sy}}}'
+                proc = await asyncio.create_subprocess_exec(
+                    "osascript", "-e", script,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.wait()
+                return f"Clicked ({sx}, {sy}) via AppleScript"
+            return f"pyautogui not available and no fallback for {platform.system()}"
 
     async def _do_type(self, text: str) -> str:
         try:
             import pyautogui
-            pyautogui.typewrite(text, interval=0.02) if text.isascii() else pyautogui.write(text)
+            if text.isascii():
+                await asyncio.to_thread(pyautogui.write, text, interval=0.02)
+            else:
+                try:
+                    import pyperclip
+                    pyperclip.copy(text)
+                    modifier = "command" if platform.system() == "Darwin" else "ctrl"
+                    await asyncio.to_thread(pyautogui.hotkey, modifier, "v")
+                except ImportError:
+                    await asyncio.to_thread(pyautogui.write, text, interval=0.02)
             return f"Typed: {text[:50]}"
         except ImportError:
-            escaped = text.replace('"', '\\"')
-            script = f'tell application "System Events" to keystroke "{escaped}"'
-            proc = await asyncio.create_subprocess_exec(
-                "osascript", "-e", script,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.wait()
-            return f"Typed via AppleScript: {text[:50]}"
+            if platform.system() == "Darwin":
+                escaped = text.replace('"', '\\"')
+                script = f'tell application "System Events" to keystroke "{escaped}"'
+                proc = await asyncio.create_subprocess_exec(
+                    "osascript", "-e", script,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.wait()
+                return f"Typed via AppleScript: {text[:50]}"
+            return f"pyautogui not available and no fallback for {platform.system()}"
 
     async def _do_key(self, keys: str) -> str:
         try:
             import pyautogui
             parts = [k.strip() for k in keys.split("+")]
-            pyautogui.hotkey(*parts)
+            mapped = []
+            for p in parts:
+                low = p.lower()
+                if low in ("cmd", "command", "meta", "super"):
+                    mapped.append("command" if platform.system() == "Darwin" else "ctrl")
+                elif low in ("ctrl", "control"):
+                    mapped.append("ctrl")
+                elif low in ("alt", "option"):
+                    mapped.append("alt")
+                elif low in ("shift",):
+                    mapped.append("shift")
+                else:
+                    mapped.append(low)
+            await asyncio.to_thread(pyautogui.hotkey, *mapped)
             return f"Key combo: {keys}"
         except ImportError:
             return f"pyautogui not available for key combo: {keys}"
@@ -292,7 +411,7 @@ class AgenticComputerUseSkill(BaseSkill):
         try:
             import pyautogui
             scroll_amount = amount if direction == "up" else -amount
-            pyautogui.scroll(scroll_amount)
+            await asyncio.to_thread(pyautogui.scroll, scroll_amount)
             return f"Scrolled {direction} by {amount}"
         except ImportError:
             return "pyautogui not available for scroll"
