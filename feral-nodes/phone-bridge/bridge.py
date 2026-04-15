@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Reference FERAL phone bridge daemon.
+FERAL Phone Bridge — REFERENCE IMPLEMENTATION (SIMULATED DATA).
 
-This process simulates a phone node that can:
-- Register to FERAL Brain over WebSocket
-- Receive node.invoke commands and return execute_result payloads
-- Stream sensor data and glasses bridge status
+WARNING: This bridge returns SIMULATED data for all commands.
+It exists as a development/testing reference only.
+For real phone integration, use the native iOS or Android apps.
+
+All simulated responses are tagged with "source": "simulated".
 """
 
 from __future__ import annotations
@@ -157,11 +158,11 @@ class PhoneBridgeDaemon:
             return {"success": False, "error": str(exc)}
 
     async def _camera_snap(self, args: dict) -> dict:
-        return {"success": True, "data": {"note": "Stub camera snap (replace with native iOS/Android camera call).", "resolution": args.get("resolution", "1080p")}}
+        return {"success": False, "data": {"source": "simulated", "error": "Camera not available. Use native iOS/Android app for real camera.", "resolution": args.get("resolution", "1080p")}}
 
     async def _camera_clip(self, args: dict) -> dict:
         duration_s = int(args.get("duration_s", 5))
-        return {"success": True, "data": {"note": "Stub camera clip.", "duration_s": duration_s}}
+        return {"success": False, "data": {"source": "simulated", "error": "Video not available. Use native iOS/Android app.", "duration_s": duration_s}}
 
     async def _location_get(self, args: dict) -> dict:
         lat = 47.6062 + random.uniform(-0.001, 0.001)
@@ -171,19 +172,21 @@ class PhoneBridgeDaemon:
     async def _sensor_read(self, args: dict) -> dict:
         sensor_name = args.get("sensor_name", "all")
         all_data = {
-            "battery_pct": random.randint(30, 100),
-            "ambient_temp_c": round(22 + random.uniform(-2, 2), 1),
-            "accelerometer": {"x": random.uniform(-0.2, 0.2), "y": random.uniform(-0.2, 0.2), "z": 1 + random.uniform(-0.05, 0.05)},
+            "battery_pct": 0,
+            "ambient_temp_c": 0.0,
+            "accelerometer": {"x": 0, "y": 0, "z": 0},
+            "source": "simulated",
+            "note": "Python bridge returns no real sensor data. Use native iOS/Android app.",
         }
         if sensor_name == "all":
             return {"success": True, "data": all_data}
-        return {"success": True, "data": {sensor_name: all_data.get(sensor_name, "unavailable")}}
+        return {"success": True, "data": {sensor_name: all_data.get(sensor_name, "unavailable"), "source": "simulated"}}
 
     async def _health_read(self, args: dict) -> dict:
-        return {"success": True, "data": {"heart_rate": random.randint(62, 90), "spo2": random.randint(95, 99), "source": "simulated"}}
+        return {"success": True, "data": {"heart_rate": 0, "spo2": 0, "source": "simulated", "note": "No real health data. Use native iOS/Android app with HealthKit/Health Connect."}}
 
     async def _audio_play(self, args: dict) -> dict:
-        return {"success": True, "data": {"note": "Stub audio playback.", "url": args.get("url", "")}}
+        return {"success": False, "data": {"source": "simulated", "error": "Audio playback not available in Python bridge. Use native app."}}
 
     async def _audio_tts(self, args: dict) -> dict:
         text = args.get("text", "")
@@ -214,41 +217,32 @@ class PhoneBridgeDaemon:
         }
 
     async def _screen_record(self, args: dict) -> dict:
-        return {"success": True, "data": {"note": "Stub screen record command.", "action": args.get("action", "start")}}
+        return {"success": False, "data": {"source": "simulated", "error": "Screen recording not available in Python bridge. Use native app."}}
 
     async def _sensor_loop(self) -> None:
+        """Push telemetry — all data tagged as simulated since this is the reference Python bridge."""
         assert self.ws is not None
         while True:
             now = time.time()
             readings = {
                 "phone": {
-                    "battery_pct": random.randint(30, 100),
-                    "network": random.choice(["wifi", "5g"]),
+                    "battery_pct": 0,
+                    "network": "unknown",
+                    "source": "simulated",
                 },
                 "health": {
-                    "heart_rate": random.randint(62, 90),
-                    "spo2": random.randint(95, 99),
+                    "heart_rate": 0,
+                    "spo2": 0,
+                    "source": "simulated",
                 },
+                "note": "Python reference bridge — no real sensor data. Use native iOS/Android app.",
             }
             await self.ws.send(
                 json.dumps(
                     {
                         "hop": "daemon",
                         "type": "sensor_batch",
-                        "payload": {"readings": readings, "timestamp": now},
-                    }
-                )
-            )
-            await self.ws.send(
-                json.dumps(
-                    {
-                        "hop": "daemon",
-                        "type": "glasses_status",
-                        "payload": {
-                            "glasses_connected": True,
-                            "battery_level": random.randint(40, 100),
-                            "glasses_model": self.glasses_model,
-                        },
+                        "payload": {"readings": readings, "timestamp": now, "source": "simulated"},
                     }
                 )
             )

@@ -133,22 +133,26 @@ class WristbandAdapter:
 
     async def read_telemetry(self) -> dict[str, Any]:
         """Read all sensor data and return as a flat dict."""
-        import random
         if not self._client:
-            self._last_hr = random.randint(60, 100)
-            self._last_spo2 = round(random.uniform(95.0, 99.9), 1)
-            self._last_temp = round(random.uniform(36.0, 37.2), 1)
-        else:
-            try:
-                hr_data = await self._client.read_gatt_char(HEART_RATE_UUID)
-                self._last_hr = hr_data[1] if len(hr_data) > 1 else hr_data[0]
-            except Exception:
-                pass
+            return {
+                "heart_rate_bpm": 0,
+                "spo2_pct": 0,
+                "skin_temp_c": 0.0,
+                "timestamp": time.time(),
+                "source": "no_device",
+                "note": "No BLE wristband connected. Pair a device or use --demo mode for simulated data.",
+            }
+        try:
+            hr_data = await self._client.read_gatt_char(HEART_RATE_UUID)
+            self._last_hr = hr_data[1] if len(hr_data) > 1 else hr_data[0]
+        except Exception:
+            pass
         return {
             "heart_rate_bpm": self._last_hr,
             "spo2_pct": self._last_spo2,
             "skin_temp_c": self._last_temp,
             "timestamp": time.time(),
+            "source": "ble_device",
         }
 
     async def execute(self, action: HUPAction) -> HUPResult:

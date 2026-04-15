@@ -295,36 +295,53 @@ class HardwareDaemon:
         return {"success": True, "data": {"output": f"Rendered '{text}' on HUD"}}
 
     async def _telemetry_loop(self):
-        """Continuously push sensor telemetry to the Brain (ROS Publisher equivalent)."""
-        heart_rate = 70
+        """Continuously push real system telemetry to the Brain via psutil."""
+        try:
+            import psutil
+            has_psutil = True
+        except ImportError:
+            has_psutil = False
+            logger.warning("psutil not installed — telemetry loop disabled. Install psutil for real system metrics.")
+            return
+
         try:
             while True:
-                # Simulate bio-metric data drift
-                import random
-                heart_rate += random.randint(-2, 2)
-                heart_rate = max(60, min(120, heart_rate))
-                
+                cpu_pct = psutil.cpu_percent(interval=None)
+                mem = psutil.virtual_memory()
+                battery = psutil.sensors_battery()
+
+                sensors = {
+                    "cpu_percent": cpu_pct,
+                    "memory_percent": mem.percent,
+                    "memory_available_mb": round(mem.available / (1024 * 1024)),
+                    "source": "psutil",
+                }
+                if battery is not None:
+                    sensors["battery_pct"] = battery.percent
+                    sensors["battery_plugged"] = battery.power_plugged
+
+                try:
+                    temps = psutil.sensors_temperatures()
+                    if temps:
+                        first_sensor = next(iter(temps.values()))[0]
+                        sensors["cpu_temp_c"] = first_sensor.current
+                except Exception:
+                    pass
+
                 telemetry = {
                     "hop": "daemon",
                     "type": "telemetry",
                     "payload": {
                         "node_id": self.node_id,
-                        "sensors": {
-                            "ppg_heart_rate": heart_rate,
-                            "battery_pct": 87,
-                            "imu_status": "stable",
-                            "environment_temp": 22.5
-                        },
-                        "timestamp": time.time()
-                    }
+                        "sensors": sensors,
+                        "timestamp": time.time(),
+                    },
                 }
-                
+
                 await self.ws.send(json.dumps(telemetry))
-                logger.debug(f"Pushed telemetry: HR={heart_rate}")
-                
-                # Push every 2 seconds
+                logger.debug("Pushed telemetry: CPU=%.1f%% MEM=%.1f%%", cpu_pct, mem.percent)
                 await asyncio.sleep(2.0)
-                
+
         except websockets.ConnectionClosed:
             logger.info("Telemetry loop stopped (connection closed).")
 
