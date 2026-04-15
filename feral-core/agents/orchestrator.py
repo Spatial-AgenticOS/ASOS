@@ -110,6 +110,8 @@ class Orchestrator:
         self.genui = GenUIGenerator()
         self._mcp_client = None
         self._somatic_engine = None  # set via set_somatic_engine() from BrainState
+        self._tool_genesis = None    # set via set_tool_genesis() from BrainState
+        self._mitosis_engine = None  # set via set_mitosis_engine() from BrainState
 
         # Delegate sub-modules
         self.tool_runner = ToolRunner(self)
@@ -179,6 +181,14 @@ class Orchestrator:
         """Wire the SomaticEngine so the identity loader can inject body-state context."""
         self._somatic_engine = somatic_engine
         self.identity_loader.somatic_engine = somatic_engine
+
+    def set_tool_genesis(self, tool_genesis):
+        """Wire the ToolGenesisEngine so the orchestrator records tool-call patterns."""
+        self._tool_genesis = tool_genesis
+
+    def set_mitosis_engine(self, mitosis_engine):
+        """Wire the AgentMitosisEngine so the orchestrator observes interaction patterns."""
+        self._mitosis_engine = mitosis_engine
 
     def _init_multi_agent(self):
         """Lazy-init the multi-agent orchestrator once LLM is available."""
@@ -421,6 +431,9 @@ class Orchestrator:
                     result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
                     latency_ms = (time.time() - t_start) * 1000
 
+                    if self._tool_genesis:
+                        self._tool_genesis.record_tool_call(session_id, tc["name"], tc.get("args", {}))
+
                     if self.memory:
                         parts = tc["name"].split("__", 1)
                         skill_id = parts[0] if len(parts) == 2 else tc["name"]
@@ -444,6 +457,10 @@ class Orchestrator:
                     anti_loop_guidance = result_data.get("_anti_loop_guidance")
                     if anti_loop_guidance:
                         history.append({"role": "system", "content": anti_loop_guidance})
+
+                if self._mitosis_engine:
+                    tools_used = [tc["name"] for tc in tool_calls]
+                    self._mitosis_engine.observe_interaction(session_id, text, tools_used)
             elif text_content:
                 if self.memory:
                     self.memory.working_push(session_id, {"role": "assistant", "text": text_content[:300]})
@@ -589,6 +606,10 @@ class Orchestrator:
                     t_start = time.time()
                     result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
                     latency_ms = (time.time() - t_start) * 1000
+
+                    if self._tool_genesis:
+                        self._tool_genesis.record_tool_call(session_id, tc["name"], tc.get("args", {}))
+
                     if self.memory:
                         parts = tc["name"].split("__", 1)
                         skill_id = parts[0] if len(parts) == 2 else tc["name"]
@@ -611,6 +632,10 @@ class Orchestrator:
                         history.append({"role": "system", "content": anti_loop_guidance})
 
                     await self._try_genui_for_result(session_id, tc, result_data)
+
+                if self._mitosis_engine:
+                    tools_used = [tc["name"] for tc in normalized_tool_calls]
+                    self._mitosis_engine.observe_interaction(session_id, text, tools_used)
                 continue
 
             if accumulated_text:

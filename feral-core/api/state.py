@@ -25,7 +25,7 @@ from perception.fusion import PerceptionEngine
 from perception.audio_pipeline import AudioPipeline
 from perception.scene import SceneAnalyzer
 from perception.change_detector import ChangeDetector
-from config.loader import ConfigLoader, feral_home
+from config.loader import ConfigLoader, feral_home, feral_data_home
 from config.runtime import brain_bind_host, brain_port, brain_public_base_url, ollama_base_url
 from security.vault import BlindVault, PermissionTier, ExecutionSandbox
 from security.sandbox_policy import SandboxPolicy
@@ -161,6 +161,9 @@ class BrainState:
         self.session_handoff: Optional[SessionHandoffManager] = None
         self.baseline_engine: Optional[BaselineEngine] = None
         self.somatic_engine = None
+        self.tool_genesis = None
+        self.agent_mitosis = None
+        self.intent_compiler = None
         self.device_pairing_store: DevicePairingStore = DevicePairingStore()
         self._boot_report: BootReport = BootReport()
 
@@ -298,6 +301,10 @@ class BrainState:
             self.orchestrator.executor.set_wasm_sandbox(self.wasm_sandbox)
         if self.mcp_client:
             self.orchestrator.set_mcp_client(self.mcp_client)
+        if self.tool_genesis:
+            self.orchestrator.set_tool_genesis(self.tool_genesis)
+        if self.agent_mitosis:
+            self.orchestrator.set_mitosis_engine(self.agent_mitosis)
 
         self.realtime_proxy = RealtimeProxy(
             skill_registry=self.skill_registry,
@@ -394,6 +401,19 @@ class BrainState:
             self.somatic_engine = SomaticEngine()
             if self.orchestrator:
                 self.orchestrator.set_somatic_engine(self.somatic_engine)
+
+        with boot_subsystem(self._boot_report, "ToolGenesisEngine"):
+            from agents.tool_genesis import ToolGenesisEngine
+            self.tool_genesis = ToolGenesisEngine(llm=_shared_llm)
+
+        with boot_subsystem(self._boot_report, "AgentMitosisEngine"):
+            from agents.agent_mitosis import AgentMitosisEngine
+            self.agent_mitosis = AgentMitosisEngine(llm=_shared_llm, memory=self.memory)
+
+        with boot_subsystem(self._boot_report, "IntentCompiler"):
+            from agents.intent_compiler import IntentCompiler
+            _intent_db = str(feral_data_home() / "intents.db")
+            self.intent_compiler = IntentCompiler(llm=_shared_llm, db_path=_intent_db)
 
         self.proactive = None
         with boot_subsystem(self._boot_report, "ProactiveEngine"):

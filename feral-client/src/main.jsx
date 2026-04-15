@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard';
 import TaskFlows from './pages/TaskFlows';
 import Timeline from './pages/Timeline';
 import Ambient from './pages/Ambient';
+import GlassBrain from './pages/GlassBrain';
 import AppShell from './components/AppShell';
 import { API_BASE } from './config';
 import { ToastProvider } from './components/Toast';
@@ -72,6 +73,7 @@ function Root() {
           <Route path="/settings" element={setupComplete ? <Settings /> : <Navigate to="/setup" />} />
           <Route path="/taskflows" element={setupComplete ? <TaskFlows /> : <Navigate to="/setup" />} />
           <Route path="/timeline" element={setupComplete ? <Timeline /> : <Navigate to="/setup" />} />
+          <Route path="/glass-brain" element={setupComplete ? <GlassBrain /> : <Navigate to="/setup" />} />
         </Route>
         <Route path="/ambient" element={setupComplete ? <Ambient /> : <Navigate to="/setup" />} />
         <Route path="*" element={<Navigate to="/" />} />
