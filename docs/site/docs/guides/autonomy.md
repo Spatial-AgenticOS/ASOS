@@ -22,9 +22,9 @@ Agent: It's 72°F and sunny in New York.
 
 Best for: first-time setup, untrusted environments, auditing all agent behavior.
 
-```yaml
-# ~/.feral/config.yaml
-autonomy: strict
+```json
+// ~/.feral/settings.json
+{ "autonomy": { "mode": "strict" } }
 ```
 
 ## Hybrid Mode
@@ -89,9 +89,9 @@ FERAL_AUTONOMY=strict feral start
 
 ### Config File
 
-```yaml
-# ~/.feral/config.yaml
-autonomy: hybrid
+```json
+// ~/.feral/settings.json
+{ "autonomy": { "mode": "hybrid" } }
 ```
 
 ### Per-Session Override

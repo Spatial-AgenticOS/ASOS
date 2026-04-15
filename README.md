@@ -32,6 +32,17 @@
 
 ---
 
+## Feature Maturity
+
+| Status | Features |
+|:-------|:---------|
+| **Stable** | Chat, Memory (4-tier + Knowledge Graph), Skills (17 manifests + WASM), Config (layered JSON), CLI |
+| **Beta** | Voice (OpenAI Realtime / Gemini Live / Whisper), Browser Use, Computer Use, Channels (Telegram / Slack / Discord), Health Monitoring (wristband biometrics) |
+| **Experimental** | Tool Genesis, Agent Mitosis, Intent Compiler, Glass Brain, Somatic Context, P2P Sync |
+| **Planned** | Native iOS / Android apps, Video generation, Music generation |
+
+---
+
 ## The Idea
 
 FERAL is **one local brain for every device you own**. It connects to your wristband, your smart glasses, your home, your computer, your phone, your robots — every device, every app, every sensor. It learns your daily baseline across all of them. And it proactively manages hardware, software, health data, and your environment through natural language and intent.
@@ -164,34 +175,32 @@ Docker-first sandboxed execution: --network=none, --memory=512m, --cpus=1, --rea
 
 ## Get Started
 
-**One-liner** (installs everything, creates a virtual env):
-
 ```bash
-curl -sSL https://raw.githubusercontent.com/FERAL-AI/FERAL-AI/main/scripts/install.sh | bash
-```
+# Install
+pip install "feral-ai[llm]"
 
-After install, activate and run:
-
-```bash
-source ~/.feral-env/bin/activate
+# Start (opens browser, runs setup wizard on first run)
 feral start
 ```
 
-**Or clone manually:**
+That's it. The Brain starts on `http://localhost:9090` with the web dashboard bundled.
 
+### What Happens
+1. `feral start` detects first run → launches the setup wizard
+2. You pick an LLM provider (OpenAI, Anthropic, Ollama, etc.) and enter your API key
+3. The Brain starts on port 9090 with the web dashboard
+4. Your browser opens automatically
+
+No API key required for local models (Ollama auto-detected on `localhost:11434`).
+
+### Development Mode
+If you're developing FERAL itself:
 ```bash
-git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
-make install       # or: cd feral-core && pip install -e ".[llm]"
-feral start
-```
-
-Brain starts, UI opens, voice activates. No API key required for local models (Ollama auto-detected).
-
-Want cloud LLM instead?
-
-```bash
-export ANTHROPIC_API_KEY=sk-...    # or OPENAI_API_KEY, or OPENROUTER_API_KEY
-feral start
+git clone https://github.com/FERAL-AI/FERAL-AI.git
+cd FERAL-AI
+make dev           # installs both brain + client
+feral serve        # brain on :9090 (headless)
+cd feral-client && npm run dev  # Vite on :5173
 ```
 
 ---

@@ -292,9 +292,12 @@ The edge adapter translates the device's native protocol into the daemon WebSock
 
 | Endpoint | Method | Description |
 |:---------|:-------|:------------|
-| `/api/devices` | GET | List connected hardware devices |
-| `/api/hardware/execute` | POST | Execute a HUP action on a device |
-| `/api/hardware/status` | GET | Device registry stats |
+| `/api/devices/connected` | GET | List all connected devices with types and metrics |
+| `/api/devices/paired` | GET | List all paired edge-node devices |
+| `/api/devices/pair` | POST | Pair a new edge-node device |
+| `/api/devices/{device_id}` | DELETE | Revoke (un-pair) a device |
+| `/api/nodes/health` | GET | All node health status with heartbeat freshness |
+| `/api/commands/recent` | GET | Recent commands with lifecycle state |
 | `/v1/node` | WS | Hardware daemon WebSocket channel |
 
 ## Implementation Reference

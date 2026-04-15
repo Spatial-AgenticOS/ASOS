@@ -46,16 +46,20 @@ feral vault set TELEGRAM_BOT_TOKEN "123456:ABC-..."
 
 3. Enable the channel in config:
 
-```yaml
-# ~/.feral/config.yaml
-channels:
-  telegram:
-    enabled: true
-    allowed_users:
-      - 12345678       # Telegram user IDs
-    features:
-      voice_messages: true
-      inline_mode: true
+```json
+// ~/.feral/settings.json — "channels" section
+{
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "allowed_users": [12345678],
+      "features": {
+        "voice_messages": true,
+        "inline_mode": true
+      }
+    }
+  }
+}
 ```
 
 4. Start FERAL — the Telegram channel connects automatically.

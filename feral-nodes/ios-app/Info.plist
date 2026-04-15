@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>FERAL Node</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>NSCameraUsageDescription</key>
+    <string>FERAL Node uses the camera to scan QR codes for pairing and to capture frames for the Brain's perception pipeline.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>FERAL Node uses the microphone for voice commands sent to the Brain.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>FERAL Node shares location with the Brain for context-aware assistance.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>FERAL Node shares location with the Brain for continuous context-aware assistance.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>FERAL Node connects to FERAL Glasses via Bluetooth for sensor data.</string>
+    <key>NSHealthShareUsageDescription</key>
+    <string>FERAL Node reads health data to forward to the Brain for health monitoring.</string>
+</dict>
+</plist>

@@ -292,6 +292,18 @@ class Orchestrator:
         return RefusalHandler.capability_key(text)
 
     # ─────────────────────────────────────────────
+    # Brain Event Bus (Glass Brain visualization)
+    # ─────────────────────────────────────────────
+
+    async def _emit_brain_event(self, session_id: str, event_type: str, data: dict):
+        """Emit a brain event to the session for Glass Brain visualization."""
+        try:
+            msg = FeralMessage(type="brain_event", payload={"event": event_type, **data})
+            await self.send(session_id, msg)
+        except Exception:
+            pass
+
+    # ─────────────────────────────────────────────
     # Core Command Handler
     # ─────────────────────────────────────────────
 
@@ -385,6 +397,8 @@ class Orchestrator:
             ]
 
             try:
+                model_name = getattr(self.llm, 'model_name', 'llm')
+                await self._emit_brain_event(session_id, "llm_call", {"model": model_name})
                 response = await self.llm.chat_with_failover(messages=messages, tools=tools if tools else None)
                 text_content, tool_calls = self.llm.extract_response(response)
 
@@ -431,6 +445,9 @@ class Orchestrator:
                     result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
                     latency_ms = (time.time() - t_start) * 1000
 
+                    tool_success = bool(result_data.get("success") or result_data.get("status") == "command_sent_to_hardware_daemon")
+                    await self._emit_brain_event(session_id, "tool_exec", {"tool": tc["name"], "success": tool_success})
+
                     if self._tool_genesis:
                         self._tool_genesis.record_tool_call(session_id, tc["name"], tc.get("args", {}))
 
@@ -443,7 +460,7 @@ class Orchestrator:
                             skill_id=skill_id,
                             endpoint_id=endpoint_id,
                             args=tc.get("args", {}),
-                            result_status="success" if result_data.get("success") or result_data.get("status") == "command_sent_to_hardware_daemon" else "failure",
+                            result_status="success" if tool_success else "failure",
                             result_summary=json.dumps(result_data)[:300],
                             latency_ms=latency_ms,
                         )
@@ -464,6 +481,7 @@ class Orchestrator:
             elif text_content:
                 if self.memory:
                     self.memory.working_push(session_id, {"role": "assistant", "text": text_content[:300]})
+                    await self._emit_brain_event(session_id, "memory_write", {"type": "episodic"})
 
                 await self._send_text(session_id, text_content)
                 break
@@ -524,6 +542,8 @@ class Orchestrator:
             tool_calls_received = []
 
             try:
+                stream_model = getattr(self.llm, 'model_name', 'llm')
+                await self._emit_brain_event(session_id, "llm_call", {"model": stream_model})
                 async for delta in self.llm.chat_stream(messages=messages, tools=tools if tools else None):
                     if delta["type"] == "text_delta":
                         piece = delta.get("content", "")
@@ -607,6 +627,9 @@ class Orchestrator:
                     result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
                     latency_ms = (time.time() - t_start) * 1000
 
+                    stream_tool_success = bool(result_data.get("success") or result_data.get("status") == "command_sent_to_hardware_daemon")
+                    await self._emit_brain_event(session_id, "tool_exec", {"tool": tc["name"], "success": stream_tool_success})
+
                     if self._tool_genesis:
                         self._tool_genesis.record_tool_call(session_id, tc["name"], tc.get("args", {}))
 
@@ -617,7 +640,7 @@ class Orchestrator:
                         self.memory.log_execution(
                             session_id=session_id, skill_id=skill_id,
                             endpoint_id=endpoint_id, args=tc.get("args", {}),
-                            result_status="success" if result_data.get("success") or result_data.get("status") == "command_sent_to_hardware_daemon" else "failure",
+                            result_status="success" if stream_tool_success else "failure",
                             result_summary=json.dumps(result_data)[:300],
                             latency_ms=latency_ms,
                         )
@@ -642,6 +665,7 @@ class Orchestrator:
                 got_final_text = True
                 if self.memory:
                     self.memory.working_push(session_id, {"role": "assistant", "text": accumulated_text[:300]})
+                    await self._emit_brain_event(session_id, "memory_write", {"type": "episodic"})
                 break
 
             break

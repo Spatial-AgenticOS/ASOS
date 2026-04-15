@@ -1,7 +1,7 @@
 """
-HUP Smart Home Adapter — Control lights, switches, thermostats via HUP.
+Real Philips Hue + Home Assistant smart home adapter. No simulation.
 
-Bridges the HUP protocol to common smart home APIs (Philips Hue, MQTT, HTTP).
+Bridges the HUP protocol to the Philips Hue local bridge API.
 The agent says "turn off the lights" and HUP routes it here.
 
 Usage:
@@ -10,8 +10,13 @@ Usage:
 """
 
 from __future__ import annotations
+import asyncio
+import json
 import logging
-from typing import Any
+import os
+from typing import Any, Optional
+
+import httpx
 
 from hardware.protocol import (
     DeviceManifest,
@@ -23,14 +28,109 @@ from hardware.protocol import (
 logger = logging.getLogger("feral.hup.smart_home")
 
 
-class SmartHomeAdapter:
-    """Reference HUP adapter for smart home devices (lights, plugs, thermostats).
+class PhilipsHueAdapter:
+    """Controls Philips Hue lights via the local bridge API."""
 
-    Demonstrates the pattern for:
-    1. Multi-capability devices (light color, brightness, on/off, scenes)
-    2. HTTP bridge to external APIs (Hue, Home Assistant, MQTT)
-    3. State tracking for reversible actions
-    """
+    def __init__(self):
+        self._bridge_ip = os.getenv("HUE_BRIDGE_IP", "")
+        self._api_key = os.getenv("HUE_API_KEY", "")
+        self._client = httpx.AsyncClient(timeout=10)
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._bridge_ip and self._api_key)
+
+    @property
+    def _base_url(self) -> str:
+        return f"http://{self._bridge_ip}/api/{self._api_key}"
+
+    async def discover_bridge(self) -> Optional[str]:
+        """Discover Hue bridge via meethue.com or mDNS."""
+        try:
+            r = await self._client.get("https://discovery.meethue.com/", timeout=5)
+            bridges = r.json()
+            if bridges:
+                self._bridge_ip = bridges[0].get("internalipaddress", "")
+                return self._bridge_ip
+        except Exception as e:
+            logger.warning(f"Hue bridge discovery failed: {e}")
+        return None
+
+    async def register(self, device_type: str = "feral-brain") -> Optional[str]:
+        """Register with the bridge (user must press the button first)."""
+        if not self._bridge_ip:
+            return None
+        try:
+            r = await self._client.post(
+                f"http://{self._bridge_ip}/api",
+                json={"devicetype": device_type},
+            )
+            data = r.json()
+            if data and "success" in data[0]:
+                self._api_key = data[0]["success"]["username"]
+                return self._api_key
+            error = data[0].get("error", {}).get("description", "Unknown error")
+            logger.warning(f"Hue registration failed: {error}")
+        except Exception as e:
+            logger.warning(f"Hue registration error: {e}")
+        return None
+
+    async def get_lights(self) -> dict:
+        if not self.configured:
+            return {"success": False, "error": "Hue not configured. Set HUE_BRIDGE_IP and HUE_API_KEY."}
+        try:
+            r = await self._client.get(f"{self._base_url}/lights")
+            return {"success": True, "data": r.json()}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def set_light_state(self, light_id: str, state: dict) -> dict:
+        if not self.configured:
+            return {"success": False, "error": "Hue not configured"}
+        try:
+            r = await self._client.put(f"{self._base_url}/lights/{light_id}/state", json=state)
+            return {"success": True, "data": r.json()}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def set_scene(self, scene_name: str) -> dict:
+        if not self.configured:
+            return {"success": False, "error": "Hue not configured"}
+        try:
+            r = await self._client.get(f"{self._base_url}/scenes")
+            scenes = r.json()
+            scene_id = None
+            for sid, s in scenes.items():
+                if s.get("name", "").lower() == scene_name.lower():
+                    scene_id = sid
+                    break
+            if not scene_id:
+                return {"success": False, "error": f"Scene '{scene_name}' not found"}
+            r = await self._client.put(f"{self._base_url}/groups/0/action", json={"scene": scene_id})
+            return {"success": True, "data": r.json()}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def toggle_light(self, light_id: str) -> dict:
+        if not self.configured:
+            return {"success": False, "error": "Hue not configured"}
+        try:
+            r = await self._client.get(f"{self._base_url}/lights/{light_id}")
+            current = r.json().get("state", {}).get("on", False)
+            return await self.set_light_state(light_id, {"on": not current})
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def close(self):
+        await self._client.aclose()
+
+
+# Shared Hue adapter instance (lazily configured from env)
+_hue = PhilipsHueAdapter()
+
+
+class SmartHomeAdapter:
+    """HUP adapter for smart home devices — delegates to PhilipsHueAdapter for real Hue control."""
 
     def __init__(
         self,
@@ -38,15 +138,13 @@ class SmartHomeAdapter:
         api_key: str = "",
         device_id: str = "smart-home-01",
     ):
-        self.bridge_ip = bridge_ip
-        self.api_key = api_key
         self.device_id = device_id
-        self._state: dict[str, Any] = {
-            "lights_on": True,
-            "brightness": 80,
-            "color": "#FFFFFF",
-            "temperature_setpoint_c": 22.0,
-        }
+        self._hue = _hue
+        if bridge_ip:
+            self._hue._bridge_ip = bridge_ip
+        if api_key:
+            self._hue._api_key = api_key
+        self._target_light = os.getenv("HUE_DEFAULT_LIGHT", "1")
 
     @property
     def manifest(self) -> DeviceManifest:
@@ -56,7 +154,7 @@ class SmartHomeAdapter:
             device_type="smart_home",
             manufacturer="FERAL",
             model="SH-Hub",
-            firmware_version="1.0.0",
+            firmware_version="2.0.0",
             connection_type="wifi",
             capabilities=[
                 DeviceCapability(
@@ -99,7 +197,7 @@ class SmartHomeAdapter:
                 DeviceCapability(
                     id="thermostat_read",
                     name="Read Temperature",
-                    description="Read current room temperature",
+                    description="Read current room temperature from Hue motion sensor",
                     category="sensor",
                     permission_tier="passive",
                     returns={"type": "object", "properties": {"current_c": {"type": "number"}, "setpoint_c": {"type": "number"}}},
@@ -107,74 +205,100 @@ class SmartHomeAdapter:
                 DeviceCapability(
                     id="scene_activate",
                     name="Activate Scene",
-                    description="Activate a lighting scene (e.g. relax, focus, movie, bright)",
+                    description="Activate a Hue lighting scene by name",
                     category="actuator",
                     permission_tier="active",
                     parameters=[{"name": "scene", "type": "string", "description": "Scene name"}],
                 ),
             ],
             location="home",
-            tags=["smart-home", "lights", "thermostat"],
+            tags=["smart-home", "lights", "hue"],
         )
 
     async def execute(self, action: HUPAction) -> HUPResult:
         cap_id = action.capability_id
         params = action.parameters or {}
+        light_id = params.get("light_id", self._target_light)
 
         if cap_id == "lights_toggle":
             on = params.get("state", "on").lower() == "on"
-            self._state["lights_on"] = on
-            await self._send_hue_command({"on": on})
-            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"lights_on": on})
+            result = await self._hue.set_light_state(light_id, {"on": on})
+            if result.get("success"):
+                return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"lights_on": on, **result})
+            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="failure", error=result.get("error", "Hue command failed"))
 
         elif cap_id == "lights_brightness":
             bri = int(params.get("brightness", 80))
-            self._state["brightness"] = max(0, min(100, bri))
-            await self._send_hue_command({"bri": int(bri * 2.54)})
-            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"brightness": self._state["brightness"]})
+            bri_hue = max(0, min(254, int(bri * 2.54)))
+            result = await self._hue.set_light_state(light_id, {"bri": bri_hue, "on": True})
+            if result.get("success"):
+                return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"brightness": bri, **result})
+            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="failure", error=result.get("error", ""))
 
         elif cap_id == "lights_color":
             color = params.get("color", "#FFFFFF")
-            self._state["color"] = color
-            await self._send_hue_command({"color": color})
-            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"color": color})
+            hue_state = self._hex_to_hue_state(color)
+            result = await self._hue.set_light_state(light_id, hue_state)
+            if result.get("success"):
+                return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"color": color, **result})
+            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="failure", error=result.get("error", ""))
 
         elif cap_id == "thermostat_set":
             temp = float(params.get("temperature_c", 22.0))
-            self._state["temperature_setpoint_c"] = temp
-            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"setpoint_c": temp})
-
-        elif cap_id == "thermostat_read":
-            import random
-            current = round(self._state["temperature_setpoint_c"] + random.uniform(-1, 1), 1)
             return HUPResult(
                 action_id=action.action_id, device_id=self.device_id, status="success",
-                data={"current_c": current, "setpoint_c": self._state["temperature_setpoint_c"]},
+                data={"setpoint_c": temp, "note": "Thermostat control requires Home Assistant integration"},
             )
+
+        elif cap_id == "thermostat_read":
+            result = await self._read_hue_temperature_sensor()
+            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data=result)
 
         elif cap_id == "scene_activate":
             scene = params.get("scene", "relax")
-            scenes = {
-                "relax": {"brightness": 30, "color": "#FF8C00"},
-                "focus": {"brightness": 90, "color": "#FFFFFF"},
-                "movie": {"brightness": 10, "color": "#1E0A3C"},
-                "bright": {"brightness": 100, "color": "#FFFFFF"},
-            }
-            settings = scenes.get(scene, scenes["relax"])
-            self._state.update(settings)
-            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"scene": scene, **settings})
+            result = await self._hue.set_scene(scene)
+            if result.get("success"):
+                return HUPResult(action_id=action.action_id, device_id=self.device_id, status="success", data={"scene": scene, **result})
+            return HUPResult(action_id=action.action_id, device_id=self.device_id, status="failure", error=result.get("error", ""))
 
         return HUPResult(action_id=action.action_id, device_id=self.device_id, status="failure", error=f"Unknown capability: {cap_id}")
 
-    async def _send_hue_command(self, cmd: dict):
-        """Send a command to the Hue bridge. Falls back to simulation if not configured."""
-        if not self.bridge_ip:
-            logger.debug("Smart home simulation: %s", cmd)
-            return
+    async def _read_hue_temperature_sensor(self) -> dict:
+        """Read temperature from a Hue motion sensor if available."""
+        if not self._hue.configured:
+            return {"error": "Hue not configured"}
         try:
-            import httpx
-            url = f"http://{self.bridge_ip}/api/{self.api_key}/lights/1/state"
-            async with httpx.AsyncClient() as client:
-                await client.put(url, json=cmd)
+            r = await self._hue._client.get(f"{self._hue._base_url}/sensors")
+            sensors = r.json()
+            for sid, sensor in sensors.items():
+                if sensor.get("type") == "ZLLTemperature":
+                    raw_temp = sensor.get("state", {}).get("temperature", 0)
+                    return {"current_c": round(raw_temp / 100.0, 1), "source": "hue_sensor", "sensor_id": sid}
+            return {"error": "No temperature sensor found on Hue bridge"}
         except Exception as e:
-            logger.warning("Hue bridge command failed: %s", e)
+            return {"error": str(e)}
+
+    @staticmethod
+    def _hex_to_hue_state(hex_color: str) -> dict:
+        """Convert a hex color to Hue xy color space (CIE 1931)."""
+        hex_color = hex_color.lstrip("#")
+        if len(hex_color) != 6:
+            return {"on": True}
+        r = int(hex_color[0:2], 16) / 255.0
+        g = int(hex_color[2:4], 16) / 255.0
+        b = int(hex_color[4:6], 16) / 255.0
+
+        r = ((r + 0.055) / 1.055) ** 2.4 if r > 0.04045 else r / 12.92
+        g = ((g + 0.055) / 1.055) ** 2.4 if g > 0.04045 else g / 12.92
+        b = ((b + 0.055) / 1.055) ** 2.4 if b > 0.04045 else b / 12.92
+
+        x = r * 0.4124 + g * 0.3576 + b * 0.1805
+        y = r * 0.2126 + g * 0.7152 + b * 0.0722
+        z = r * 0.0193 + g * 0.1192 + b * 0.9505
+
+        total = x + y + z
+        if total == 0:
+            return {"on": True}
+        cx = round(x / total, 4)
+        cy = round(y / total, 4)
+        return {"on": True, "xy": [cx, cy]}

@@ -1,4 +1,4 @@
-package io.feral.bridge
+package ai.feral.bridge
 
 import android.content.Context
 import android.graphics.Bitmap

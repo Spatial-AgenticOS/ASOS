@@ -12,12 +12,11 @@ After [installation](/getting-started/installation), start everything with a sin
 feral start
 ```
 
-This launches three components simultaneously:
+This launches two components simultaneously:
 
 | Component | Description | Default Address |
 |-----------|-------------|-----------------|
-| **Brain** | Python backend — LLM orchestration, memory, skills, hardware mesh | `ws://localhost:9090` |
-| **Dashboard** | React web UI — The Orb, timeline, ambient strip, SDUI renderer | `http://localhost:3000` |
+| **Brain + Dashboard** | Python backend with bundled web UI — LLM orchestration, memory, skills, hardware mesh, The Orb, timeline, ambient strip, SDUI renderer | `http://localhost:9090` |
 | **REPL** | Interactive terminal session for text commands | Your terminal |
 
 <Note>
@@ -114,7 +113,7 @@ Once setup completes, you are dropped into the REPL. Try these:
 ```
 </CodeGroup>
 
-Open the dashboard at [http://localhost:3000](http://localhost:3000) to see The Orb — FERAL's visual presence — react to your conversation in real time.
+Open the dashboard at [http://localhost:9090](http://localhost:9090) to see The Orb — FERAL's visual presence — react to your conversation in real time.
 
 ## What's Running
 
@@ -123,8 +122,7 @@ Use `feral status` to check all active components:
 ```bash
 $ feral status
 
-  Brain       ● running   ws://localhost:9090   PID 48201
-  Dashboard   ● running   http://localhost:3000  PID 48215
+  Brain       ● running   http://localhost:9090   PID 48201
   Voice       ● active    wake word listening
   Hardware    ● 2 devices FERAL-Wristband-A3F2, Home-Assistant
   Memory      ● sqlite    ~/.feral/memory.db (24 episodes)

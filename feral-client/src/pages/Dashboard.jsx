@@ -27,6 +27,7 @@ export default function Dashboard() {
   const [baselineSummary, setBaselineSummary] = useState(null);
   const [quickActionLoading, setQuickActionLoading] = useState(null);
   const [quickActionResult, setQuickActionResult] = useState(null);
+  const [genesisStats, setGenesisStats] = useState(null);
 
   const refresh = useCallback(() => {
     Promise.all([
@@ -38,7 +39,8 @@ export default function Dashboard() {
       fetch(`${API}/api/channels`).then(r => r.json()).catch(e => { addToast(e.message || 'Failed to load channels'); return null; }),
       fetch(`${API}/api/genui/providers`).then(r => r.json()).catch(e => { addToast(e.message || 'Failed to load providers'); return null; }),
       fetch(`${API}/api/baseline/summary`).then(r => r.json()).catch(() => null),
-    ]).then(([dash, sys, act, llm, presets, channels, genui, baseline]) => {
+      fetch(`${API}/api/tool-genesis/stats`).then(r => r.json()).catch(() => null),
+    ]).then(([dash, sys, act, llm, presets, channels, genui, baseline, genesis]) => {
       if (dash) setDashboard(dash);
       if (sys) setInfo(sys);
       if (act) setActivity(act.entries || []);
@@ -47,6 +49,7 @@ export default function Dashboard() {
       if (channels && !channels.error) setChannelStats(channels);
       if (genui && !genui.error) setGenuiProviders(genui.providers || []);
       if (baseline && !baseline.error && baseline.metrics_tracked > 0) setBaselineSummary(baseline);
+      if (genesis && !genesis.error && (genesis.sequences_tracked > 0 || genesis.tools_generated > 0)) setGenesisStats(genesis);
       setLoading(false);
     });
   }, []);
@@ -240,6 +243,35 @@ export default function Dashboard() {
                 <div className={`text-xl font-bold ${baselineSummary.recent_alerts > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
                   {baselineSummary.recent_alerts}
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tool Genesis */}
+        {genesisStats && (
+          <div className="bg-feral-card border border-feral-border rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <Sparkles size={16} className="text-violet-400" />
+              <h2 className="font-semibold text-sm">Tool Genesis</h2>
+              <span className="ml-auto text-[10px] text-feral-text-muted">auto-generated tools</span>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="bg-feral-bg/30 border border-feral-border rounded-lg p-3">
+                <div className="text-xs text-feral-text-secondary uppercase tracking-wider mb-1">Sequences</div>
+                <div className="text-xl font-bold text-violet-400">{genesisStats.sequences_tracked}</div>
+              </div>
+              <div className="bg-feral-bg/30 border border-feral-border rounded-lg p-3">
+                <div className="text-xs text-feral-text-secondary uppercase tracking-wider mb-1">Proposals</div>
+                <div className="text-xl font-bold text-amber-400">{genesisStats.proposals_ready}</div>
+              </div>
+              <div className="bg-feral-bg/30 border border-feral-border rounded-lg p-3">
+                <div className="text-xs text-feral-text-secondary uppercase tracking-wider mb-1">Generated</div>
+                <div className="text-xl font-bold text-emerald-400">{genesisStats.tools_generated}</div>
+              </div>
+              <div className="bg-feral-bg/30 border border-feral-border rounded-lg p-3">
+                <div className="text-xs text-feral-text-secondary uppercase tracking-wider mb-1">Total Uses</div>
+                <div className="text-xl font-bold text-feral-accent">{genesisStats.total_uses}</div>
               </div>
             </div>
           </div>

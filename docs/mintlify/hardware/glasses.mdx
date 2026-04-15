@@ -1,5 +1,6 @@
 ---
 title: "Smart Glasses"
+status: "Beta"
 sidebarTitle: "Smart Glasses"
 description: "Stream video from smart glasses for scene analysis, AR overlays, and hands-free voice interaction."
 ---
@@ -122,7 +123,7 @@ Example scene context:
 Send visual overlays to the glasses display:
 
 ```bash
-curl -X POST http://localhost:9090/api/hardware/glasses/overlay \
+curl -X POST http://localhost:9090/api/devices/connected \
   -H "Content-Type: application/json" \
   -d '{
     "type": "notification",

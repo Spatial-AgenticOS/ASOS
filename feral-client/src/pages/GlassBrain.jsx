@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 
 const COLORS = {
@@ -11,10 +11,86 @@ const COLORS = {
   stress: 0xef4444,
 };
 
+const EVENT_COLORS = {
+  llm_call: '#06b6d4',
+  tool_exec: '#f59e0b',
+  memory_write: '#8b5cf6',
+  device_telemetry: '#10b981',
+  proactive_alert: '#ef4444',
+};
+
 export default function GlassBrain() {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
+  const eventsRef = useRef([]);
   const [stats, setStats] = useState(null);
+  const [eventLog, setEventLog] = useState([]);
+
+  const handleBrainEvent = useCallback((payload) => {
+    const event = payload.event;
+    const ts = new Date().toLocaleTimeString();
+    eventsRef.current = [...eventsRef.current.slice(-9), { event, ts, ...payload }];
+    setEventLog([...eventsRef.current]);
+
+    if (sceneRef.current) {
+      const { brain, brainMat, pointLight, satellites, ring, ringMat, particlesMat } = sceneRef.current;
+      if (event === 'llm_call') {
+        brainMat.emissiveIntensity = 1.0;
+        pointLight.intensity = 5;
+        setTimeout(() => { brainMat.emissiveIntensity = 0.3; pointLight.intensity = 2; }, 500);
+      } else if (event === 'tool_exec') {
+        ringMat.opacity = 0.8;
+        ring.scale.setScalar(1.3);
+        setTimeout(() => { ringMat.opacity = 0.2; ring.scale.setScalar(1); }, 600);
+      } else if (event === 'memory_write') {
+        particlesMat.opacity = 1.0;
+        particlesMat.size = 0.08;
+        setTimeout(() => { particlesMat.opacity = 0.5; particlesMat.size = 0.04; }, 700);
+      } else if (event === 'device_telemetry') {
+        satellites.forEach(sat => {
+          sat.material.emissiveIntensity = 1.5;
+          setTimeout(() => { sat.material.emissiveIntensity = 0.5; }, 500);
+        });
+      } else if (event === 'proactive_alert') {
+        brainMat.color.setHex(COLORS.alert);
+        brainMat.emissive.setHex(COLORS.alert);
+        pointLight.color.setHex(COLORS.alert);
+        setTimeout(() => {
+          brainMat.color.setHex(COLORS.brain);
+          brainMat.emissive.setHex(COLORS.brain);
+          pointLight.color.setHex(COLORS.brain);
+        }, 1000);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const wsUrl = `ws://${location.hostname}:9090/v1/session`;
+    let ws;
+    let reconnectTimer;
+
+    function connect() {
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'brain_event') {
+            handleBrainEvent(msg.payload);
+          } else if (msg.type === 'state_push' && msg.event === 'proactive_alert') {
+            handleBrainEvent({ event: 'proactive_alert', ...msg.data });
+          }
+        } catch { /* ignore parse errors */ }
+      };
+      ws.onclose = () => { reconnectTimer = setTimeout(connect, 3000); };
+      ws.onerror = () => { ws.close(); };
+    }
+    connect();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (ws) ws.close();
+    };
+  }, [handleBrainEvent]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -158,7 +234,7 @@ export default function GlassBrain() {
     fetchStats();
     const interval = setInterval(fetchStats, 5000);
 
-    sceneRef.current = { scene, renderer, brain, brainMat, pointLight, satellites };
+    sceneRef.current = { scene, renderer, brain, brainMat, pointLight, satellites, ring, ringMat, particlesMat };
 
     return () => {
       cancelAnimationFrame(frame);
@@ -192,6 +268,28 @@ export default function GlassBrain() {
         )}
       </div>
 
+      {/* Live event log */}
+      {eventLog.length > 0 && (
+        <div style={{
+          position: 'absolute', bottom: 20, left: 20,
+          fontFamily: 'monospace', fontSize: 11,
+          background: 'rgba(5,5,16,0.8)', padding: '10px 14px', borderRadius: 8,
+          border: '1px solid rgba(6,182,212,0.15)',
+          maxWidth: 360, pointerEvents: 'none',
+        }}>
+          <div style={{ color: '#71717a', fontSize: 10, marginBottom: 6, letterSpacing: 1 }}>BRAIN EVENTS</div>
+          {[...eventLog].reverse().map((ev, i) => (
+            <div key={i} style={{
+              color: EVENT_COLORS[ev.event] || '#06b6d4',
+              opacity: 1 - i * 0.08,
+              lineHeight: 1.6,
+            }}>
+              [{ev.ts}] {ev.event} {ev.tool || ev.type || ev.model || ''}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Legend */}
       <div style={{
         position: 'absolute', bottom: 20, right: 20,
@@ -202,6 +300,7 @@ export default function GlassBrain() {
         <div><span style={{ color: '#8b5cf6' }}>●</span> Memory particles</div>
         <div><span style={{ color: '#f59e0b' }}>●</span> Tool ring</div>
         <div><span style={{ color: '#10b981' }}>●</span> Device satellites</div>
+        <div><span style={{ color: '#ef4444' }}>●</span> Proactive alert</div>
       </div>
     </div>
   );

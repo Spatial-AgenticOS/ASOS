@@ -5,51 +5,26 @@ sidebar_position: 1
 slug: /getting-started
 ---
 
-# Getting Started
-
-Get FERAL running locally in under five minutes. By the end of this page you will have a brain server, a web dashboard, and your first conversation.
-
-## Prerequisites
-
-- **Python 3.11+** — `python3 --version`
-- An LLM API key (OpenAI, Anthropic, Gemini, Groq) **or** a local [Ollama](https://ollama.ai) instance
-
-## Install
+# Quick Start
 
 ```bash
-pip install feral-ai[llm]
-```
+# Install
+pip install "feral-ai[llm]"
 
-This installs the `feral` CLI, the FastAPI brain server, and the bundled web UI.
-
-## Setup
-
-Run the interactive setup wizard:
-
-```bash
-feral setup
-```
-
-The wizard walks you through:
-
-| Step | What It Configures |
-|:-----|:-------------------|
-| **LLM Provider** | Choose OpenAI, Anthropic, Gemini, Groq, or Ollama (free/local). API key is validated live. |
-| **Agent Identity** | Name, personality, voice settings, and behavioral rules. |
-| **Skills & Tools** | Enable computer use, web search, vision, hardware control. Add keys for Tavily, Spotify, etc. |
-| **Features** | Voice mode (realtime / whisper / disabled), streaming, proactive behavior, wake word. |
-
-All configuration is written to `~/.feral/`. No cloud account needed.
-
-## Start
-
-```bash
+# Start (opens browser, runs setup wizard on first run)
 feral start
 ```
 
-This launches the brain and serves the web dashboard at [http://localhost:9090](http://localhost:9090).
+That's it. The Brain starts on `http://localhost:9090` with the web dashboard bundled.
 
-Open the URL in your browser. Type a message or click the microphone for voice.
+## What Happens
+
+1. `feral start` detects first run and launches the setup wizard.
+2. You pick an LLM provider (OpenAI, Anthropic, Ollama, etc.) and enter your API key.
+3. The Brain starts on port 9090 with the web dashboard.
+4. Your browser opens automatically.
+
+No API key is required for local models — Ollama on `localhost:11434` is auto-detected.
 
 ## First Chat (CLI)
 
@@ -72,9 +47,19 @@ async with FeralClient("http://localhost:9090") as client:
     print(reply)
 ```
 
-## Docker Alternative
+## Development Mode
 
-If you prefer Docker:
+If you're developing FERAL itself:
+
+```bash
+git clone https://github.com/FERAL-AI/FERAL-AI.git
+cd FERAL-AI
+make dev           # installs both brain + client
+feral serve        # brain on :9090 (headless)
+cd feral-client && npm run dev  # Vite on :5173
+```
+
+## Docker Alternative
 
 ```bash
 git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
@@ -84,9 +69,7 @@ docker compose up -d
 
 | Service | URL |
 |:--------|:----|
-| Brain + API | http://localhost:9090 |
-| Web UI | http://localhost:3000 |
-| Skill Registry | http://localhost:8080 |
+| Brain + Web UI | http://localhost:9090 |
 
 ## What's Next
 

@@ -61,7 +61,7 @@ class TestSmartHomeAdapter:
         assert len(m.capabilities) >= 5
 
     @pytest.mark.asyncio
-    async def test_lights_toggle_off(self):
+    async def test_lights_toggle_off_without_bridge(self):
         from hardware.adapters.smart_home import SmartHomeAdapter
 
         sh = SmartHomeAdapter()
@@ -72,8 +72,12 @@ class TestSmartHomeAdapter:
             parameters={"state": "off"},
         )
         result = await sh.execute(action)
-        assert result.status == "success"
-        assert result.data["lights_on"] is False
+        # Without a configured Hue bridge, should return a clear error
+        if not sh._hue.configured:
+            assert result.status == "failure"
+            assert "not configured" in (result.error or "").lower() or "hue" in (result.error or "").lower()
+        else:
+            assert result.status == "success"
 
     @pytest.mark.asyncio
     async def test_unknown_capability(self):

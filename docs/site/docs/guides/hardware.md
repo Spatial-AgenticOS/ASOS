@@ -226,7 +226,10 @@ class MyDeviceAdapter(HUPAdapter):
 | Endpoint | Method | Description |
 |:---------|:-------|:------------|
 | `/v1/node` | WebSocket | HUP device connection endpoint |
-| `/api/devices` | GET | List connected devices and capabilities |
-| `/api/devices/{id}` | GET | Device details and recent telemetry |
-| `/api/devices/{id}/command` | POST | Send a command to a device |
-| `/api/devices/{id}/telemetry` | GET | Query historical telemetry |
+| `/api/devices/connected` | GET | List all connected devices with types and metrics |
+| `/api/devices/paired` | GET | List all paired edge-node devices |
+| `/api/devices/pair` | POST | Pair a new edge-node device |
+| `/api/devices/{device_id}` | DELETE | Revoke (un-pair) a device |
+| `/api/nodes/health` | GET | All node health status with heartbeat freshness |
+| `/api/commands/recent` | GET | Recent commands with lifecycle state |
+| `/api/commands/{command_id}` | GET | Single command detail with state history |

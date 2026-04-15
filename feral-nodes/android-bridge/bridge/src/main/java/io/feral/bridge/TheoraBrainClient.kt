@@ -41,8 +41,11 @@ class FeralBrainClient(
         private set
 
     fun connect() {
-        val url = "ws://$host:$port/v1/node?api_key=$apiKey"
-        val request = Request.Builder().url(url).build()
+        val url = "ws://$host:$port/v1/node"
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {

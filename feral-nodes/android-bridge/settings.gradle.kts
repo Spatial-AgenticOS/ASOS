@@ -17,3 +17,5 @@ dependencyResolutionManagement {
 rootProject.name = "feral-android-bridge"
 include(":bridge")
 include(":sample")
+include(":app")
+project(":app").projectDir = file("../android-app")

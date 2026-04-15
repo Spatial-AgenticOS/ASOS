@@ -1,6 +1,11 @@
 """Device mesh, session handoff, command ledger, node health, and pairing endpoints."""
 
+import io
+import json
+import socket
+
 from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
 
 from api.state import state
 
@@ -172,6 +177,40 @@ async def pair_device(request: Request):
     store = state.device_pairing_store
     result = store.pair_device(name)
     return result
+
+
+@router.get("/api/devices/pair/qr")
+async def pair_device_qr(name: str = "phone"):
+    """Generate a QR code PNG containing pairing info for a new device."""
+    store = state.device_pairing_store
+    if not store:
+        return {"error": "Pairing store not initialized"}
+
+    result = store.pair_device(name)
+
+    hostname = socket.gethostname()
+    ip = socket.gethostbyname(hostname)
+    port = 9090
+
+    payload = json.dumps({
+        "host": ip,
+        "port": port,
+        "token": result["token"],
+        "name": "FERAL Brain",
+    })
+
+    try:
+        import qrcode
+        qr = qrcode.QRCode(version=1, box_size=10, border=4)
+        qr.add_data(payload)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="white", back_color="black")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return StreamingResponse(buf, media_type="image/png")
+    except ImportError:
+        return {"pairing_info": json.loads(payload), "note": "Install qrcode package for QR image"}
 
 
 @router.delete("/api/devices/{device_id}")

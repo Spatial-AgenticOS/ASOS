@@ -15,13 +15,15 @@ FERAL supports three voice paths optimized for different latency, cost, and qual
 
 The lowest-latency option. Audio streams bidirectionally over a single WebSocket — no transcription step, no TTS step. The model hears your voice and speaks back directly.
 
-```yaml
-# ~/.feral/config.yaml
-voice:
-  mode: realtime
-  provider: openai
-  model: gpt-4o-realtime-preview
-  vad: server  # server-side voice activity detection
+```json
+// ~/.feral/settings.json — "audio" section
+{
+  "audio": {
+    "stt_provider": "openai",
+    "tts_provider": "openai",
+    "tts_voice": "nova"
+  }
+}
 ```
 
 Latency: **~150ms** end-to-end. Best for conversational use where natural interruption matters.

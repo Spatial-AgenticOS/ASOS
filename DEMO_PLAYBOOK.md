@@ -33,7 +33,7 @@ Run these checks before starting the demo.
 ### Optional
 
 - [ ] Web UI built and bundled: `cd feral-client && npm ci && npm run build` then `scripts/build_webui.sh`
-- [ ] Docker Compose: `docker compose up -d` (brain at :9090, client at :3000)
+- [ ] Docker Compose: `docker compose up -d` (brain + bundled UI at :9090)
 
 ---
 
@@ -52,7 +52,7 @@ Walk through:
 4. Enable tools
 5. Set security preferences
 
-**Expected output:** `~/.feral/config.yaml`, `identity.yaml`, `credentials.json` created. Agent is ready.
+**Expected output:** `~/.feral/settings.json`, `USER.md`, `SOUL.md`, `credentials.json` created. Agent is ready.
 
 **Verify:**
 ```bash
@@ -67,7 +67,7 @@ curl http://localhost:9090/api/identity
 
 ### Text
 
-Open `http://localhost:9090` (or `http://localhost:3000` if client is separate).
+Open `http://localhost:9090`.
 
 Type a question:
 > "What can you do?"
@@ -286,7 +286,7 @@ python hardware_daemon/daemon.py --node-id demo-sensor --node-type sensor --brai
 ### Verify
 
 ```bash
-curl http://localhost:9090/api/devices
+curl http://localhost:9090/api/devices/connected
 # Should list the connected daemon with its capabilities
 ```
 

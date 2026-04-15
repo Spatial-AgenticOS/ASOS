@@ -63,6 +63,10 @@ wasm = [
 sync = [
     "zeroconf>=0.131.0",
 ]
+discovery = [
+    "zeroconf>=0.131.0",
+    "qrcode[pil]>=7.4",
+]
 stt = [
     "faster-whisper>=1.0.0",
 ]
@@ -90,6 +94,7 @@ all = [
     "playwright>=1.40.0",
     "wasmtime>=22.0.0",
     "zeroconf>=0.131.0",
+    "qrcode[pil]>=7.4",
     "openwakeword>=0.6.0",
     "onnxruntime>=1.16.0",
     "rich>=13.0.0",
@@ -118,7 +123,7 @@ include = [
     "agents*", "api*", "channels*", "cli*", "config*", "gateway*",
     "genui*", "hardware*", "identity*", "infra*", "integrations*",
     "mcp*", "memory*", "models*", "perception*", "security*",
-    "skills*", "voice*", "webui*", "tests*",
+    "services*", "skills*", "voice*", "webui*", "tests*",
 ]
 
 [tool.setuptools.package-data]

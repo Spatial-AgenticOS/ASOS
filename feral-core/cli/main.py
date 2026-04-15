@@ -20,6 +20,7 @@ import os
 import shutil
 import sys
 from importlib import metadata as importlib_metadata
+from pathlib import Path
 from urllib.parse import urlparse
 
 try:
@@ -42,6 +43,7 @@ from config.runtime import (
     brain_public_host,
     brain_public_port,
     brain_public_scheme,
+    brain_tls_enabled,
 )
 
 
@@ -306,7 +308,67 @@ async def one_shot(text: str):
         sys.exit(1)
 
 
-def cmd_serve(host: str | None = None, port: int | None = None):
+def _ensure_tls_certs():
+    """Generate self-signed TLS certificate if none exists."""
+    from config.runtime import brain_tls_cert, brain_tls_key
+    cert_path = Path(brain_tls_cert())
+    key_path = Path(brain_tls_key())
+
+    if cert_path.exists() and key_path.exists():
+        return str(cert_path), str(key_path)
+
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        import datetime
+        import ipaddress
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+        subject = issuer = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, "FERAL Brain"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "FERAL"),
+        ])
+
+        import socket
+        hostname = socket.gethostname()
+
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime.utcnow())
+            .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=365))
+            .add_extension(
+                x509.SubjectAlternativeName([
+                    x509.DNSName("localhost"),
+                    x509.DNSName(hostname),
+                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                ]),
+                critical=False,
+            )
+            .sign(key, hashes.SHA256())
+        )
+
+        key_path.write_bytes(
+            key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
+        )
+        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+
+        print(f"Generated self-signed TLS certificate at {cert_path}")
+        return str(cert_path), str(key_path)
+    except ImportError:
+        print("Install 'cryptography' package for auto-generated TLS certs")
+        return None, None
+
+
+def cmd_serve(host: str | None = None, port: int | None = None, tls: bool = False):
     """Start the FERAL Brain server."""
     try:
         import uvicorn
@@ -320,12 +382,24 @@ def cmd_serve(host: str | None = None, port: int | None = None):
 
     host = host or brain_bind_host()
     port = int(port or brain_port())
-    public_base = os.getenv("FERAL_PUBLIC_BASE_URL", f"http://localhost:{port}")
-    print(f"\n  Starting FERAL Brain on {host}:{port} ...")
+
+    ssl_kwargs: dict = {}
+    if tls or brain_tls_enabled():
+        cert, key = _ensure_tls_certs()
+        if cert and key:
+            ssl_kwargs["ssl_certfile"] = cert
+            ssl_kwargs["ssl_keyfile"] = key
+        else:
+            print("TLS requested but no certificates available")
+            return
+
+    scheme = "https" if ssl_kwargs else "http"
+    public_base = os.getenv("FERAL_PUBLIC_BASE_URL", f"{scheme}://localhost:{port}")
+    print(f"\n  Starting FERAL Brain on {host}:{port} {'(TLS)' if ssl_kwargs else ''}...")
     print(f"  Dashboard: {public_base}")
     print(f"  API docs:  {public_base}/docs\n")
 
-    uvicorn.run("api.server:app", host=host, port=port, reload=False, log_level="info")
+    uvicorn.run("api.server:app", host=host, port=port, reload=False, log_level="info", **ssl_kwargs)
 
 
 def _is_first_run() -> bool:
@@ -350,7 +424,7 @@ def _is_first_run() -> bool:
     return True
 
 
-def cmd_start(port: int | None = None, no_browser: bool = False):
+def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = False):
     """
     One command to rule them all.
     Starts the brain, checks health, opens browser, and drops into chat.
@@ -367,6 +441,16 @@ def cmd_start(port: int | None = None, no_browser: bool = False):
 
     port = int(port or brain_port())
 
+    ssl_kwargs: dict = {}
+    if tls or brain_tls_enabled():
+        cert, key = _ensure_tls_certs()
+        if cert and key:
+            ssl_kwargs["ssl_certfile"] = cert
+            ssl_kwargs["ssl_keyfile"] = key
+        else:
+            print("TLS requested but no certificates available")
+            return
+
     # First run detection — auto-launch setup
     if _is_first_run():
         print()
@@ -376,9 +460,10 @@ def cmd_start(port: int | None = None, no_browser: bool = False):
 
     # Check if already running
     try:
-        health_url = os.getenv("FERAL_HEALTH_URL", f"http://127.0.0.1:{port}/health")
+        scheme = "https" if ssl_kwargs else "http"
+        health_url = os.getenv("FERAL_HEALTH_URL", f"{scheme}://127.0.0.1:{port}/health")
         if httpx:
-            r = httpx.get(health_url, timeout=2)
+            r = httpx.get(health_url, timeout=2, verify=False)
             if r.status_code == 200:
                 print(f"  FERAL is already running on port {port}")
                 if not no_browser:
@@ -388,10 +473,11 @@ def cmd_start(port: int | None = None, no_browser: bool = False):
     except Exception:
         pass
 
+    tls_label = " (TLS)" if ssl_kwargs else ""
     print(f"""
   ╔══════════════════════════════════════╗
   ║          F E R A L                    ║
-  ║   Starting agent on port {port}       ║
+  ║   Starting agent on port {port}{tls_label:7s}  ║
   ╚══════════════════════════════════════╝
 """)
 
@@ -403,6 +489,7 @@ def cmd_start(port: int | None = None, no_browser: bool = False):
         config = uvicorn.Config(
             "api.server:app", host=brain_bind_host(), port=port,
             log_level="warning", access_log=False,
+            **ssl_kwargs,
         )
         server = uvicorn.Server(config)
         server_ready.set()
@@ -955,6 +1042,7 @@ def main():
     start_p = sub.add_parser("start", help="Start FERAL — brain + dashboard + chat in one command")
     start_p.add_argument("--serve-port", default=str(brain_port()), help=f"Port (default {brain_port()})")
     start_p.add_argument("--no-browser", action="store_true", help="Don't open browser")
+    start_p.add_argument("--tls", action="store_true", help="Enable TLS (auto-generates self-signed cert if needed)")
     start_p.add_argument("--demo", action="store_true", help="Demo mode: simulated hardware, pre-seeded memory, compelling identity")
 
     # feral demo (shortcut for start --demo)
@@ -966,6 +1054,7 @@ def main():
     serve_p = sub.add_parser("serve", help="Start the brain server (headless, no chat)")
     serve_p.add_argument("--bind", default=brain_bind_host(), help=f"Bind address (default {brain_bind_host()})")
     serve_p.add_argument("--serve-port", default=str(brain_port()), help=f"Port (default {brain_port()})")
+    serve_p.add_argument("--tls", action="store_true", help="Enable TLS (auto-generates self-signed cert if needed)")
 
     # feral setup
     sub.add_parser("setup", help="Guided setup wizard — configure provider, keys, features")
@@ -1014,9 +1103,9 @@ def main():
     elif args.subcommand == "start":
         if getattr(args, "demo", False):
             os.environ["FERAL_DEMO"] = "1"
-        cmd_start(port=int(args.serve_port), no_browser=args.no_browser)
+        cmd_start(port=int(args.serve_port), no_browser=args.no_browser, tls=getattr(args, "tls", False))
     elif args.subcommand == "serve":
-        cmd_serve(host=args.bind, port=int(args.serve_port))
+        cmd_serve(host=args.bind, port=int(args.serve_port), tls=getattr(args, "tls", False))
     elif args.subcommand == "setup":
         cmd_setup()
     elif args.subcommand == "doctor":

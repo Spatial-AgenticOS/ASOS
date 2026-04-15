@@ -4,6 +4,8 @@ sidebarTitle: "Channels"
 description: "Bridge Telegram, Slack, Discord, and push notifications into the FERAL session system."
 ---
 
+> **Status: Beta** — Telegram and Slack channels are functional. Discord and push notifications are still being refined.
+
 # Channels
 
 FERAL connects to external messaging platforms through **channels**. Each channel bridges a platform's API into the Brain's session system, so users can talk to the agent from Telegram, Slack, Discord, or receive push notifications — all with the same capabilities as the web UI.
@@ -45,16 +47,20 @@ feral vault set TELEGRAM_BOT_TOKEN "123456:ABC-..."
 
 3. Enable the channel in config:
 
-```yaml
-# ~/.feral/config.yaml
-channels:
-  telegram:
-    enabled: true
-    allowed_users:
-      - 12345678       # Telegram user IDs
-    features:
-      voice_messages: true
-      inline_mode: true
+```json
+// ~/.feral/settings.json — "channels" section
+{
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "allowed_users": [12345678],
+      "features": {
+        "voice_messages": true,
+        "inline_mode": true
+      }
+    }
+  }
+}
 ```
 
 4. Start FERAL — the Telegram channel connects automatically.

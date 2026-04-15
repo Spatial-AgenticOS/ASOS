@@ -4,6 +4,8 @@ sidebarTitle: "Autonomy"
 description: "Control how much freedom the agent has to act without human approval."
 ---
 
+> **Status: Stable** — The three autonomy modes and the ApprovalManager are production-ready.
+
 # Autonomy Levels
 
 FERAL's autonomy system controls how much freedom the agent has to act without human approval. Three modes — **strict**, **hybrid**, and **loose** — determine which tools auto-execute and which require explicit confirmation.
@@ -21,9 +23,9 @@ Agent: It's 72°F and sunny in New York.
 
 Best for: first-time setup, untrusted environments, auditing all agent behavior.
 
-```yaml
-# ~/.feral/config.yaml
-autonomy: strict
+```json
+// ~/.feral/settings.json
+{ "autonomy": { "mode": "strict" } }
 ```
 
 ## Hybrid Mode
@@ -90,9 +92,9 @@ FERAL_AUTONOMY=strict feral start
 
 ### Config File
 
-```yaml
-# ~/.feral/config.yaml
-autonomy: hybrid
+```json
+// ~/.feral/settings.json
+{ "autonomy": { "mode": "hybrid" } }
 ```
 
 ### Per-Session Override

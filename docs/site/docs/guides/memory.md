@@ -129,12 +129,15 @@ The algorithm iteratively selects the result that maximizes `lambda * relevance 
 
 When working memory exceeds its token budget, the compactor summarizes older messages into an episode and evicts them from the active context.
 
-```yaml
-# ~/.feral/config.yaml
-memory:
-  working_memory_budget: 8000   # tokens
-  compaction_trigger: 0.85       # compact when 85% full
-  compaction_strategy: summarize # summarize | truncate
+```json
+// ~/.feral/settings.json — "memory" section
+{
+  "memory": {
+    "working_memory_budget": 8000,
+    "compaction_trigger": 0.85,
+    "compaction_strategy": "summarize"
+  }
+}
 ```
 
 The compaction flow:
@@ -177,13 +180,15 @@ Compilation runs automatically on a schedule or on-demand. New facts merge into 
 
 For multi-device setups (laptop + phone + home server), FERAL supports peer-to-peer memory synchronization over the `/sync` WebSocket endpoint.
 
-```yaml
-# ~/.feral/config.yaml
-sync:
-  enabled: true
-  peers:
-    - ws://homeserver.local:9090/sync
-    - ws://phone.local:9090/sync
+```json
+// ~/.feral/settings.json — "sync" section
+{
+  "sync": {
+    "enabled": true,
+    "peers": [
+      "ws://homeserver.local:9090/sync",
+      "ws://phone.local:9090/sync"
+    ],
   conflict_resolution: last_write_wins  # or manual
 ```
 

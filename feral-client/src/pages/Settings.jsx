@@ -5,6 +5,7 @@ import {
   Bluetooth, Wifi, WifiOff, Radio, Smartphone, Glasses, Watch, Bot,
   Sun, Moon, Clock, Play, Pause, ChevronDown, ChevronUp,
   MessageSquare, Server, ShoppingBag, Download, Search,
+  ThumbsUp, ThumbsDown, Users,
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
@@ -45,6 +46,51 @@ export default function Settings() {
   const [installedSkills, setInstalledSkills] = useState([]);
   const [marketplaceLoading, setMarketplaceLoading] = useState(false);
   const [installingSkill, setInstallingSkill] = useState('');
+  const [specialists, setSpecialists] = useState([]);
+  const [spawnProposals, setSpawnProposals] = useState([]);
+  const [specialistsLoading, setSpecialistsLoading] = useState(false);
+  const [spawningId, setSpawningId] = useState('');
+  const [feedbackBusy, setFeedbackBusy] = useState('');
+
+  const fetchSpecialists = async () => {
+    setSpecialistsLoading(true);
+    try {
+      const [listRes, proposalRes] = await Promise.all([
+        fetch(`${API}/api/agents/list`).then(r => r.json()),
+        fetch(`${API}/api/agents/proposals`).then(r => r.json()),
+      ]);
+      setSpecialists(listRes.agents || []);
+      setSpawnProposals(proposalRes.proposals || []);
+    } catch { /* agents may not be initialised */ }
+    finally { setSpecialistsLoading(false); }
+  };
+
+  const spawnAgent = async (patternId) => {
+    setSpawningId(patternId);
+    try {
+      await fetch(`${API}/api/agents/spawn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pattern_id: patternId }),
+      });
+      await fetchSpecialists();
+      flash();
+    } catch (e) { addToast(e.message || 'Spawn failed'); }
+    finally { setSpawningId(''); }
+  };
+
+  const sendFeedback = async (agentId, positive) => {
+    setFeedbackBusy(`${agentId}:${positive}`);
+    try {
+      await fetch(`${API}/api/agents/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_id: agentId, positive }),
+      });
+      await fetchSpecialists();
+    } catch (e) { addToast(e.message || 'Feedback failed'); }
+    finally { setFeedbackBusy(''); }
+  };
 
   const fetchInstalledSkills = async () => {
     try {
@@ -101,6 +147,7 @@ export default function Settings() {
     fetchPendingSkills();
     fetchRoutines();
     fetchInstalledSkills();
+    fetchSpecialists();
   }, []);
 
   const updateSetting = async (section, key, value) => {
@@ -219,6 +266,7 @@ export default function Settings() {
     { id: 'features', label: 'Features', icon: Zap },
     { id: 'channels', label: 'Channels', icon: MessageSquare },
     { id: 'routines', label: 'Routines', icon: Clock },
+    { id: 'specialists', label: 'Specialists', icon: Users },
     { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
     { id: 'proposals', label: 'Proposals', icon: AlertCircle },
     { id: 'keys', label: 'API Keys', icon: Key },
@@ -899,6 +947,118 @@ export default function Settings() {
               })}
             </div>
           </Section>
+        )}
+
+        {/* Specialists Tab */}
+        {activeTab === 'specialists' && (
+          <div className="space-y-5">
+            <Section title="Specialist Agents" icon={Users}>
+              <p className="text-xs text-feral-text-muted mb-4">
+                FERAL automatically detects recurring task patterns and can spawn persistent specialist agents.
+              </p>
+
+              {specialistsLoading && <Loader2 size={16} className="animate-spin text-feral-text-muted" />}
+
+              {!specialistsLoading && specialists.length === 0 && spawnProposals.length === 0 && (
+                <div className="text-center py-8 bg-feral-bg/30 rounded-xl border border-dashed border-feral-border">
+                  <Bot size={32} className="mx-auto opacity-20 mb-3" />
+                  <p className="text-sm text-feral-text-secondary">No specialists yet</p>
+                  <p className="text-xs text-feral-text-muted mt-1">Keep using FERAL — recurring patterns will generate proposals</p>
+                </div>
+              )}
+
+              {specialists.length > 0 && (
+                <div className="space-y-3">
+                  <div className="text-xs text-feral-text-secondary uppercase tracking-wider">Active Specialists</div>
+                  {specialists.map(agent => (
+                    <div key={agent.agent_id} className="bg-feral-bg/30 rounded-lg border border-feral-border p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Bot size={16} className="text-feral-accent" />
+                          <span className="text-sm font-medium">{agent.name}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => sendFeedback(agent.agent_id, true)}
+                            disabled={feedbackBusy !== ''}
+                            className="p-1.5 rounded-lg hover:bg-emerald-500/10 transition disabled:opacity-50"
+                            title="Good job"
+                          >
+                            <ThumbsUp size={14} className="text-emerald-400" />
+                          </button>
+                          <button
+                            onClick={() => sendFeedback(agent.agent_id, false)}
+                            disabled={feedbackBusy !== ''}
+                            className="p-1.5 rounded-lg hover:bg-rose-500/10 transition disabled:opacity-50"
+                            title="Needs improvement"
+                          >
+                            <ThumbsDown size={14} className="text-rose-400" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-xs text-feral-text-secondary mb-2">{agent.description}</div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="bg-feral-bg/40 rounded px-2 py-1.5">
+                          <div className="text-[10px] text-feral-text-muted">Satisfaction</div>
+                          <div className={`text-sm font-bold ${agent.satisfaction >= 0.7 ? 'text-emerald-400' : agent.satisfaction >= 0.4 ? 'text-amber-400' : 'text-rose-400'}`}>
+                            {Math.round(agent.satisfaction * 100)}%
+                          </div>
+                        </div>
+                        <div className="bg-feral-bg/40 rounded px-2 py-1.5">
+                          <div className="text-[10px] text-feral-text-muted">Tasks</div>
+                          <div className="text-sm font-bold text-feral-accent">{agent.tasks}</div>
+                        </div>
+                        <div className="bg-feral-bg/40 rounded px-2 py-1.5">
+                          <div className="text-[10px] text-feral-text-muted">Tools</div>
+                          <div className="text-sm font-bold text-feral-text-secondary">{(agent.tools || []).length}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+
+            {spawnProposals.length > 0 && (
+              <Section title="Spawn Proposals" icon={Sparkles}>
+                <p className="text-xs text-feral-text-muted mb-4">
+                  These patterns have been detected frequently. Spawn them as persistent specialists.
+                </p>
+                <div className="space-y-3">
+                  {spawnProposals.map(proposal => (
+                    <div key={proposal.pattern_id} className="bg-feral-bg/30 rounded-lg border border-feral-border p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div>
+                          <div className="text-sm font-medium">{proposal.name}</div>
+                          <div className="text-[11px] text-feral-text-muted">
+                            {proposal.topic} · seen {proposal.seen_count}x
+                            {proposal.time_pattern && ` · ${proposal.time_pattern}`}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => spawnAgent(proposal.pattern_id)}
+                          disabled={spawningId !== ''}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-feral-accent/15 border border-feral-accent/25 text-feral-accent hover:bg-feral-accent/25 transition disabled:opacity-50"
+                        >
+                          {spawningId === proposal.pattern_id
+                            ? <Loader2 size={12} className="animate-spin" />
+                            : <Zap size={12} />}
+                          Spawn
+                        </button>
+                      </div>
+                      {proposal.tools && proposal.tools.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {proposal.tools.slice(0, 5).map(t => (
+                            <span key={t} className="text-[10px] bg-feral-bg/50 text-feral-text-muted px-2 py-0.5 rounded-full font-mono">{t}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+          </div>
         )}
 
         {/* Marketplace Tab */}

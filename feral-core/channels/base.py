@@ -471,26 +471,33 @@ class WhatsAppChannel(Channel):
         return "whatsapp"
 
     async def start(self):
-        token = self.config.get("access_token", "")
-        phone_number_id = self.config.get("phone_number_id", "")
-        if not token or not phone_number_id:
+        self._access_token = self.config.get("access_token", "")
+        self._phone_id = self.config.get("phone_number_id", "")
+        self._app_secret = self.config.get("app_secret", os.environ.get("FERAL_WHATSAPP_APP_SECRET", ""))
+        if not self._access_token or not self._phone_id:
             logger.warning("WhatsApp channel: access_token and phone_number_id required")
             return
 
         import httpx
         self._running = True
-        self._token = token
-        self._phone_id = phone_number_id
-        self._http = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            timeout=10.0,
-        )
+        self._http = httpx.AsyncClient(timeout=10.0)
         logger.info("WhatsApp channel started (webhook mode)")
 
     async def stop(self):
         self._running = False
-        if hasattr(self, "_http"):
+        if hasattr(self, "_http") and self._http:
             await self._http.aclose()
+
+    def verify_signature(self, raw_body: bytes, signature: str) -> bool:
+        """Verify the X-Hub-Signature-256 header from WhatsApp Cloud API."""
+        if not self._app_secret:
+            return True
+        import hashlib
+        import hmac
+        expected = "sha256=" + hmac.new(
+            self._app_secret.encode(), raw_body, hashlib.sha256
+        ).hexdigest()
+        return hmac.compare_digest(expected, signature)
 
     async def handle_webhook(self, body: dict) -> Optional[ChannelResponse]:
         """Process an incoming WhatsApp Cloud API webhook."""
@@ -498,38 +505,52 @@ class WhatsAppChannel(Channel):
         for entry in entries:
             for change in entry.get("changes", []):
                 value = change.get("value", {})
-                messages = value.get("messages", [])
-                for msg in messages:
-                    phone = msg.get("from", "")
+                for msg in value.get("messages", []):
                     text = msg.get("text", {}).get("body", "")
-                    self._known_chat_ids.add(phone)
+                    sender = msg.get("from", "")
+                    self._known_chat_ids.add(sender)
 
-                    if self._handler and text:
+                    if text and self._handler:
                         channel_msg = ChannelMessage(
                             channel_type="whatsapp",
-                            channel_id=phone,
-                            user_id=phone,
+                            user_id=sender,
                             text=text,
+                            channel_id=self._phone_id,
                         )
                         response = await self._handler(channel_msg)
-                        await self.send(phone, response)
+                        if response and response.text:
+                            await self.send_text(sender, response.text)
                         return response
         return None
+
+    async def send_text(self, chat_id: str, text: str, **kwargs) -> dict:
+        """Send a text message via WhatsApp Cloud API."""
+        if not self._running or not self._http:
+            return {"success": False, "error": "WhatsApp not running"}
+        try:
+            response = await self._http.post(
+                f"https://graph.facebook.com/v18.0/{self._phone_id}/messages",
+                headers={
+                    "Authorization": f"Bearer {self._access_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": chat_id,
+                    "type": "text",
+                    "text": {"body": text},
+                },
+            )
+            response.raise_for_status()
+            return {"success": True, "data": response.json()}
+        except Exception as e:
+            logger.error(f"WhatsApp send failed: {e}")
+            return {"success": False, "error": str(e)}
 
     async def send(self, channel_id: str, response: ChannelResponse):
         if not response.text:
             return
-        try:
-            url = f"https://graph.facebook.com/v18.0/{self._phone_id}/messages"
-            payload = {
-                "messaging_product": "whatsapp",
-                "to": channel_id,
-                "type": "text",
-                "text": {"body": response.text},
-            }
-            await self._http.post(url, json=payload)
-        except Exception as e:
-            logger.error(f"WhatsApp send error: {e}")
+        await self.send_text(channel_id, response.text)
 
 
 class ChannelManager:

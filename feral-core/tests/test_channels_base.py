@@ -275,6 +275,7 @@ async def test_whatsapp_handle_webhook_processes_message_and_returns_response():
     ch._running = True
     ch._phone_id = "pid"
     ch._token = "t"
+    ch._access_token = "t"
     mock_http = MagicMock()
     mock_http.post = AsyncMock()
     ch._http = mock_http

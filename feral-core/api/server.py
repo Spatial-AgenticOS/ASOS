@@ -62,6 +62,9 @@ from api.routes.timeline import router as timeline_router
 from api.routes.brain_rest import router as brain_rest_router
 from api.routes.baseline import router as baseline_router
 from api.routes.handoff import router as handoff_router
+from api.routes.tool_genesis import router as tool_genesis_router
+from api.routes.agent_mitosis import router as agent_mitosis_router
+from api.routes.intents import router as intents_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -190,6 +193,9 @@ app.include_router(timeline_router)
 app.include_router(brain_rest_router)
 app.include_router(baseline_router)
 app.include_router(handoff_router)
+app.include_router(tool_genesis_router)
+app.include_router(agent_mitosis_router)
+app.include_router(intents_router)
 
 
 # ─────────────────────────────────────────────
@@ -267,7 +273,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Graceful shutdown: close LLM clients, MCP connections, sync engine."""
+    """Graceful shutdown: close LLM clients, MCP connections, sync engine, mDNS."""
     logger.info("FERAL Brain shutting down gracefully...")
     if state.orchestrator and state.orchestrator.llm:
         await state.orchestrator.llm.close()
@@ -277,6 +283,11 @@ async def shutdown_event():
         await state.sync_engine.stop_discovery()
     if state.taskflows:
         await state.taskflows.stop()
+    try:
+        from services.mdns import stop_advertisement
+        stop_advertisement()
+    except Exception:
+        pass
     logger.info("Shutdown complete.")
 
 
@@ -487,6 +498,7 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
                     bio = raw.get("payload", {})
                     if state.orchestrator:
                         state.orchestrator.update_biometric(session_id, bio)
+                        await state.orchestrator._emit_brain_event(session_id, "device_telemetry", {"source": "client"})
                     state.perception.update_sensors(session_id, bio)
                     if state.somatic_engine:
                         state.somatic_engine.update_from_perception_frame(session_id, bio)
@@ -534,6 +546,15 @@ NODE_API_KEY = os.environ.get("NODE_API_KEY", "")
 
 @app.websocket("/v1/node")
 async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
+    if not api_key:
+        api_key = ws.headers.get("authorization", "").replace("Bearer ", "")
+    if not api_key:
+        api_key = ws.headers.get("x-api-key", "")
+    if not api_key:
+        protocols = ws.headers.get("sec-websocket-protocol", "")
+        if protocols.startswith("feral-token-"):
+            api_key = protocols.replace("feral-token-", "")
+
     store = state.device_pairing_store
     paired_device_id = store.verify_device(api_key) if api_key else None
 
@@ -657,6 +678,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         state.perception.update_sensors(sid, sensors)
                         if state.somatic_engine:
                             state.somatic_engine.update_from_perception_frame(sid, sensors)
+                        if state.orchestrator:
+                            await state.orchestrator._emit_brain_event(sid, "device_telemetry", {"source": node_id, "hr": hr or 0})
                 _record_biometrics_to_baseline(sensors)
 
             elif msg.type == "sensor_telemetry":
@@ -674,6 +697,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         state.perception.update_sensors(sid, sensors_map)
                         if state.somatic_engine:
                             state.somatic_engine.update_from_perception_frame(sid, sensors_map)
+                        if state.orchestrator:
+                            await state.orchestrator._emit_brain_event(sid, "device_telemetry", {"source": node_id, "sensor": sensor_name})
 
             elif msg.type == "sensor_batch":
                 payload_dict = raw.get("payload", {})
@@ -686,6 +711,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         state.perception.update_sensors(sid, readings)
                         if state.somatic_engine:
                             state.somatic_engine.update_from_perception_frame(sid, readings)
+                        if state.orchestrator:
+                            await state.orchestrator._emit_brain_event(sid, "device_telemetry", {"source": node_id, "sensors": list(readings.keys())})
                 _record_biometrics_to_baseline(readings)
 
             elif msg.type == "heartbeat":

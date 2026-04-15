@@ -1,5 +1,6 @@
 ---
 title: "Wristband"
+status: "Beta"
 sidebarTitle: "Wristband"
 description: "Pair a BLE wristband to stream heart rate, SpO2, skin temperature, and sleep data to the FERAL brain."
 ---
@@ -57,9 +58,9 @@ FERAL's wristband integration provides real-time biometric streaming over Blueto
     Or pair programmatically via the API:
 
     ```bash
-    curl -X POST http://localhost:9090/api/hardware/ble/pair \
+    curl -X POST http://localhost:9090/api/devices/pair \
       -H "Content-Type: application/json" \
-      -d '{ "device_name": "FERAL-Wristband-A3F2" }'
+      -d '{ "name": "FERAL-Wristband-A3F2" }'
     ```
   </Step>
 

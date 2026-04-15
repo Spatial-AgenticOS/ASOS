@@ -25,9 +25,10 @@ Layout inside `FERAL_HOME`:
 
 ```
 ~/.feral/
-├── config.yaml          # feature flags, provider, voice mode, security
+├── settings.json        # feature flags, provider, voice mode, security
 ├── credentials.json     # API keys (chmod 600)
-├── identity.yaml        # agent name, personality, voice, rules
+├── USER.md              # user profile (from setup wizard)
+├── SOUL.md              # agent personality and rules
 ├── memory.db            # SQLite: notes, episodes, knowledge graph, wiki, sessions
 ├── sync_wal.db          # federated sync WAL (optional)
 ├── genui_surfaces/      # cached GenUI provider surface layouts (JSON per surface)

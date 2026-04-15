@@ -117,16 +117,19 @@ curl -X POST http://localhost:9090/api/identity/twin/ask \
 }
 ```
 
-## Hardware
+## Devices & Hardware
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/hardware/devices` | List all connected hardware nodes |
-| `POST` | `/api/hardware/ble/scan` | Scan for nearby BLE devices |
-| `POST` | `/api/hardware/ble/pair` | Pair a BLE device |
-| `POST` | `/api/hardware/command` | Send a command to a hardware device |
-| `GET` | `/api/hardware/health` | Latest aggregated health metrics |
-| `POST` | `/api/hardware/glasses/overlay` | Push an AR overlay to glasses |
+| `GET` | `/api/devices/connected` | List all connected devices with types and metrics |
+| `GET` | `/api/devices/paired` | List all paired edge-node devices |
+| `POST` | `/api/devices/pair` | Pair a new edge-node device (returns device token) |
+| `POST` | `/api/devices/handoff` | Initiate a session handoff between devices |
+| `DELETE` | `/api/devices/{device_id}` | Revoke (un-pair) a device |
+| `GET` | `/api/nodes/health` | All node health status with heartbeat freshness |
+| `GET` | `/api/commands/recent` | Recent commands with full lifecycle state |
+| `GET` | `/api/commands/{command_id}` | Single command detail including state history |
+| `POST` | `/api/proactive/dismiss` | Dismiss a proactive alert (learns from it) |
 
 ## Channels
 

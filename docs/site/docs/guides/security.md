@@ -92,9 +92,9 @@ Set via environment variable or config:
 export FERAL_AUTONOMY=hybrid
 ```
 
-```yaml
-# ~/.feral/config.yaml
-autonomy: hybrid
+```json
+// ~/.feral/settings.json
+{ "autonomy": { "mode": "hybrid" } }
 ```
 
 ## SandboxPolicy Files
@@ -158,11 +158,14 @@ DANGEROUS_TOOLS_DENY_LIST = [
 
 You can extend (but never shrink) this list in config:
 
-```yaml
-# ~/.feral/config.yaml
-dangerous_tools_extra:
-  - deploy_production
-  - revoke_all_tokens
+```json
+// ~/.feral/settings.json
+{
+  "dangerous_tools_extra": [
+    "deploy_production",
+    "revoke_all_tokens"
+  ]
+}
 ```
 
 ## enforce_safety
@@ -188,3 +191,20 @@ if not allowed:
 ```
 
 If the check fails, the orchestrator pauses execution and surfaces an approval request to the user via the active channel (web UI, CLI, Telegram, etc.).
+
+## Limitations and Caveats
+
+### What FERAL Does NOT Protect Against
+- **Physical access attacks**: If someone has physical access to the machine running the Brain, they have access to all data.
+- **Supply chain attacks**: Third-party LLM providers can see your prompts (use Ollama for full local processing).
+- **Side-channel attacks**: The timing and size of WebSocket messages may reveal information about your activity.
+- **Compromised LLM**: If the LLM provider is compromised, tool calls may be manipulated.
+
+### Platform Differences
+- **macOS**: Full Accessibility permissions required for desktop automation. Gatekeeper may block unsigned daemons.
+- **Linux**: Docker required for code interpreter sandboxing. X11/Wayland differences affect screen capture.
+- **Windows**: Limited support. No systemd daemon management.
+
+### Qualified Claims
+- Voice latency depends on the provider (OpenAI Realtime ~200ms, Gemini Live ~300ms, local Whisper+Piper ~500ms). FERAL adds ~50ms of WebSocket relay overhead.
+- "Local-first" means the Brain runs locally, but cloud LLM providers are used by default. For fully local operation, configure Ollama.

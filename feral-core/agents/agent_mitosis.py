@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import logging
+import sqlite3
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -42,12 +43,16 @@ SPAWN_THRESHOLD = 5
 MAX_SPECIALISTS = 10
 
 class AgentMitosisEngine:
-    def __init__(self, llm=None, memory=None):
+    def __init__(self, llm=None, memory=None, db_path: Optional[str] = None):
         self._llm = llm
         self._memory = memory
         self._patterns: dict[str, TaskPattern] = {}
         self._specialists: dict[str, SpecialistAgent] = {}
         self._topic_tracker: dict[str, Counter] = {}  # session -> topic counts
+        self._db_path = db_path
+        if db_path:
+            self._init_db()
+            self._load_from_db()
 
     def observe_interaction(self, session_id: str, text: str, tools_used: list[str]):
         topic = self._classify_topic(text, tools_used)
@@ -78,6 +83,7 @@ class AgentMitosisEngine:
                 occurrence_count=1,
                 sample_prompts=[text[:200]],
             )
+        self._persist_pattern(pattern_id)
 
     def _classify_topic(self, text: str, tools: list[str]) -> Optional[str]:
         text_lower = text.lower()
@@ -155,6 +161,7 @@ class AgentMitosisEngine:
                 schedule=self._pattern_to_cron(pattern),
             )
             self._specialists[pattern_id] = specialist
+            self._persist_specialist(pattern_id)
             logger.info(f"Agent Mitosis: spawned {agent_id} from pattern {pattern.topic_cluster}")
             return specialist
         except Exception as e:
@@ -162,12 +169,14 @@ class AgentMitosisEngine:
             return None
 
     def record_feedback(self, agent_id: str, positive: bool):
-        for spec in self._specialists.values():
+        for pid, spec in self._specialists.items():
             if spec.agent_id == agent_id:
                 delta = 0.05 if positive else -0.1
                 spec.satisfaction_score = max(0, min(1, spec.satisfaction_score + delta))
                 spec.tasks_completed += 1
                 spec.last_active = time.time()
+                self._persist_specialist(pid)
+                break
 
     @staticmethod
     def _pattern_to_cron(pattern: TaskPattern) -> Optional[str]:
@@ -193,3 +202,105 @@ class AgentMitosisEngine:
             "specialists_active": len(self._specialists),
             "total_tasks": sum(s.tasks_completed for s in self._specialists.values()),
         }
+
+    # ── SQLite persistence ──────────────────────
+
+    def _init_db(self):
+        con = sqlite3.connect(self._db_path)
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS task_patterns ("
+            "  pattern_id TEXT PRIMARY KEY,"
+            "  topic_cluster TEXT NOT NULL,"
+            "  tool_affinities_json TEXT NOT NULL,"
+            "  time_pattern TEXT,"
+            "  occurrence_count INTEGER NOT NULL DEFAULT 0,"
+            "  first_seen REAL NOT NULL,"
+            "  last_seen REAL NOT NULL,"
+            "  sample_prompts_json TEXT NOT NULL"
+            ")"
+        )
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS specialist_agents ("
+            "  pattern_id TEXT PRIMARY KEY,"
+            "  agent_id TEXT NOT NULL,"
+            "  name TEXT NOT NULL,"
+            "  description TEXT NOT NULL,"
+            "  system_prompt TEXT NOT NULL,"
+            "  source_pattern TEXT NOT NULL,"
+            "  tool_permissions_json TEXT NOT NULL,"
+            "  schedule TEXT,"
+            "  memory_filter TEXT,"
+            "  created_at REAL NOT NULL,"
+            "  last_active REAL NOT NULL DEFAULT 0,"
+            "  tasks_completed INTEGER NOT NULL DEFAULT 0,"
+            "  satisfaction_score REAL NOT NULL DEFAULT 0.5,"
+            "  prompt_version INTEGER NOT NULL DEFAULT 1"
+            ")"
+        )
+        con.commit()
+        con.close()
+
+    def _load_from_db(self):
+        con = sqlite3.connect(self._db_path)
+        for row in con.execute(
+            "SELECT pattern_id, topic_cluster, tool_affinities_json, time_pattern,"
+            "       occurrence_count, first_seen, last_seen, sample_prompts_json FROM task_patterns"
+        ):
+            self._patterns[row[0]] = TaskPattern(
+                pattern_id=row[0], topic_cluster=row[1],
+                tool_affinities=json.loads(row[2]), time_pattern=row[3],
+                occurrence_count=row[4], first_seen=row[5], last_seen=row[6],
+                sample_prompts=json.loads(row[7]),
+            )
+        for row in con.execute(
+            "SELECT pattern_id, agent_id, name, description, system_prompt, source_pattern,"
+            "       tool_permissions_json, schedule, memory_filter, created_at,"
+            "       last_active, tasks_completed, satisfaction_score, prompt_version"
+            " FROM specialist_agents"
+        ):
+            self._specialists[row[0]] = SpecialistAgent(
+                agent_id=row[1], name=row[2], description=row[3],
+                system_prompt=row[4], source_pattern=row[5],
+                tool_permissions=json.loads(row[6]), schedule=row[7],
+                memory_filter=row[8], created_at=row[9],
+                last_active=row[10], tasks_completed=row[11],
+                satisfaction_score=row[12], prompt_version=row[13],
+            )
+        con.close()
+        logger.info("Agent Mitosis DB loaded: %d patterns, %d specialists", len(self._patterns), len(self._specialists))
+
+    def _persist_pattern(self, pattern_id: str):
+        if not self._db_path:
+            return
+        p = self._patterns[pattern_id]
+        con = sqlite3.connect(self._db_path)
+        con.execute(
+            "INSERT OR REPLACE INTO task_patterns"
+            " (pattern_id, topic_cluster, tool_affinities_json, time_pattern,"
+            "  occurrence_count, first_seen, last_seen, sample_prompts_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (p.pattern_id, p.topic_cluster, json.dumps(p.tool_affinities),
+             p.time_pattern, p.occurrence_count, p.first_seen, p.last_seen,
+             json.dumps(p.sample_prompts)),
+        )
+        con.commit()
+        con.close()
+
+    def _persist_specialist(self, pattern_id: str):
+        if not self._db_path:
+            return
+        s = self._specialists[pattern_id]
+        con = sqlite3.connect(self._db_path)
+        con.execute(
+            "INSERT OR REPLACE INTO specialist_agents"
+            " (pattern_id, agent_id, name, description, system_prompt, source_pattern,"
+            "  tool_permissions_json, schedule, memory_filter, created_at,"
+            "  last_active, tasks_completed, satisfaction_score, prompt_version)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (pattern_id, s.agent_id, s.name, s.description, s.system_prompt,
+             s.source_pattern, json.dumps(s.tool_permissions), s.schedule,
+             s.memory_filter, s.created_at, s.last_active, s.tasks_completed,
+             s.satisfaction_score, s.prompt_version),
+        )
+        con.commit()
+        con.close()

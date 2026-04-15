@@ -1,4 +1,4 @@
-package io.feral.bridge
+package ai.feral.bridge
 
 import android.graphics.Bitmap
 import com.google.zxing.BarcodeFormat

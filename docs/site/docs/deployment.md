@@ -36,17 +36,6 @@ services:
       timeout: 5s
       retries: 3
 
-  web:
-    image: ghcr.io/feral-ai/feral-web:latest
-    ports:
-      - "3000:3000"
-    environment:
-      VITE_API_URL: http://brain:9090
-    depends_on:
-      brain:
-        condition: service_healthy
-    restart: unless-stopped
-
   redis:
     image: redis:7-alpine
     ports:
@@ -206,11 +195,14 @@ curl http://localhost:9090/metrics
 
 Enable metrics in config:
 
-```yaml
-# ~/.feral/config.yaml
-monitoring:
-  prometheus: true
-  port: 9091           # separate metrics port (optional)
+```json
+// ~/.feral/settings.json — "monitoring" section
+{
+  "monitoring": {
+    "prometheus": true,
+    "port": 9091
+  }
+}
 ```
 
 Key metrics exported:
@@ -237,4 +229,4 @@ feral backup restore /backups/feral-2025-06-15.tar.gz
 0 3 * * * /opt/feral/venv/bin/feral backup create --output /backups/feral-$(date +\%F).tar.gz
 ```
 
-The backup includes `memory.db`, `config.yaml`, `identity.yaml`, `credentials.json` (encrypted), wiki pages, and skill manifests.
+The backup includes `memory.db`, `settings.json`, `USER.md`, `SOUL.md`, `credentials.json` (encrypted), wiki pages, and skill manifests.

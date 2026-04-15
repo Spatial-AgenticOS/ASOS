@@ -8,6 +8,7 @@ desktop wrappers do not drift across hardcoded localhost/port assumptions.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from urllib.parse import urlparse
 
 
@@ -68,6 +69,18 @@ def ws_base_url() -> str:
 
 def market_registry_url() -> str:
     return os.getenv("FERAL_MARKETPLACE_URL", "http://localhost:8080/api/v1")
+
+
+def brain_tls_enabled() -> bool:
+    return os.getenv("FERAL_TLS", "").lower() in ("1", "true", "yes")
+
+
+def brain_tls_cert() -> str:
+    return os.getenv("FERAL_TLS_CERT", str(Path.home() / ".feral" / "tls" / "cert.pem"))
+
+
+def brain_tls_key() -> str:
+    return os.getenv("FERAL_TLS_KEY", str(Path.home() / ".feral" / "tls" / "key.pem"))
 
 
 def ollama_base_url() -> str:

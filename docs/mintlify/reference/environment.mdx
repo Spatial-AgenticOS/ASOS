@@ -28,15 +28,14 @@ Environment variables are the highest-priority configuration source — they ove
 |----------|---------|-------------|
 | `FERAL_HOME` | `~/.feral` | Root directory for all FERAL data (config, memory, logs) |
 | `FERAL_BRAIN_PORT` | `9090` | Brain WebSocket and API port |
-| `FERAL_BRAIN_HOST` | `0.0.0.0` | Brain bind address |
-| `FERAL_DASHBOARD_PORT` | `3000` | Web dashboard port |
+| `FERAL_BRAIN_HOST` | `127.0.0.1` | Brain bind address |
 | `FERAL_LOG_LEVEL` | `info` | Logging level: `debug`, `info`, `warn`, `error` |
 
 ## Autonomy & Security
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FERAL_AUTONOMY_MODE` | `hybrid` | `strict`, `hybrid`, or `loose` |
+| `FERAL_AUTONOMY` | `hybrid` | `strict`, `hybrid`, or `loose` |
 | `FERAL_SANDBOX_ENABLED` | `true` | Enable WASM sandbox for skill execution |
 | `FERAL_APPROVAL_TIMEOUT` | `30` | Seconds to wait for user approval before timing out |
 | `FERAL_VAULT_KEY` | — | Override vault encryption key (not recommended) |
