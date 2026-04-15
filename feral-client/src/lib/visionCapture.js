@@ -19,6 +19,10 @@ export class VisionCapture {
     return this._active;
   }
 
+  get stream() {
+    return this._stream;
+  }
+
   async start() {
     this._stream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: CAPTURE_WIDTH }, height: { ideal: CAPTURE_HEIGHT }, facingMode: 'environment' },

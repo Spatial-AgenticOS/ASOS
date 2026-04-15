@@ -1,7 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { API_BASE } from '../config';
+import { useToast } from '../components/Toast';
 
 export function useConversationThreads({ messages, setMessages, sessionId }) {
+  const { addToast } = useToast();
   const [threadsOpen, setThreadsOpen] = useState(false);
   const [threads, setThreads] = useState([]);
   const [currentThreadId, setCurrentThreadId] = useState('');
@@ -12,7 +14,9 @@ export function useConversationThreads({ messages, setMessages, sessionId }) {
     try {
       const data = await fetch(`${API_BASE}/api/conversations?limit=50`).then(r => r.json());
       setThreads(data.conversations || []);
-    } catch { /* ignore */ }
+    } catch (e) {
+      addToast(e.message || 'Failed to load threads');
+    }
   };
 
   const createConversationThread = async () => {
@@ -23,7 +27,9 @@ export function useConversationThreads({ messages, setMessages, sessionId }) {
         body: JSON.stringify({}),
       }).then(r => r.json());
       if (data.id) return data.id;
-    } catch { /* ignore */ }
+    } catch (e) {
+      addToast(e.message || 'Failed to create thread');
+    }
     return `thread-${Date.now()}`;
   };
 
@@ -37,8 +43,10 @@ export function useConversationThreads({ messages, setMessages, sessionId }) {
       });
       setThreadsDirty(false);
       try { localStorage.setItem('feral-last-thread', currentThreadId); } catch {}
-    } catch { /* ignore */ }
-  }, [currentThreadId]);
+    } catch (e) {
+      addToast(e.message || 'Failed to save conversation');
+    }
+  }, [currentThreadId, addToast]);
 
   const restoreLastThread = async ({ force = false } = {}) => {
     try {
@@ -65,7 +73,9 @@ export function useConversationThreads({ messages, setMessages, sessionId }) {
           setThreadsDirty(false);
         }
       }
-    } catch { /* fresh start */ }
+    } catch (e) {
+      addToast(e.message || 'Failed to restore last thread');
+    }
   };
 
   const loadThread = async (threadId) => {
@@ -82,7 +92,9 @@ export function useConversationThreads({ messages, setMessages, sessionId }) {
         setThreadsOpen(false);
         try { localStorage.setItem('feral-last-thread', threadId); } catch {}
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      addToast(e.message || 'Failed to load thread');
+    }
   };
 
   const startNewThread = async () => {
@@ -107,7 +119,9 @@ export function useConversationThreads({ messages, setMessages, sessionId }) {
         setMessages([]);
         setCurrentThreadId('');
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      addToast(e.message || 'Failed to delete thread');
+    }
   };
 
   useEffect(() => {

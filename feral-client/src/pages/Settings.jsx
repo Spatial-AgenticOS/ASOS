@@ -4,14 +4,16 @@ import {
   Check, AlertCircle, Loader2, Save, RefreshCw, Trash2, Plus,
   Bluetooth, Wifi, WifiOff, Radio, Smartphone, Glasses, Watch, Bot,
   Sun, Moon, Clock, Play, Pause, ChevronDown, ChevronUp,
-  MessageSquare, Server,
+  MessageSquare, Server, ShoppingBag, Download, Search,
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
 import { useTheme } from '../hooks/useTheme';
+import { useToast } from '../components/Toast';
 
 export default function Settings() {
   const { theme, toggle: toggleTheme } = useTheme();
+  const { addToast } = useToast();
   const [config, setConfig] = useState(null);
   const [identity, setIdentity] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -38,11 +40,46 @@ export default function Settings() {
   });
   const [channelStatus, setChannelStatus] = useState({});
   const [channelsSaving, setChannelsSaving] = useState(false);
+  const [marketplaceSearch, setMarketplaceSearch] = useState('');
+  const [marketplaceResults, setMarketplaceResults] = useState([]);
+  const [installedSkills, setInstalledSkills] = useState([]);
+  const [marketplaceLoading, setMarketplaceLoading] = useState(false);
+  const [installingSkill, setInstallingSkill] = useState('');
+
+  const fetchInstalledSkills = async () => {
+    try {
+      const data = await fetch(`${API}/api/marketplace/installed`).then(r => r.json());
+      setInstalledSkills(data.skills || []);
+    } catch { /* marketplace may not be initialised */ }
+  };
+
+  const searchMarketplace = async (q) => {
+    setMarketplaceLoading(true);
+    try {
+      const data = await fetch(`${API}/api/marketplace/search?q=${encodeURIComponent(q)}`).then(r => r.json());
+      setMarketplaceResults(data.results || []);
+    } catch { setMarketplaceResults([]); }
+    finally { setMarketplaceLoading(false); }
+  };
+
+  const installSkill = async (skillId) => {
+    setInstallingSkill(skillId);
+    try {
+      await fetch(`${API}/api/marketplace/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skill_id: skillId }),
+      });
+      await fetchInstalledSkills();
+      flash();
+    } catch (e) { addToast(e.message || 'Install failed'); }
+    finally { setInstallingSkill(''); }
+  };
 
   const fetchRoutines = () => {
     setRoutinesLoading(true);
     fetch(`${API}/api/routines`).then(r => r.json()).then(d => setRoutines(d.routines || []))
-      .catch(() => {}).finally(() => setRoutinesLoading(false));
+      .catch(e => addToast(e.message || 'Failed to load routines')).finally(() => setRoutinesLoading(false));
   };
 
   useEffect(() => {
@@ -56,13 +93,14 @@ export default function Settings() {
           whatsapp: { ...prev.whatsapp, ...(cfg.channels.whatsapp || {}) },
         }));
       }
-    }).catch(() => {});
-    fetch(`${API}/api/identity`).then(r => r.json()).then(setIdentity).catch(() => {});
-    fetch(`${API}/api/devices`).then(r => r.json()).then(d => setDevices(d.devices || [])).catch(() => {});
-    fetch(`${API}/api/llm/presets`).then(r => r.json()).then(d => setLlmPresets(d.presets || [])).catch(() => {});
-    fetch(`${API}/api/channels`).then(r => r.json()).then(d => setChannelStatus(d)).catch(() => {});
+    }).catch(e => addToast(e.message || 'Failed to load config'));
+    fetch(`${API}/api/identity`).then(r => r.json()).then(setIdentity).catch(e => addToast(e.message || 'Failed to load identity'));
+    fetch(`${API}/api/devices`).then(r => r.json()).then(d => setDevices(d.devices || [])).catch(e => addToast(e.message || 'Failed to load devices'));
+    fetch(`${API}/api/llm/presets`).then(r => r.json()).then(d => setLlmPresets(d.presets || [])).catch(e => addToast(e.message || 'Failed to load presets'));
+    fetch(`${API}/api/channels`).then(r => r.json()).then(d => setChannelStatus(d)).catch(e => addToast(e.message || 'Failed to load channels'));
     fetchPendingSkills();
     fetchRoutines();
+    fetchInstalledSkills();
   }, []);
 
   const updateSetting = async (section, key, value) => {
@@ -181,6 +219,7 @@ export default function Settings() {
     { id: 'features', label: 'Features', icon: Zap },
     { id: 'channels', label: 'Channels', icon: MessageSquare },
     { id: 'routines', label: 'Routines', icon: Clock },
+    { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
     { id: 'proposals', label: 'Proposals', icon: AlertCircle },
     { id: 'keys', label: 'API Keys', icon: Key },
     { id: 'security', label: 'Security', icon: Shield },
@@ -642,7 +681,8 @@ export default function Settings() {
                     const st = await fetch(`${API}/api/channels`).then(r => r.json());
                     setChannelStatus(st);
                     flash();
-                  } catch {
+                  } catch (e) {
+                    addToast(e.message || 'Failed to save channels');
                   } finally {
                     setChannelsSaving(false);
                   }
@@ -792,6 +832,83 @@ export default function Settings() {
               })}
             </div>
           </Section>
+        )}
+
+        {/* Marketplace Tab */}
+        {activeTab === 'marketplace' && (
+          <div className="space-y-5">
+            <Section title="Skill Marketplace" icon={ShoppingBag}>
+              <p className="text-xs text-feral-text-muted mb-4">
+                Browse and install community skills to extend FERAL's capabilities.
+              </p>
+
+              <div className="flex gap-2 mb-4">
+                <div className="relative flex-1">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-feral-text-muted" />
+                  <input
+                    className="w-full bg-feral-bg border border-feral-border rounded-lg pl-9 pr-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-feral-accent"
+                    placeholder="Search skills..."
+                    value={marketplaceSearch}
+                    onChange={e => setMarketplaceSearch(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') searchMarketplace(marketplaceSearch); }}
+                  />
+                </div>
+                <button
+                  onClick={() => searchMarketplace(marketplaceSearch)}
+                  disabled={marketplaceLoading}
+                  className="px-4 py-2.5 bg-feral-accent text-white rounded-lg text-sm font-medium hover:bg-feral-accent/90 transition disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {marketplaceLoading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                  Search
+                </button>
+              </div>
+
+              {marketplaceResults.length > 0 && (
+                <div className="space-y-2 mb-4">
+                  <div className="text-xs text-feral-text-secondary uppercase tracking-wider">Results</div>
+                  {marketplaceResults.map(skill => (
+                    <div key={skill.skill_id || skill.id} className="flex items-center gap-3 bg-feral-bg/30 border border-feral-border rounded-lg px-4 py-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{skill.name || skill.skill_id || skill.id}</div>
+                        <div className="text-xs text-feral-text-secondary mt-0.5 truncate">{skill.description || 'No description'}</div>
+                      </div>
+                      <button
+                        onClick={() => installSkill(skill.skill_id || skill.id)}
+                        disabled={installingSkill !== ''}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-feral-accent/15 border border-feral-accent/25 text-feral-accent hover:bg-feral-accent/25 transition disabled:opacity-50 flex-shrink-0"
+                      >
+                        {installingSkill === (skill.skill_id || skill.id)
+                          ? <Loader2 size={12} className="animate-spin" />
+                          : <Download size={12} />}
+                        Install
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+
+            <Section title="Installed Marketplace Skills" icon={Download}>
+              {installedSkills.length === 0 ? (
+                <div className="text-sm text-feral-text-muted bg-feral-bg/30 rounded-lg px-4 py-4 border border-feral-border text-center">
+                  No marketplace skills installed yet. Search above to find and install skills.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {installedSkills.map(skill => (
+                    <div key={skill.skill_id || skill.id} className="flex items-center gap-3 bg-feral-bg/30 border border-feral-border rounded-lg px-4 py-3">
+                      <div className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{skill.name || skill.skill_id || skill.id}</div>
+                        <div className="text-[11px] text-feral-text-muted font-mono">{skill.version || 'latest'}</div>
+                      </div>
+                      <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full flex-shrink-0">Installed</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+          </div>
         )}
 
         {/* Proposals Tab */}

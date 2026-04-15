@@ -24,10 +24,14 @@ export default function App() {
   const [cameraOn, setCameraOn] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sessionStartTime] = useState(Date.now());
+  const [attachedFiles, setAttachedFiles] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
 
   const voiceEngineRef = useRef(null);
   const visionRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const cameraPreviewRef = useRef(null);
   const navigate = useNavigate();
 
   const session = useFeralSession({ voiceEngineRef });
@@ -47,16 +51,31 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [session.messages, session.isThinking]);
 
-  const handleSend = (e) => {
+  const handleSend = async (e) => {
     e.preventDefault();
-    if (!inputText.trim() || !session.wsRef.current || session.wsRef.current.readyState !== WebSocket.OPEN) return;
-    session.setMessages(prev => [...prev, { role: 'user', type: 'text', content: inputText }]);
-    session.setIsThinking(true);
-    session.wsRef.current.send(JSON.stringify({
-      hop: 'client', type: 'text_command',
-      payload: { text: inputText, context: {} },
+    if ((!inputText.trim() && attachedFiles.length === 0) || !session.wsRef.current || session.wsRef.current.readyState !== WebSocket.OPEN) return;
+
+    const fileData = await Promise.all(attachedFiles.map(async (f) => {
+      const buffer = await f.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      return { name: f.name, type: f.type, size: f.size, data: btoa(binary) };
     }));
+
+    const displayText = inputText.trim() || `[Sent ${attachedFiles.length} file${attachedFiles.length > 1 ? 's' : ''}]`;
+    session.setMessages(prev => [...prev, {
+      role: 'user', type: 'text',
+      content: displayText + (fileData.length > 0 ? ` (${fileData.map(f => f.name).join(', ')})` : ''),
+    }]);
+    session.setIsThinking(true);
+
+    const payload = { text: inputText, context: {} };
+    if (fileData.length > 0) payload.files = fileData;
+    session.wsRef.current.send(JSON.stringify({ hop: 'client', type: 'text_command', payload }));
+
     setInputText('');
+    setAttachedFiles([]);
   };
 
   const sendQuickMessage = (text) => {
@@ -91,6 +110,7 @@ export default function App() {
   const toggleCamera = async () => {
     if (cameraOn) {
       if (visionRef.current) { visionRef.current.stop(); visionRef.current = null; }
+      if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = null;
       setCameraOn(false);
       session.setMessages(prev => [...prev, { role: 'system', type: 'text', content: 'Camera stopped.' }]);
     } else {
@@ -99,6 +119,9 @@ export default function App() {
         const vc = new VisionCapture(session.wsRef.current, 1);
         visionRef.current = vc;
         await vc.start();
+        if (cameraPreviewRef.current && vc.stream) {
+          cameraPreviewRef.current.srcObject = vc.stream;
+        }
         setCameraOn(true);
         session.setMessages(prev => [...prev, { role: 'system', type: 'text', content: 'Camera active — agent can now see through your webcam.' }]);
       } catch (err) {
@@ -107,8 +130,55 @@ export default function App() {
     }
   };
 
+  const handleDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
+  const handleDragLeave = (e) => {
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setIsDragging(false);
+  };
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) setAttachedFiles(prev => [...prev, ...files]);
+  };
+
   return (
-    <div className="flex flex-col h-full max-w-full lg:max-w-3xl mx-auto bg-feral-bg relative overflow-hidden">
+    <div
+      className="flex flex-col h-full max-w-full lg:max-w-3xl mx-auto bg-feral-bg relative overflow-hidden"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragging && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-feral-bg/80 backdrop-blur-sm border-2 border-dashed border-feral-accent rounded-xl pointer-events-none">
+          <div className="text-center">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-2 text-feral-accent">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+            </svg>
+            <p className="text-sm font-medium text-feral-accent">Drop files to attach</p>
+          </div>
+        </div>
+      )}
+
+      {!session.isConnected && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0,
+          padding: '6px 16px',
+          background: '#78350f',
+          color: '#fbbf24',
+          fontSize: 13,
+          textAlign: 'center',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
+        }}>
+          <span className="animate-spin" style={{ width: 12, height: 12, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', display: 'inline-block' }} />
+          Reconnecting to FERAL Brain...
+        </div>
+      )}
+
       <ProactiveToast
         alert={session.proactiveAlert}
         onDismiss={() => session.setProactiveAlert(null)}
@@ -249,7 +319,34 @@ export default function App() {
         onToggleRecording={() => isRecording ? stopRecording() : startRecording()}
         onToggleCamera={toggleCamera}
         onStartNewThread={threads.startNewThread}
+        fileInputRef={fileInputRef}
+        attachedFiles={attachedFiles}
+        setAttachedFiles={setAttachedFiles}
       />
+
+      {cameraOn && (
+        <div style={{
+          position: 'fixed', bottom: 80, right: 20,
+          width: 160, height: 120,
+          borderRadius: 12, overflow: 'hidden',
+          border: '2px solid #06b6d4',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+          zIndex: 100,
+        }}>
+          <video
+            ref={cameraPreviewRef}
+            autoPlay
+            playsInline
+            muted
+            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+          />
+          <div style={{
+            position: 'absolute', top: 4, right: 4,
+            background: '#ef4444', borderRadius: '50%', width: 8, height: 8,
+            animation: 'pulse 2s infinite',
+          }} />
+        </div>
+      )}
     </div>
   );
 }

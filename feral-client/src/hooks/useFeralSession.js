@@ -1,7 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { WS_URL, API_BASE } from '../config';
+import { useToast } from '../components/Toast';
 
 export function useFeralSession({ voiceEngineRef }) {
+  const { addToast } = useToast();
   const [messages, setMessages] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [streamingText, setStreamingText] = useState('');
@@ -81,13 +83,13 @@ export function useFeralSession({ voiceEngineRef }) {
             }
             return;
           }
-          setMessages(prev => [...prev, { role: 'assistant', type: 'text', content: text }]);
+          setMessages(prev => [...prev.filter(m => m.type !== 'tool_start'), { role: 'assistant', type: 'text', content: text }]);
         } else if (msg.type === 'stream_delta') {
           setIsThinking(false);
           if (msg.payload.is_final) {
             const finalText = streamBufferRef.current;
             if (finalText) {
-              setMessages(prev => [...prev, { role: 'assistant', type: 'text', content: finalText }]);
+              setMessages(prev => [...prev.filter(m => m.type !== 'tool_start'), { role: 'assistant', type: 'text', content: finalText }]);
             }
             streamBufferRef.current = '';
             setStreamingText('');
@@ -97,6 +99,10 @@ export function useFeralSession({ voiceEngineRef }) {
             setStreamingText(streamBufferRef.current);
             setIsStreaming(true);
           }
+        } else if (msg.type === 'tool_start' || msg.type === 'tool_call' || msg.type === 'skill_start') {
+          setMessages(prev => [...prev, { role: 'assistant', type: 'tool_start', payload: msg.payload }]);
+        } else if (msg.type === 'tool_result' || msg.type === 'skill_result') {
+          setMessages(prev => prev.filter(m => m.type !== 'tool_start'));
         } else if (msg.type === 'transcript') {
           const role = msg.payload.role || (msg.payload.text?.startsWith('[user] ') ? 'user' : 'assistant');
           const normalizedText =
@@ -178,15 +184,15 @@ export function useFeralSession({ voiceEngineRef }) {
   useEffect(() => {
     fetch(`${API_BASE}/api/dashboard`).then(r => r.json()).then(data => {
       if (data?.health?.heart_rate) setHr(data.health.heart_rate);
-    }).catch(() => {});
+    }).catch(e => addToast(e.message || 'Failed to load health data'));
     fetch(`${API_BASE}/api/identity/greeting`).then(r => r.json()).then(data => {
       if (data && !data.error) setGreeting(data);
-    }).catch(() => {});
+    }).catch(e => addToast(e.message || 'Failed to load greeting'));
   }, []);
 
   useEffect(() => {
     connect();
-    fetch(`${API_BASE}/api/llm/status`).then(r => r.json()).then(setLlmStatus).catch(() => {});
+    fetch(`${API_BASE}/api/llm/status`).then(r => r.json()).then(setLlmStatus).catch(e => addToast(e.message || 'Failed to check LLM status'));
     return () => {
       unmountedRef.current = true;
       clearTimeout(reconnectTimerRef.current);
@@ -200,7 +206,7 @@ export function useFeralSession({ voiceEngineRef }) {
         multi_agent_enabled: false, multi_agent_ready: false,
         active_subagents: 0, pending_confirmations: 0,
       });
-    }).catch(() => {});
+    }).catch(e => addToast(e.message || 'Failed to load system info'));
   }, []);
 
   useEffect(() => {

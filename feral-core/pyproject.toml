@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "feral-ai"
-version = "1.2.0"
+dynamic = ["version"]
 description = "FERAL — Open-source AI agent with computer use, GenUI, voice, hardware control, and persistent memory."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -108,6 +108,9 @@ feral = "cli.main:main"
 [project.urls]
 Homepage = "https://github.com/FERAL-AI/FERAL-AI"
 Issues = "https://github.com/FERAL-AI/FERAL-AI/issues"
+
+[tool.setuptools.dynamic]
+version = {attr = "_version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]

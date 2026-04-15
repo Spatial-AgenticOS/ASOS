@@ -35,6 +35,7 @@ DEFAULT_SETTINGS = {
         "provider": "openai",
         "model": "gpt-4o-mini",
         "base_url": "",
+        "fallback_providers": [],
     },
     "audio": {
         "stt_provider": "openai",

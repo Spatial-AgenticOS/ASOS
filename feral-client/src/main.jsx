@@ -10,6 +10,8 @@ import Timeline from './pages/Timeline';
 import Ambient from './pages/Ambient';
 import AppShell from './components/AppShell';
 import { API_BASE } from './config';
+import { ToastProvider } from './components/Toast';
+import 'highlight.js/styles/github-dark.css';
 import './index.css';
 
 class ErrorBoundary extends React.Component {
@@ -81,7 +83,9 @@ function Root() {
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <Root />
+      <ToastProvider>
+        <Root />
+      </ToastProvider>
     </ErrorBoundary>
   </React.StrictMode>
 );

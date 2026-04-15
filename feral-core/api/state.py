@@ -12,6 +12,7 @@ from typing import Optional
 
 from fastapi import WebSocket
 
+from _version import __version__
 from models.protocol import FeralMessage
 from agents.orchestrator import Orchestrator
 from agents.learner import Learner
@@ -60,6 +61,7 @@ from agents.session_handoff import SessionHandoffManager
 from agents.identity_loader import IdentityLoader
 from agents.baseline_engine import BaselineEngine
 from security.device_pairing import DevicePairingStore
+from api.boot_report import BootReport, boot_subsystem
 
 logger = logging.getLogger("feral.brain")
 
@@ -159,6 +161,7 @@ class BrainState:
         self.session_handoff: Optional[SessionHandoffManager] = None
         self.baseline_engine: Optional[BaselineEngine] = None
         self.device_pairing_store: DevicePairingStore = DevicePairingStore()
+        self._boot_report: BootReport = BootReport()
 
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
@@ -171,6 +174,7 @@ class BrainState:
         return self.orchestrator.executor if self.orchestrator else None
 
     async def init(self):
+        _boot_start = time.time()
         self.skill_registry.load_builtin_skills()
 
         from agents.llm_provider import LLMProvider
@@ -198,10 +202,8 @@ class BrainState:
             perception=self.perception,
         )
         self.mcp_client = MCPClientManager()
-        try:
+        with boot_subsystem(self._boot_report, "MCPClientManager"):
             await self.mcp_client.load_and_connect()
-        except Exception as e:
-            logger.warning(f"MCP client auto-connect failed: {e}")
         self.channel_manager = ChannelManager()
 
         self.oauth = OAuthManager(vault=self.vault)
@@ -211,35 +213,23 @@ class BrainState:
         self.calendar = CalendarIntegration(oauth_manager=self.oauth)
         self.email = EmailIntegration(oauth_manager=self.oauth)
         self.messaging = MessagingHub()
-        try:
+        with boot_subsystem(self._boot_report, "GoogleDriveIntegration"):
             self.google_drive = GoogleDriveIntegration(oauth_manager=self.oauth)
-        except Exception as e:
-            logger.debug(f"Google Drive init skipped: {e}")
-        try:
+        with boot_subsystem(self._boot_report, "GoogleContactsIntegration"):
             self.google_contacts = GoogleContactsIntegration(oauth_manager=self.oauth)
-        except Exception as e:
-            logger.debug(f"Google Contacts init skipped: {e}")
-        try:
+        with boot_subsystem(self._boot_report, "Microsoft365Integration"):
             self.microsoft365 = Microsoft365Integration(oauth_manager=self.oauth)
-        except Exception as e:
-            logger.debug(f"Microsoft 365 init skipped: {e}")
-        try:
+        with boot_subsystem(self._boot_report, "HealthAggregator"):
             whoop = WhoopClient(oauth_manager=self.oauth)
             oura = OuraClient()
             self.health_aggregator = HealthAggregator(whoop=whoop, oura=oura)
-        except Exception as e:
-            logger.debug(f"Health aggregator init skipped: {e}")
-        try:
+        with boot_subsystem(self._boot_report, "LocationEngine"):
             from perception.location import LocationEngine
             self.location_engine = LocationEngine()
-        except Exception as e:
-            logger.debug(f"Location engine skipped: {e}")
-        try:
+        with boot_subsystem(self._boot_report, "PushChannel"):
             from channels.push import PushChannel
             self.push_channel = PushChannel()
-        except Exception as e:
-            logger.debug(f"Push channel skipped: {e}")
-        try:
+        with boot_subsystem(self._boot_report, "DigitalTwin"):
             from agents.digital_twin import DigitalTwin
             _identity_loader = IdentityLoader(memory=self.memory)
             self.digital_twin = DigitalTwin(memory=self.memory, identity_loader=_identity_loader, llm=_shared_llm)
@@ -248,8 +238,6 @@ class BrainState:
             from skills.impl import register_instance as _register_twin
             set_twin(self.digital_twin)
             _register_twin("digital_twin", DigitalTwinSkillBridge())
-        except Exception as e:
-            logger.debug(f"Digital twin skipped: {e}")
         self.event_bus = EventBus()
         self.webhook_receiver = WebhookReceiver(event_bus=self.event_bus)
         self.marketplace = MarketplaceClient(skill_registry=self.skill_registry)
@@ -288,12 +276,9 @@ class BrainState:
         if self.microsoft365:
             register_instance("microsoft365", self.microsoft365)
 
-        try:
+        with boot_subsystem(self._boot_report, "TaskFlowRuntime"):
             self.taskflows = TaskFlowRuntime(memory_store=self.memory)
             await self.taskflows.start()
-            logger.info("TaskFlow runtime initialized")
-        except Exception as e:
-            logger.warning(f"TaskFlow runtime skipped: {e}")
 
         self.orchestrator = Orchestrator(
             skill_registry=self.skill_registry,
@@ -355,9 +340,8 @@ class BrainState:
         self.identity_workspace = IdentityWorkspace()
         self.identity_workspace.sync_tools_from_registry(self.skill_registry)
 
-        # Screen Capture Loop
         self.screen_loop = None
-        try:
+        with boot_subsystem(self._boot_report, "ScreenLoop"):
             from perception.screen_loop import ScreenLoop
             self.screen_loop = ScreenLoop(
                 perception=self.perception,
@@ -367,13 +351,9 @@ class BrainState:
             )
             import asyncio
             asyncio.create_task(self.screen_loop.start())
-            logger.info("Screen capture loop started")
-        except Exception as e:
-            logger.debug(f"Screen loop skipped: {e}")
 
-        # Cross-Device Session Handoff
         self.session_handoff = None
-        try:
+        with boot_subsystem(self._boot_report, "SessionHandoffManager"):
             from agents.session_handoff import SessionHandoffManager
             self.session_handoff = SessionHandoffManager(
                 sessions=self.sessions,
@@ -381,9 +361,6 @@ class BrainState:
                 memory=self.memory,
                 send_to_session=self.send_to_session,
             )
-            logger.info("Session handoff manager initialized")
-        except Exception as e:
-            logger.debug(f"Session handoff skipped: {e}")
 
         self.genui_engine = GenUIEngine(llm=_shared_llm)
         self.service_providers = ServiceProviderRegistry()
@@ -393,40 +370,26 @@ class BrainState:
         self.browser = BrowserController()
         self._register_browser_skill()
 
-        try:
+        with boot_subsystem(self._boot_report, "ApprovalManager"):
             from security.exec_approvals import ApprovalManager
             self.approval_manager = ApprovalManager()
-            logger.info("Exec approval manager initialized")
-        except Exception as e:
-            logger.debug(f"Exec approvals skipped: {e}")
 
-        try:
+        with boot_subsystem(self._boot_report, "DockerSandbox"):
             from security.docker_sandbox import get_sandbox
             self.docker_sandbox = get_sandbox()
-            if self.docker_sandbox:
-                logger.info("Docker sandbox available")
-        except Exception:
-            pass
 
-        try:
+        with boot_subsystem(self._boot_report, "CronService"):
             from agents.scheduler import CronService
             self.cron_service = CronService()
             self.scheduler = self.cron_service
             self.skill_registry.set_cron_service(self.cron_service)
-            logger.info("Cron scheduler initialized")
-        except Exception as e:
-            logger.debug(f"Cron scheduler skipped: {e}")
 
-        # Baseline Learning Engine
-        try:
+        with boot_subsystem(self._boot_report, "BaselineEngine"):
             _baseline_db = str(feral_home() / "baselines.db")
             self.baseline_engine = BaselineEngine(db_path=_baseline_db)
-            logger.info("Baseline learning engine initialized (%s)", _baseline_db)
-        except Exception as e:
-            logger.debug(f"Baseline engine skipped: {e}")
 
-        # Proactive Intelligence Engine
-        try:
+        self.proactive = None
+        with boot_subsystem(self._boot_report, "ProactiveEngine"):
             from agents.proactive_engine import ProactiveEngine
             self.proactive = ProactiveEngine(
                 perception=self.perception,
@@ -454,18 +417,13 @@ class BrainState:
             self.proactive.on_message(_proactive_delivery)
             import asyncio
             asyncio.create_task(self.proactive.start())
-            logger.info("Proactive intelligence engine started")
-        except Exception as e:
-            self.proactive = None
-            logger.debug(f"Proactive engine skipped: {e}")
 
         # Wire inbound channels to the orchestrator
         await self._start_channels()
 
-        # Demo mode initialization
         self._demo = None
         if os.environ.get("FERAL_DEMO", "").lower() in ("1", "true", "yes"):
-            try:
+            with boot_subsystem(self._boot_report, "DemoMode"):
                 from demo.seed import seed_demo_identity, seed_demo_memory
                 from demo.simulator import DemoOrchestrator
                 seed_demo_identity()
@@ -493,14 +451,14 @@ class BrainState:
                 self._demo.on_telemetry(_push_demo_telemetry)
                 import asyncio
                 asyncio.create_task(self._demo.start())
-                logger.info("DEMO MODE active — simulated hardware, seeded memory")
-            except Exception as e:
-                logger.warning(f"Demo mode init failed: {e}")
+
+        self._boot_report.total_elapsed_ms = (time.time() - _boot_start) * 1000
+        self._boot_report.log_summary()
 
         stats = self.memory.stats()
         demo_tag = " [DEMO MODE]" if self._demo else ""
         logger.info(
-            f"Brain v1.2.0 initialized{demo_tag} — {len(self.skill_registry.skills)} skills, "
+            f"Brain v{__version__} initialized{demo_tag} — {len(self.skill_registry.skills)} skills, "
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
             f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
         )

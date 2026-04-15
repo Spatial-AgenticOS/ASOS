@@ -27,12 +27,13 @@ jobs:
         run: ruff check --output-format=github --select=E,F,W --ignore=E501,E402,F401,W291,W293 .
 
   brain-tests:
-    name: Brain — pytest (${{ matrix.python-version }})
+    name: Brain — pytest (${{ matrix.python-version }}, ${{ matrix.os }})
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         python-version: ['3.11', '3.12']
+        os: [ubuntu-latest, macos-latest]
     defaults:
       run:
         working-directory: feral-core

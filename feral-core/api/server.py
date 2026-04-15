@@ -5,8 +5,6 @@ The local-first agentic brain. Runs on the user's machine.
 Clients (phone, web, daemon, glasses, robots) connect via WebSocket.
 MCP clients (Claude, Cursor) connect via JSON-RPC.
 Channels (Telegram, Discord, Slack) bridge messaging platforms.
-
-v1.2.0 — HUP, MCP server/client, sandbox policies, channels, federated sync, routines, permissions.
 """
 
 import asyncio
@@ -22,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, HTMLResponse, FileResponse
 
+from _version import __version__
 from models.protocol import (
     FeralMessage,
     TextCommandPayload,
@@ -75,7 +74,7 @@ logger = logging.getLogger("feral.brain")
 app = FastAPI(
     title="FERAL Brain",
     description="FERAL — Open AI agent with computer use, GenUI, voice, and hardware control",
-    version="1.2.0",
+    version=__version__,
 )
 
 CORS_ORIGINS = os.getenv("FERAL_CORS_ORIGINS", "http://localhost:5173,http://localhost:9090").split(",")
@@ -979,9 +978,9 @@ async def serve_webui_or_fallback(full_path: str = ""):
 
 if __name__ == "__main__":
     import uvicorn
-    print("""
+    print(f"""
     ╔══════════════════════════════════════╗
-    ║        FERAL v1.2.0                ║
+    ║        FERAL v{__version__:<22s}║
     ║   Open AI Agent · Computer Use      ║
     ║   Voice · GenUI · Hardware          ║
     ╚══════════════════════════════════════╝

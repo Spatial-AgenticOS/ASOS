@@ -66,6 +66,7 @@ class TestHandleCommandDirect:
         mock_llm = MagicMock()
         mock_llm.available = True
         mock_llm.chat = AsyncMock(side_effect=RuntimeError("LLM down"))
+        mock_llm.chat_with_failover = mock_llm.chat
         orch.llm = mock_llm
         with patch.object(orch, "_direct_execute", new_callable=AsyncMock) as de:
             await orch.handle_command("s1", "do something")
@@ -78,6 +79,7 @@ class TestHandleCommandWithLLM:
         mock_llm = MagicMock()
         mock_llm.available = True
         mock_llm.chat = AsyncMock(return_value={"choices": [{"message": {"content": "Hi there"}}]})
+        mock_llm.chat_with_failover = mock_llm.chat
         mock_llm.extract_response = MagicMock(return_value=("Hi there", []))
         orch.llm = mock_llm
 
@@ -96,6 +98,7 @@ class TestHandleCommandWithLLM:
             ]}}]},
             {"choices": [{"message": {"content": "The weather is sunny"}}]},
         ])
+        mock_llm.chat_with_failover = mock_llm.chat
         mock_llm.extract_response = MagicMock(side_effect=[
             ("", [tool_call]),
             ("The weather is sunny", []),

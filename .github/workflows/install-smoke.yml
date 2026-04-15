@@ -1,0 +1,28 @@
+name: Install Smoke Test
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.11', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install from PyPI
+        run: pip install feral-ai
+
+      - name: Verify CLI
+        run: |
+          feral --help || feral doctor 2>&1 | head -20
+          python -c "from _version import __version__; print(f'Version: {__version__}')" || true

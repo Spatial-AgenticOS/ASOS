@@ -11,8 +11,10 @@ import {
 
 import { API_BASE as API, WS_URL } from '../config';
 import DeviceStatusBar from '../components/DeviceStatusBar';
+import { useToast } from '../components/Toast';
 
 export default function Dashboard() {
+  const { addToast } = useToast();
   const navigate = useNavigate();
   const [dashboard, setDashboard] = useState(null);
   const [info, setInfo] = useState(null);
@@ -22,18 +24,21 @@ export default function Dashboard() {
   const [channelStats, setChannelStats] = useState({ active_channels: [], details: {}, channel_count: 0 });
   const [genuiProviders, setGenuiProviders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [baselineSummary, setBaselineSummary] = useState(null);
   const [quickActionLoading, setQuickActionLoading] = useState(null);
+  const [quickActionResult, setQuickActionResult] = useState(null);
 
   const refresh = useCallback(() => {
     Promise.all([
-      fetch(`${API}/api/dashboard`).then(r => r.json()).catch(() => null),
-      fetch(`${API}/api/system/info`).then(r => r.json()).catch(() => null),
-      fetch(`${API}/api/activity`).then(r => r.json()).catch(() => null),
-      fetch(`${API}/api/llm/status`).then(r => r.json()).catch(() => null),
-      fetch(`${API}/api/llm/presets`).then(r => r.json()).catch(() => null),
-      fetch(`${API}/api/channels`).then(r => r.json()).catch(() => null),
-      fetch(`${API}/api/genui/providers`).then(r => r.json()).catch(() => null),
-    ]).then(([dash, sys, act, llm, presets, channels, genui]) => {
+      fetch(`${API}/api/dashboard`).then(r => r.json()).catch(e => { addToast(e.message || 'Failed to load dashboard'); return null; }),
+      fetch(`${API}/api/system/info`).then(r => r.json()).catch(e => { addToast(e.message || 'Failed to load system info'); return null; }),
+      fetch(`${API}/api/activity`).then(r => r.json()).catch(e => { addToast(e.message || 'Failed to load activity'); return null; }),
+      fetch(`${API}/api/llm/status`).then(r => r.json()).catch(e => { addToast(e.message || 'Failed to check LLM status'); return null; }),
+      fetch(`${API}/api/llm/presets`).then(r => r.json()).catch(e => { addToast(e.message || 'Failed to load presets'); return null; }),
+      fetch(`${API}/api/channels`).then(r => r.json()).catch(e => { addToast(e.message || 'Failed to load channels'); return null; }),
+      fetch(`${API}/api/genui/providers`).then(r => r.json()).catch(e => { addToast(e.message || 'Failed to load providers'); return null; }),
+      fetch(`${API}/api/baseline/summary`).then(r => r.json()).catch(() => null),
+    ]).then(([dash, sys, act, llm, presets, channels, genui, baseline]) => {
       if (dash) setDashboard(dash);
       if (sys) setInfo(sys);
       if (act) setActivity(act.entries || []);
@@ -41,6 +46,7 @@ export default function Dashboard() {
       if (presets && !presets.error) setLlmPresets(presets.presets || []);
       if (channels && !channels.error) setChannelStats(channels);
       if (genui && !genui.error) setGenuiProviders(genui.providers || []);
+      if (baseline && !baseline.error && baseline.metrics_tracked > 0) setBaselineSummary(baseline);
       setLoading(false);
     });
   }, []);
@@ -56,22 +62,30 @@ export default function Dashboard() {
           if (msg.type === 'state_push' && msg.event === 'dashboard_update' && msg.data) {
             setDashboard(msg.data);
           }
-        } catch {}
+        } catch (e) { addToast(e.message || 'Failed to parse dashboard update'); }
       };
-    } catch {}
+    } catch (e) { addToast(e.message || 'Dashboard connection error'); }
     return () => { if (ws) ws.close(); };
   }, [refresh]);
 
   const executeQuickAction = async (action) => {
     setQuickActionLoading(action);
+    setQuickActionResult(null);
     try {
-      await fetch(`${API}/api/chat`, {
+      const res = await fetch(`${API}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hop: 'client', type: 'text_command', payload: { text: action } }),
       });
-    } catch { /* ignore */ }
-    setTimeout(() => setQuickActionLoading(null), 3000);
+      const data = await res.json();
+      const text = data.text || data.payload?.text || data.reply || data.message || JSON.stringify(data);
+      setQuickActionResult({ action, result: text });
+      setTimeout(() => setQuickActionResult(null), 15000);
+    } catch (err) {
+      setQuickActionResult({ action, result: `Error: ${err.message}` });
+      setTimeout(() => setQuickActionResult(null), 8000);
+    }
+    setQuickActionLoading(null);
   };
 
   if (loading) {
@@ -197,6 +211,40 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Baseline Summary */}
+        {baselineSummary && (
+          <div className="bg-feral-card border border-feral-border rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <TrendingUp size={16} className="text-feral-accent" />
+              <h2 className="font-semibold text-sm">Baseline Learning</h2>
+              <span className="ml-auto text-[10px] text-feral-text-muted">
+                {baselineSummary.metrics_tracked} metrics tracked
+              </span>
+            </div>
+            {baselineSummary.categories?.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                {baselineSummary.categories.map(cat => (
+                  <span key={cat} className="text-[11px] bg-feral-accent/10 text-feral-accent px-2.5 py-1 rounded-full capitalize">
+                    {cat}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-feral-bg/30 border border-feral-border rounded-lg p-3">
+                <div className="text-xs text-feral-text-secondary uppercase tracking-wider mb-1">Metrics</div>
+                <div className="text-xl font-bold text-feral-accent">{baselineSummary.metrics_tracked}</div>
+              </div>
+              <div className="bg-feral-bg/30 border border-feral-border rounded-lg p-3">
+                <div className="text-xs text-feral-text-secondary uppercase tracking-wider mb-1">Recent Alerts</div>
+                <div className={`text-xl font-bold ${baselineSummary.recent_alerts > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  {baselineSummary.recent_alerts}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Provider / Channel Plane */}
         <div className="bg-feral-card border border-feral-border rounded-xl p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -258,6 +306,22 @@ export default function Dashboard() {
             <QuickAction icon={Brain} label="Memory Status" onClick={() => executeQuickAction("Show me my memory stats")} loading={quickActionLoading === "Show me my memory stats"} />
             <QuickAction icon={Globe} label="System Check" onClick={() => executeQuickAction("Run a system health check")} loading={quickActionLoading === "Run a system health check"} />
           </div>
+          {quickActionResult && (
+            <div className="mt-3 bg-feral-bg/30 border border-feral-border rounded-lg p-4 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-medium text-feral-accent">{quickActionResult.action}</span>
+                <button
+                  onClick={() => setQuickActionResult(null)}
+                  className="text-feral-text-muted hover:text-feral-text text-xs transition"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="text-[13px] text-feral-text-secondary leading-relaxed whitespace-pre-wrap break-words">
+                {quickActionResult.result}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Memory + System Status */}

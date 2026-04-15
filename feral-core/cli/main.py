@@ -33,6 +33,7 @@ try:
 except ImportError:
     httpx = None
 
+from _version import __version__
 from config.loader import feral_home
 from config.runtime import (
     brain_bind_host,
@@ -58,10 +59,10 @@ def _runtime_ws_url() -> str:
 WS_URL = _runtime_ws_url()
 HTTP_BASE = _runtime_http_base()
 
-BANNER = """
+BANNER = f"""
 ╔══════════════════════════════════════╗
 ║          F E R A L                    ║
-║   Unleashed AI  v1.2.0              ║
+║   Unleashed AI  v{__version__:<21s}║
 ╚══════════════════════════════════════╝
   Type a message to chat. Commands:
     /status   — system health
@@ -997,6 +998,10 @@ def main():
     sp.add_argument("action", nargs="?", default="status", choices=["status", "peers", "export", "import"], help="Action")
     sp.add_argument("file", nargs="?", default="", help="File path for export/import")
 
+    # feral install-service / uninstall-service
+    sub.add_parser("install-service", help="Install FERAL Brain as a system daemon (launchd/systemd)")
+    sub.add_parser("uninstall-service", help="Remove the FERAL Brain system daemon")
+
     # Parse known args — everything else is treated as a message
     args, remaining = parser.parse_known_args()
     _apply_connection_args(args)
@@ -1036,6 +1041,12 @@ def main():
         cmd_marketplace(args.action, args.query)
     elif args.subcommand == "sync":
         cmd_sync(args.action, getattr(args, "file", ""))
+    elif args.subcommand == "install-service":
+        from cli.daemon import install_service
+        install_service()
+    elif args.subcommand == "uninstall-service":
+        from cli.daemon import uninstall_service
+        uninstall_service()
     elif args.subcommand is None and not remaining:
         asyncio.run(repl())
     else:

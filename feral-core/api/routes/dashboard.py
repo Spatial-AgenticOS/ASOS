@@ -3,6 +3,7 @@
 import time
 from fastapi import APIRouter
 
+from _version import __version__
 from api.state import state
 from config.loader import feral_home
 
@@ -67,7 +68,8 @@ async def identity_greeting():
 @router.get("/health")
 async def health():
     """Health check endpoint for Docker HEALTHCHECK and load balancers."""
-    return {"status": "ok", "version": "1.2.0"}
+    boot_data = state._boot_report.to_dict() if hasattr(state, '_boot_report') else {}
+    return {"status": "ok", "version": __version__, "boot": boot_data}
 
 
 @router.get("/api/info")
@@ -75,7 +77,7 @@ async def api_info():
     stats = state.memory.stats()
     return {
         "name": "FERAL Brain",
-        "version": "1.2.0",
+        "version": __version__,
         "status": "running",
         "sessions": len(state.sessions),
         "daemons": list(state.daemons.keys()),
@@ -96,7 +98,7 @@ async def system_info():
     channel_stats = state.channel_manager.stats if state.channel_manager else {}
     skill_gen_stats = state.skill_gen.stats if state.skill_gen else {}
     return {
-        "version": "1.2.0",
+        "version": __version__,
         "config": state.config.to_client_safe_dict(),
         "memory": stats,
         "sessions": len(state.sessions),
@@ -160,6 +162,7 @@ async def _get_dashboard_data() -> dict:
                 latest_health["spo2"] = frame.spo2_pct
             if frame.skin_temperature_c:
                 latest_health["temperature"] = frame.skin_temperature_c
+    boot_data = state._boot_report.to_dict() if hasattr(state, '_boot_report') else {}
     return {
         "devices": devices_list, "device_count": len(state.daemons),
         "session_count": len(state.sessions), "health": latest_health,
@@ -170,6 +173,7 @@ async def _get_dashboard_data() -> dict:
         "wasm_available": state.wasm_sandbox.available if state.wasm_sandbox else False,
         "wake_word_enabled": state.wake_word.enabled if state.wake_word else False,
         "taskflows": state.taskflows.stats() if state.taskflows else {},
+        "boot": boot_data,
     }
 
 

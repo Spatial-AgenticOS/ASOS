@@ -10,7 +10,9 @@ import asyncio
 import os
 import json
 import logging
+import time
 import httpx
+from enum import Enum
 from typing import Optional, AsyncGenerator
 
 from config.runtime import ollama_base_url, ollama_openai_base_url
@@ -67,6 +69,94 @@ LLM_PRESETS = {
 }
 
 
+# ── Failover Error Classification ─────────────────────────────
+
+
+class FailoverReason(str, Enum):
+    RATE_LIMIT = "rate_limit"
+    AUTH = "auth"
+    AUTH_PERMANENT = "auth_permanent"
+    BILLING = "billing"
+    MODEL_NOT_FOUND = "model_not_found"
+    CONTEXT_OVERFLOW = "context_overflow"
+    TIMEOUT = "timeout"
+    OVERLOADED = "overloaded"
+    UNKNOWN = "unknown"
+
+
+def classify_error(error: Exception) -> FailoverReason:
+    """Classify an LLM error into a failover reason for routing decisions."""
+    err_str = str(error).lower()
+    status = getattr(error, "status_code", 0) or 0
+    if hasattr(error, "response"):
+        status = getattr(error.response, "status_code", status) or status
+
+    if status == 429 or "rate" in err_str or "quota" in err_str:
+        return FailoverReason.RATE_LIMIT
+    if status == 401 or "unauthorized" in err_str or "invalid api key" in err_str:
+        return FailoverReason.AUTH
+    if "billing" in err_str or "payment" in err_str or "insufficient" in err_str:
+        return FailoverReason.BILLING
+    if status == 404 or ("model" in err_str and "not found" in err_str):
+        return FailoverReason.MODEL_NOT_FOUND
+    if "context" in err_str and ("length" in err_str or "overflow" in err_str or "too long" in err_str):
+        return FailoverReason.CONTEXT_OVERFLOW
+    if "timeout" in err_str or status == 408 or "timed out" in err_str:
+        return FailoverReason.TIMEOUT
+    if status in (500, 502, 503) or "overloaded" in err_str or "server error" in err_str:
+        return FailoverReason.OVERLOADED
+    return FailoverReason.UNKNOWN
+
+
+class ProviderCooldownTracker:
+    """Tracks per-provider cooldown state for failover decisions."""
+
+    _COOLDOWN_MAP: dict[FailoverReason, int] = {
+        FailoverReason.RATE_LIMIT: 60,
+        FailoverReason.AUTH: 300,
+        FailoverReason.AUTH_PERMANENT: 86400,
+        FailoverReason.BILLING: 3600,
+        FailoverReason.OVERLOADED: 30,
+        FailoverReason.TIMEOUT: 15,
+    }
+    _PROBE_INTERVAL = 30.0
+
+    def __init__(self):
+        self._cooldowns: dict[str, float] = {}
+        self._last_probe: dict[str, float] = {}
+
+    def record_failure(self, provider: str, reason: FailoverReason):
+        cooldown_seconds = self._COOLDOWN_MAP.get(reason, 10)
+        self._cooldowns[provider] = time.time() + cooldown_seconds
+
+    def is_available(self, provider: str) -> bool:
+        return time.time() >= self._cooldowns.get(provider, 0)
+
+    def should_probe(self, provider: str) -> bool:
+        if self.is_available(provider):
+            return True
+        last = self._last_probe.get(provider, 0)
+        if time.time() - last >= self._PROBE_INTERVAL:
+            self._last_probe[provider] = time.time()
+            return True
+        return False
+
+    def record_success(self, provider: str):
+        self._cooldowns.pop(provider, None)
+
+
+_PROVIDER_REGISTRY: dict[str, tuple[str, str, str]] = {
+    "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"),
+    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "llama-3.1-70b-versatile"),
+    "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "claude-sonnet-4-20250514"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", "gemini-2.5-flash"),
+    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "openai/gpt-4.1"),
+    "deepseek": ("https://api.deepseek.com", "DEEPSEEK_API_KEY", "deepseek-chat"),
+    "kimi": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY", "moonshot-v1-128k"),
+    "qwen": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", "qwen-max"),
+}
+
+
 class LLMProvider:
     """
     Pluggable LLM interface.
@@ -85,6 +175,8 @@ class LLMProvider:
         self.api_key = os.getenv("OPENAI_API_KEY", "")
         self.base_url = os.getenv("FERAL_LLM_BASE_URL", "")
         self.available = True
+        self._config: dict = {}
+        self._cooldown = ProviderCooldownTracker()
 
         # Local inference engine (for provider=local or hybrid)
         self._local_engine = None
@@ -737,6 +829,229 @@ class LLMProvider:
             "model": self.model,
             "vision_supported": bool(preset.get("vision_supported", False)),
         }
+
+    # ── Failover ───────────────────────────────────────────
+
+    def set_config(self, config: dict):
+        """Accept external config (e.g. from ConfigLoader) for fallback routing."""
+        self._config = config
+
+    @staticmethod
+    def _normalize_anthropic_response(data: dict) -> dict:
+        """Convert raw Anthropic Messages API response to OpenAI-shaped dict."""
+        text_parts: list[str] = []
+        tool_calls: list[dict] = []
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                text_parts.append(block["text"])
+            elif block.get("type") == "tool_use":
+                tool_calls.append({
+                    "id": block["id"],
+                    "type": "function",
+                    "function": {
+                        "name": block["name"],
+                        "arguments": json.dumps(block.get("input", {})),
+                    },
+                })
+        msg: dict = {"role": "assistant", "content": "\n".join(text_parts)}
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+        return {"choices": [{"message": msg, "finish_reason": data.get("stop_reason", "end_turn")}]}
+
+    def _get_provider_config(self, provider_name: str) -> dict:
+        """Resolve base_url / api_key / model for a named provider."""
+        if provider_name == "ollama":
+            return {
+                "base_url": ollama_openai_base_url(),
+                "api_key": "ollama",
+                "model": "llama3.1",
+            }
+        reg = _PROVIDER_REGISTRY.get(
+            provider_name,
+            ("https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"),
+        )
+        base_url, env_key, default_model = reg
+        api_key = os.getenv(env_key, "")
+        if provider_name == "gemini" and not api_key:
+            api_key = os.getenv("GOOGLE_API_KEY", "")
+        return {"base_url": base_url, "api_key": api_key, "model": default_model}
+
+    def _build_candidate_list(self) -> list[tuple[str, dict]]:
+        """Ordered list of (provider_name, config) — primary first, then fallbacks."""
+        candidates: list[tuple[str, dict]] = [
+            (self.provider, {"base_url": self.base_url, "api_key": self.api_key, "model": self.model}),
+        ]
+        for fb in self._config.get("fallback_providers", []):
+            if fb != self.provider:
+                candidates.append((fb, self._get_provider_config(fb)))
+        return candidates
+
+    @staticmethod
+    def _build_anthropic_body(
+        model: str, messages: list[dict], tools: Optional[list[dict]],
+        temperature: float, max_tokens: int,
+    ) -> dict:
+        """Build Anthropic Messages API request body."""
+        system_text = ""
+        conv: list[dict] = []
+        for m in messages:
+            if m["role"] == "system":
+                system_text += m.get("content", "") + "\n"
+            else:
+                conv.append({"role": m["role"], "content": m.get("content", "")})
+        body: dict = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": conv,
+        }
+        if system_text.strip():
+            body["system"] = system_text.strip()
+        if tools:
+            anthropic_tools = []
+            for t in tools:
+                if t.get("type") == "function":
+                    fn = t["function"]
+                    anthropic_tools.append({
+                        "name": fn["name"],
+                        "description": fn.get("description", ""),
+                        "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+                    })
+            if anthropic_tools:
+                body["tools"] = anthropic_tools
+        return body
+
+    async def _call_provider(
+        self,
+        provider_name: str,
+        config: dict,
+        messages: list[dict],
+        tools: Optional[list[dict]],
+        **kwargs,
+    ) -> dict:
+        """Make a chat request to a specific provider. Raises on error."""
+        temperature = kwargs.get("temperature", 0.7)
+        max_tokens = kwargs.get("max_tokens", 1024)
+
+        # Primary provider — reuse existing client
+        if provider_name == self.provider:
+            if provider_name == "anthropic":
+                body = self._build_anthropic_body(
+                    self.model, messages, tools, temperature, max_tokens,
+                )
+
+                async def _do_primary_anthropic():
+                    resp = await self.client.post("/messages", json=body)
+                    resp.raise_for_status()
+                    return resp.json()
+
+                data = await _retry_llm_call(_do_primary_anthropic)
+                return self._normalize_anthropic_response(data)
+
+            body = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            if tools:
+                body["tools"] = [{k: v for k, v in t.items() if k != "_feral_meta"} for t in tools]
+                body["tool_choice"] = "auto"
+
+            async def _do_primary():
+                resp = await self.client.post("/chat/completions", json=body)
+                resp.raise_for_status()
+                return resp.json()
+
+            return await _retry_llm_call(_do_primary)
+
+        # Fallback provider — build a temporary client
+        base_url = config["base_url"]
+        api_key = config["api_key"]
+        model = config["model"]
+        if not api_key:
+            raise RuntimeError(f"No API key configured for fallback provider '{provider_name}'")
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if provider_name == "anthropic":
+            headers["x-api-key"] = api_key
+            headers["anthropic-version"] = "2023-06-01"
+        else:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=60.0) as tmp:
+            if provider_name == "anthropic":
+                body = self._build_anthropic_body(
+                    model, messages, tools, temperature, max_tokens,
+                )
+
+                async def _do_fb_anthropic():
+                    resp = await tmp.post("/messages", json=body)
+                    resp.raise_for_status()
+                    return resp.json()
+
+                data = await _retry_llm_call(_do_fb_anthropic)
+                return self._normalize_anthropic_response(data)
+
+            body = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            if tools:
+                body["tools"] = [{k: v for k, v in t.items() if k != "_feral_meta"} for t in tools]
+                body["tool_choice"] = "auto"
+
+            async def _do_fb():
+                resp = await tmp.post("/chat/completions", json=body)
+                resp.raise_for_status()
+                return resp.json()
+
+            return await _retry_llm_call(_do_fb)
+
+    async def chat_with_failover(
+        self,
+        messages: list[dict],
+        tools: Optional[list[dict]] = None,
+        **kwargs,
+    ) -> dict:
+        """Call chat() with automatic failover across configured providers.
+
+        Same-provider transient retries are handled by ``_retry_llm_call``.
+        Cross-provider routing is handled here based on error classification.
+        """
+        if self._messages_contain_vision(messages):
+            ok, reason = self._vision_support_status()
+            if not ok:
+                logger.warning(reason)
+                return {"error": reason, "choices": []}
+
+        if self._local_engine and self.provider in ("local", "hybrid"):
+            return await self.chat(messages, tools, **kwargs)
+
+        candidates = self._build_candidate_list()
+        last_error: Optional[Exception] = None
+
+        for provider_name, config in candidates:
+            if not self._cooldown.should_probe(provider_name):
+                continue
+            try:
+                result = await self._call_provider(provider_name, config, messages, tools, **kwargs)
+                self._cooldown.record_success(provider_name)
+                return result
+            except Exception as e:
+                reason = classify_error(e)
+                self._cooldown.record_failure(provider_name, reason)
+                logger.warning("Provider %s failed (%s): %s", provider_name, reason.value, e)
+                last_error = e
+                if reason == FailoverReason.CONTEXT_OVERFLOW:
+                    raise
+                continue
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("All LLM providers exhausted")
 
     async def close(self):
         client = getattr(self, "client", None)

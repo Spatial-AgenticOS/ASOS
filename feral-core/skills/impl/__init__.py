@@ -88,3 +88,12 @@ try:
     import skills.impl.web_actions
 except ImportError:
     pass
+
+try:
+    import skills.impl.browser_use
+except ImportError:
+    pass
+
+
+# robot_action uses WS_EXECUTE method — handled natively by SkillExecutor via daemon WebSocket
+# The RobotActionSkill bridge in robot_action.py is available for direct HUP use if needed

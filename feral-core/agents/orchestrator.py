@@ -366,7 +366,7 @@ class Orchestrator:
             ]
 
             try:
-                response = await self.llm.chat(messages=messages, tools=tools if tools else None)
+                response = await self.llm.chat_with_failover(messages=messages, tools=tools if tools else None)
                 text_content, tool_calls = self.llm.extract_response(response)
 
                 if text_content and not tool_calls and self._is_refusal_text(text_content):
@@ -710,7 +710,7 @@ class Orchestrator:
         prompt += "\nOutput ONLY a JSON list of strings (tool IDs). [] if none match. No markdown."
 
         try:
-            response = await self.llm.chat([{"role": "user", "content": prompt}], tools=None)
+            response = await self.llm.chat_with_failover([{"role": "user", "content": prompt}], tools=None)
             text_content, _ = self.llm.extract_response(response)
 
             cleaned = text_content.strip()
