@@ -519,4 +519,6 @@ def register_core_methods(registry: MethodRegistry, state):
         if state.orchestrator:
             state.orchestrator.update_biometric(session_id, params)
         state.perception.update_sensors(session_id, params)
+        if state.somatic_engine:
+            state.somatic_engine.update_from_perception_frame(session_id, params)
         return {"received": True}

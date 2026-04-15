@@ -109,6 +109,7 @@ class Orchestrator:
         self.executor = SkillExecutor(daemons=daemons)
         self.genui = GenUIGenerator()
         self._mcp_client = None
+        self._somatic_engine = None  # set via set_somatic_engine() from BrainState
 
         # Delegate sub-modules
         self.tool_runner = ToolRunner(self)
@@ -173,6 +174,11 @@ class Orchestrator:
     def set_genui_engine(self, engine):
         """Wire the shared GenUI engine so tool-result SDUI uses the server's LLM."""
         self._genui_engine = engine
+
+    def set_somatic_engine(self, somatic_engine):
+        """Wire the SomaticEngine so the identity loader can inject body-state context."""
+        self._somatic_engine = somatic_engine
+        self.identity_loader.somatic_engine = somatic_engine
 
     def _init_multi_agent(self):
         """Lazy-init the multi-agent orchestrator once LLM is available."""
@@ -303,6 +309,9 @@ class Orchestrator:
                     if self.memory:
                         self.memory.working_push(session_id, {"role": "assistant", "text": ack})
                     return
+
+        if self._somatic_engine:
+            self._somatic_engine.update_interaction(session_id, len(text))
 
         if self.memory:
             self.memory.episode_save(
@@ -459,6 +468,9 @@ class Orchestrator:
         if not self._streaming_enabled or not self.llm.available:
             await self.handle_command(session_id, text, context)
             return
+
+        if self._somatic_engine:
+            self._somatic_engine.update_interaction(session_id, len(text))
 
         if self.memory:
             self.memory.episode_save(

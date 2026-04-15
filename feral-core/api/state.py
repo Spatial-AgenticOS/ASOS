@@ -160,6 +160,7 @@ class BrainState:
         self.taskflows: Optional[TaskFlowRuntime] = None
         self.session_handoff: Optional[SessionHandoffManager] = None
         self.baseline_engine: Optional[BaselineEngine] = None
+        self.somatic_engine = None
         self.device_pairing_store: DevicePairingStore = DevicePairingStore()
         self._boot_report: BootReport = BootReport()
 
@@ -388,6 +389,12 @@ class BrainState:
             _baseline_db = str(feral_home() / "baselines.db")
             self.baseline_engine = BaselineEngine(db_path=_baseline_db)
 
+        with boot_subsystem(self._boot_report, "SomaticEngine"):
+            from perception.somatic import SomaticEngine
+            self.somatic_engine = SomaticEngine()
+            if self.orchestrator:
+                self.orchestrator.set_somatic_engine(self.somatic_engine)
+
         self.proactive = None
         with boot_subsystem(self._boot_report, "ProactiveEngine"):
             from agents.proactive_engine import ProactiveEngine
@@ -439,6 +446,13 @@ class BrainState:
                             frame.spo2_pct = int(wb.get("spo2_pct", 0))
                             frame.skin_temperature_c = wb.get("skin_temp_c", 0.0)
                             frame.activity_state = wb.get("activity", "resting")
+                        if self.somatic_engine and wb:
+                            self.somatic_engine.update_biometrics(
+                                sid,
+                                heart_rate=float(wb.get("heart_rate_bpm", 0)),
+                                spo2_pct=float(wb.get("spo2_pct", 0)),
+                                skin_temp_c=float(wb.get("skin_temp_c", 0)),
+                            )
                     await self.broadcast_event("dashboard_update", await _get_dashboard_data_safe())
 
                 async def _get_dashboard_data_safe():

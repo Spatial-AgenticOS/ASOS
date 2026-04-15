@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from memory.store import MemoryStore
     from models.skill_manifest import SkillManifest
     from perception.fusion import PerceptionFrame
+    from perception.somatic import SomaticEngine
 
 logger = logging.getLogger("feral.orchestrator.identity")
 
@@ -24,8 +25,9 @@ logger = logging.getLogger("feral.orchestrator.identity")
 class IdentityLoader:
     """Loads agent identity files and builds the LLM system prompt."""
 
-    def __init__(self, memory: "MemoryStore | None" = None):
+    def __init__(self, memory: "MemoryStore | None" = None, somatic_engine: "SomaticEngine | None" = None):
         self.memory = memory
+        self.somatic_engine: SomaticEngine | None = somatic_engine
 
     def load_identity(self) -> str:
         """Load agent identity from ~/.feral/ files: IDENTITY.yaml, USER.md, SOUL.md, MEMORY.md."""
@@ -217,5 +219,11 @@ class IdentityLoader:
         # Connected nodes
         if frame.connected_nodes:
             prompt += f"\nConnected devices: {frame.connected_nodes}\n"
+
+        # Somatic context — body-state adaptive behaviour
+        if self.somatic_engine and session_id:
+            somatic_section = self.somatic_engine.build_system_prompt_section(session_id)
+            if somatic_section:
+                prompt += f"\n{somatic_section}\n"
 
         return prompt

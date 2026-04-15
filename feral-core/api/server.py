@@ -488,6 +488,8 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
                     if state.orchestrator:
                         state.orchestrator.update_biometric(session_id, bio)
                     state.perception.update_sensors(session_id, bio)
+                    if state.somatic_engine:
+                        state.somatic_engine.update_from_perception_frame(session_id, bio)
                     _record_biometrics_to_baseline(bio)
 
             except Exception as msg_err:
@@ -653,6 +655,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 if node_id:
                     for sid in state.get_sessions_for_daemon(node_id):
                         state.perception.update_sensors(sid, sensors)
+                        if state.somatic_engine:
+                            state.somatic_engine.update_from_perception_frame(sid, sensors)
                 _record_biometrics_to_baseline(sensors)
 
             elif msg.type == "sensor_telemetry":
@@ -668,6 +672,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 if node_id:
                     for sid in state.get_sessions_for_daemon(node_id):
                         state.perception.update_sensors(sid, sensors_map)
+                        if state.somatic_engine:
+                            state.somatic_engine.update_from_perception_frame(sid, sensors_map)
 
             elif msg.type == "sensor_batch":
                 payload_dict = raw.get("payload", {})
@@ -678,6 +684,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 if node_id:
                     for sid in state.get_sessions_for_daemon(node_id):
                         state.perception.update_sensors(sid, readings)
+                        if state.somatic_engine:
+                            state.somatic_engine.update_from_perception_frame(sid, readings)
                 _record_biometrics_to_baseline(readings)
 
             elif msg.type == "heartbeat":
