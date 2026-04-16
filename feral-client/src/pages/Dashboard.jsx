@@ -126,7 +126,30 @@ export default function Dashboard() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <DeviceStatusBar devices={devices} hr={health.heart_rate} />
+      {dashboard?.is_demo_mode && (
+        <div style={{
+          background: 'linear-gradient(90deg, #78350f, #92400e)',
+          color: '#fbbf24',
+          padding: '10px 16px',
+          textAlign: 'center',
+          fontSize: 13,
+          fontWeight: 600,
+          borderRadius: 8,
+          marginBottom: 16,
+          border: '1px solid #b45309',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
+        }}>
+          <span style={{ fontSize: 16 }}>⚠</span>
+          DEMO MODE ACTIVE — all health data, devices, and biometrics are simulated.
+          To use real data, restart without FERAL_DEMO=1.
+        </div>
+      )}
+      {(devices.length > 0 || dashboard?.is_demo_mode) && (
+        <DeviceStatusBar devices={devices} hr={health.heart_rate} demo={dashboard?.is_demo_mode} />
+      )}
       <div className="max-w-6xl mx-auto p-4 lg:p-8 space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -210,9 +233,9 @@ export default function Dashboard() {
             </div>
             {Object.keys(health).length > 0 ? (
               <div className="grid grid-cols-3 gap-4">
-                {health.heart_rate && <HealthMetric icon={Heart}       label="Heart Rate" value={`${health.heart_rate}`} unit="bpm" status="critical" />}
-                {health.spo2        && <HealthMetric icon={Wind}        label="SpO2"       value={`${health.spo2}`}       unit="%"   status="accent" />}
-                {health.temperature && <HealthMetric icon={Thermometer} label="Temp"       value={`${health.temperature}`} unit="°C"  status="warning" />}
+                {health.heart_rate && <HealthMetric icon={Heart}       label="Heart Rate" value={`${health.heart_rate}`} unit="bpm" status="critical" demo={dashboard?.demo} />}
+                {health.spo2        && <HealthMetric icon={Wind}        label="SpO2"       value={`${health.spo2}`}       unit="%"   status="accent" demo={dashboard?.demo} />}
+                {health.temperature && <HealthMetric icon={Thermometer} label="Temp"       value={`${health.temperature}`} unit="°C"  status="warning" demo={dashboard?.demo} />}
               </div>
             ) : (
               <div className="text-center py-8">
@@ -474,12 +497,17 @@ function MemoryMetric({ label, value, icon: Icon }) {
   );
 }
 
-function HealthMetric({ icon: Icon, label, value, unit, status = 'accent' }) {
+function HealthMetric({ icon: Icon, label, value, unit, status = 'accent', demo }) {
   const color = STATUS_COLORS[status] || STATUS_COLORS.accent;
   return (
     <div className="text-center">
       <Icon size={18} className={`mx-auto mb-2 ${color}`} />
       <div className={`text-2xl font-bold ${color}`}>{value}</div>
+      {demo && (
+        <span style={{ fontSize: 9, color: '#f59e0b', opacity: 0.8, display: 'block', marginTop: 2 }}>
+          simulated
+        </span>
+      )}
       <div className="text-[10px] text-feral-text-secondary">{unit}</div>
       <div className="text-[10px] text-feral-text-muted mt-0.5">{label}</div>
     </div>

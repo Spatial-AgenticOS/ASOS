@@ -129,11 +129,18 @@ class SmartHomeSimulator:
 class DemoOrchestrator:
     """Coordinates all simulators and feeds telemetry into the brain."""
 
-    def __init__(self):
+    def __init__(self, orchestrator=None, sessions=None):
         self.wristband = WristbandSimulator()
         self.smart_home = SmartHomeSimulator()
+        self._orchestrator = orchestrator
+        self._sessions = sessions
         self._running = False
         self._callbacks: list[Callable] = []
+        self._tick = 0
+
+    def set_refs(self, orchestrator, sessions):
+        self._orchestrator = orchestrator
+        self._sessions = sessions
 
     def on_telemetry(self, callback: Callable[[dict], Awaitable[None]]):
         self._callbacks.append(callback)
@@ -152,7 +159,32 @@ class DemoOrchestrator:
                     await cb(data)
                 except Exception as e:
                     logger.warning("Demo telemetry callback error: %s", e)
+
+            self._tick += 1
+            if self._orchestrator and self._sessions and self._tick % 3 == 0:
+                try:
+                    await self._emit_random_brain_event()
+                except Exception as e:
+                    logger.debug("Demo brain event error: %s", e)
+
             await asyncio.sleep(interval_s)
+
+    async def _emit_random_brain_event(self):
+        """Emit a simulated brain event to liven up the Glass Brain."""
+        event_pool = [
+            ("llm_call", {"model": "gpt-4o-mini", "source": "demo"}),
+            ("tool_exec", {"tool": random.choice(["web_search", "weather_current", "calendar_lookup", "notes_search", "memory_recall"]), "success": True, "source": "demo"}),
+            ("memory_write", {"type": random.choice(["episodic", "knowledge", "note"]), "source": "demo"}),
+        ]
+        if self._tick % 30 == 0:
+            event_pool.append(("proactive_alert", {"title": "Demo wellness check", "source": "demo"}))
+
+        event_type, event_data = random.choice(event_pool)
+        for sid in list(self._sessions.keys()):
+            try:
+                await self._orchestrator._emit_brain_event(sid, event_type, event_data)
+            except Exception:
+                pass
 
     def stop(self):
         self._running = False

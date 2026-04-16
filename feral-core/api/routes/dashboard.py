@@ -1,5 +1,6 @@
 """Dashboard, system info, health, and activity endpoints."""
 
+import os
 import time
 from fastapi import APIRouter
 
@@ -163,6 +164,23 @@ async def _get_dashboard_data() -> dict:
             if frame.skin_temperature_c:
                 latest_health["temperature"] = frame.skin_temperature_c
     boot_data = state._boot_report.to_dict() if hasattr(state, '_boot_report') else {}
+
+    is_demo = getattr(state, "_demo", None) is not None or os.environ.get("FERAL_DEMO", "").lower() in ("1", "true", "yes")
+
+    somatic_state = {}
+    if hasattr(state, 'somatic_engine') and state.somatic_engine and state.sessions:
+        for sid in state.sessions:
+            vec = state.somatic_engine.get_vector(sid)
+            somatic_state = {
+                "cognitive_load": vec.cognitive_load,
+                "heart_rate": vec.heart_rate,
+                "hrv_ms": vec.hrv_ms,
+                "spo2_pct": vec.spo2_pct,
+                "activity_level": vec.activity_level,
+                "circadian_phase": vec.circadian_phase,
+            }
+            break
+
     return {
         "devices": devices_list, "device_count": len(state.daemons),
         "session_count": len(state.sessions), "health": latest_health,
@@ -174,6 +192,9 @@ async def _get_dashboard_data() -> dict:
         "wake_word_enabled": state.wake_word.enabled if state.wake_word else False,
         "taskflows": state.taskflows.stats() if state.taskflows else {},
         "boot": boot_data,
+        "demo": is_demo,
+        "is_demo_mode": getattr(state, "_demo", None) is not None,
+        "somatic": somatic_state,
     }
 
 

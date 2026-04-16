@@ -37,7 +37,15 @@ export default function GlassBrain() {
   const handleBrainEvent = useCallback((payload) => {
     const event = payload.event;
     const ts = new Date().toLocaleTimeString();
-    eventsRef.current = [...eventsRef.current.slice(-9), { event, ts, ...payload }];
+
+    const last = eventsRef.current[eventsRef.current.length - 1];
+    if (last && last.event === event && last.type === payload.type) {
+      last.count = (last.count || 1) + 1;
+      last.ts = ts;
+      eventsRef.current = [...eventsRef.current.slice(0, -1), last];
+    } else {
+      eventsRef.current = [...eventsRef.current.slice(-9), { event, ts, count: 1, ...payload }];
+    }
     setEventLog([...eventsRef.current]);
 
     if (sceneRef.current) {
@@ -180,21 +188,8 @@ export default function GlassBrain() {
     const particles = new THREE.Points(particlesGeo, particlesMat);
     scene.add(particles);
 
-    // Orbiting satellite nodes (connected devices)
+    // Satellites array — populated dynamically by useEffect reacting to stats.devices
     const satellites = [];
-    const deviceTypes = ['desktop', 'phone', 'glasses', 'wristband'];
-    deviceTypes.forEach((type, i) => {
-      const satGeo = new THREE.OctahedronGeometry(0.15, 0);
-      const satMat = new THREE.MeshPhongMaterial({
-        color: COLORS.device,
-        emissive: COLORS.device,
-        emissiveIntensity: 0.5,
-      });
-      const sat = new THREE.Mesh(satGeo, satMat);
-      sat.userData = { type, angle: (i / deviceTypes.length) * Math.PI * 2, radius: 3, speed: 0.3 + i * 0.1 };
-      scene.add(sat);
-      satellites.push(sat);
-    });
 
     // Lighting
     scene.add(new THREE.AmbientLight(0x111122, 0.5));
@@ -268,21 +263,12 @@ export default function GlassBrain() {
         if (!r.ok) return;
         const data = await r.json();
         setStats(data);
-        if (data?.somatic?.cognitive_load != null) {
-          if (data.somatic.cognitive_load > 0.7) {
-            brainMat.color.setHex(0xef4444);
-          } else if (data.somatic.cognitive_load > 0.4) {
-            brainMat.color.setHex(0xf59e0b);
-          } else {
-            brainMat.color.setHex(0x06b6d4);
-          }
-        }
       } catch (e) { addToast(e.message || 'Failed to load dashboard stats'); }
     };
     fetchStats();
     const interval = setInterval(fetchStats, 5000);
 
-    sceneRef.current = { scene, renderer, composer, brain, brainMat, pointLight, satellites, ring, ringMat, particlesMat };
+    sceneRef.current = { scene, renderer, composer, brain, brainMat, glowMat, pointLight, satellites, ring, ringMat, particlesMat };
 
     return () => {
       cancelAnimationFrame(frame);
@@ -292,6 +278,63 @@ export default function GlassBrain() {
       renderer.dispose();
     };
   }, []);
+
+  // Dynamic satellite management — reacts to real device list or demo mode
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    const { scene, satellites } = sceneRef.current;
+
+    satellites.forEach(s => {
+      scene.remove(s);
+      if (s.geometry) s.geometry.dispose();
+      if (s.material) s.material.dispose();
+    });
+    satellites.length = 0;
+
+    const deviceList = stats?.devices || [];
+    const isDemoMode = stats?.is_demo_mode || false;
+
+    const effectiveDevices = (isDemoMode && deviceList.length === 0)
+      ? [{ type: 'demo_phone', demo: true }, { type: 'demo_wristband', demo: true }, { type: 'demo_glasses', demo: true }]
+      : deviceList;
+
+    effectiveDevices.forEach((device, i) => {
+      const satGeo = new THREE.OctahedronGeometry(0.15, 0);
+      const satMat = new THREE.MeshPhongMaterial({
+        color: device.demo ? 0xf59e0b : COLORS.device,
+        emissive: device.demo ? 0xf59e0b : COLORS.device,
+        emissiveIntensity: device.demo ? 0.3 : 0.5,
+        transparent: device.demo,
+        opacity: device.demo ? 0.5 : 1,
+      });
+      const sat = new THREE.Mesh(satGeo, satMat);
+      sat.userData = {
+        type: device.type || 'unknown',
+        demo: device.demo || false,
+        angle: (i / Math.max(1, effectiveDevices.length)) * Math.PI * 2,
+        radius: 3,
+        speed: 0.3 + i * 0.1,
+      };
+      scene.add(sat);
+      satellites.push(sat);
+    });
+  }, [stats?.devices?.length, stats?.is_demo_mode]);
+
+  // Brain color from somatic cognitive load
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    const { brainMat, glowMat, pointLight } = sceneRef.current;
+    if (!brainMat) return;
+
+    const load = stats?.somatic?.cognitive_load || 0;
+    let color = 0x06b6d4;
+    if (load > 0.7) color = 0xef4444;
+    else if (load > 0.4) color = 0xf59e0b;
+
+    brainMat.color.setHex(color);
+    if (glowMat) glowMat.color.setHex(color);
+    if (pointLight) pointLight.color.setHex(color);
+  }, [stats?.somatic?.cognitive_load]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100vh', background: '#050510' }}>
@@ -331,10 +374,68 @@ export default function GlassBrain() {
               color: EVENT_COLORS[ev.event] || '#06b6d4',
               opacity: 1 - i * 0.08,
               lineHeight: 1.6,
+              fontSize: 11,
             }}>
-              [{ev.ts}] {ev.event} {ev.tool || ev.type || ev.model || ''}
+              [{ev.ts}] {ev.event}
+              {ev.count > 1 && <span style={{ color: '#71717a', marginLeft: 4 }}>×{ev.count}</span>}
+              {ev.tool && <span style={{ color: '#71717a', marginLeft: 4 }}>{ev.tool}</span>}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Onboarding overlay — visible when nothing is happening */}
+      {(!stats || (stats?.devices?.length === 0 && !stats?.is_demo_mode && eventLog.length === 0)) && (
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          background: 'rgba(5, 5, 16, 0.95)',
+          border: '1px solid rgba(6,182,212,0.2)',
+          borderRadius: 12,
+          padding: '24px 32px',
+          maxWidth: 420,
+          textAlign: 'center',
+          color: '#a1a1aa',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          pointerEvents: 'none',
+        }}>
+          <h3 style={{ color: '#06b6d4', marginBottom: 12, fontSize: 18, fontWeight: 600 }}>
+            FERAL Glass Brain
+          </h3>
+          <p style={{ fontSize: 13, marginBottom: 16, lineHeight: 1.5 }}>
+            Real-time visualization of the AI&apos;s cognition.
+          </p>
+          <div style={{ fontSize: 12, textAlign: 'left', lineHeight: 1.8 }}>
+            <div><span style={{ color: '#06b6d4' }}>●</span> Brain flashes cyan on LLM calls</div>
+            <div><span style={{ color: '#f59e0b' }}>●</span> Ring pulses amber on tool execution</div>
+            <div><span style={{ color: '#8b5cf6' }}>●</span> Particles bloom on memory writes</div>
+            <div><span style={{ color: '#10b981' }}>●</span> Satellites appear for devices</div>
+            <div><span style={{ color: '#ef4444' }}>●</span> Brain turns red on health alerts</div>
+          </div>
+          <p style={{ fontSize: 11, marginTop: 16, color: '#71717a' }}>
+            Start chatting or connect a device to see the brain come alive.
+          </p>
+        </div>
+      )}
+
+      {/* Demo mode banner */}
+      {stats?.is_demo_mode && eventLog.length <= 2 && (
+        <div style={{
+          position: 'absolute',
+          top: 80, right: 20,
+          background: 'rgba(120, 53, 15, 0.9)',
+          border: '1px solid #b45309',
+          borderRadius: 8,
+          padding: '12px 16px',
+          maxWidth: 280,
+          color: '#fbbf24',
+          fontSize: 12,
+          pointerEvents: 'none',
+        }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>DEMO MODE</div>
+          <div>Simulated LLM calls, tool executions, memory writes, and device telemetry are driving the visualization.</div>
         </div>
       )}
 

@@ -535,9 +535,9 @@ class BrainState:
                         return {}
 
                 self._demo.on_telemetry(_push_demo_telemetry)
+                self._demo.set_refs(self.orchestrator, self.sessions)
                 import asyncio
                 asyncio.create_task(self._demo.start())
-                asyncio.create_task(self._push_demo_health_telemetry())
 
         self._boot_report.total_elapsed_ms = (time.time() - _boot_start) * 1000
         self._boot_report.log_summary()
@@ -785,69 +785,6 @@ class BrainState:
                 logger.info(f"Loaded credentials from {creds_path}: {', '.join(loaded)}")
         except Exception as e:
             logger.warning(f"Failed to load credentials: {e}")
-
-    async def _push_demo_health_telemetry(self):
-        """Generate realistic synthetic biometric data for demo/health mode."""
-        import asyncio
-        import math
-        import random
-
-        t = 0
-        while True:
-            await asyncio.sleep(5)
-            t += 5
-
-            if not self.sessions:
-                continue
-
-            base_hr = 72 + 10 * math.sin(t / 300) + random.gauss(0, 2)
-            hr = max(55, min(110, int(base_hr)))
-
-            if random.random() < 0.01:
-                hr = random.randint(95, 115)
-
-            spo2 = max(93, min(100, int(97 + random.gauss(0, 0.8))))
-            skin_temp = round(36.5 + 0.3 * math.sin(t / 600) + random.gauss(0, 0.1), 1)
-
-            hour = (time.localtime().tm_hour + t // 3600) % 24
-            if 9 <= hour <= 17:
-                activity = random.choice(["sedentary", "sedentary", "sedentary", "walking", "active"])
-            else:
-                activity = random.choice(["sedentary", "sedentary", "resting"])
-
-            activity_level = {"sedentary": 0.1, "walking": 0.5, "active": 0.8, "resting": 0.0}.get(activity, 0.1)
-
-            sensor_data = {
-                "vitals": {"ppg_heart_rate": hr, "spo2": spo2},
-                "environment": {"skin_temperature": skin_temp, "ambient_light": random.randint(100, 800)},
-                "activity": {"state": activity},
-            }
-
-            for sid in list(self.sessions.keys()):
-                self.perception.update_sensors(sid, sensor_data)
-
-            if self.somatic_engine:
-                for sid in list(self.sessions.keys()):
-                    self.somatic_engine.update_biometrics(
-                        sid, heart_rate=hr, spo2_pct=spo2,
-                        skin_temp_c=skin_temp, activity_level=activity_level,
-                    )
-
-            if self.proactive:
-                for sid in list(self.sessions.keys()):
-                    try:
-                        await self.proactive.evaluate(sid)
-                    except Exception:
-                        pass
-
-            if self.orchestrator:
-                for sid in list(self.sessions.keys()):
-                    try:
-                        await self.orchestrator._emit_brain_event(sid, "device_telemetry", {
-                            "source": "demo", "hr": hr, "spo2": spo2, "temp": skin_temp, "activity": activity,
-                        })
-                    except Exception:
-                        pass
 
     async def send_to_session(self, session_id: str, msg: FeralMessage):
         ws = self.sessions.get(session_id)
