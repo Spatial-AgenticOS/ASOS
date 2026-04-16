@@ -1,7 +1,7 @@
 {
   "identifier": "default",
-  "description": "Main window: brain control, tray, autostart, events",
-  "windows": ["main"],
+  "description": "Main + floating window: brain control, tray, autostart, shortcuts, notifications",
+  "windows": ["main", "floating"],
   "permissions": [
     "core:default",
     "core:event:default",
@@ -10,6 +10,8 @@
     "core:window:allow-hide",
     "core:window:allow-set-focus",
     "core:window:allow-is-visible",
+    "core:window:allow-close",
+    "core:window:allow-center",
     "autostart:default"
   ]
 }

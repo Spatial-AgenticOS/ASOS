@@ -1,0 +1,27 @@
+name: "FERAL AI Brain"
+description: "AI Operating System for your smart home — local-first, privacy-respecting"
+version: "2026.4.16"
+slug: feral-brain
+url: "https://github.com/FERAL-AI/FERAL-AI"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+init: false
+homeassistant_api: true
+ports:
+  9090/tcp: 9090
+  "9090/tcp": null
+map:
+  - config:rw
+  - ssl:ro
+options:
+  llm_provider: "ollama"
+  ollama_url: "http://homeassistant.local:11434"
+  openai_api_key: ""
+  anthropic_api_key: ""
+schema:
+  llm_provider: str
+  ollama_url: url?
+  openai_api_key: str?
+  anthropic_api_key: str?

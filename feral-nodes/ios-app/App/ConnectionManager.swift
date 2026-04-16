@@ -11,7 +11,7 @@ class ConnectionManager: ObservableObject {
     @Published var lastSpO2: Int = 0
     @Published var statusMessage = "Not connected"
     
-    private var client: FeralBrainClient?
+    private(set) var client: FeralBrainClient?
     
     func connect() {
         guard !brainHost.isEmpty else { return }
@@ -27,6 +27,7 @@ class ConnectionManager: ObservableObject {
     
     func disconnect() {
         client?.disconnect()
+        client = nil
         isConnected = false
         statusMessage = "Disconnected"
     }
@@ -37,5 +38,9 @@ class ConnectionManager: ObservableObject {
         apiKey = info.apiKey
         nodeName = info.nodeName
         connect()
+    }
+    
+    func sendText(_ text: String) {
+        client?.sendTextCommand(text)
     }
 }

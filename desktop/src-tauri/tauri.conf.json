@@ -25,6 +25,20 @@
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "transparent": false
+      },
+      {
+        "label": "floating",
+        "title": "FERAL",
+        "url": "floating-window.html",
+        "width": 400,
+        "height": 600,
+        "visible": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "center": true,
+        "transparent": true,
+        "skipTaskbar": true
       }
     ],
     "trayIcon": {

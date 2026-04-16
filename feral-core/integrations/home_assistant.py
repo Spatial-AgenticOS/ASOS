@@ -26,8 +26,14 @@ class HomeAssistantIntegration:
 
     def __init__(self, oauth_manager=None):
         self._oauth = oauth_manager
-        self._base_url = os.getenv("HA_URL", "http://homeassistant.local:8123")
-        self._token = os.getenv("HA_TOKEN", "")
+        self._is_addon = bool(os.getenv("SUPERVISOR_TOKEN"))
+        if self._is_addon:
+            self._base_url = os.getenv("FERAL_HA_URL", "http://supervisor/core")
+            self._token = os.getenv("SUPERVISOR_TOKEN", "")
+            logger.info("Running as HA add-on — using Supervisor API at %s", self._base_url)
+        else:
+            self._base_url = os.getenv("HA_URL", "http://homeassistant.local:8123")
+            self._token = os.getenv("HA_TOKEN", "")
         self._http: Optional[httpx.AsyncClient] = None
         self._entities_cache: dict[str, dict] = {}
         self._ws = None

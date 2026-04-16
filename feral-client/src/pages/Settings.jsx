@@ -5,7 +5,7 @@ import {
   Bluetooth, Wifi, WifiOff, Radio, Smartphone, Glasses, Watch, Bot,
   Sun, Moon, Clock, Play, Pause, ChevronDown, ChevronUp,
   MessageSquare, Server, ShoppingBag, Download, Search,
-  ThumbsUp, ThumbsDown, Users,
+  ThumbsUp, ThumbsDown, Users, Webhook, Copy, Link,
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
@@ -51,6 +51,51 @@ export default function Settings() {
   const [specialistsLoading, setSpecialistsLoading] = useState(false);
   const [spawningId, setSpawningId] = useState('');
   const [feedbackBusy, setFeedbackBusy] = useState('');
+  const [webhooks, setWebhooks] = useState([]);
+  const [webhooksLoading, setWebhooksLoading] = useState(false);
+  const [newWebhook, setNewWebhook] = useState({ name: '', secret: '', action: 'chat' });
+  const [creatingWebhook, setCreatingWebhook] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState('');
+
+  const fetchWebhooks = async () => {
+    setWebhooksLoading(true);
+    try {
+      const data = await fetch(`${API}/api/webhooks/list`).then(r => r.json());
+      setWebhooks(data.webhooks || []);
+    } catch { setWebhooks([]); }
+    finally { setWebhooksLoading(false); }
+  };
+
+  const createWebhook = async () => {
+    if (!newWebhook.name) return;
+    setCreatingWebhook(true);
+    try {
+      await fetch(`${API}/api/webhooks/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newWebhook),
+      });
+      setNewWebhook({ name: '', secret: '', action: 'chat' });
+      await fetchWebhooks();
+      flash();
+    } catch (e) { addToast(e.message || 'Failed to create webhook'); }
+    finally { setCreatingWebhook(false); }
+  };
+
+  const deleteWebhook = async (webhookId) => {
+    try {
+      await fetch(`${API}/api/webhooks/${webhookId}`, { method: 'DELETE' });
+      await fetchWebhooks();
+    } catch (e) { addToast(e.message || 'Failed to delete webhook'); }
+  };
+
+  const copyWebhookUrl = (url) => {
+    const fullUrl = `${window.location.protocol}//${window.location.hostname}:9090${url}`;
+    navigator.clipboard.writeText(fullUrl).then(() => {
+      setCopiedUrl(url);
+      setTimeout(() => setCopiedUrl(''), 2000);
+    });
+  };
 
   const fetchSpecialists = async () => {
     setSpecialistsLoading(true);
@@ -148,6 +193,7 @@ export default function Settings() {
     fetchRoutines();
     fetchInstalledSkills();
     fetchSpecialists();
+    fetchWebhooks();
   }, []);
 
   const updateSetting = async (section, key, value) => {
@@ -266,6 +312,7 @@ export default function Settings() {
     { id: 'features', label: 'Features', icon: Zap },
     { id: 'channels', label: 'Channels', icon: MessageSquare },
     { id: 'routines', label: 'Routines', icon: Clock },
+    { id: 'webhooks', label: 'Webhooks', icon: Webhook },
     { id: 'specialists', label: 'Specialists', icon: Users },
     { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
     { id: 'proposals', label: 'Proposals', icon: AlertCircle },
@@ -945,6 +992,99 @@ export default function Settings() {
                   </div>
                 );
               })}
+            </div>
+          </Section>
+        )}
+
+        {/* Webhooks Tab */}
+        {activeTab === 'webhooks' && (
+          <Section title="Webhook Management" icon={Webhook}>
+            <div className="space-y-4">
+              <p className="text-xs text-feral-text-muted">
+                Create webhook endpoints that external services can POST to. Incoming events are routed to FERAL's orchestrator.
+              </p>
+
+              <div className="bg-feral-card border border-feral-border rounded-lg p-3 space-y-2">
+                <div className="text-xs font-medium text-feral-text-secondary">Create Webhook</div>
+                <input
+                  className="w-full bg-feral-bg border border-feral-border rounded px-2.5 py-1.5 text-xs text-feral-text placeholder-feral-text-muted"
+                  placeholder="Webhook name (e.g. GitHub Push)"
+                  value={newWebhook.name}
+                  onChange={e => setNewWebhook(p => ({ ...p, name: e.target.value }))}
+                />
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    className="flex-1 bg-feral-bg border border-feral-border rounded px-2.5 py-1.5 text-xs text-feral-text placeholder-feral-text-muted font-mono"
+                    placeholder="Secret (optional, for HMAC verification)"
+                    value={newWebhook.secret}
+                    onChange={e => setNewWebhook(p => ({ ...p, secret: e.target.value }))}
+                  />
+                  <select
+                    className="bg-feral-bg border border-feral-border rounded px-2.5 py-1.5 text-xs text-feral-text"
+                    value={newWebhook.action}
+                    onChange={e => setNewWebhook(p => ({ ...p, action: e.target.value }))}
+                  >
+                    <option value="chat">Chat</option>
+                    <option value="skill">Skill</option>
+                    <option value="routine">Routine</option>
+                    <option value="intent">Intent</option>
+                  </select>
+                </div>
+                <button
+                  className="px-3 py-1.5 text-xs font-medium rounded bg-feral-accent/15 border border-feral-accent/25 text-feral-accent hover:bg-feral-accent/25 transition disabled:opacity-50"
+                  onClick={createWebhook}
+                  disabled={!newWebhook.name || creatingWebhook}
+                >
+                  {creatingWebhook ? <Loader2 size={11} className="inline mr-1 animate-spin" /> : <Plus size={11} className="inline mr-1" />}
+                  Create Webhook
+                </button>
+              </div>
+
+              {webhooksLoading && <Loader2 size={16} className="animate-spin text-feral-text-muted" />}
+              {!webhooksLoading && webhooks.length === 0 && (
+                <div className="text-center py-6 bg-feral-bg/30 rounded-xl border border-dashed border-feral-border">
+                  <Link size={28} className="mx-auto opacity-20 mb-2" />
+                  <p className="text-sm text-feral-text-secondary">No webhooks created</p>
+                  <p className="text-xs text-feral-text-muted mt-1">Create one above to receive events from external services</p>
+                </div>
+              )}
+
+              {webhooks.map(hook => (
+                <div key={hook.id} className="bg-feral-bg/30 rounded-lg border border-feral-border p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Webhook size={14} className="text-feral-accent" />
+                      <span className="text-sm font-medium">{hook.name}</span>
+                      <span className="text-[10px] bg-feral-bg px-2 py-0.5 rounded-full text-feral-text-muted font-mono">{hook.action}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => copyWebhookUrl(hook.url)}
+                        className="p-1.5 rounded-lg hover:bg-feral-accent/10 transition"
+                        title="Copy URL"
+                      >
+                        {copiedUrl === hook.url ? <Check size={14} className="text-green-400" /> : <Copy size={14} className="text-feral-text-muted" />}
+                      </button>
+                      <button
+                        onClick={() => deleteWebhook(hook.id)}
+                        className="p-1.5 rounded-lg hover:bg-rose-500/10 transition"
+                        title="Delete"
+                      >
+                        <Trash2 size={14} className="text-rose-400" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-feral-text-muted font-mono bg-feral-bg/50 rounded px-2.5 py-1.5 mb-2 break-all">
+                    {window.location.protocol}//{window.location.hostname}:9090{hook.url}
+                  </div>
+                  <div className="flex items-center gap-4 text-[11px] text-feral-text-muted">
+                    <span>Triggers: <strong className="text-feral-text-secondary">{hook.trigger_count}</strong></span>
+                    <span>Last: <strong className="text-feral-text-secondary">{hook.last_triggered ? new Date(hook.last_triggered * 1000).toLocaleString() : 'Never'}</strong></span>
+                    {hook.secret && <span className="text-green-400">HMAC verified</span>}
+                  </div>
+                </div>
+              ))}
             </div>
           </Section>
         )}

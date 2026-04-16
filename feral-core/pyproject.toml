@@ -83,6 +83,9 @@ desktop = [
 browser = [
     "playwright>=1.40.0",
 ]
+mqtt = [
+    "aiomqtt>=2.0.0",
+]
 all = [
     "openai>=1.50.0",
     "exa-py>=1.0.0",
@@ -100,6 +103,7 @@ all = [
     "rich>=13.0.0",
     "faster-whisper>=1.0.0",
     "piper-tts>=1.2.0",
+    "aiomqtt>=2.0.0",
 ]
 dev = [
     "pytest>=8.0.0",

@@ -42,8 +42,10 @@ from perception.wake_word import WakeWordDetector, WakeWordConfig
 from integrations.oauth_manager import OAuthManager
 from integrations.spotify import SpotifyIntegration
 from integrations.home_assistant import HomeAssistantIntegration
+from integrations.mqtt_bridge import MQTTBridge
 from integrations.notion import NotionIntegration
 from integrations.webhook_receiver import WebhookReceiver, EventBus
+from integrations.email_watcher import EmailWatcher
 from integrations.calendar import CalendarIntegration
 from integrations.email import EmailIntegration
 from integrations.messaging import MessagingHub
@@ -164,6 +166,8 @@ class BrainState:
         self.tool_genesis = None
         self.agent_mitosis = None
         self.intent_compiler = None
+        self.mqtt_bridge = None
+        self.email_watcher: Optional[EmailWatcher] = None
         self.device_pairing_store: DevicePairingStore = DevicePairingStore()
         self._boot_report: BootReport = BootReport()
 
@@ -450,6 +454,31 @@ class BrainState:
             self.proactive.on_message(_proactive_delivery)
             import asyncio
             asyncio.create_task(self.proactive.start())
+
+        with boot_subsystem(self._boot_report, "MQTTBridge"):
+            self.mqtt_bridge = MQTTBridge()
+            if self.mqtt_bridge.configured:
+                await self.mqtt_bridge.start()
+
+        with boot_subsystem(self._boot_report, "EmailWatcher"):
+            async def _handle_email(incoming):
+                text = (
+                    f'New email from {incoming.sender}: "{incoming.subject}"\n\n'
+                    f"{incoming.body[:2000]}"
+                )
+                for sid in list(self.sessions.keys())[:1]:
+                    await self.orchestrator.handle_command(
+                        sid,
+                        text,
+                        context={
+                            "source": "email",
+                            "message_id": incoming.message_id,
+                        },
+                    )
+
+            self.email_watcher = EmailWatcher(on_email=_handle_email)
+            if self.email_watcher.configured:
+                await self.email_watcher.start()
 
         with boot_subsystem(self._boot_report, "mDNS"):
             from services.mdns import advertise_brain

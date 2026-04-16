@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FERAL Settings</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --bg2: #111118;
+      --bg3: #1a1a24;
+      --border: #2a2a3a;
+      --text: #e4e4ef;
+      --text2: #8888a0;
+      --cyan: #06b6d4;
+      --purple: #8b5cf6;
+      --green: #10b981;
+      --red: #ef4444;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+
+    .container {
+      max-width: 560px;
+      margin: 0 auto;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 32px;
+    }
+    .logo {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--cyan), var(--purple));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 22px;
+      color: #fff;
+    }
+    .page-header h1 {
+      font-size: 22px;
+      font-weight: 600;
+    }
+    .page-header p {
+      font-size: 13px;
+      color: var(--text2);
+    }
+
+    .section {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section-title svg { color: var(--cyan); }
+
+    .field {
+      margin-bottom: 16px;
+    }
+    .field:last-child { margin-bottom: 0; }
+
+    .field label {
+      display: block;
+      font-size: 12px;
+      color: var(--text2);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .field-hint {
+      font-size: 11px;
+      color: var(--text2);
+      margin-top: 4px;
+    }
+
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: var(--cyan); }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .toggle-row:last-child { border-bottom: none; }
+    .toggle-info {
+      flex: 1;
+    }
+    .toggle-label {
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .toggle-desc {
+      font-size: 11px;
+      color: var(--text2);
+      margin-top: 2px;
+    }
+
+    .toggle {
+      position: relative;
+      width: 42px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      height: 18px;
+      width: 18px;
+      left: 2px;
+      bottom: 2px;
+      background: var(--text2);
+      border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle input:checked + .toggle-slider {
+      background: var(--cyan);
+      border-color: var(--cyan);
+    }
+    .toggle input:checked + .toggle-slider::before {
+      transform: translateX(18px);
+      background: #fff;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      background: var(--bg3);
+      border-radius: 10px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--red);
+    }
+    .status-dot.connected { background: var(--green); }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--cyan), var(--purple));
+      color: #fff;
+      flex: 1;
+    }
+    .btn-secondary {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: var(--green);
+      color: #fff;
+      padding: 10px 24px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      transition: transform 0.3s ease;
+      pointer-events: none;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <div class="logo">F</div>
+      <div>
+        <h1>FERAL Settings</h1>
+        <p>Configure your brain connection and preferences</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        Connection
+      </div>
+
+      <div class="field">
+        <label for="brain-url">Brain WebSocket URL</label>
+        <input type="text" id="brain-url" placeholder="ws://localhost:9090/v1/session">
+        <p class="field-hint">The WebSocket endpoint for your FERAL Brain instance</p>
+      </div>
+
+      <div class="field">
+        <label for="api-key">API Key (optional)</label>
+        <input type="password" id="api-key" placeholder="feral_key_...">
+        <p class="field-hint">If your Brain requires authentication</p>
+      </div>
+
+      <div class="field">
+        <div class="status-row">
+          <div class="status-dot" id="status-dot"></div>
+          <span id="status-label">Checking...</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Behavior
+      </div>
+
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="toggle-label">Auto-connect on startup</div>
+          <div class="toggle-desc">Automatically connect to Brain when browser opens</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="auto-connect" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="toggle-label">Floating button</div>
+          <div class="toggle-desc">Show the FERAL button on every page</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="show-float-btn" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="toggle-label">Auto page context</div>
+          <div class="toggle-desc">Automatically include current page context with messages</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="auto-context">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        Notifications
+      </div>
+
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="toggle-label">Proactive alerts</div>
+          <div class="toggle-desc">Show desktop notifications for Brain alerts</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="notify-alerts" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="toggle-label">Sound</div>
+          <div class="toggle-desc">Play a sound with notifications</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="notify-sound">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="save-btn">Save Settings</button>
+      <button class="btn btn-secondary" id="reset-btn">Reset</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">Settings saved</div>
+
+  <script>
+    const fields = {
+      brainUrl: document.getElementById('brain-url'),
+      apiKey: document.getElementById('api-key'),
+      autoConnect: document.getElementById('auto-connect'),
+      showFloatBtn: document.getElementById('show-float-btn'),
+      autoContext: document.getElementById('auto-context'),
+      notifyAlerts: document.getElementById('notify-alerts'),
+      notifySound: document.getElementById('notify-sound'),
+    };
+    const statusDot = document.getElementById('status-dot');
+    const statusLabel = document.getElementById('status-label');
+    const toast = document.getElementById('toast');
+
+    const defaults = {
+      brainUrl: 'ws://localhost:9090/v1/session',
+      apiKey: '',
+      autoConnect: true,
+      showFloatBtn: true,
+      autoContext: false,
+      notifyAlerts: true,
+      notifySound: false,
+    };
+
+    function loadSettings() {
+      chrome.storage.local.get(Object.keys(defaults), (result) => {
+        fields.brainUrl.value = result.brainUrl || defaults.brainUrl;
+        fields.apiKey.value = result.apiKey || defaults.apiKey;
+        fields.autoConnect.checked = result.autoConnect !== undefined ? result.autoConnect : defaults.autoConnect;
+        fields.showFloatBtn.checked = result.showFloatBtn !== undefined ? result.showFloatBtn : defaults.showFloatBtn;
+        fields.autoContext.checked = result.autoContext !== undefined ? result.autoContext : defaults.autoContext;
+        fields.notifyAlerts.checked = result.notifyAlerts !== undefined ? result.notifyAlerts : defaults.notifyAlerts;
+        fields.notifySound.checked = result.notifySound !== undefined ? result.notifySound : defaults.notifySound;
+      });
+    }
+
+    function saveSettings() {
+      const data = {
+        brainUrl: fields.brainUrl.value.trim() || defaults.brainUrl,
+        apiKey: fields.apiKey.value.trim(),
+        autoConnect: fields.autoConnect.checked,
+        showFloatBtn: fields.showFloatBtn.checked,
+        autoContext: fields.autoContext.checked,
+        notifyAlerts: fields.notifyAlerts.checked,
+        notifySound: fields.notifySound.checked,
+      };
+      chrome.storage.local.set(data, () => {
+        chrome.runtime.sendMessage({ type: 'set_brain_url', url: data.brainUrl });
+        showToast('Settings saved');
+      });
+    }
+
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function updateStatus() {
+      chrome.runtime.sendMessage({ type: 'get_connection_status' }, (res) => {
+        if (chrome.runtime.lastError) return;
+        const connected = res?.connected || false;
+        statusDot.classList.toggle('connected', connected);
+        statusLabel.textContent = connected ? 'Connected to Brain' : 'Disconnected';
+      });
+    }
+
+    document.getElementById('save-btn').addEventListener('click', saveSettings);
+    document.getElementById('reset-btn').addEventListener('click', () => {
+      fields.brainUrl.value = defaults.brainUrl;
+      fields.apiKey.value = defaults.apiKey;
+      fields.autoConnect.checked = defaults.autoConnect;
+      fields.showFloatBtn.checked = defaults.showFloatBtn;
+      fields.autoContext.checked = defaults.autoContext;
+      fields.notifyAlerts.checked = defaults.notifyAlerts;
+      fields.notifySound.checked = defaults.notifySound;
+      showToast('Reset to defaults');
+    });
+
+    loadSettings();
+    updateStatus();
+    setInterval(updateStatus, 5000);
+  </script>
+</body>
+</html>

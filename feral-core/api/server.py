@@ -65,6 +65,7 @@ from api.routes.handoff import router as handoff_router
 from api.routes.tool_genesis import router as tool_genesis_router
 from api.routes.agent_mitosis import router as agent_mitosis_router
 from api.routes.intents import router as intents_router
+from api.routes.webhooks import router as webhooks_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -196,6 +197,7 @@ app.include_router(handoff_router)
 app.include_router(tool_genesis_router)
 app.include_router(agent_mitosis_router)
 app.include_router(intents_router)
+app.include_router(webhooks_router)
 
 
 # ─────────────────────────────────────────────

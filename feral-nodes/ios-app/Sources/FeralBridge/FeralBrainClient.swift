@@ -339,6 +339,14 @@ class FeralBrainClient: NSObject {
     
     // MARK: - Audio
     
+    private var audioChunkCounter = 0
+    
+    func sendAudioChunk(_ data: Data) {
+        let base64 = data.base64EncodedString()
+        audioChunkCounter += 1
+        sendAudioChunk(base64: base64, chunkIndex: audioChunkCounter, isFinal: false)
+    }
+    
     func sendAudioChunk(base64: String, chunkIndex: Int, isFinal: Bool = false) {
         let audio: [String: Any] = [
             "hop": "node",

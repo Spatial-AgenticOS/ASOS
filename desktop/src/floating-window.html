@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: rgba(10, 10, 11, 0.95); font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: #fff; }
+    .container { padding: 12px; }
+    .input-row { display: flex; gap: 8px; align-items: center; }
+    #command-input {
+      flex: 1; background: #1a1a2e; border: 1px solid #333; color: #fff;
+      padding: 12px 16px; border-radius: 12px; font-size: 15px; outline: none;
+    }
+    #command-input:focus { border-color: #06b6d4; }
+    #command-input::placeholder { color: #555; }
+    .response { padding: 12px; margin-top: 8px; background: #1a1a2e; border-radius: 8px; font-size: 13px; color: #d4d4d8; max-height: 400px; overflow-y: auto; display: none; white-space: pre-wrap; word-break: break-word; }
+    .status { font-size: 11px; color: #555; padding: 4px 12px; display: flex; justify-content: space-between; }
+    .connected { color: #10b981; }
+    .disconnected { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="input-row">
+      <input id="command-input" type="text" placeholder="Ask FERAL anything..." autofocus />
+    </div>
+    <div id="response" class="response"></div>
+    <div class="status">
+      <span id="status-text" class="disconnected">Connecting...</span>
+      <span>Cmd+Shift+F to toggle</span>
+    </div>
+  </div>
+  <script>
+    let ws = null;
+    const input = document.getElementById('command-input');
+    const response = document.getElementById('response');
+    const status = document.getElementById('status-text');
+
+    function connect() {
+      ws = new WebSocket('ws://localhost:9090/v1/session');
+      ws.onopen = () => { status.textContent = 'Connected'; status.className = 'connected'; };
+      ws.onclose = () => { status.textContent = 'Disconnected'; status.className = 'disconnected'; setTimeout(connect, 3000); };
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'text_response' || msg.type === 'stream_delta') {
+            const text = msg.payload?.text || '';
+            if (text) {
+              response.style.display = 'block';
+              if (msg.type === 'stream_delta' && msg.payload?.final) {
+                // Stream complete
+              } else if (msg.type === 'text_response') {
+                response.textContent = text;
+              } else {
+                response.textContent += text;
+              }
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      };
+    }
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && input.value.trim()) {
+        response.textContent = '';
+        response.style.display = 'block';
+        ws?.send(JSON.stringify({
+          hop: 'client',
+          type: 'text_command',
+          payload: { text: input.value, context: { source: 'desktop_tray' } }
+        }));
+        input.value = '';
+      }
+      if (e.key === 'Escape') {
+        if (window.__TAURI__) {
+          window.__TAURI__.window?.getCurrent()?.hide();
+        }
+      }
+    });
+
+    connect();
+  </script>
+</body>
+</html>

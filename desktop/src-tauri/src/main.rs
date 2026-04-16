@@ -145,18 +145,48 @@ fn shutdown_brain(state: &BrainProcess) {
 // Entry point
 // ---------------------------------------------------------------------------
 
+fn toggle_floating_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("floating") {
+        if w.is_visible().unwrap_or(false) {
+            let _ = w.hide();
+        } else {
+            let _ = w.center();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+    }
+}
+
 fn main() {
-    let shortcuts: &[&str] = if cfg!(target_os = "macos") {
+    let voice_shortcut: &[&str] = if cfg!(target_os = "macos") {
         &["cmd+shift+t"]
     } else {
         &["ctrl+shift+t"]
     };
+    let floating_shortcut: &[&str] = if cfg!(target_os = "macos") {
+        &["cmd+shift+f"]
+    } else {
+        &["ctrl+shift+f"]
+    };
+
+    let all_shortcuts: Vec<&str> = voice_shortcut
+        .iter()
+        .chain(floating_shortcut.iter())
+        .copied()
+        .collect();
+
+    let floating_key = floating_shortcut[0].to_string();
     let global_shortcut = GsBuilder::new()
-        .with_shortcuts(shortcuts)
+        .with_shortcuts(&all_shortcuts)
         .expect("register global shortcut definitions")
-        .with_handler(|app, _shortcut, event| {
+        .with_handler(move |app, shortcut, event| {
             if event.state == ShortcutState::Pressed {
-                let _ = app.emit("voice-activation", ());
+                let key = shortcut.to_string().to_lowercase();
+                if key.contains(&floating_key.to_lowercase()) {
+                    toggle_floating_window(app);
+                } else {
+                    let _ = app.emit("voice-activation", ());
+                }
             }
         })
         .build();
@@ -183,6 +213,13 @@ fn main() {
                 true,
                 None::<&str>,
             )?;
+            let spotlight = MenuItem::with_id(
+                app,
+                "spotlight",
+                "Spotlight Chat  (Cmd+Shift+F)",
+                true,
+                None::<&str>,
+            )?;
             let quick_chat = MenuItem::with_id(
                 app,
                 "quick_chat",
@@ -197,6 +234,7 @@ fn main() {
                 app,
                 &[
                     &show_hide,
+                    &spotlight,
                     &PredefinedMenuItem::separator(app)?,
                     &quick_chat,
                     &PredefinedMenuItem::separator(app)?,
@@ -219,6 +257,9 @@ fn main() {
                                 let _ = w.set_focus();
                             }
                         }
+                    }
+                    "spotlight" => {
+                        toggle_floating_window(app);
                     }
                     "quick_chat" => {
                         if let Some(w) = app.get_webview_window("main") {

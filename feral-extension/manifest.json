@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "FERAL AI",
+  "version": "2026.4.16",
+  "description": "Your AI brain, right in your browser. Chat, voice, page context, and proactive alerts.",
+  "permissions": ["activeTab", "storage", "sidePanel", "contextMenus", "notifications"],
+  "host_permissions": ["http://localhost:9090/*", "https://localhost:9443/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["content.js"],
+    "css": ["content.css"]
+  }],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
