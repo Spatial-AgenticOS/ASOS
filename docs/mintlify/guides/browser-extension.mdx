@@ -1,0 +1,102 @@
+---
+title: "Browser Extension"
+description: "Access FERAL from any browser — page context, chat sidebar, voice, and right-click actions"
+status: "Beta"
+---
+
+# Browser Extension
+
+The FERAL browser extension puts your AI brain right inside Chrome or Firefox. It reads what you're browsing, answers questions about the page, and gives you chat + voice access from any device with a browser.
+
+## Installation
+
+1. Navigate to `chrome://extensions/` (or `about:addons` in Firefox)
+2. Enable "Developer Mode"
+3. Click "Load unpacked" and select the `feral-extension/` folder from your FERAL installation
+4. The FERAL icon appears in your toolbar
+
+## Features
+
+### Page Context
+
+Every message you send includes the current page's URL, title, and selected text. The AI knows what you're looking at.
+
+### Chat Sidebar
+
+Click the FERAL icon or use the side panel to open a full chat interface. Same WebSocket protocol as the web dashboard — messages, streaming, SDUI cards all work.
+
+### Right-Click Actions
+
+- **Ask FERAL about this** — select text, right-click, and ask
+- **Summarize this page** — extracts full page text and generates a summary
+- **Save to memory** — saves selected text to FERAL's knowledge graph
+
+### Voice
+
+Click the microphone button in the sidebar for voice input via the Web Speech API.
+
+### Notifications
+
+Proactive alerts from the Brain (health warnings, reminders) appear as browser notifications.
+
+## Configuration
+
+Click the FERAL icon → "Options" to configure:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Brain URL** | `ws://localhost:9090/v1/session` | WebSocket endpoint for your FERAL brain |
+| **Auto-connect** | `true` | Reconnect automatically on startup |
+| **Floating button** | `true` | Show/hide the floating FERAL button on pages |
+| **Notifications** | `true` | Enable proactive browser notifications |
+
+## Architecture
+
+```
+┌──────────────┐     WebSocket     ┌──────────────┐
+│   Extension  │ ◄──────────────► │  FERAL Brain  │
+│  (Side Panel)│                   │  (localhost)  │
+└──────┬───────┘                   └──────────────┘
+       │
+       ▼
+  Page Context
+  (URL, title,
+   selection)
+```
+
+The extension connects over the same `v1/session` WebSocket that the web dashboard and mobile apps use. All FERAL features — streaming responses, SDUI cards, tool calls — work natively in the sidebar.
+
+## Permissions
+
+The extension requests these permissions:
+
+- `activeTab` — read the current page's URL and title
+- `contextMenus` — add right-click actions
+- `sidePanel` — the main chat interface
+- `notifications` — proactive alerts from the Brain
+- `storage` — save your settings locally
+
+No data is sent to any external server. Everything goes to your local FERAL brain.
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+F` / `Cmd+Shift+F` | Toggle side panel |
+| `Ctrl+Shift+M` / `Cmd+Shift+M` | Voice input |
+
+You can customize these in `chrome://extensions/shortcuts`.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Extension can't connect to the Brain">
+    Make sure your FERAL brain is running (`feral start`) and the Brain URL in Options matches. Default: `ws://localhost:9090/v1/session`.
+  </Accordion>
+  <Accordion title="No right-click menu items">
+    Reload the extension from `chrome://extensions/` and refresh the page.
+  </Accordion>
+  <Accordion title="Voice not working">
+    The Web Speech API requires HTTPS or localhost. Make sure your browser supports it (Chrome recommended).
+  </Accordion>
+</AccordionGroup>

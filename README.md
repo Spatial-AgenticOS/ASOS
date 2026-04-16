@@ -15,6 +15,7 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/version-2026.4.16-06b6d4?style=flat-square" alt="Version" />
   <a href="https://github.com/FERAL-AI/FERAL-AI/stargazers"><img src="https://img.shields.io/github/stars/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Stars" /></a>
   <a href="https://github.com/FERAL-AI/FERAL-AI/commits/main"><img src="https://img.shields.io/github/last-commit/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Last Commit" /></a>
   <img src="https://img.shields.io/badge/license-Apache%202.0-06b6d4?style=flat-square" alt="License" />
@@ -34,12 +35,43 @@
 
 ## Feature Maturity
 
-| Status | Features |
-|:-------|:---------|
-| **Stable** | Chat, Memory (4-tier + Knowledge Graph), Skills (17 manifests + WASM), Config (layered JSON), CLI |
-| **Beta** | Voice (OpenAI Realtime / Gemini Live / Whisper), Browser Use, Computer Use, Channels (Telegram / Slack / Discord), Health Monitoring (wristband biometrics) |
-| **Experimental** | Tool Genesis, Agent Mitosis, Intent Compiler, Glass Brain, Somatic Context, P2P Sync |
-| **Planned** | Native iOS / Android apps, Video generation, Music generation |
+| Feature | Status | Details |
+|---------|--------|---------|
+| **Chat + LLM Orchestration** | Stable | 10 providers, failover, streaming, tool calling |
+| **Memory (4-tier + P2P sync)** | Stable | Notes, episodic, knowledge graph, CRDT sync |
+| **Skills + Tool Execution** | Stable | 19 skills, multi-runtime executor, blind vault |
+| **CLI + Setup Wizard** | Stable | `feral start/serve/doctor/setup`, NL scheduling |
+| **Web Dashboard** | Stable | Chat, SDUI, settings, dashboard, timeline |
+| **Security + Autonomy** | Stable | Safety classification, approval gates, Docker sandbox |
+| **Voice (OpenAI/Gemini/Local)** | Beta | Push-to-talk, provider selection, reconnection |
+| **Browser Automation** | Beta | CDP + Playwright, cookies, network interception, iframes |
+| **GUI Computer Use** | Beta | Anthropic-style, Retina DPI, window management |
+| **PDF Intelligence** | Beta | Tables, images, OCR, metadata, layout preservation |
+| **Search (7 providers)** | Beta | Tavily, Brave, DDG, Exa, SearXNG, Perplexity, Google CSE |
+| **Channels (Telegram/Discord/Slack/WhatsApp)** | Beta | Bidirectional messaging, webhook support |
+| **Cron + Scheduling** | Beta | NL parsing, timezone, priorities, missed-job catch-up |
+| **Proactive Engine** | Beta | Health alerts, smart home automation, LLM-hybrid |
+| **Smart Home (Hue + HA)** | Beta | Real Philips Hue API, Home Assistant REST/Supervisor |
+| **Browser Extension** | Beta | Chrome/Firefox, page context, chat sidebar, voice |
+| **MQTT Bridge** | Beta | IoT devices, Zigbee2MQTT, Tasmota, HA discovery |
+| **Home Assistant Add-on** | Beta | Access to 2000+ device types |
+| **Desktop Tray App** | Beta | Tauri, global hotkey, floating command window |
+| **Webhook Receiver** | Beta | CRUD API, HMAC verification, action mapping |
+| **Email Watcher** | Beta | IMAP IDLE, VIP filtering, LLM-driven actions |
+| **iOS App** | Beta | HealthKit, chat, voice, QR pairing, camera relay |
+| **Android App** | Beta | Health Connect, chat, voice, QR pairing, foreground service |
+| **Hardware Mesh (HUP)** | Beta | Typed devices, command contract, BLE, W300 glasses |
+| **Somatic Context Layer** | Experimental | 12D body vector, cognitive load, behavioral policies |
+| **Glass Brain Visualization** | Experimental | Three.js, event-driven, real-time brain activity |
+| **Tool Genesis** | Experimental | Auto-generated composite tools from patterns |
+| **Agent Mitosis** | Experimental | Self-spawning persistent specialist agents |
+| **Intent Compiler** | Experimental | Goal → execution plan with micro-actions |
+| **Digital Twin** | Experimental | Ask-as-user, predict preferences, daily reflection |
+| **A2UI Protocol** | Experimental | Wire format for reactive generative UI |
+| **Federated Memory Sync** | Experimental | CRDT + HLC, P2P via mDNS |
+| **Video Generation** | Planned | — |
+| **Music Generation** | Planned | — |
+| **Native macOS App** | Planned | — |
 
 ---
 
@@ -153,6 +185,19 @@ Docker-first sandboxed execution: --network=none, --memory=512m, --cpus=1, --rea
 </tr>
 </table>
 
+### Universal Connectivity
+
+| Surface | What It Does |
+|---------|-------------|
+| **Browser Extension** | FERAL in your browser — reads pages, chat sidebar, right-click actions, voice |
+| **MQTT Bridge** | Connect to any IoT device — smart plugs, sensors, ESP32, Zigbee2MQTT |
+| **Home Assistant** | Run as HA add-on — instant access to 2000+ device types |
+| **Desktop Tray** | Always-on access — Cmd+Shift+F for Spotlight-style commands |
+| **Webhooks** | Any service can trigger FERAL — GitHub, Stripe, IFTTT, Zapier |
+| **Email Watcher** | FERAL monitors your inbox — summarize, reply, extract action items |
+| **iOS App** | HealthKit relay, chat, voice, camera, QR pairing |
+| **Android App** | Health Connect relay, chat, voice, camera, foreground service |
+
 ---
 
 ## Comparison
@@ -205,34 +250,45 @@ cd feral-client && npm run dev  # Vite on :5173
 
 ---
 
-## Demos
-
-### ☀️ The Morning Routine
-You wake up. FERAL already knows your sleep data from the wristband. It briefs you: calendar, weather, overnight emails — unprompted. You say "lights to morning mode" and your Philips Hue shifts warm. All voice. All local context.
+## Experience FERAL
 
 ```bash
-feral demo --scenario morning
+feral start --demo
 ```
 
-### 💻 The Developer Flow
-You're deep in VS Code. FERAL watches your screen, notices you've been stuck on the same error for 20 minutes. It interrupts: *"I see a null pointer on line 47 — the API response changed shape after the deploy at 3pm. Want me to fix it?"* It knows because it has your screen context AND your git history in memory.
+The demo generates realistic biometric data through the full pipeline — somatic context engine, proactive health alerts, Glass Brain visualization, dashboard health cards — so you experience the complete system without any hardware.
 
-```bash
-feral demo --scenario developer
+### Demo Scenarios
+
+| Scenario | What You'll See | Command |
+|----------|----------------|---------|
+| **Morning Briefing** | Health summary, calendar prep, proactive coaching | `feral demo --scenario morning` |
+| **Developer Flow** | Code tools, browser automation, file management, Git | `feral demo --scenario developer` |
+| **Health Alert** | Elevated HR triggers calming scene + breathing exercise | `feral demo --scenario health` |
+| **Smart Home** | "Turn off the lights" → real Hue API call (if configured) | `feral demo --scenario smart-home` |
+| **Glass Brain** | 3D visualization of agent cognition at `/glass-brain` | Open browser after `feral start --demo` |
+| **Device Mesh** | Glasses + wristband + phone telemetry flowing to brain | `feral demo --scenario mesh` |
+
+### What the Demo Shows
+
 ```
-
-### 🔗 The Mesh
-Phone, wristband, smart glasses, desktop — all connected. You start a conversation on your phone walking to work. Sit down at your desk. FERAL picks up exactly where you left off, now with your full screen context. Your heart rate spikes during a meeting — it dims the lights and queues a breathing exercise. No cloud. No subscription. Just your devices, talking to each other.
-
-```bash
-feral demo --scenario mesh
-```
-
-### 🤖 Ask Your Digital Twin
-You're considering a job offer. Instead of pro/con lists, you ask: *"What would I think about this?"* FERAL's digital twin — built from your memory, preferences, and decision patterns — reasons through it as you would.
-
-```bash
-feral demo --scenario twin
+┌─────────────────────────────────────────────────────────┐
+│                    FERAL Glass Brain                     │
+│                                                         │
+│              ·  ·    ◆ ◆    ·  ·                       │
+│           ·  ·  · ╱ BRAIN ╲ ·  ·  ·                    │
+│         ·  ·  · ╱  ◇ ◇ ◇  ╲ ·  ·  ·                  │
+│        ○ Phone  ═══════════  ○ Glasses                  │
+│        ○ Watch  ═══════════  ○ Home                     │
+│              ·  ·    ◆ ◆    ·  ·                       │
+│                                                         │
+│  ◇ Memory particles  ◆ Tool activations  ○ Devices     │
+│                                                         │
+│  Brain flashes cyan on LLM calls                       │
+│  Tool ring pulses amber on skill execution             │
+│  Devices glow green on telemetry                       │
+│  Brain turns red on health alerts                      │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -323,6 +379,14 @@ FERAL is what happens when you break AI out of captivity and let it run wild on 
 Not because we're idealists. Because that's how it should have worked from the start.
 
 **AI off the leash.**
+
+---
+
+## Created By
+
+**[Mahmoud Omar](https://github.com/mahmoudomar)** and **[Alpay Kasal](https://github.com/alpaykasal)**
+
+Contact: [info@feral.sh](mailto:info@feral.sh) | Website: [feral.sh](https://feral.sh) | GitHub: [FERAL-AI](https://github.com/FERAL-AI)
 
 ---
 

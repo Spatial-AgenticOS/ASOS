@@ -134,6 +134,7 @@ EXPECTED_PROVIDER_KEYS = (
     "qwen",
     "groq",
     "ollama",
+    "lmstudio",
 )
 
 

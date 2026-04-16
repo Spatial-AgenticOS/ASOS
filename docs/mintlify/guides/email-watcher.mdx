@@ -1,0 +1,121 @@
+---
+title: "Email Watcher"
+description: "Let FERAL monitor your inbox — VIP filtering, smart summaries, and automated actions via IMAP"
+status: "Beta"
+---
+
+# Email Watcher
+
+The FERAL Email Watcher connects to your inbox via IMAP and monitors incoming messages. It filters by VIP senders, summarizes important emails, and can take actions like creating reminders, updating your calendar, or drafting replies.
+
+## Setup
+
+### Gmail
+
+1. Enable IMAP in Gmail: **Settings** → **See all settings** → **Forwarding and POP/IMAP** → **Enable IMAP**
+2. Generate an App Password: **Google Account** → **Security** → **2-Step Verification** → **App passwords**
+3. Configure FERAL:
+
+```bash
+export FERAL_EMAIL_IMAP_HOST="imap.gmail.com"
+export FERAL_EMAIL_IMAP_PORT="993"
+export FERAL_EMAIL_ADDRESS="you@gmail.com"
+export FERAL_EMAIL_PASSWORD="your-app-password"
+```
+
+### Outlook / Microsoft 365
+
+1. Enable IMAP in Outlook: **Settings** → **Mail** → **Sync email** → **POP and IMAP**
+2. Configure FERAL:
+
+```bash
+export FERAL_EMAIL_IMAP_HOST="outlook.office365.com"
+export FERAL_EMAIL_IMAP_PORT="993"
+export FERAL_EMAIL_ADDRESS="you@outlook.com"
+export FERAL_EMAIL_PASSWORD="your-password"
+```
+
+<Note>
+For Microsoft 365 accounts with modern authentication, you may need to use an App Password or configure OAuth2. See [Microsoft's IMAP guide](https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/authenticated-client-smtp-submission).
+</Note>
+
+### Other Providers
+
+Any IMAP-compatible email provider works. Set the host, port (usually 993 for SSL), and credentials.
+
+## VIP Filtering
+
+By default, FERAL processes all incoming emails. To focus on important senders, configure a VIP list:
+
+```bash
+export FERAL_EMAIL_VIP="boss@company.com,partner@example.com,*@important-client.com"
+```
+
+VIP rules support:
+- Exact addresses: `alice@example.com`
+- Domain wildcards: `*@company.com`
+- Name patterns: `ceo@*`
+
+Non-VIP emails are still indexed for search but don't trigger proactive actions.
+
+## What FERAL Does With Your Email
+
+When a new email arrives from a VIP (or any sender, if no VIP filter is set):
+
+| Action | Description |
+|--------|-------------|
+| **Summarize** | Generates a 1-2 sentence summary of the email |
+| **Classify** | Tags as: urgent, FYI, action-required, receipt, newsletter |
+| **Extract dates** | Finds dates/deadlines and offers to add calendar events |
+| **Draft reply** | For action-required emails, prepares a draft you can review |
+| **Notify** | Sends a proactive alert via your preferred channel (push, Telegram, etc.) |
+| **Store** | Saves the summary to FERAL's knowledge graph for future reference |
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_EMAIL_IMAP_HOST` | *(required)* | IMAP server hostname |
+| `FERAL_EMAIL_IMAP_PORT` | `993` | IMAP server port (993 = SSL) |
+| `FERAL_EMAIL_ADDRESS` | *(required)* | Your email address |
+| `FERAL_EMAIL_PASSWORD` | *(required)* | Password or app password |
+| `FERAL_EMAIL_VIP` | *(none — process all)* | Comma-separated VIP senders |
+| `FERAL_EMAIL_POLL_INTERVAL` | `60` | Seconds between inbox checks |
+| `FERAL_EMAIL_FOLDERS` | `INBOX` | Comma-separated IMAP folders to watch |
+| `FERAL_EMAIL_SSL` | `true` | Use SSL/TLS connection |
+| `FERAL_EMAIL_ACTIONS` | `summarize,classify,notify` | Comma-separated actions to perform |
+
+## Architecture
+
+```
+┌──────────────┐   IMAP/SSL   ┌──────────────┐          ┌──────────────┐
+│  Email       │ ◄──────────► │  FERAL Email │  Events  │  FERAL Brain │
+│  Server      │              │  Watcher     │ ───────► │              │
+│  (Gmail,     │              │  (IDLE +     │          │  → Summarize │
+│   Outlook)   │              │   polling)   │          │  → Classify  │
+└──────────────┘              └──────────────┘          │  → Notify    │
+                                                        └──────────────┘
+```
+
+The watcher uses IMAP IDLE for real-time push notifications where supported, falling back to polling at the configured interval.
+
+## Privacy
+
+- Email credentials are stored in FERAL's encrypted credentials file (`~/.feral/credentials.json`, mode `0600`)
+- Email content is processed locally by your FERAL brain — nothing is sent to external services beyond your configured LLM provider
+- Summaries stored in the knowledge graph stay on your machine
+- You can disable any action via `FERAL_EMAIL_ACTIONS`
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection refused / timeout">
+    Verify the IMAP host and port are correct. Test with: `openssl s_client -connect imap.gmail.com:993`. Ensure your firewall allows outbound connections on port 993.
+  </Accordion>
+  <Accordion title="Gmail: authentication failed">
+    Gmail requires an App Password when 2FA is enabled. Regular passwords won't work. Generate one at: Google Account → Security → App passwords.
+  </Accordion>
+  <Accordion title="Emails not being detected">
+    Check `FERAL_EMAIL_FOLDERS` — some providers use localized folder names (e.g., "Posteingang" in German). Run FERAL with `--log-level debug` to see IMAP activity.
+  </Accordion>
+</AccordionGroup>

@@ -140,6 +140,16 @@ PROVIDERS = {
         "voice": False,
         "key_hint": "No key needed — just install Ollama",
     },
+    "lmstudio": {
+        "name": "LM Studio (Local)",
+        "env_key": "",
+        "base_url": "http://localhost:1234/v1",
+        "desc": "Free, private, GUI model manager — no API key needed",
+        "models": [],
+        "default_model": "",
+        "voice": False,
+        "key_hint": "No key needed — just launch LM Studio and load a model",
+    },
 }
 
 # ═══════════════════════════════════════════════════════════
@@ -392,6 +402,8 @@ class OnboardWizard:
 
         if choice == "ollama":
             await self._check_ollama()
+        elif choice == "lmstudio":
+            await self._check_lmstudio()
         elif provider["env_key"]:
             existing = self.creds.get(provider["env_key"]) or os.getenv(provider["env_key"], "")
             if existing:
@@ -426,6 +438,20 @@ class OnboardWizard:
     async def _step_model(self):
         provider_id = self.config.get("provider", "openai")
         provider = PROVIDERS[provider_id]
+
+        if provider_id == "lmstudio":
+            models = await self._list_lmstudio_models()
+            if models:
+                self.c.print(Panel("[bold]Step 2 · Model[/]", style="blue"))
+                for i, m in enumerate(models, 1):
+                    self.c.print(f"  {i}. {m}")
+                model = Prompt.ask("Choose model", default=models[0])
+                self.config["model"] = model
+            else:
+                self.c.print("  [dim]No LM Studio models loaded. Open LM Studio and load a model.[/]")
+                self.config["model"] = "local-model"
+            self.c.print()
+            return
 
         if provider_id == "ollama":
             models = await self._list_ollama_models()
@@ -889,6 +915,33 @@ class OnboardWizard:
             pass
         return []
 
+    async def _check_lmstudio(self):
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get("http://localhost:1234/v1/models")
+                if r.status_code == 200:
+                    models = r.json().get("data", [])
+                    if models:
+                        self.c.print(f"  [green]LM Studio running with {len(models)} model(s)[/]")
+                    else:
+                        self.c.print("  [yellow]LM Studio running but no model loaded. Load one in the GUI.[/]")
+                    return
+        except Exception:
+            pass
+        self.c.print("  [yellow]LM Studio not running. Launch it and load a model.[/]")
+
+    async def _list_lmstudio_models(self) -> list[str]:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get("http://localhost:1234/v1/models")
+                if r.status_code == 200:
+                    return [m.get("id", "unknown") for m in r.json().get("data", [])]
+        except Exception:
+            pass
+        return []
+
 
 # ═══════════════════════════════════════════════════════════
 # Plain fallback (no rich)
@@ -956,7 +1009,18 @@ class OnboardWizardPlain:
         print()
 
         # Model
-        if provider_id == "ollama":
+        if provider_id == "lmstudio":
+            print("Step 2: Model")
+            lms_models = await self._list_lmstudio_models()
+            if lms_models:
+                for i, m in enumerate(lms_models, 1):
+                    print(f"  {i}. {m}")
+                model_input = input(f"  Choose [{lms_models[0]}]: ").strip()
+                self.config["model"] = model_input or lms_models[0]
+            else:
+                print("  No LM Studio models loaded. Open LM Studio and load a model.")
+                self.config["model"] = "local-model"
+        elif provider_id == "ollama":
             print("Step 2: Model")
             ollama_models = await self._list_ollama_models()
             if ollama_models:
@@ -1172,6 +1236,17 @@ class OnboardWizardPlain:
                 r = await client.get(f"{base}/api/tags")
                 if r.status_code == 200:
                     return [m["name"] for m in r.json().get("models", [])]
+        except Exception:
+            pass
+        return []
+
+    async def _list_lmstudio_models(self) -> list[str]:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get("http://localhost:1234/v1/models")
+                if r.status_code == 200:
+                    return [m.get("id", "unknown") for m in r.json().get("data", [])]
         except Exception:
             pass
         return []

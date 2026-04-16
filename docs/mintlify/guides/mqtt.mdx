@@ -1,0 +1,120 @@
+---
+title: "MQTT Bridge"
+description: "Connect FERAL to any IoT device via MQTT — smart plugs, sensors, Zigbee2MQTT, Tasmota"
+status: "Beta"
+---
+
+# MQTT Bridge
+
+MQTT is the universal language of IoT. The FERAL MQTT bridge connects to any MQTT broker and gives your AI brain access to smart plugs, temperature sensors, motion detectors, ESP32 boards, and thousands more.
+
+## Setup
+
+Set the broker URL in your environment:
+
+```bash
+export FERAL_MQTT_BROKER="mqtt://localhost:1883"
+```
+
+Optional: configure specific topics:
+
+```bash
+export FERAL_MQTT_TOPICS="home/+/+,sensor/+,zigbee2mqtt/+"
+```
+
+## Default Topics
+
+FERAL subscribes to these topics by default:
+
+| Topic Pattern | Source |
+|---------------|--------|
+| `homeassistant/+/+/config` | Home Assistant auto-discovery |
+| `home/+/+` | Common home automation |
+| `sensor/+` | Generic sensors |
+| `zigbee2mqtt/+` | Zigbee2MQTT devices |
+| `tasmota/+/+` | Tasmota firmware devices |
+
+## Home Assistant Auto-Discovery
+
+FERAL supports the Home Assistant MQTT discovery protocol. When a device publishes a config message to `homeassistant/{type}/{id}/config`, FERAL automatically registers it as a HUP device in the hardware mesh.
+
+## Sending Commands
+
+FERAL can publish to MQTT topics to control devices:
+
+```
+User: "Turn on the living room light"
+→ MQTT publish: home/living_room/light/set {"state": "ON"}
+```
+
+```
+User: "Set thermostat to 72°F"
+→ MQTT publish: home/thermostat/set {"temperature": 72, "mode": "heat"}
+```
+
+The Brain maps natural language to the correct topic and payload based on discovered device schemas.
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_MQTT_BROKER` | `mqtt://localhost:1883` | MQTT broker connection URL |
+| `FERAL_MQTT_TOPICS` | *(see defaults above)* | Comma-separated topic subscriptions |
+| `FERAL_MQTT_USERNAME` | *(none)* | Broker authentication username |
+| `FERAL_MQTT_PASSWORD` | *(none)* | Broker authentication password |
+| `FERAL_MQTT_CLIENT_ID` | `feral-brain` | MQTT client identifier |
+| `FERAL_MQTT_QOS` | `1` | Quality of service level (0, 1, or 2) |
+
+## Architecture
+
+```
+┌──────────────┐          ┌──────────────┐          ┌──────────────┐
+│  IoT Devices │  MQTT    │  MQTT Broker │  MQTT    │  FERAL Brain │
+│  (Zigbee,    │ ───────► │  (Mosquitto) │ ───────► │  (MQTT       │
+│   Tasmota,   │ ◄─────── │              │ ◄─────── │   Bridge)    │
+│   ESP32)     │          └──────────────┘          └──────────────┘
+└──────────────┘
+```
+
+## Supported Devices
+
+The MQTT bridge works with any device that speaks MQTT, including:
+
+- **Zigbee2MQTT** — Zigbee devices via a coordinator
+- **Tasmota** — flashed smart plugs, switches, sensors
+- **ESPHome / ESP32** — custom sensor boards
+- **Shelly** — smart relays and energy monitors
+- **Generic sensors** — any device publishing to standard topics
+
+## Requirements
+
+Install the MQTT extra:
+
+```bash
+pip install "feral-ai[mqtt]"
+```
+
+You also need a running MQTT broker. [Mosquitto](https://mosquitto.org/) is recommended:
+
+```bash
+# macOS
+brew install mosquitto && brew services start mosquitto
+
+# Ubuntu/Debian
+sudo apt install mosquitto mosquitto-clients
+sudo systemctl start mosquitto
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="FERAL doesn't see my devices">
+    Verify your broker is running: `mosquitto_sub -t '#' -v`. Make sure `FERAL_MQTT_BROKER` points to the correct host and port.
+  </Accordion>
+  <Accordion title="Commands aren't reaching devices">
+    Check that FERAL has publish permissions on the broker. Some brokers require ACL configuration for write access.
+  </Accordion>
+  <Accordion title="Zigbee2MQTT devices not discovered">
+    Ensure Zigbee2MQTT is publishing to the default `zigbee2mqtt/` topic prefix and that FERAL's topic subscriptions include it.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,166 @@
+---
+title: "Desktop App"
+description: "Native desktop app powered by Tauri — global hotkeys, floating window, system tray, always-on access"
+status: "Beta"
+---
+
+# Desktop App
+
+The FERAL desktop app is a native Tauri application that gives you instant access to your AI brain from anywhere on your desktop. Global hotkeys, a floating window, and system tray integration mean FERAL is always one keystroke away.
+
+## Installation
+
+### Pre-built Binaries
+
+Download the latest release for your platform from the [releases page](https://github.com/FERAL-AI/FERAL-AI/releases):
+
+| Platform | File |
+|----------|------|
+| macOS (Apple Silicon) | `FERAL_x.x.x_aarch64.dmg` |
+| macOS (Intel) | `FERAL_x.x.x_x64.dmg` |
+| Windows | `FERAL_x.x.x_x64-setup.exe` |
+| Linux (AppImage) | `FERAL_x.x.x_amd64.AppImage` |
+| Linux (deb) | `FERAL_x.x.x_amd64.deb` |
+
+### Building from Source
+
+Prerequisites:
+- [Rust](https://rustup.rs/) (1.75+)
+- [Node.js](https://nodejs.org/) (20+)
+- Platform-specific dependencies (see below)
+
+```bash
+# Clone the repo
+git clone https://github.com/FERAL-AI/FERAL-AI.git
+cd FERAL-AI/feral-desktop
+
+# Install dependencies
+npm install
+
+# Development mode (hot reload)
+npm run tauri dev
+
+# Production build
+npm run tauri build
+```
+
+#### Platform-specific Build Dependencies
+
+**macOS:**
+```bash
+xcode-select --install
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget \
+  libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+**Windows:**
+- Visual Studio Build Tools with "Desktop development with C++"
+- WebView2 (included in Windows 10/11)
+
+## Features
+
+### Global Hotkeys
+
+| Hotkey | Action |
+|--------|--------|
+| `Ctrl+Space` / `Cmd+Space` | Toggle floating window |
+| `Ctrl+Shift+V` / `Cmd+Shift+V` | Voice input (push-to-talk) |
+| `Ctrl+Shift+S` / `Cmd+Shift+S` | Screenshot + ask FERAL |
+| `Escape` | Dismiss floating window |
+
+Hotkeys are customizable in **Settings** → **Keyboard Shortcuts**.
+
+### Floating Window
+
+The floating window is a compact, always-on-top chat interface. Type a question, get an answer, and dismiss — all without leaving your current app.
+
+Features:
+- **Auto-resize** — expands as the conversation grows
+- **Pin mode** — keep the window visible while you work
+- **Quick actions** — clipboard paste, screenshot, file drop
+- **Theme** — follows your system dark/light mode
+
+### System Tray
+
+FERAL lives in your system tray (menu bar on macOS). Right-click for quick actions:
+
+- **Open FERAL** — launch the main window
+- **Quick Ask** — one-shot question from a text field
+- **Voice** — start voice input
+- **Status** — brain connection status, active devices
+- **Quit** — close the app (brain keeps running)
+
+### Notification Center
+
+Desktop notifications for proactive alerts from the Brain:
+
+- Health warnings from wristband data
+- Calendar reminders
+- Email summaries (VIP filter)
+- Smart home alerts (motion, temperature, etc.)
+
+## Configuration
+
+App settings are stored in the platform-specific config directory:
+
+| Platform | Path |
+|----------|------|
+| macOS | `~/Library/Application Support/com.feral.desktop/config.json` |
+| Windows | `%APPDATA%\com.feral.desktop\config.json` |
+| Linux | `~/.config/com.feral.desktop/config.json` |
+
+Key settings:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `brain_url` | `ws://localhost:9090/v1/session` | FERAL brain WebSocket URL |
+| `launch_at_login` | `false` | Start FERAL when you log in |
+| `floating_window.position` | `top-right` | Default position: `top-left`, `top-right`, `bottom-left`, `bottom-right`, `center` |
+| `floating_window.width` | `400` | Window width in pixels |
+| `floating_window.opacity` | `0.95` | Window opacity (0.0 – 1.0) |
+| `theme` | `system` | `light`, `dark`, or `system` |
+| `hotkeys.toggle` | `CmdOrCtrl+Space` | Global toggle hotkey |
+
+## Architecture
+
+```
+┌──────────────────────────────────────┐
+│           Tauri App Shell            │
+│  ┌──────────┐    ┌────────────────┐  │
+│  │  Rust    │    │  Web UI        │  │
+│  │  Backend │◄──►│  (React /      │  │
+│  │  (IPC,   │    │   WebView)     │  │
+│  │   tray,  │    └────────────────┘  │
+│  │   hotkeys│                        │
+│  └────┬─────┘                        │
+│       │ WebSocket                    │
+└───────┼──────────────────────────────┘
+        ▼
+┌──────────────┐
+│  FERAL Brain │
+│  (localhost)  │
+└──────────────┘
+```
+
+The Rust backend handles system integration (global hotkeys, tray, notifications) while the web UI runs in a lightweight WebView. Communication with the FERAL brain uses the same WebSocket protocol as the browser extension and mobile apps.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Global hotkeys not working">
+    On macOS, grant Accessibility permission: **System Settings** → **Privacy & Security** → **Accessibility** → enable FERAL. On Linux, some Wayland compositors don't support global hotkeys — try X11.
+  </Accordion>
+  <Accordion title="App can't connect to Brain">
+    Ensure the FERAL brain is running (`feral start`). Check that `brain_url` in settings matches your brain's address.
+  </Accordion>
+  <Accordion title="Build fails on Linux">
+    Install all webkit2gtk dependencies listed above. On Fedora: `sudo dnf install webkit2gtk4.1-devel openssl-devel gtk3-devel`.
+  </Accordion>
+  <Accordion title="System tray icon missing on Linux">
+    Install `libayatana-appindicator3-1` (or `libappindicator-gtk3` on older distros). Some desktop environments require a tray extension.
+  </Accordion>
+</AccordionGroup>

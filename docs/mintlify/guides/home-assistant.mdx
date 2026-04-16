@@ -1,0 +1,127 @@
+---
+title: "Home Assistant"
+description: "Run FERAL as a Home Assistant add-on — full access to every device, automation, and sensor in your smart home"
+status: "Beta"
+---
+
+# Home Assistant Integration
+
+FERAL integrates with Home Assistant as a native add-on, giving your AI brain direct access to every device, entity, automation, and sensor in your smart home.
+
+## Installation
+
+### Add-on Installation
+
+1. Open Home Assistant → **Settings** → **Add-ons** → **Add-on Store**
+2. Click the three dots (top right) → **Repositories**
+3. Add the FERAL repository URL:
+   ```
+   https://github.com/FERAL-AI/ha-addon
+   ```
+4. Find "FERAL Brain" in the store and click **Install**
+5. Go to the add-on's **Configuration** tab to set your LLM provider and API key
+6. Click **Start**
+
+### Manual Installation
+
+If you prefer running FERAL alongside (not inside) Home Assistant:
+
+```bash
+export FERAL_HA_URL="http://homeassistant.local:8123"
+export FERAL_HA_TOKEN="your-long-lived-access-token"
+feral start
+```
+
+Generate a long-lived access token from your HA profile page: **Profile** → **Security** → **Long-Lived Access Tokens** → **Create Token**.
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_HA_URL` | `http://homeassistant.local:8123` | Home Assistant instance URL |
+| `FERAL_HA_TOKEN` | *(required)* | Long-lived access token |
+| `FERAL_HA_WEBHOOK_ID` | `feral-brain` | Webhook ID for HA → FERAL events |
+| `FERAL_HA_AREAS` | *(all)* | Comma-separated area filter (e.g. `living_room,kitchen`) |
+
+When running as an add-on, `FERAL_HA_URL` and `FERAL_HA_TOKEN` are auto-configured via the Supervisor API.
+
+## What Devices Become Accessible
+
+Once connected, FERAL can see and control **every entity** exposed in Home Assistant:
+
+| Category | Examples |
+|----------|----------|
+| **Lights** | On/off, brightness, color temperature, RGB |
+| **Switches & plugs** | Smart plugs, relays, power strips |
+| **Climate** | Thermostats, AC units, fans, humidifiers |
+| **Sensors** | Temperature, humidity, motion, door/window, energy |
+| **Media** | Speakers, TVs, media players |
+| **Covers** | Blinds, garage doors, curtains |
+| **Locks** | Smart locks, deadbolts |
+| **Cameras** | Snapshot and stream access |
+| **Automations** | Trigger, enable/disable existing automations |
+
+## Usage Examples
+
+```
+"Turn off all the lights in the bedroom"
+→ Calls service: light.turn_off for area bedroom
+
+"What's the temperature in the kitchen?"
+→ Reads sensor.kitchen_temperature → "72.4°F"
+
+"Lock the front door and arm the alarm"
+→ Calls lock.lock + alarm_control_panel.arm_away
+
+"Run the 'movie time' automation"
+→ Triggers automation.movie_time
+```
+
+## Supervisor API
+
+When running as an add-on, FERAL uses the Home Assistant Supervisor API for:
+
+- **Auto-discovery** — automatically finds the HA instance
+- **Ingress** — the FERAL dashboard is accessible through the HA sidebar
+- **Add-on management** — restart, update, and configure from the HA UI
+- **Backup integration** — FERAL's memory and config are included in HA backups
+
+The add-on communicates with HA over the internal Docker network using the Supervisor token, so no manual token configuration is needed.
+
+## Architecture
+
+```
+┌──────────────┐          ┌──────────────┐          ┌──────────────┐
+│  Smart Home  │   Z-Wave │    Home      │  REST +  │  FERAL Brain │
+│  Devices     │  Zigbee  │  Assistant   │  WS API  │  (Add-on)    │
+│  (400+ int.) │  WiFi    │  (Supervisor)│ ◄──────► │              │
+└──────────────┘ ───────► └──────────────┘          └──────────────┘
+```
+
+## Event Streaming
+
+FERAL subscribes to Home Assistant's WebSocket event stream. When state changes occur (a door opens, temperature spikes, motion detected), FERAL receives them in real-time and can:
+
+- Log the event to memory
+- Trigger proactive alerts ("Your front door has been open for 10 minutes")
+- Execute learned skills in response
+
+## Security
+
+- The long-lived access token is stored in FERAL's encrypted credentials file (`~/.feral/credentials.json`, mode `0600`)
+- When running as an add-on, the Supervisor token is ephemeral and rotated automatically
+- FERAL never exposes your HA token to external services
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="FERAL can't connect to Home Assistant">
+    Verify the URL is reachable: `curl http://homeassistant.local:8123/api/`. Ensure the long-lived token is valid and hasn't expired.
+  </Accordion>
+  <Accordion title="Devices not showing up">
+    FERAL only sees entities exposed in HA. Check that your devices are not hidden in **Settings → Entities**. Try filtering with `FERAL_HA_AREAS`.
+  </Accordion>
+  <Accordion title="Add-on won't start">
+    Check the add-on logs in **Settings → Add-ons → FERAL Brain → Log**. Common issues: missing LLM config, port conflicts.
+  </Accordion>
+</AccordionGroup>

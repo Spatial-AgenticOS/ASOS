@@ -26,6 +26,11 @@
             </intent-filter>
         </activity>
         
+        <activity
+            android:name=".QRScannerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Material3.DynamicColors.DayNight" />
+
         <service
             android:name=".FeralForegroundService"
             android:foregroundServiceType="connectedDevice|health"

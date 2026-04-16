@@ -1,7 +1,8 @@
 """
 FERAL LLM Provider — Pluggable AI Backend
 =====================================================
-Supports: OpenAI API, Ollama (local), and any OpenAI-compatible endpoint.
+Supports: OpenAI API, Ollama (local), LM Studio (local),
+and any OpenAI-compatible endpoint.
 Now with streaming support for real-time token delivery.
 """
 
@@ -154,6 +155,7 @@ _PROVIDER_REGISTRY: dict[str, tuple[str, str, str]] = {
     "deepseek": ("https://api.deepseek.com", "DEEPSEEK_API_KEY", "deepseek-chat"),
     "kimi": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY", "moonshot-v1-128k"),
     "qwen": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", "qwen-max"),
+    "lmstudio": ("http://localhost:1234/v1", "", "local-model"),
 }
 
 
@@ -225,12 +227,16 @@ class LLMProvider:
             self.base_url = self.base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
             self.api_key = os.getenv("DASHSCOPE_API_KEY", self.api_key)
             self.model = self.model or "qwen-max"
+        elif self.provider == "lmstudio":
+            self.base_url = self.base_url or "http://localhost:1234/v1"
+            self.api_key = "lm-studio"
+            self.model = self.model or "local-model"
         else:
             self.base_url = self.base_url or "https://api.openai.com/v1"
 
-        # Check if API key is available — if not, try Ollama fallback
-        if not self.api_key and self.provider != "ollama":
-            logger.warning(f"No API key for provider '{self.provider}'. Trying Ollama fallback...")
+        # Check if API key is available — if not, try local fallbacks
+        if not self.api_key and self.provider not in ("ollama", "lmstudio"):
+            logger.warning(f"No API key for provider '{self.provider}'. Trying local fallbacks...")
             ollama_model = self._detect_ollama()
             if ollama_model:
                 self.provider = "ollama"
@@ -239,12 +245,21 @@ class LLMProvider:
                 self.api_key = "ollama"
                 logger.info(f"Ollama detected — using model '{ollama_model}'")
             else:
-                logger.warning(
-                    "No LLM available. Set OPENAI_API_KEY or run Ollama (`ollama serve`). "
-                    "Brain will operate in direct-execution mode (no reasoning, skill matching only)."
-                )
-                self.available = False
-                self.api_key = "none"
+                lmstudio_model = self._detect_lmstudio()
+                if lmstudio_model:
+                    self.provider = "lmstudio"
+                    self.base_url = "http://localhost:1234/v1"
+                    self.model = lmstudio_model
+                    self.api_key = "lm-studio"
+                    logger.info(f"LM Studio detected — using model '{lmstudio_model}'")
+                else:
+                    logger.warning(
+                        "No LLM available. Set OPENAI_API_KEY or run Ollama (`ollama serve`) "
+                        "or LM Studio. Brain will operate in direct-execution mode "
+                        "(no reasoning, skill matching only)."
+                    )
+                    self.available = False
+                    self.api_key = "none"
 
         self.client = self._build_client()
 
@@ -282,6 +297,20 @@ class LLMProvider:
             return models[0]
         except Exception:
             return None
+
+    @staticmethod
+    def _detect_lmstudio() -> Optional[str]:
+        """Probe LM Studio for loaded models. Returns model id or None."""
+        try:
+            import httpx
+            r = httpx.get("http://localhost:1234/v1/models", timeout=2)
+            if r.status_code == 200:
+                models = r.json().get("data", [])
+                if models:
+                    return models[0].get("id", "local-model")
+        except Exception:
+            pass
+        return None
 
     def _init_local_engine(self):
         try:
@@ -781,9 +810,16 @@ class LLMProvider:
             "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"),
             "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "claude-sonnet-4-20250514"),
             "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", "gemini-2.0-flash"),
+            "lmstudio": ("http://localhost:1234/v1", "", "local-model"),
         }
 
-        if provider == "ollama":
+        if provider == "lmstudio":
+            self.base_url = "http://localhost:1234/v1"
+            self.api_key = "lm-studio"
+            if not model:
+                detected = self._detect_lmstudio()
+                self.model = detected or "local-model"
+        elif provider == "ollama":
             self.base_url = ollama_openai_base_url()
             self.api_key = "ollama"
             if not model:
@@ -865,6 +901,13 @@ class LLMProvider:
                 "base_url": ollama_openai_base_url(),
                 "api_key": "ollama",
                 "model": "llama3.1",
+            }
+        if provider_name == "lmstudio":
+            detected = self._detect_lmstudio()
+            return {
+                "base_url": "http://localhost:1234/v1",
+                "api_key": "lm-studio",
+                "model": detected or "local-model",
             }
         reg = _PROVIDER_REGISTRY.get(
             provider_name,

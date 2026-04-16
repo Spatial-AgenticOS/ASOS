@@ -3,7 +3,9 @@ package ai.feral.node
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -18,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +79,28 @@ fun FeralNodeApp(onStartService: () -> Unit = {}, onStopService: () -> Unit = {}
     var apiKey by remember { mutableStateOf("") }
     var statusText by remember { mutableStateOf("Not connected") }
     var chatMessages by remember { mutableStateOf(listOf<ChatMessage>()) }
+
+    val context = LocalContext.current
+    val qrLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == ComponentActivity.RESULT_OK) {
+            val json = result.data?.getStringExtra(QRScannerActivity.RESULT_KEY)
+                ?: return@rememberLauncherForActivityResult
+            try {
+                val info = org.json.JSONObject(json)
+                host = info.getString("host")
+                port = info.optInt("port", 9090).toString()
+                apiKey = info.getString("token")
+                statusText = "Paired! Connecting..."
+                isConnected = true
+                statusText = "Connected to $host:$port"
+                onStartService()
+            } catch (_: Exception) {
+                statusText = "Invalid QR code"
+            }
+        }
+    }
 
     var heartRate by remember { mutableIntStateOf(0) }
     var spO2 by remember { mutableIntStateOf(0) }
@@ -137,6 +162,9 @@ fun FeralNodeApp(onStartService: () -> Unit = {}, onStopService: () -> Unit = {}
                         isConnected = false
                         statusText = "Disconnected"
                         onStopService()
+                    },
+                    onScanQR = {
+                        qrLauncher.launch(Intent(context, QRScannerActivity::class.java))
                     }
                 )
             }
@@ -200,7 +228,8 @@ fun SettingsScreen(
     onPortChange: (String) -> Unit,
     onApiKeyChange: (String) -> Unit,
     onConnect: () -> Unit,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    onScanQR: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier.fillMaxSize().background(Color(0xFF0A0A0B)).padding(24.dp),
@@ -232,7 +261,7 @@ fun SettingsScreen(
                 Text("Connect")
             }
             
-            OutlinedButton(onClick = { }, modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = onScanQR, modifier = Modifier.fillMaxWidth()) {
                 Text("Scan QR Code to Pair")
             }
         } else {

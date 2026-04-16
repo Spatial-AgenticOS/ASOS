@@ -24,5 +24,5 @@ jobs:
 
       - name: Verify CLI
         run: |
-          feral --help || feral doctor 2>&1 | head -20
-          python -c "from _version import __version__; print(f'Version: {__version__}')" || true
+          feral --help || true
+          python -c "import importlib.metadata; print('Version:', importlib.metadata.version('feral-ai'))" || true

@@ -84,6 +84,17 @@
         ]
       },
       {
+        "group": "Connectivity",
+        "pages": [
+          "guides/browser-extension",
+          "guides/mqtt",
+          "guides/home-assistant",
+          "guides/email-watcher",
+          "guides/webhooks",
+          "guides/desktop-app"
+        ]
+      },
+      {
         "group": "SDKs",
         "pages": [
           "sdk/python",

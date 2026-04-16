@@ -1,0 +1,167 @@
+---
+title: "Webhooks"
+description: "Receive events from any service — GitHub, IFTTT, Zapier, Stripe, and more — via FERAL's webhook API"
+status: "Beta"
+---
+
+# Webhooks
+
+FERAL exposes a webhook endpoint that lets any external service push events into your AI brain. Connect GitHub pushes, Stripe payments, IFTTT applets, Zapier zaps, or any service that can send HTTP POST requests.
+
+## Creating a Webhook
+
+### Via API
+
+```bash
+curl -X POST http://localhost:9090/v1/webhooks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "github-pushes",
+    "events": ["push", "pull_request"],
+    "action": "notify",
+    "secret": "your-webhook-secret"
+  }'
+```
+
+Response:
+
+```json
+{
+  "id": "wh_abc123",
+  "url": "http://localhost:9090/v1/webhooks/wh_abc123",
+  "name": "github-pushes",
+  "secret": "your-webhook-secret",
+  "created_at": "2026-04-15T12:00:00Z"
+}
+```
+
+### Via CLI
+
+```bash
+feral webhooks create --name "github-pushes" --action notify --secret "your-secret"
+```
+
+## Signature Verification
+
+FERAL verifies webhook signatures to ensure requests are authentic. When you create a webhook with a `secret`, FERAL computes an HMAC-SHA256 signature and compares it to the incoming request's signature header.
+
+| Service | Signature Header | Algorithm |
+|---------|-----------------|-----------|
+| GitHub | `X-Hub-Signature-256` | HMAC-SHA256 |
+| Stripe | `Stripe-Signature` | HMAC-SHA256 (with timestamp) |
+| IFTTT | *(custom)* | Bearer token |
+| Zapier | `X-Zapier-Signature` | HMAC-SHA256 |
+| Generic | `X-Webhook-Signature` | HMAC-SHA256 |
+
+If the signature doesn't match, FERAL rejects the request with `401 Unauthorized`.
+
+## Connecting Services
+
+### GitHub
+
+1. Create a webhook in FERAL: `feral webhooks create --name github --action process`
+2. In your GitHub repo: **Settings** → **Webhooks** → **Add webhook**
+3. Set the Payload URL to your FERAL webhook URL (use a tunnel like ngrok for remote access)
+4. Set Content type to `application/json`
+5. Enter the same secret you used when creating the FERAL webhook
+6. Select events: Pushes, Pull requests, Issues, etc.
+
+### IFTTT
+
+1. Create a webhook in FERAL
+2. In IFTTT, use the **Webhooks** service as the action
+3. Set the URL to your FERAL webhook endpoint
+4. Set Method to `POST` and Content-Type to `application/json`
+5. Map IFTTT ingredients to the JSON body
+
+### Zapier
+
+1. Create a webhook in FERAL
+2. In Zapier, add a **Webhooks by Zapier** action step
+3. Choose "POST" and enter your FERAL webhook URL
+4. Map your Zap's data fields to the payload
+
+### Stripe
+
+1. Create a webhook in FERAL with a secret
+2. In the Stripe Dashboard: **Developers** → **Webhooks** → **Add endpoint**
+3. Enter your FERAL webhook URL
+4. Select events (e.g., `payment_intent.succeeded`, `invoice.paid`)
+5. Copy the signing secret from Stripe and update your FERAL webhook
+
+## Action Mapping
+
+Each webhook can map to an action that FERAL performs when the event arrives:
+
+| Action | Description |
+|--------|-------------|
+| `notify` | Send a notification to your preferred channel (push, Telegram, etc.) |
+| `process` | Feed the event to the Brain for intelligent processing and response |
+| `log` | Store the event in FERAL's knowledge graph for later reference |
+| `skill` | Trigger a specific FERAL skill by name |
+| `automation` | Run a Home Assistant automation (requires HA integration) |
+
+Example: trigger a skill when a GitHub issue is opened:
+
+```bash
+feral webhooks create \
+  --name "github-issues" \
+  --action skill \
+  --skill-name "triage_github_issue" \
+  --secret "gh-secret-123"
+```
+
+## Managing Webhooks
+
+```bash
+# List all webhooks
+feral webhooks list
+
+# Get details
+feral webhooks get wh_abc123
+
+# Delete
+feral webhooks delete wh_abc123
+
+# Test (send a mock event)
+feral webhooks test wh_abc123 --payload '{"test": true}'
+```
+
+## Exposing to the Internet
+
+By default, FERAL runs on localhost. To receive webhooks from external services, you need to expose the endpoint. Options:
+
+1. **ngrok** (recommended for development):
+   ```bash
+   ngrok http 9090
+   # Use the generated URL as your webhook endpoint
+   ```
+
+2. **Cloudflare Tunnel** (recommended for production):
+   ```bash
+   cloudflared tunnel --url http://localhost:9090
+   ```
+
+3. **Reverse proxy** — configure Nginx/Caddy to forward `/v1/webhooks/*` to FERAL
+
+## Security
+
+- Always use a webhook `secret` for signature verification
+- Webhook secrets are stored in FERAL's encrypted credentials file
+- FERAL logs all webhook deliveries (with redacted payloads) for audit
+- Rate limiting: 60 requests/minute per webhook by default
+- IP allowlisting is available via `FERAL_WEBHOOK_ALLOWED_IPS`
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Webhook returns 401">
+    The signature doesn't match. Verify that the secret in FERAL matches the secret configured in the external service. Check the signature header name.
+  </Accordion>
+  <Accordion title="External service can't reach FERAL">
+    FERAL runs on localhost by default. Use ngrok or a Cloudflare Tunnel to expose it. Verify your firewall allows inbound connections.
+  </Accordion>
+  <Accordion title="Events received but no action taken">
+    Check the webhook's `action` setting. Run `feral webhooks get <id>` to verify the configuration. Check FERAL logs for processing errors.
+  </Accordion>
+</AccordionGroup>
