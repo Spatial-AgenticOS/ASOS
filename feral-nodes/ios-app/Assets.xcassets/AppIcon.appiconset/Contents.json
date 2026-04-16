@@ -1,0 +1,86 @@
+{
+  "images": [
+    {
+      "filename": "icon-20.png",
+      "size": "20x20",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-29.png",
+      "size": "29x29",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-40.png",
+      "size": "40x40",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-58.png",
+      "size": "58x58",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-60.png",
+      "size": "60x60",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-76.png",
+      "size": "76x76",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-80.png",
+      "size": "80x80",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-87.png",
+      "size": "87x87",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-120.png",
+      "size": "120x120",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-152.png",
+      "size": "152x152",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-167.png",
+      "size": "167x167",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-180.png",
+      "size": "180x180",
+      "scale": "1x",
+      "idiom": "universal"
+    },
+    {
+      "filename": "icon-1024.png",
+      "size": "1024x1024",
+      "scale": "1x",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "version": 1,
+    "author": "feral-branding"
+  }
+}

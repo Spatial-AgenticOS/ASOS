@@ -71,7 +71,7 @@ function showStarting() {
         <div class="glow-ring"></div>
         <div class="glow-ring"></div>
         <div class="glow-ring"></div>
-        ${BRAIN_SVG}
+        <img src="/icons/128x128.png" alt="FERAL" style="width: 96px; height: 96px; border-radius: 16px; box-shadow: 0 4px 24px rgba(239,68,68,0.3);" />
       </div>
       <div class="splash-title">FERAL</div>
       <div class="splash-subtitle">One brain. Every device.</div>

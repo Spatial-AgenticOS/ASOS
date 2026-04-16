@@ -56,8 +56,12 @@ class TestWebSearchExecute:
 
     @pytest.mark.asyncio
     async def test_engine_orders_tavily_brave_then_ddg(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-        monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+        for var in (
+            "TAVILY_API_KEY", "BRAVE_API_KEY", "EXA_API_KEY",
+            "PERPLEXITY_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CSE_ID",
+            "SEARXNG_URL",
+        ):
+            monkeypatch.delenv(var, raising=False)
         eng = WebSearchEngine.from_env({})
         names = [p.name for p in eng.providers]
         assert names == ["duckduckgo"]

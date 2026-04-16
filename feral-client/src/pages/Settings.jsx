@@ -496,7 +496,7 @@ export default function Settings() {
             <Section title="How to Connect Devices" icon={Wifi}>
               <div className="space-y-3 text-sm">
                 {[
-                  { icon: Smartphone, name: 'Phone (iOS/Android)', desc: 'Run the FERAL bridge app or use the Web Bluetooth scanner above to connect BLE devices directly from your phone browser.' },
+                  { icon: Smartphone, name: 'Phone (iOS/Android)', desc: 'Install the FERAL Node app and scan the QR code above to pair your phone as a bridge for BLE devices.' },
                   { icon: Glasses, name: 'Smart Glasses', desc: 'Any BLE-capable glasses can connect through the phone bridge or a direct daemon. The glasses stream camera frames and mic audio.' },
                   { icon: Watch, name: 'Wristband / Watch', desc: 'Health sensors (HR, SpO2, temp) connect via BLE through a phone bridge or dedicated USB dongle daemon.' },
                   { icon: Bot, name: 'Robot / Custom Hardware', desc: 'Any device running Python or Kotlin can use the node SDK. Connect to ws://BRAIN_IP:9090/v1/node with your API key.' },
@@ -1484,87 +1484,33 @@ export default function Settings() {
 }
 
 function PhoneBridgeSection() {
-  const [scanning, setScanning] = useState(false);
-  const [bleDevices, setBleDevices] = useState([]);
-  const [error, setError] = useState('');
-  const [connected, setConnected] = useState(null);
-  const btAvailable = typeof navigator !== 'undefined' && !!navigator.bluetooth;
-
-  const startScan = async () => {
-    if (!btAvailable) {
-      setError('Web Bluetooth is not supported on this browser. Use Chrome on Android or a Chromium-based browser.');
-      return;
-    }
-    setScanning(true);
-    setError('');
-    try {
-      const device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: ['heart_rate', 'battery_service', 'generic_access'],
-      });
-      setBleDevices(prev => {
-        if (prev.find(d => d.id === device.id)) return prev;
-        return [...prev, { id: device.id, name: device.name || 'Unknown Device' }];
-      });
-      setConnected(device.id);
-    } catch (e) {
-      if (e.name !== 'NotFoundError') {
-        setError(e.message);
-      }
-    }
-    setScanning(false);
-  };
-
   return (
-    <Section title="Phone Bridge (Web Bluetooth)" icon={Smartphone}>
-      <p className="text-xs text-feral-text-muted mb-4">
-        Use your phone's browser as a bridge. Scan for nearby BLE devices and forward their data to the Brain.
-      </p>
-
-      <button
-        onClick={startScan}
-        disabled={scanning}
-        className="flex items-center gap-2 px-4 py-2.5 bg-feral-accent text-white rounded-lg text-sm font-medium hover:bg-feral-accent/90 transition disabled:opacity-50 w-full justify-center"
-      >
-        {scanning ? (
-          <><Loader2 size={14} className="animate-spin" /> Scanning...</>
-        ) : (
-          <><Bluetooth size={14} /> Scan for BLE Devices</>
-        )}
-      </button>
-
-      {error && (
-        <div className="mt-3 text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
-          {error}
-        </div>
-      )}
-
-      {!btAvailable && (
-        <div className="mt-3 text-xs text-yellow-400 bg-yellow-500/10 rounded-lg px-3 py-2">
-          Web Bluetooth requires Chrome/Edge on Android or a Chromium-based desktop browser with the flag enabled.
-        </div>
-      )}
-
-      {bleDevices.length > 0 && (
-        <div className="mt-4 space-y-2">
-          <div className="text-xs text-feral-text-secondary uppercase tracking-wider mb-2">Discovered Devices</div>
-          {bleDevices.map(dev => (
-            <div key={dev.id}
-              className={`flex items-center gap-3 rounded-lg px-4 py-3 border ${
-                connected === dev.id ? 'bg-green-500/5 border-green-500/30' : 'bg-feral-bg/30 border-feral-border'
-              }`}>
-              <Bluetooth size={14} className={connected === dev.id ? 'text-green-400' : 'text-feral-text-muted'} />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium truncate">{dev.name}</div>
-                <div className="text-[10px] text-feral-text-muted font-mono">{dev.id}</div>
-              </div>
-              {connected === dev.id && (
-                <span className="text-[10px] text-green-400 bg-green-500/20 px-2 py-0.5 rounded-full">Paired</span>
-              )}
+    <Section title="Connect Your Phone" icon={Smartphone}>
+      <div style={{ padding: 24, background: 'rgba(6,182,212,0.05)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: 12 }}>
+        <p className="text-xs text-feral-text-muted mb-4">
+          For full phone capabilities (HealthKit, Health Connect, motion sensors, camera, voice),
+          install the FERAL Node app and scan the QR code below.
+        </p>
+        <div className="flex gap-4 items-center flex-wrap">
+          <div className="text-center">
+            <img src="/api/devices/pair/qr" alt="Pairing QR" className="rounded-lg bg-white p-2" style={{ width: 200, height: 200 }} />
+            <div className="text-[11px] mt-2 text-feral-text-muted">Scan with FERAL Node app</div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <a href="https://apps.apple.com/" target="_blank" rel="noopener noreferrer"
+              className="px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-feral-text text-xs no-underline hover:border-feral-border-bright transition">
+              Download for iOS
+            </a>
+            <a href="https://play.google.com/" target="_blank" rel="noopener noreferrer"
+              className="px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-feral-text text-xs no-underline hover:border-feral-border-bright transition">
+              Download for Android
+            </a>
+            <div className="text-[10px] text-feral-text-muted mt-2">
+              Or run the hardware daemon: <code className="bg-feral-bg px-1.5 py-0.5 rounded font-mono text-[10px]">python -m feral_nodes.hardware_daemon</code>
             </div>
-          ))}
+          </div>
         </div>
-      )}
+      </div>
     </Section>
   );
 }

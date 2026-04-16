@@ -256,20 +256,11 @@ class HardwareDaemon:
             return {"success": True, "data": {"sent": True, "method": "log"}}
 
     async def _cmd_health_read(self, args: dict) -> dict:
-        metric = args.get("metric", "all")
-        import random
-        data = {}
-        if metric in ("all", "heart_rate"):
-            data["heart_rate"] = random.randint(62, 85)
-        if metric in ("all", "spo2"):
-            data["spo2"] = random.randint(95, 99)
-        if metric in ("all", "temperature"):
-            data["body_temperature"] = round(36.2 + random.random() * 0.8, 1)
-        if metric in ("all", "steps"):
-            data["steps_today"] = random.randint(2000, 12000)
-        data["source"] = "simulated"
-        data["note"] = "Connect a real wristband or HealthKit for real data"
-        return {"success": True, "data": data}
+        return {
+            "success": False,
+            "reason": "no_health_sensor_connected",
+            "hint": "Health telemetry requires the iOS/Android FERAL Node app or a paired BLE wristband (see feral-nodes/ios-app, feral-nodes/android-app, feral-core/hardware/adapters/wristband.py).",
+        }
 
     async def _cmd_audio_play(self, args: dict) -> dict:
         url = args.get("url", "")

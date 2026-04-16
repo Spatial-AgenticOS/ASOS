@@ -23,8 +23,8 @@ logger = logging.getLogger("feral.demo.runner")
 
 def run_demo(scenario: str = ""):
     """Entry point for the demo runner."""
-    os.environ["FERAL_DEMO"] = "1"
-    os.environ["FERAL_DEMO_FORCE"] = "1"
+    os.environ["FERAL_DEV_DEMO"] = "1"
+    os.environ["FERAL_DEV_DEMO_FORCE"] = "1"
 
     if not scenario:
         from demo.scenarios import SCENARIOS

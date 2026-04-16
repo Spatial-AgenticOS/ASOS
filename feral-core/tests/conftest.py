@@ -2,6 +2,28 @@ import pytest
 import os
 
 
+@pytest.fixture(autouse=True)
+def _disable_api_key_middleware_for_tests(monkeypatch):
+    """Starlette TestClient reports client host as 'testclient'; accept that as localhost
+    for tests so the auth middleware bypasses without every test needing to send a header.
+    Real production hosts never report 'testclient'.
+    """
+    from security import session_auth as _sa
+    orig_is_localhost = _sa.is_localhost
+
+    def _is_localhost_test(host):
+        if host == "testclient":
+            return True
+        return orig_is_localhost(host)
+
+    monkeypatch.setattr(_sa, "is_localhost", _is_localhost_test)
+    try:
+        import api.server as _server
+        monkeypatch.setattr(_server, "is_localhost", _is_localhost_test, raising=False)
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def temp_db(tmp_path):
     """Provide a temporary SQLite database path."""

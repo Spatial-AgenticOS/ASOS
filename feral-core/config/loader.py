@@ -133,6 +133,10 @@ class ConfigLoader:
         # Load credentials separately
         self._load_credentials()
 
+        # Auto-derive fallback providers from stored keys if not explicitly set
+        self._merged.setdefault("llm", {})
+        self._merged["llm"]["fallback_providers"] = self._derive_fallback_providers()
+
         # Check if setup has been completed
         self._setup_complete = self._check_setup_complete()
 
@@ -219,6 +223,38 @@ class ConfigLoader:
                 if "skill_keys" not in self._credentials:
                     self._credentials["skill_keys"] = {}
                 self._credentials["skill_keys"][skill_id] = value
+
+    def _derive_fallback_providers(self) -> list[str]:
+        """Auto-populate fallback_providers from providers that have stored keys."""
+        existing = self._merged.get("llm", {}).get("fallback_providers") or []
+        if existing:
+            return existing
+
+        _KEY_MAP = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "groq": "GROQ_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "xai": "XAI_API_KEY",
+            "cohere": "COHERE_API_KEY",
+            "mistral": "MISTRAL_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+        }
+
+        primary = self._merged.get("llm", {}).get("provider", "openai").lower()
+        providers = []
+        for prov, key_name in _KEY_MAP.items():
+            if prov == primary:
+                continue
+            key = os.environ.get(key_name, "").strip()
+            if not key and key_name == "GEMINI_API_KEY":
+                key = os.environ.get("GOOGLE_API_KEY", "").strip()
+            if not key:
+                key = self._credentials.get(key_name, "").strip() if isinstance(self._credentials.get(key_name), str) else ""
+            if key:
+                providers.append(prov)
+        return providers
 
     def _check_setup_complete(self) -> bool:
         """Check if the full setup has been done (LLM key + identity)."""

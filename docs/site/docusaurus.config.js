@@ -46,7 +46,7 @@ const config = {
         title: 'FERAL',
         logo: {
           alt: 'FERAL Logo',
-          src: 'img/logo.svg',
+          src: 'img/logo.png',
         },
         items: [
           { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },

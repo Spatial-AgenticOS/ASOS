@@ -49,7 +49,7 @@ class GeminiRealtimeSession:
     ):
         self.session_id = session_id
         self.node_id = node_id
-        self._api_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        self._api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
         self._model = model or os.getenv("FERAL_GEMINI_LIVE_MODEL", DEFAULT_MODEL)
         self._system_prompt = system_prompt
         self._tools = tools or []
@@ -296,7 +296,7 @@ class GeminiRealtimeProxy:
         self._perception = perception
         self._send_to_node = send_to_node
         self._send_to_session = send_to_session
-        self._api_key = os.getenv("GEMINI_API_KEY", "")
+        self._api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
 
     @property
     def available(self) -> bool:

@@ -248,11 +248,7 @@ export default function App() {
       {/* Top Bar */}
       <div className="flex-shrink-0 h-12 bg-feral-surface/80 border-b border-feral-border z-10 flex items-center justify-between px-4 backdrop-blur-xl">
         <div className="flex items-center gap-2.5">
-          <TheOrb
-            size={20}
-            mode={!session.isConnected ? 'disconnected' : session.isThinking ? 'thinking' : session.isStreaming ? 'speaking' : isRecording ? 'listening' : session.proactiveAlert ? 'alert' : 'idle'}
-            connected={session.isConnected}
-          />
+          <img src="/feral-icon-48.png" alt="FERAL" width="20" height="20" style={{ borderRadius: 4 }} />
           <span className="font-semibold text-sm text-feral-text">FERAL</span>
           {session.agentRuntime.active_subagents > 0 && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-feral-accent/30 text-feral-accent bg-feral-accent-dim">

@@ -20,6 +20,12 @@ from config.runtime import ollama_base_url, ollama_openai_base_url
 
 logger = logging.getLogger("feral.llm")
 
+
+def _gemini_api_key() -> str | None:
+    """Return Gemini API key. Prefers GEMINI_API_KEY; falls back to GOOGLE_API_KEY."""
+    return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+
+
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # seconds
 _RETRIABLE_CODES = ("429", "500", "502", "503", "504", "timeout", "connection")
@@ -209,7 +215,7 @@ class LLMProvider:
             self.model = self.model or "claude-sonnet-4-20250514"
         elif self.provider == "gemini":
             self.base_url = self.base_url or "https://generativelanguage.googleapis.com/v1beta/openai"
-            self.api_key = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", self.api_key))
+            self.api_key = _gemini_api_key() or self.api_key
             self.model = self.model or "gemini-2.5-flash"
         elif self.provider == "openrouter":
             self.base_url = self.base_url or "https://openrouter.ai/api/v1"
@@ -809,7 +815,7 @@ class LLMProvider:
             "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "llama-3.1-70b-versatile"),
             "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"),
             "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "claude-sonnet-4-20250514"),
-            "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", "gemini-2.0-flash"),
+            "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "_GEMINI_HELPER", "gemini-2.0-flash"),
             "lmstudio": ("http://localhost:1234/v1", "", "local-model"),
         }
 
@@ -838,7 +844,10 @@ class LLMProvider:
         elif provider in PROVIDER_DEFAULTS:
             base, env_key, default_model = PROVIDER_DEFAULTS[provider]
             self.base_url = base
-            self.api_key = api_key or os.getenv(env_key, "")
+            if env_key == "_GEMINI_HELPER":
+                self.api_key = api_key or _gemini_api_key() or ""
+            else:
+                self.api_key = api_key or os.getenv(env_key, "")
             if not model:
                 self.model = default_model
         else:
@@ -914,9 +923,10 @@ class LLMProvider:
             ("https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"),
         )
         base_url, env_key, default_model = reg
-        api_key = os.getenv(env_key, "")
-        if provider_name == "gemini" and not api_key:
-            api_key = os.getenv("GOOGLE_API_KEY", "")
+        if provider_name == "gemini":
+            api_key = _gemini_api_key() or ""
+        else:
+            api_key = os.getenv(env_key, "")
         return {"base_url": base_url, "api_key": api_key, "model": default_model}
 
     def _build_candidate_list(self) -> list[tuple[str, dict]]:
@@ -1095,6 +1105,25 @@ class LLMProvider:
         if last_error:
             raise last_error
         raise RuntimeError("All LLM providers exhausted")
+
+    def is_available(self) -> bool:
+        """True if at least one provider has a valid key and is not in cooldown."""
+        if not self.available:
+            return False
+        if self._local_engine and self.provider in ("local", "hybrid"):
+            return True
+        if self.provider in ("ollama", "lmstudio"):
+            return True
+        if self.api_key and self.api_key not in ("none", ""):
+            if self._cooldown.is_available(self.provider):
+                return True
+        for fb in self._config.get("fallback_providers", []):
+            if fb == self.provider:
+                continue
+            cfg = self._get_provider_config(fb)
+            if cfg.get("api_key") and self._cooldown.is_available(fb):
+                return True
+        return False
 
     async def close(self):
         client = getattr(self, "client", None)

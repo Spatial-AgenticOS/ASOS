@@ -79,11 +79,11 @@ def seed_demo_identity():
     soul_path = home / "SOUL.md"
     user_path = home / "USER.md"
 
-    if not soul_path.exists() or os.environ.get("FERAL_DEMO_FORCE"):
+    if not soul_path.exists() or os.environ.get("FERAL_DEV_DEMO_FORCE"):
         soul_path.write_text(DEMO_SOUL)
         logger.info("Seeded demo SOUL.md")
 
-    if not user_path.exists() or os.environ.get("FERAL_DEMO_FORCE"):
+    if not user_path.exists() or os.environ.get("FERAL_DEV_DEMO_FORCE"):
         user_path.write_text(DEMO_USER)
         logger.info("Seeded demo USER.md")
 

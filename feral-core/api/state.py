@@ -500,8 +500,11 @@ class BrainState:
         # Wire inbound channels to the orchestrator
         await self._start_channels()
 
+        if os.environ.get("FERAL_DEMO"):
+            logger.warning("FERAL_DEMO is deprecated and ignored. Use FERAL_DEV_DEMO=1 for dev-only demo mode.")
+
         self._demo = None
-        if os.environ.get("FERAL_DEMO", "").lower() in ("1", "true", "yes"):
+        if os.environ.get("FERAL_DEV_DEMO", "").lower() in ("1", "true", "yes"):
             with boot_subsystem(self._boot_report, "DemoMode"):
                 from demo.seed import seed_demo_identity, seed_demo_memory
                 from demo.simulator import DemoOrchestrator

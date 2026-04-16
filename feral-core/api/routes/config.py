@@ -42,7 +42,13 @@ async def complete_setup(body: dict):
     if settings:
         state.config.save_user_settings(settings)
     if credentials:
-        for key in ("OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+        if credentials.get("GEMINI_API_KEY") and not credentials.get("GOOGLE_API_KEY"):
+            credentials["GOOGLE_API_KEY"] = credentials["GEMINI_API_KEY"]
+        if credentials.get("GOOGLE_API_KEY") and not credentials.get("GEMINI_API_KEY"):
+            credentials["GEMINI_API_KEY"] = credentials["GOOGLE_API_KEY"]
+        for key in ("OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY",
+                     "GOOGLE_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
+                     "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "DASHSCOPE_API_KEY"):
             if credentials.get(key):
                 os.environ[key] = credentials[key]
         state.config.save_credentials(credentials)
@@ -163,47 +169,114 @@ async def save_credentials(body: dict):
     return {"ok": True, "keys_saved": list(creds.keys())}
 
 
+async def _validate_key_for_provider(provider: str, api_key: str, base_url: str = None) -> tuple[bool, str]:
+    """Return (is_valid, message). Makes a real HTTP call to the provider."""
+    import httpx
+
+    provider = provider.lower().strip()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if provider == "openai":
+                r = await client.get(
+                    f"{base_url or 'https://api.openai.com'}/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            elif provider == "anthropic":
+                r = await client.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                )
+            elif provider in ("gemini", "google"):
+                r = await client.get(
+                    f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+                )
+            elif provider == "groq":
+                r = await client.get(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            elif provider == "deepseek":
+                r = await client.get(
+                    "https://api.deepseek.com/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            elif provider == "xai":
+                r = await client.get(
+                    "https://api.x.ai/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            elif provider == "cohere":
+                r = await client.get(
+                    "https://api.cohere.ai/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            elif provider == "mistral":
+                r = await client.get(
+                    "https://api.mistral.ai/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            elif provider == "together":
+                r = await client.get(
+                    "https://api.together.xyz/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            elif provider == "openrouter":
+                r = await client.get(
+                    "https://openrouter.ai/api/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            elif provider == "ollama":
+                url = base_url or ollama_base_url()
+                r = await client.get(f"{url}/api/tags")
+            elif provider == "lmstudio":
+                url = base_url or "http://localhost:1234"
+                r = await client.get(f"{url}/v1/models")
+            elif provider == "perplexity":
+                r = await client.get(
+                    "https://api.perplexity.ai/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                if r.status_code in (200, 400, 405):
+                    return True, "Key validates (method-not-allowed is OK for perplexity)"
+            elif provider in ("kimi", "moonshot"):
+                r = await client.get(
+                    "https://api.moonshot.cn/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            elif provider in ("qwen", "dashscope"):
+                r = await client.get(
+                    "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            else:
+                return False, f"Unknown provider: {provider}"
+
+            if r.status_code in (200, 201):
+                return True, "Key is valid"
+            elif r.status_code in (401, 403):
+                return False, f"Invalid or unauthorized key (HTTP {r.status_code})"
+            else:
+                return False, f"Unexpected response HTTP {r.status_code}: {r.text[:200]}"
+    except httpx.TimeoutException:
+        return False, "Timeout connecting to provider"
+    except httpx.ConnectError as e:
+        return False, f"Connection error: {e}"
+    except Exception as e:
+        return False, f"Validation error: {type(e).__name__}: {e}"
+
+
 @router.post("/api/config/validate-key")
 async def validate_key(body: dict):
     """Validate an LLM API key by making a test request."""
     provider = body.get("provider", "openai")
     api_key = body.get("api_key", "")
-    if not api_key:
+    base_url = body.get("base_url", "")
+
+    if not api_key and provider not in ("ollama", "lmstudio"):
         return {"valid": False, "error": "No API key provided"}
 
-    import httpx
-    try:
-        if provider == "openai":
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    "https://api.openai.com/v1/models",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    timeout=10.0,
-                )
-                if resp.status_code == 200:
-                    return {"valid": True, "provider": "openai", "models": len(resp.json().get("data", []))}
-                return {"valid": False, "error": f"API returned {resp.status_code}"}
-        elif provider == "groq":
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    "https://api.groq.com/openai/v1/models",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    timeout=10.0,
-                )
-                return {"valid": resp.status_code == 200, "provider": "groq"}
-        elif provider == "ollama":
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    body.get("base_url", ollama_base_url()) + "/api/tags",
-                    timeout=5.0,
-                )
-                if resp.status_code == 200:
-                    models = resp.json().get("models", [])
-                    return {"valid": True, "provider": "ollama", "models": len(models)}
-                return {"valid": False, "error": "Ollama not reachable"}
-        return {"valid": False, "error": f"Unknown provider: {provider}"}
-    except Exception as e:
-        return {"valid": False, "error": str(e)}
+    valid, message = await _validate_key_for_provider(provider, api_key, base_url or None)
+    return {"valid": valid, "provider": provider, "message": message}
 
 
 # ── Identity ──

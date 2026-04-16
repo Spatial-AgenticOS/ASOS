@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+# Internal/dev use only. Not documented or shipped to users.
 """
-FERAL Demo — Shows every working feature in sequence.
-Run: cd feral-core && PYTHONPATH=. python ../scripts/demo.py
+FERAL Showcase — Shows every working feature in sequence.
+Run: cd feral-core && PYTHONPATH=. python ../dev/showcase.py
 
 This works WITHOUT an LLM key — it directly tests the tools.
 With an LLM key, it also demos the full agent chat loop.

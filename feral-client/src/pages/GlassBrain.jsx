@@ -292,33 +292,25 @@ export default function GlassBrain() {
     satellites.length = 0;
 
     const deviceList = stats?.devices || [];
-    const isDemoMode = stats?.is_demo_mode || false;
 
-    const effectiveDevices = (isDemoMode && deviceList.length === 0)
-      ? [{ type: 'demo_phone', demo: true }, { type: 'demo_wristband', demo: true }, { type: 'demo_glasses', demo: true }]
-      : deviceList;
-
-    effectiveDevices.forEach((device, i) => {
+    deviceList.forEach((device, i) => {
       const satGeo = new THREE.OctahedronGeometry(0.15, 0);
       const satMat = new THREE.MeshPhongMaterial({
-        color: device.demo ? 0xf59e0b : COLORS.device,
-        emissive: device.demo ? 0xf59e0b : COLORS.device,
-        emissiveIntensity: device.demo ? 0.3 : 0.5,
-        transparent: device.demo,
-        opacity: device.demo ? 0.5 : 1,
+        color: COLORS.device,
+        emissive: COLORS.device,
+        emissiveIntensity: 0.5,
       });
       const sat = new THREE.Mesh(satGeo, satMat);
       sat.userData = {
         type: device.type || 'unknown',
-        demo: device.demo || false,
-        angle: (i / Math.max(1, effectiveDevices.length)) * Math.PI * 2,
+        angle: (i / Math.max(1, deviceList.length)) * Math.PI * 2,
         radius: 3,
         speed: 0.3 + i * 0.1,
       };
       scene.add(sat);
       satellites.push(sat);
     });
-  }, [stats?.devices?.length, stats?.is_demo_mode]);
+  }, [stats?.devices?.length]);
 
   // Brain color from somatic cognitive load
   useEffect(() => {
@@ -385,7 +377,7 @@ export default function GlassBrain() {
       )}
 
       {/* Onboarding overlay — visible when nothing is happening */}
-      {(!stats || (stats?.devices?.length === 0 && !stats?.is_demo_mode && eventLog.length === 0)) && (
+      {(!stats || (stats?.devices?.length === 0 && eventLog.length === 0)) && (
         <div style={{
           position: 'absolute',
           top: '50%',
@@ -417,25 +409,6 @@ export default function GlassBrain() {
           <p style={{ fontSize: 11, marginTop: 16, color: '#71717a' }}>
             Start chatting or connect a device to see the brain come alive.
           </p>
-        </div>
-      )}
-
-      {/* Demo mode banner */}
-      {stats?.is_demo_mode && eventLog.length <= 2 && (
-        <div style={{
-          position: 'absolute',
-          top: 80, right: 20,
-          background: 'rgba(120, 53, 15, 0.9)',
-          border: '1px solid #b45309',
-          borderRadius: 8,
-          padding: '12px 16px',
-          maxWidth: 280,
-          color: '#fbbf24',
-          fontSize: 12,
-          pointerEvents: 'none',
-        }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>DEMO MODE</div>
-          <div>Simulated LLM calls, tool executions, memory writes, and device telemetry are driving the visualization.</div>
         </div>
       )}
 

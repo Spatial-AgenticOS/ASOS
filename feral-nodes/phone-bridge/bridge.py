@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-FERAL Phone Bridge — REFERENCE IMPLEMENTATION (SIMULATED DATA).
+FERAL Phone Bridge (Python reference)
 
-WARNING: This bridge returns SIMULATED data for all commands.
-It exists as a development/testing reference only.
-For real phone integration, use the native iOS or Android apps.
+Reference daemon for turning a Linux/macOS/Windows host into a FERAL
+companion node. Uses real system sensors only - any unavailable sensor
+returns {"success": false, "reason": "..."}.
 
-All simulated responses are tagged with "source": "simulated".
+For full phone capabilities (HealthKit, Health Connect, motion, camera),
+use the native FERAL Node apps for iOS and Android in feral-nodes/ios-app/
+and feral-nodes/android-app/.
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ import json
 import logging
 import os
 import platform
-import random
 import socket
 import time
 from uuid import uuid4
@@ -40,6 +41,69 @@ def normalize_ws_base(url: str) -> str:
     elif not url.startswith(("ws://", "wss://")):
         url = "ws://" + url
     return url.rstrip("/")
+
+
+def _try_real_location() -> dict:
+    """Attempt to get real location from the host OS. Returns result dict."""
+    system = platform.system()
+
+    if system == "Darwin":
+        try:
+            import CoreLocation  # pyobjc
+            mgr = CoreLocation.CLLocationManager.alloc().init()
+            loc = mgr.location()
+            if loc:
+                return {
+                    "success": True,
+                    "data": {
+                        "latitude": loc.coordinate().latitude,
+                        "longitude": loc.coordinate().longitude,
+                        "source": "core_location",
+                    },
+                }
+        except ImportError:
+            pass
+
+    if system == "Linux":
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["gdbus", "call", "--system",
+                 "--dest", "org.freedesktop.GeoClue2",
+                 "--object-path", "/org/freedesktop/GeoClue2/Manager",
+                 "--method", "org.freedesktop.GeoClue2.Manager.GetClient"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                return {
+                    "success": True,
+                    "data": {"source": "geoclue", "note": "geoclue available"},
+                }
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+    if system == "Windows":
+        try:
+            from winrt.windows.devices.geolocation import Geolocator
+            locator = Geolocator()
+            pos = locator.get_geoposition_async().get()
+            coord = pos.coordinate.point.position
+            return {
+                "success": True,
+                "data": {
+                    "latitude": coord.latitude,
+                    "longitude": coord.longitude,
+                    "source": "windows_geolocation",
+                },
+            }
+        except (ImportError, Exception):
+            pass
+
+    return {
+        "success": False,
+        "reason": "location_service_not_available_on_this_host",
+        "hint": "Install pyobjc (macOS), geoclue (Linux), or use the native mobile apps",
+    }
 
 
 class PhoneBridgeDaemon:
@@ -158,53 +222,128 @@ class PhoneBridgeDaemon:
             return {"success": False, "error": str(exc)}
 
     async def _camera_snap(self, args: dict) -> dict:
-        return {"success": False, "data": {"source": "simulated", "error": "Camera not available. Use native iOS/Android app for real camera.", "resolution": args.get("resolution", "1080p")}}
+        return {
+            "success": False,
+            "reason": "camera_not_available_on_host_bridge",
+            "hint": "Use the native FERAL Node app for iOS or Android for camera capture.",
+        }
 
     async def _camera_clip(self, args: dict) -> dict:
-        duration_s = int(args.get("duration_s", 5))
-        return {"success": False, "data": {"source": "simulated", "error": "Video not available. Use native iOS/Android app.", "duration_s": duration_s}}
+        return {
+            "success": False,
+            "reason": "video_not_available_on_host_bridge",
+            "hint": "Use the native FERAL Node app for iOS or Android for video recording.",
+        }
 
     async def _location_get(self, args: dict) -> dict:
-        lat = 47.6062 + random.uniform(-0.001, 0.001)
-        lon = -122.3321 + random.uniform(-0.001, 0.001)
-        return {"success": True, "data": {"latitude": lat, "longitude": lon, "source": "simulated"}}
+        return _try_real_location()
 
     async def _sensor_read(self, args: dict) -> dict:
         sensor_name = args.get("sensor_name", "all")
-        all_data = {
-            "battery_pct": 0,
-            "ambient_temp_c": 0.0,
-            "accelerometer": {"x": 0, "y": 0, "z": 0},
-            "source": "simulated",
-            "note": "Python bridge returns no real sensor data. Use native iOS/Android app.",
-        }
-        if sensor_name == "all":
-            return {"success": True, "data": all_data}
-        return {"success": True, "data": {sensor_name: all_data.get(sensor_name, "unavailable"), "source": "simulated"}}
+        try:
+            import psutil
+        except ImportError:
+            return {
+                "success": False,
+                "reason": "psutil_not_installed",
+                "hint": "Install psutil for real system metrics: pip install psutil",
+            }
+
+        data = {}
+        if sensor_name in ("all", "battery"):
+            bat = psutil.sensors_battery()
+            if bat:
+                data["battery_pct"] = bat.percent
+                data["power_plugged"] = bat.power_plugged
+        if sensor_name in ("all", "cpu"):
+            data["cpu_percent"] = psutil.cpu_percent(interval=0.5)
+        if sensor_name in ("all", "network"):
+            net_stats = psutil.net_if_stats()
+            active = [k for k, v in net_stats.items() if v.isup and k != "lo"]
+            data["active_interfaces"] = active
+            net_io = psutil.net_io_counters()
+            data["bytes_sent"] = net_io.bytes_sent
+            data["bytes_recv"] = net_io.bytes_recv
+        if sensor_name in ("all", "temperature"):
+            try:
+                temps = psutil.sensors_temperatures()
+                if temps:
+                    first = next(iter(temps.values()))[0]
+                    data["ambient_temp_c"] = first.current
+            except Exception:
+                pass
+
+        if not data:
+            return {
+                "success": False,
+                "reason": f"sensor_{sensor_name}_not_available",
+                "hint": "This host does not expose the requested sensor. Use the native mobile apps for accelerometer, gyroscope, etc.",
+            }
+
+        data["source"] = "psutil"
+        return {"success": True, "data": data}
 
     async def _health_read(self, args: dict) -> dict:
-        return {"success": True, "data": {"heart_rate": 0, "spo2": 0, "source": "simulated", "note": "No real health data. Use native iOS/Android app with HealthKit/Health Connect."}}
+        return {
+            "success": False,
+            "reason": "no_health_sensor_on_host_bridge",
+            "hint": "Health data requires the native FERAL Node app with HealthKit (iOS) or Health Connect (Android), or a paired BLE wristband.",
+        }
 
     async def _audio_play(self, args: dict) -> dict:
-        return {"success": False, "data": {"source": "simulated", "error": "Audio playback not available in Python bridge. Use native app."}}
+        return {
+            "success": False,
+            "reason": "audio_playback_not_available_on_host_bridge",
+            "hint": "Use the native mobile app for audio playback.",
+        }
 
     async def _audio_tts(self, args: dict) -> dict:
         text = args.get("text", "")
-        logger.info("TTS request: %s", text[:100])
-        return {"success": True, "data": {"spoken_preview": text[:100]}}
+        if not text:
+            return {"success": False, "reason": "no_text_provided"}
+        system = platform.system()
+        if system == "Darwin":
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "say", text,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+                return {"success": True, "data": {"spoken_preview": text[:100], "engine": "macos_say"}}
+            except FileNotFoundError:
+                pass
+        return {
+            "success": False,
+            "reason": "tts_not_available_on_this_host",
+            "hint": "Install a TTS engine or use the native mobile app.",
+        }
 
     async def _notify(self, args: dict) -> dict:
         title = args.get("title", "FERAL")
         body = args.get("body", "")
-        logger.info("Notification -> %s: %s", title, body)
-        return {"success": True, "data": {"sent": True, "title": title}}
+        system = platform.system()
+        if system == "Darwin":
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "osascript", "-e",
+                    f'display notification "{body}" with title "{title}"',
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+                return {"success": True, "data": {"sent": True, "title": title}}
+            except FileNotFoundError:
+                pass
+        logger.info("[NOTIFICATION] %s: %s", title, body)
+        return {"success": True, "data": {"sent": True, "title": title, "method": "log"}}
 
     async def _system_run(self, args: dict) -> dict:
         if os.getenv("FERAL_PHONE_BRIDGE_ALLOW_SYSTEM_RUN", "0") != "1":
-            return {"success": False, "error": "system.run disabled by default. Set FERAL_PHONE_BRIDGE_ALLOW_SYSTEM_RUN=1 to enable."}
+            return {"success": False, "reason": "system_run_disabled", "hint": "Set FERAL_PHONE_BRIDGE_ALLOW_SYSTEM_RUN=1 to enable."}
         command = args.get("command", "")
         if not command:
-            return {"success": False, "error": "Missing command"}
+            return {"success": False, "reason": "missing_command"}
         proc = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
@@ -217,35 +356,55 @@ class PhoneBridgeDaemon:
         }
 
     async def _screen_record(self, args: dict) -> dict:
-        return {"success": False, "data": {"source": "simulated", "error": "Screen recording not available in Python bridge. Use native app."}}
+        return {
+            "success": False,
+            "reason": "screen_recording_not_available_on_host_bridge",
+            "hint": "Use the native mobile app for screen recording.",
+        }
 
     async def _sensor_loop(self) -> None:
-        """Push telemetry — all data tagged as simulated since this is the reference Python bridge."""
+        """Push real telemetry from psutil. Skip ticks when no real data is available."""
         assert self.ws is not None
+
+        try:
+            import psutil
+        except ImportError:
+            logger.warning("psutil not installed — telemetry loop disabled. Install: pip install psutil")
+            return
+
         while True:
-            now = time.time()
-            readings = {
-                "phone": {
-                    "battery_pct": 0,
-                    "network": "unknown",
-                    "source": "simulated",
-                },
-                "health": {
-                    "heart_rate": 0,
-                    "spo2": 0,
-                    "source": "simulated",
-                },
-                "note": "Python reference bridge — no real sensor data. Use native iOS/Android app.",
-            }
-            await self.ws.send(
-                json.dumps(
-                    {
+            readings = {}
+
+            bat = psutil.sensors_battery()
+            if bat:
+                readings["battery_pct"] = bat.percent
+                readings["power_plugged"] = bat.power_plugged
+
+            net_stats = psutil.net_if_stats()
+            active = [k for k, v in net_stats.items() if v.isup and k != "lo"]
+            if active:
+                readings["network_interfaces_up"] = len(active)
+
+            try:
+                temps = psutil.sensors_temperatures()
+                if temps:
+                    first = next(iter(temps.values()))[0]
+                    readings["cpu_temp_c"] = first.current
+            except Exception:
+                pass
+
+            readings["cpu_percent"] = psutil.cpu_percent(interval=None)
+
+            if readings:
+                readings["source"] = "psutil"
+                await self.ws.send(
+                    json.dumps({
                         "hop": "daemon",
                         "type": "sensor_batch",
-                        "payload": {"readings": readings, "timestamp": now, "source": "simulated"},
-                    }
+                        "payload": {"readings": readings, "timestamp": time.time()},
+                    })
                 )
-            )
+
             await asyncio.sleep(self.sensor_interval_s)
 
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
+# Internal/dev use only. Not documented or shipped to users.
 set -euo pipefail
 
-# FERAL Demo — one-command setup
-# Usage: bash scripts/demo.sh
+# FERAL Showcase — one-command setup
+# Usage: bash dev/showcase.sh
 
 BOLD='\033[1m'
 DIM='\033[2m'

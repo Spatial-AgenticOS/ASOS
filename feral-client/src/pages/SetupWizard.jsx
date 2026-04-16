@@ -128,10 +128,17 @@ export default function SetupWizard({ onComplete }) {
           glasses_model: deviceConfig.registerGlasses ? deviceConfig.glassesModel : '',
         },
       };
+      const finalCredentials = { ...credentials };
+      if (finalCredentials.GOOGLE_API_KEY && !finalCredentials.GEMINI_API_KEY) {
+        finalCredentials.GEMINI_API_KEY = finalCredentials.GOOGLE_API_KEY;
+      }
+      if (finalCredentials.GEMINI_API_KEY && !finalCredentials.GOOGLE_API_KEY) {
+        finalCredentials.GOOGLE_API_KEY = finalCredentials.GEMINI_API_KEY;
+      }
       await fetch(`${API}/api/setup/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings: finalSettings, credentials, identity }),
+        body: JSON.stringify({ settings: finalSettings, credentials: finalCredentials, identity }),
       });
       onComplete?.();
       navigate('/');
@@ -201,9 +208,7 @@ export default function SetupWizard({ onComplete }) {
             {/* ── Welcome ── */}
             {currentStep.id === 'welcome' && (
               <div className="text-center space-y-6">
-                <div className="w-20 h-20 rounded-full bg-feral-accent/15 flex items-center justify-center mx-auto">
-                  <Brain size={40} className="text-feral-accent" />
-                </div>
+                <img src="/feral-banner.png" alt="FERAL" style={{ maxWidth: 400, width: '100%', margin: '0 auto 24px', display: 'block', borderRadius: 12 }} />
                 <h1 className="text-3xl font-bold">Welcome to FERAL</h1>
                 <p className="text-lg font-medium text-feral-accent">The Open AI Operating System</p>
                 <p className="text-feral-text-secondary text-sm leading-relaxed max-w-md mx-auto">

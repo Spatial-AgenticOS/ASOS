@@ -51,17 +51,12 @@ feral start [options]
 |--------|---------|-------------|
 | `--serve-port <n>` | `9090` | Brain server port |
 | `--no-browser` | — | Skip opening the dashboard in the browser |
-| `--demo` | — | Demo mode: simulated hardware, pre-seeded memory |
-
 <CodeGroup>
 ```bash Default
 feral start
 ```
 ```bash Custom port, no browser
 feral start --serve-port 8080 --no-browser
-```
-```bash Demo mode
-feral start --demo
 ```
 </CodeGroup>
 
@@ -232,29 +227,6 @@ feral doctor
 ```
 
 Checks: Python version, FERAL package, config directory, LLM credentials (keys + Ollama), identity files, memory database, port availability, Playwright/chromium, Node.js, local audio backends (faster-whisper, piper), and core dependencies.
-
-### `feral demo`
-
-Launch FERAL in demo mode with simulated hardware and pre-seeded data.
-
-```bash
-feral demo [options]
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--scenario <name>` | — | Run a specific demo scenario |
-| `--serve-port <n>` | `9090` | Brain server port |
-
-| Scenario | Description |
-|----------|-------------|
-| `morning` | Simulated morning routine with health briefing |
-| `developer` | Developer flow with screen context and proactive help |
-| `mesh` | Multi-device mesh with phone, wristband, glasses |
-
-```bash
-feral demo --scenario morning
-```
 
 ## Exit Codes
 

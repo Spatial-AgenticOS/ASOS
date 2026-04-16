@@ -38,6 +38,7 @@ from api.state import state, _log_activity, VISION_MAX_FRAME_KB
 from api.routes.config import _build_greeting
 from api.routes.dashboard import _get_dashboard_data
 
+from security import session_auth as _session_auth_module
 from security.session_auth import (
     session_auth_required,
     verify_session,
@@ -135,37 +136,100 @@ app.add_middleware(RateLimitMiddleware)
 # Optional REST API Key Middleware (Part C)
 # ─────────────────────────────────────────────
 
-def _load_api_key() -> str | None:
-    """Return the REST API key from env or ~/.feral/api_key, or None."""
-    key = os.environ.get("FERAL_API_KEY")
-    if key:
-        return key
+def _load_or_generate_api_key() -> str:
+    """Load FERAL_API_KEY from env or ~/.feral/api_key; generate on first boot."""
+    import secrets
+
+    env_key = os.environ.get("FERAL_API_KEY", "").strip()
+    if env_key:
+        return env_key
+
     key_path = Path(os.environ.get("FERAL_HOME", str(Path.home() / ".feral"))) / "api_key"
     if key_path.exists():
-        text = key_path.read_text().strip()
-        return text or None
+        key = key_path.read_text().strip()
+        if key:
+            return key
+
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key = secrets.token_urlsafe(32)
+    key_path.write_text(key)
+    try:
+        os.chmod(key_path, 0o600)
+    except OSError:
+        pass
+
+    print("=" * 70)
+    print("FERAL: Generated new API key on first boot.")
+    print(f"Location: {key_path}")
+    print(f"Key: {key}")
+    print("Use this key to authenticate clients (iOS, Android, browser ext).")
+    print("Set FERAL_API_KEY env var to override.")
+    print("=" * 70)
+    return key
+
+
+def _load_api_key():
+    """Legacy pure loader: returns key from env or ~/.feral/api_key, or None.
+    
+    Used by older callers that want to read without generating.
+    The boot path uses _load_or_generate_api_key() which always returns a key.
+    """
+    env_key = os.environ.get("FERAL_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    key_path = Path(os.environ.get("FERAL_HOME", str(Path.home() / ".feral"))) / "api_key"
+    if key_path.exists():
+        key = key_path.read_text().strip()
+        if key:
+            return key
     return None
+
+
+FERAL_API_KEY = _load_or_generate_api_key()
 
 
 _OPEN_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json"})
 
+_OPEN_PATH_PREFIXES = (
+    "/docs",
+    "/redoc",
+    "/api/oauth/callback",
+    "/webhooks/",
+)
+
+
+def _is_webhook_receive(path: str) -> bool:
+    """External webhook endpoints (POST /api/webhooks/{app_id}) must be public.
+    
+    External services cannot know our API key; they authenticate via HMAC signature.
+    The LIST endpoint (GET /api/webhooks) remains authenticated.
+    """
+    if not path.startswith("/api/webhooks/"):
+        return False
+    tail = path[len("/api/webhooks/"):].strip("/")
+    return bool(tail) and "/" not in tail
+
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        api_key = _load_api_key()
-        if api_key is None:
-            return await call_next(request)
-
         path = request.url.path
-        if path in _OPEN_PATHS or path.startswith("/docs") or path.startswith("/redoc"):
+        if path in _OPEN_PATHS:
+            return await call_next(request)
+        if any(path.startswith(p) for p in _OPEN_PATH_PREFIXES):
+            return await call_next(request)
+        if _is_webhook_receive(path) and request.method == "POST":
             return await call_next(request)
 
         scope_type = request.scope.get("type", "")
         if scope_type == "websocket":
             return await call_next(request)
 
+        client_host = request.client.host if request.client else None
+        if _session_auth_module.is_localhost(client_host) and _session_auth_module.local_bypass_enabled():
+            return await call_next(request)
+
         auth = request.headers.get("authorization", "")
-        if auth == f"Bearer {api_key}":
+        if auth == f"Bearer {FERAL_API_KEY}":
             return await call_next(request)
 
         return JSONResponse({"error": "Unauthorized — provide Authorization: Bearer <key>"}, status_code=401)
@@ -301,23 +365,27 @@ async def shutdown_event():
 async def client_session(ws: WebSocket, token: str = Query(default=None)):
     await ws.accept()
 
-    if session_auth_required():
-        client_host = ws.client.host if ws.client else None
-        if is_localhost(client_host) and local_bypass_enabled():
-            pass  # localhost bypass
-        elif token and verify_session(token):
-            pass  # valid query-param token
-        else:
-            try:
-                first_msg = await asyncio.wait_for(ws.receive_json(), timeout=5)
-                if first_msg.get("type") == "auth" and verify_session(first_msg.get("token", "")):
-                    pass  # valid first-message token
-                else:
-                    await ws.close(code=4001, reason="Unauthorized")
-                    return
-            except Exception:
-                await ws.close(code=4001, reason="Unauthorized")
-                return
+    client_host = ws.client.host if ws.client else None
+    _ws_authed = False
+
+    if is_localhost(client_host) and local_bypass_enabled():
+        _ws_authed = True
+    elif token and (verify_session(token) or token == FERAL_API_KEY):
+        _ws_authed = True
+
+    if not _ws_authed:
+        try:
+            first_msg = await asyncio.wait_for(ws.receive_json(), timeout=5)
+            if first_msg.get("type") == "auth":
+                t = first_msg.get("token", "")
+                if verify_session(t) or t == FERAL_API_KEY:
+                    _ws_authed = True
+        except Exception:
+            pass
+
+    if not _ws_authed:
+        await ws.close(code=4001, reason="Unauthorized")
+        return
 
     session_id = str(uuid4())
     state.sessions[session_id] = ws

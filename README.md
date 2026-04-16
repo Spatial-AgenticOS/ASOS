@@ -250,46 +250,19 @@ cd feral-client && npm run dev  # Vite on :5173
 
 ---
 
-## Experience FERAL
+## Connect Your First Device
 
+### iOS / Android
+Download the FERAL Node app, scan the QR code shown in Settings, and grant HealthKit/Health Connect permissions.
+
+### Wristband (BLE)
+Run the hardware daemon on your Mac/Linux host:
 ```bash
-feral start --demo
+python -m feral_nodes.hardware_daemon --brain ws://localhost:9090 --api-key $FERAL_API_KEY
 ```
 
-The demo generates realistic biometric data through the full pipeline — somatic context engine, proactive health alerts, Glass Brain visualization, dashboard health cards — so you experience the complete system without any hardware.
-
-### Demo Scenarios
-
-| Scenario | What You'll See | Command |
-|----------|----------------|---------|
-| **Morning Briefing** | Health summary, calendar prep, proactive coaching | `feral demo --scenario morning` |
-| **Developer Flow** | Code tools, browser automation, file management, Git | `feral demo --scenario developer` |
-| **Health Alert** | Elevated HR triggers calming scene + breathing exercise | `feral demo --scenario health` |
-| **Smart Home** | "Turn off the lights" → real Hue API call (if configured) | `feral demo --scenario smart-home` |
-| **Glass Brain** | 3D visualization of agent cognition at `/glass-brain` | Open browser after `feral start --demo` |
-| **Device Mesh** | Glasses + wristband + phone telemetry flowing to brain | `feral demo --scenario mesh` |
-
-### What the Demo Shows
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    FERAL Glass Brain                     │
-│                                                         │
-│              ·  ·    ◆ ◆    ·  ·                       │
-│           ·  ·  · ╱ BRAIN ╲ ·  ·  ·                    │
-│         ·  ·  · ╱  ◇ ◇ ◇  ╲ ·  ·  ·                  │
-│        ○ Phone  ═══════════  ○ Glasses                  │
-│        ○ Watch  ═══════════  ○ Home                     │
-│              ·  ·    ◆ ◆    ·  ·                       │
-│                                                         │
-│  ◇ Memory particles  ◆ Tool activations  ○ Devices     │
-│                                                         │
-│  Brain flashes cyan on LLM calls                       │
-│  Tool ring pulses amber on skill execution             │
-│  Devices glow green on telemetry                       │
-│  Brain turns red on health alerts                      │
-└─────────────────────────────────────────────────────────┘
-```
+### Smart Home (Philips Hue)
+Press the button on your Hue bridge, then open Settings > Devices > Add Hue Bridge.
 
 ---
 

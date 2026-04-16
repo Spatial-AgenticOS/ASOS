@@ -147,6 +147,19 @@ async def system_info():
     }
 
 
+def _check_llm_available() -> bool:
+    """Real LLM availability check: key is configured and not in cooldown."""
+    if not state.orchestrator:
+        return False
+    llm = getattr(state.orchestrator, 'llm', None)
+    if not llm:
+        return False
+    try:
+        return llm.is_available()
+    except Exception:
+        return False
+
+
 async def _get_dashboard_data() -> dict:
     stats = state.memory.stats()
     devices_list = []
@@ -165,7 +178,7 @@ async def _get_dashboard_data() -> dict:
                 latest_health["temperature"] = frame.skin_temperature_c
     boot_data = state._boot_report.to_dict() if hasattr(state, '_boot_report') else {}
 
-    is_demo = getattr(state, "_demo", None) is not None or os.environ.get("FERAL_DEMO", "").lower() in ("1", "true", "yes")
+    is_demo = getattr(state, "_demo", None) is not None or os.environ.get("FERAL_DEV_DEMO", "").lower() in ("1", "true", "yes")
 
     somatic_state = {}
     if hasattr(state, 'somatic_engine') and state.somatic_engine and state.sessions:
@@ -185,7 +198,7 @@ async def _get_dashboard_data() -> dict:
         "devices": devices_list, "device_count": len(state.daemons),
         "session_count": len(state.sessions), "health": latest_health,
         "memory": stats, "skills_count": len(state.skill_registry.skills),
-        "llm_available": state.orchestrator is not None,
+        "llm_available": _check_llm_available(),
         "audio_available": state.audio.available,
         "sync": state.sync_engine.stats if state.sync_engine else {},
         "wasm_available": state.wasm_sandbox.available if state.wasm_sandbox else False,

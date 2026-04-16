@@ -35,8 +35,8 @@ export default function AppShell() {
     <div className="flex flex-col lg:flex-row h-screen bg-feral-bg text-feral-text">
       {/* Desktop Sidebar */}
       <nav className="hidden lg:flex w-[220px] flex-shrink-0 bg-feral-surface border-r border-feral-border flex-col">
-        <div className="flex items-center gap-3 px-5 py-5 border-b border-feral-border">
-          <TheOrb size={28} mode="idle" connected />
+        <div className="flex items-center gap-2 px-4 py-4 border-b border-feral-border">
+          <img src="/feral-icon-48.png" alt="FERAL" width="32" height="32" style={{ borderRadius: 6 }} />
           <div>
             <span className="font-semibold text-sm tracking-wide block">FERAL</span>
             <span className="text-[10px] text-feral-text-muted">Unleashed AI</span>
