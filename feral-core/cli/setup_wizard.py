@@ -801,7 +801,22 @@ class OnboardWizard:
             },
         }
         settings_path = FERAL_HOME / "settings.json"
-        settings_path.write_text(json.dumps(settings, indent=2))
+        existing = {}
+        if settings_path.exists():
+            try:
+                existing = json.loads(settings_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        for section, values in settings.items():
+            if section not in existing:
+                existing[section] = {}
+            if isinstance(values, dict) and isinstance(existing[section], dict):
+                existing[section].update(values)
+            else:
+                existing[section] = values
+
+        settings_path.write_text(json.dumps(existing, indent=2))
 
     def _step_finish(self):
         provider_name = PROVIDERS.get(self.config.get("provider", ""), {}).get("name", "?")
@@ -1215,7 +1230,23 @@ class OnboardWizardPlain:
                 "setup_complete": True,
             },
         }
-        (FERAL_HOME / "settings.json").write_text(json.dumps(settings, indent=2))
+        settings_path = FERAL_HOME / "settings.json"
+        existing_settings = {}
+        if settings_path.exists():
+            try:
+                existing_settings = json.loads(settings_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        for section, values in settings.items():
+            if section not in existing_settings:
+                existing_settings[section] = {}
+            if isinstance(values, dict) and isinstance(existing_settings[section], dict):
+                existing_settings[section].update(values)
+            else:
+                existing_settings[section] = values
+
+        settings_path.write_text(json.dumps(existing_settings, indent=2))
 
         print("=" * 60)
         print("  Setup complete!")

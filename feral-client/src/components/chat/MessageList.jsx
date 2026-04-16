@@ -9,7 +9,7 @@ import SkillProposalCard from './SkillProposalCard';
 
 function MessageActions({ text, onRetry }) {
   return (
-    <div style={{ display: 'flex', gap: '4px', opacity: 0, transition: 'opacity 0.15s' }}
+    <div style={{ display: 'flex', gap: '4px', opacity: 0.3, transition: 'opacity 0.15s' }}
          className="message-actions">
       <button onClick={() => navigator.clipboard.writeText(text)} title="Copy"
         style={{ background: 'none', border: 'none', color: '#71717a', cursor: 'pointer', padding: '4px' }}>
@@ -92,7 +92,7 @@ export default function MessageList({
           ) : (
             <div className="flex gap-2 max-w-[80%]">
               <div className="flex-shrink-0 mt-1">
-                <TheOrb size={14} mode="idle" connected={isConnected} />
+                <TheOrb size={14} mode={msg.type === 'stream_delta' ? 'thinking' : 'idle'} connected={isConnected} />
               </div>
               <div className="min-w-0">
                 {msg.type === 'text' && (

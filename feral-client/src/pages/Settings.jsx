@@ -212,26 +212,30 @@ export default function Settings() {
   const saveIdentity = async () => {
     if (!identity) return;
     setSaving(true);
-    await fetch(`${API}/api/identity`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(identity),
-    });
-    setSaving(false);
-    flash();
+    try {
+      await fetch(`${API}/api/identity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(identity),
+      });
+      flash();
+    } catch (e) { addToast(e.message || 'Failed to save identity'); }
+    finally { setSaving(false); }
   };
 
   const saveSkillKey = async () => {
     if (!newSkillKey.id || !newSkillKey.key) return;
-    await fetch(`${API}/api/config/credentials`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ skill_keys: { [newSkillKey.id]: newSkillKey.key } }),
-    });
-    setNewSkillKey({ id: '', key: '' });
-    const resp = await fetch(`${API}/api/config`);
-    setConfig(await resp.json());
-    flash();
+    try {
+      await fetch(`${API}/api/config/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skill_keys: { [newSkillKey.id]: newSkillKey.key } }),
+      });
+      setNewSkillKey({ id: '', key: '' });
+      const resp = await fetch(`${API}/api/config`);
+      setConfig(await resp.json());
+      flash();
+    } catch (e) { addToast(e.message || 'Failed to save API key'); }
   };
 
   const flash = () => {
@@ -653,13 +657,15 @@ export default function Settings() {
                   <button
                     key={mode.id}
                     onClick={async () => {
-                      setConfig(prev => ({ ...prev, autonomy_mode: mode.id }));
-                      await fetch(`${API}/v1/config`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ autonomy_mode: mode.id }),
-                      });
-                      flash();
+                      try {
+                        setConfig(prev => ({ ...prev, autonomy_mode: mode.id }));
+                        await fetch(`${API}/api/config/update`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ section: 'security', key: 'autonomy_mode', value: mode.id }),
+                        });
+                        flash();
+                      } catch (e) { addToast(e.message || 'Failed to update autonomy mode'); }
                     }}
                     className={`text-left px-4 py-3 rounded-lg border transition ${
                       (config.autonomy_mode || 'hybrid') === mode.id
@@ -716,13 +722,15 @@ export default function Settings() {
                   <button
                     key={vp.id}
                     onClick={async () => {
-                      setConfig(prev => ({ ...prev, voice_provider: vp.id }));
-                      await fetch(`${API}/v1/config`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ voice_provider: vp.id }),
-                      });
-                      flash();
+                      try {
+                        setConfig(prev => ({ ...prev, voice_provider: vp.id }));
+                        await fetch(`${API}/api/config/update`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ section: 'audio', key: 'voice_provider', value: vp.id }),
+                        });
+                        flash();
+                      } catch (e) { addToast(e.message || 'Failed to update voice provider'); }
                     }}
                     className={`text-left px-4 py-3 rounded-lg border transition ${
                       (config.voice_provider || 'openai') === vp.id
@@ -749,13 +757,15 @@ export default function Settings() {
                   <button
                     key={m.id}
                     onClick={async () => {
-                      setConfig(prev => ({ ...prev, voice_input_mode: m.id }));
-                      await fetch(`${API}/v1/config`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ voice_input_mode: m.id }),
-                      });
-                      flash();
+                      try {
+                        setConfig(prev => ({ ...prev, voice_input_mode: m.id }));
+                        await fetch(`${API}/api/config/update`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ section: 'audio', key: 'voice_input_mode', value: m.id }),
+                        });
+                        flash();
+                      } catch (e) { addToast(e.message || 'Failed to update voice input mode'); }
                     }}
                     className={`text-left px-4 py-3 rounded-lg border transition ${
                       (config.voice_input_mode || 'toggle') === m.id
@@ -835,10 +845,10 @@ export default function Settings() {
                 onClick={async () => {
                   setChannelsSaving(true);
                   try {
-                    await fetch(`${API}/v1/config`, {
-                      method: 'PATCH',
+                    await fetch(`${API}/api/config/update`, {
+                      method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ channels: channelsConfig }),
+                      body: JSON.stringify({ section: 'channels', key: 'channels', value: channelsConfig }),
                     });
                     const st = await fetch(`${API}/api/channels`).then(r => r.json());
                     setChannelStatus(st);
@@ -1395,14 +1405,15 @@ export default function Settings() {
               <div className="flex gap-3 mt-3">
                 <button
                   onClick={() => {
-                    fetch(`${API}/v1/memory/export`)
+                    fetch(`${API}/api/memory/export`)
                       .then(r => r.blob())
                       .then(b => {
                         const a = document.createElement('a');
                         a.href = URL.createObjectURL(b);
                         a.download = 'feral-memory.json';
                         a.click();
-                      });
+                      })
+                      .catch(e => addToast(e.message || 'Failed to export memory'));
                   }}
                   className="flex items-center gap-2 px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-sm hover:bg-feral-card-hover transition"
                 >
@@ -1411,7 +1422,8 @@ export default function Settings() {
                 <button
                   onClick={() => {
                     if (window.confirm('Clear all memory? This cannot be undone.'))
-                      fetch(`${API}/v1/memory`, { method: 'DELETE' });
+                      fetch(`${API}/api/memory/clear`, { method: 'POST' })
+                        .catch(e => addToast(e.message || 'Failed to clear memory'));
                   }}
                   className="flex items-center gap-2 px-4 py-2 bg-red-900/30 border border-red-800 rounded-lg text-sm text-red-400 hover:bg-red-900/50 transition"
                 >

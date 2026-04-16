@@ -27,21 +27,24 @@ def wiki_upsert_page(
     now = time.time()
     refs = source_refs or []
     conn = sqlite3.connect(store.db_path)
-    conn.execute(
-        """
-        INSERT INTO wiki_pages (id, title, kind, body_markdown, source_refs, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          title=excluded.title,
-          kind=excluded.kind,
-          body_markdown=excluded.body_markdown,
-          source_refs=excluded.source_refs,
-          updated_at=excluded.updated_at
-        """,
-        (page_id, title, kind, body_markdown, json.dumps(refs), now, now),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            """
+            INSERT INTO wiki_pages (id, title, kind, body_markdown, source_refs, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              title=excluded.title,
+              kind=excluded.kind,
+              body_markdown=excluded.body_markdown,
+              source_refs=excluded.source_refs,
+              updated_at=excluded.updated_at
+            """,
+            (page_id, title, kind, body_markdown, json.dumps(refs), now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return {
         "id": page_id,
         "title": title,

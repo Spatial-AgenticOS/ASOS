@@ -93,13 +93,14 @@ async def _run_unsandboxed(code: str, language: str, work_dir: str, timeout: int
     argv = ["python3", script_name] if language == "python" else ["node", script_name]
 
     preexec = None
-    if platform.system() == "Linux":
+    if platform.system() in ("Linux", "Darwin"):
         import resource
 
         def _set_limits() -> None:
-            resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
             resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))
             resource.setrlimit(resource.RLIMIT_FSIZE, (100 * 1024 * 1024, 100 * 1024 * 1024))
+            if platform.system() == "Linux":
+                resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
 
         preexec = _set_limits
 

@@ -1,24 +1,24 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Brain, Heart, Monitor, Calendar, ArrowLeft, Filter,
-  Loader2, WifiOff, ChevronDown,
+  Brain, Heart, Calendar, ArrowLeft,
+  Loader2, WifiOff,
 } from 'lucide-react';
 import { API_BASE } from '../config';
+import { useToast } from '../components/Toast';
 
 const FILTERS = [
-  { key: 'all',      label: 'All' },
-  { key: 'memory',   label: 'Memories' },
-  { key: 'health',   label: 'Health' },
-  { key: 'screen',   label: 'Screen' },
-  { key: 'event',    label: 'Events' },
+  { key: 'all',       label: 'All' },
+  { key: 'memories',  label: 'Memories' },
+  { key: 'health',    label: 'Health' },
+  { key: 'event',     label: 'Events' },
 ];
 
 const TYPE_META = {
-  memory: { icon: Brain,    color: 'text-feral-accent',  bg: 'bg-feral-accent-dim' },
-  health: { icon: Heart,    color: 'text-rose-400',      bg: 'bg-rose-400/10' },
-  screen: { icon: Monitor,  color: 'text-amber-400',     bg: 'bg-amber-400/10' },
-  event:  { icon: Calendar, color: 'text-emerald-400',   bg: 'bg-emerald-400/10' },
+  memories: { icon: Brain,    color: 'text-feral-accent',  bg: 'bg-feral-accent-dim' },
+  memory:   { icon: Brain,    color: 'text-feral-accent',  bg: 'bg-feral-accent-dim' },
+  health:   { icon: Heart,    color: 'text-rose-400',      bg: 'bg-rose-400/10' },
+  event:    { icon: Calendar, color: 'text-emerald-400',   bg: 'bg-emerald-400/10' },
 };
 
 function dateLabel(ts) {
@@ -38,6 +38,7 @@ function formatTime(ts) {
 
 export default function Timeline() {
   const navigate = useNavigate();
+  const { addToast } = useToast();
   const [entries, setEntries] = useState([]);
   const [activeFilter, setActiveFilter] = useState('all');
   const [loading, setLoading] = useState(true);
@@ -51,7 +52,8 @@ export default function Timeline() {
       const res = await fetch(`${API_BASE}/api/timeline?days=7&type=${activeFilter}`);
       const data = await res.json();
       setEntries(data.entries || data.items || data || []);
-    } catch {
+    } catch (e) {
+      addToast(e.message || 'Failed to load timeline');
       setError(true);
       setEntries([]);
     } finally {

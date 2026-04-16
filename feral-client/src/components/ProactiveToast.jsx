@@ -33,7 +33,12 @@ export default function ProactiveToast({ alert, onDismiss, onAction }) {
 
   if (!visible || !alert) return null;
 
-  const kind = alert.kind || 'info';
+  const title = alert.title || '';
+  const message = alert.message || alert.body || '';
+  const actionLabel = alert.action_label || alert.action || (title ? 'View' : '');
+  const actionId = alert.action_id || (alert.trigger_id ? `proactive_${alert.trigger_id}` : '');
+
+  const kind = alert.kind || (alert.priority === 'high' ? 'warning' : 'info');
   const Icon = ICON_MAP[kind] || Bell;
   const borderColor =
     kind === 'warning'    ? 'border-amber-500/30' :
@@ -46,6 +51,8 @@ export default function ProactiveToast({ alert, onDismiss, onAction }) {
     kind === 'reminder'   ? 'text-feral-accent' :
     'text-feral-text-secondary';
 
+  const normalizedAlert = { ...alert, title, message, action_label: actionLabel, action_id: actionId };
+
   return (
     <div
       className={`proactive-toast fixed top-4 right-4 z-50 max-w-sm w-full pointer-events-auto
@@ -57,18 +64,18 @@ export default function ProactiveToast({ alert, onDismiss, onAction }) {
           <Icon size={18} />
         </div>
         <div className="flex-1 min-w-0">
-          {alert.title && (
-            <div className="text-sm font-semibold text-feral-text mb-0.5">{alert.title}</div>
+          {title && (
+            <div className="text-sm font-semibold text-feral-text mb-0.5">{title}</div>
           )}
           <div className="text-[12px] text-feral-text-secondary leading-relaxed">
-            {alert.message}
+            {message}
           </div>
-          {alert.action_label && (
+          {actionLabel && (
             <button
-              onClick={() => { if (onAction) onAction(alert); dismiss(); }}
+              onClick={() => { if (onAction) onAction(normalizedAlert); dismiss(); }}
               className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-feral-accent hover:text-feral-accent/80 transition"
             >
-              {alert.action_label}
+              {actionLabel}
               <ChevronRight size={12} />
             </button>
           )}

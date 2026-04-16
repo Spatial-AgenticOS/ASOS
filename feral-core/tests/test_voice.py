@@ -33,7 +33,9 @@ class TestGeminiRealtimeProxy:
         """`start_session` registers the session after connect (websocket mocked)."""
         with patch("voice.gemini_realtime.os.getenv", return_value="fake-key"):
             proxy = GeminiRealtimeProxy()
-        with patch.object(GeminiRealtimeSession, "connect", new_callable=AsyncMock):
+        async def fake_connect(self_inner):
+            self_inner._ws = MagicMock()
+        with patch.object(GeminiRealtimeSession, "connect", fake_connect):
             sess = await proxy.start_session("sess-a", "node-a")
         assert isinstance(sess, GeminiRealtimeSession)
         assert proxy.has_session("sess-a")

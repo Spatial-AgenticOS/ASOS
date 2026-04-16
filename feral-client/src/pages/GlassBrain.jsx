@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useToast } from '../components/Toast';
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+
+const API = import.meta.env.VITE_BRAIN_URL || `http://${location.hostname}:9090`;
+const WS_URL = import.meta.env.VITE_BRAIN_WS || `ws://${location.hostname}:9090/v1/session`;
 
 const COLORS = {
   brain: 0x06b6d4,
@@ -20,6 +27,7 @@ const EVENT_COLORS = {
 };
 
 export default function GlassBrain() {
+  const { addToast } = useToast();
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const eventsRef = useRef([]);
@@ -33,7 +41,7 @@ export default function GlassBrain() {
     setEventLog([...eventsRef.current]);
 
     if (sceneRef.current) {
-      const { brain, brainMat, pointLight, satellites, ring, ringMat, particlesMat } = sceneRef.current;
+      const { scene, brain, brainMat, pointLight, satellites, ring, ringMat, particlesMat } = sceneRef.current;
       if (event === 'llm_call') {
         brainMat.emissiveIntensity = 1.0;
         pointLight.intensity = 5;
@@ -42,6 +50,23 @@ export default function GlassBrain() {
         ringMat.opacity = 0.8;
         ring.scale.setScalar(1.3);
         setTimeout(() => { ringMat.opacity = 0.2; ring.scale.setScalar(1); }, 600);
+        const canvas = document.createElement('canvas');
+        canvas.width = 256; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#f59e0b';
+        ctx.font = 'bold 24px monospace';
+        ctx.fillText(payload.tool || 'tool', 10, 40);
+        const texture = new THREE.CanvasTexture(canvas);
+        const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+        const sprite = new THREE.Sprite(spriteMat);
+        sprite.position.set(Math.random() * 2 - 1, 2, Math.random() * 2 - 1);
+        sprite.scale.set(2, 0.5, 1);
+        scene.add(sprite);
+        const fadeInterval = setInterval(() => {
+          sprite.position.y += 0.02;
+          spriteMat.opacity -= 0.02;
+          if (spriteMat.opacity <= 0) { scene.remove(sprite); texture.dispose(); spriteMat.dispose(); clearInterval(fadeInterval); }
+        }, 30);
       } else if (event === 'memory_write') {
         particlesMat.opacity = 1.0;
         particlesMat.size = 0.08;
@@ -64,13 +89,15 @@ export default function GlassBrain() {
     }
   }, []);
 
+  const unmountedRef = useRef(false);
+
   useEffect(() => {
-    const wsUrl = `ws://${location.hostname}:9090/v1/session`;
+    unmountedRef.current = false;
     let ws;
     let reconnectTimer;
 
     function connect() {
-      ws = new WebSocket(wsUrl);
+      ws = new WebSocket(WS_URL);
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
@@ -79,14 +106,15 @@ export default function GlassBrain() {
           } else if (msg.type === 'state_push' && msg.event === 'proactive_alert') {
             handleBrainEvent({ event: 'proactive_alert', ...msg.data });
           }
-        } catch { /* ignore parse errors */ }
+        } catch (e) { addToast(e.message || 'Failed to parse brain event'); }
       };
-      ws.onclose = () => { reconnectTimer = setTimeout(connect, 3000); };
+      ws.onclose = () => { if (!unmountedRef.current) reconnectTimer = setTimeout(connect, 3000); };
       ws.onerror = () => { ws.close(); };
     }
     connect();
 
     return () => {
+      unmountedRef.current = true;
       clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
@@ -181,13 +209,21 @@ export default function GlassBrain() {
     ring.rotation.x = Math.PI / 2;
     scene.add(ring);
 
+    // Bloom post-processing
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(mount.clientWidth, mount.clientHeight),
+      0.8, 0.3, 0.85
+    );
+    composer.addPass(bloomPass);
+
     // Render loop
     let frame = 0;
     const animate = () => {
       frame = requestAnimationFrame(animate);
       const t = Date.now() * 0.001;
 
-      // Brain pulse
       const pulse = 1 + Math.sin(t * 2) * 0.05;
       brain.scale.setScalar(pulse);
       glow.scale.setScalar(pulse * 0.75);
@@ -214,7 +250,7 @@ export default function GlassBrain() {
       camera.position.y = 2 + Math.sin(t * 0.3) * 0.3;
       camera.lookAt(0, 0, 0);
 
-      renderer.render(scene, camera);
+      composer.render();
     };
     animate();
 
@@ -222,19 +258,31 @@ export default function GlassBrain() {
       camera.aspect = mount.clientWidth / mount.clientHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(mount.clientWidth, mount.clientHeight);
+      composer.setSize(mount.clientWidth, mount.clientHeight);
     };
     window.addEventListener('resize', handleResize);
 
     const fetchStats = async () => {
       try {
-        const r = await fetch('/api/dashboard');
-        if (r.ok) setStats(await r.json());
-      } catch { /* backend may be offline */ }
+        const r = await fetch(`${API}/api/dashboard`);
+        if (!r.ok) return;
+        const data = await r.json();
+        setStats(data);
+        if (data?.somatic?.cognitive_load != null) {
+          if (data.somatic.cognitive_load > 0.7) {
+            brainMat.color.setHex(0xef4444);
+          } else if (data.somatic.cognitive_load > 0.4) {
+            brainMat.color.setHex(0xf59e0b);
+          } else {
+            brainMat.color.setHex(0x06b6d4);
+          }
+        }
+      } catch (e) { addToast(e.message || 'Failed to load dashboard stats'); }
     };
     fetchStats();
     const interval = setInterval(fetchStats, 5000);
 
-    sceneRef.current = { scene, renderer, brain, brainMat, pointLight, satellites, ring, ringMat, particlesMat };
+    sceneRef.current = { scene, renderer, composer, brain, brainMat, pointLight, satellites, ring, ringMat, particlesMat };
 
     return () => {
       cancelAnimationFrame(frame);

@@ -383,11 +383,13 @@ class TestSessionErrors:
             assert err_msg["type"] == "text_response"
             assert "boom" in err_msg["payload"]["text"]
 
-    def test_non_json_payload_raises(self, ws_client):
-        with pytest.raises(json.JSONDecodeError):
-            with ws_client.websocket_connect("/v1/session") as ws:
-                ws.receive_json()
-                ws.send_text("not json {")
+    def test_non_json_payload_returns_error(self, ws_client):
+        with ws_client.websocket_connect("/v1/session") as ws:
+            ws.receive_json()  # greeting
+            ws.send_text("not json {")
+            err_msg = ws.receive_json()
+            assert err_msg["type"] == "error"
+            assert "invalid" in err_msg["payload"].get("text", "").lower() or "json" in err_msg["payload"].get("text", "").lower()
 
     def test_invalid_message_envelope_returns_error_text(self, ws_mock_state, ws_client):
         with ws_client.websocket_connect("/v1/session") as ws:

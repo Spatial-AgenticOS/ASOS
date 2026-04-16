@@ -341,6 +341,9 @@ html.light .markdown-body th { background: rgba(0, 0, 0, 0.03); }
 
 /* ── Message action buttons ────────────────────────── */
 .msg-bubble:hover .message-actions { opacity: 1 !important; }
+@media (hover: none) {
+  .message-actions { opacity: 0.5 !important; }
+}
 
 /* ── Toast animation ────────────────────────────────── */
 @keyframes toastFadeIn {

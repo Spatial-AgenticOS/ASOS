@@ -73,6 +73,7 @@ async def update_config(body: dict):
     if not section or not key:
         return {"error": "section and key are required"}
     state.config.update_settings(section, key, value)
+
     if section == "features" and key == "multi_agent" and state.orchestrator:
         enabled = value if isinstance(value, bool) else str(value).lower() in ("true", "1", "yes", "on")
         os.environ["FERAL_MULTI_AGENT"] = str(enabled).lower()
@@ -81,6 +82,47 @@ async def update_config(body: dict):
             state.orchestrator._init_multi_agent()
         if not enabled:
             state.orchestrator._multi_agent = None
+
+    elif section == "llm" and state.orchestrator and state.orchestrator.llm:
+        llm_config = state.config._merged.get("llm", {})
+        new_provider = llm_config.get("provider", state.orchestrator.llm.provider)
+        new_model = llm_config.get("model", "")
+        new_base = llm_config.get("base_url", "")
+        new_key = os.environ.get(f"{new_provider.upper()}_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+        state.orchestrator.llm.switch_provider(new_provider, model=new_model, base_url=new_base, api_key=new_key)
+
+    elif section == "features":
+        enabled = str(value).lower() in ("true", "1", "yes", "on")
+        if key == "streaming" and state.orchestrator:
+            state.orchestrator._streaming_enabled = enabled
+            os.environ["FERAL_STREAMING"] = str(enabled).lower()
+        elif key == "proactive":
+            if state.orchestrator:
+                state.orchestrator._proactive_enabled = enabled
+            os.environ["FERAL_PROACTIVE"] = str(enabled).lower()
+            if hasattr(state, 'proactive') and state.proactive:
+                if enabled:
+                    import asyncio
+                    asyncio.create_task(state.proactive.start())
+                else:
+                    await state.proactive.stop()
+        elif key == "vision":
+            os.environ["FERAL_VISION_ENABLED"] = str(enabled).lower()
+            if state.orchestrator:
+                state.orchestrator._vision_enabled = enabled
+            if hasattr(state, 'screen_loop') and state.screen_loop:
+                if enabled:
+                    import asyncio
+                    asyncio.create_task(state.screen_loop.start())
+                else:
+                    state.screen_loop.stop()
+        elif key == "self_learning":
+            os.environ["FERAL_SELF_LEARNING"] = str(enabled).lower()
+
+    elif section == "security" and key == "autonomy_mode":
+        if state.orchestrator and hasattr(state.orchestrator, 'tool_runner'):
+            state.orchestrator.tool_runner.set_autonomy_mode(str(value))
+
     return {"ok": True, "section": section, "key": key, "value": value}
 
 
@@ -97,6 +139,27 @@ async def save_credentials(body: dict):
         for skill_id, api_key in body["skill_keys"].items():
             os.environ[f"FERAL_KEY_{skill_id}"] = api_key
     state.config.save_credentials(creds)
+
+    if state.orchestrator and state.orchestrator.llm:
+        for key_name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY",
+                         "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"):
+            if key_name in creds and creds[key_name]:
+                provider = state.orchestrator.llm.provider
+                state.orchestrator.llm.switch_provider(provider, api_key=creds[key_name])
+                break
+
+    if state.channel_manager:
+        channel_keys = {
+            "FERAL_TELEGRAM_BOT_TOKEN": "telegram",
+            "FERAL_DISCORD_BOT_TOKEN": "discord",
+            "FERAL_SLACK_BOT_TOKEN": "slack",
+        }
+        for env_key, channel_type in channel_keys.items():
+            token = os.environ.get(env_key, "")
+            if token and channel_type not in [ch for ch in state.channel_manager._channels]:
+                import asyncio
+                asyncio.create_task(state.channel_manager.start_channel(channel_type, {"bot_token": token, "enabled": True}))
+
     return {"ok": True, "keys_saved": list(creds.keys())}
 
 
@@ -148,7 +211,7 @@ async def validate_key(body: dict):
 @router.get("/api/identity")
 async def get_identity():
     """Get the agent identity configuration."""
-    identity_path = feral_home() / "identity.yaml"
+    identity_path = feral_home() / "IDENTITY.yaml"
     if identity_path.exists():
         try:
             import yaml
@@ -162,7 +225,7 @@ async def get_identity():
 @router.post("/api/identity")
 async def update_identity(body: dict):
     """Update the agent identity configuration."""
-    identity_path = feral_home() / "identity.yaml"
+    identity_path = feral_home() / "IDENTITY.yaml"
     try:
         import yaml
         with open(identity_path, "w") as f:

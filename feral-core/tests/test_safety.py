@@ -45,8 +45,8 @@ class TestSafetyClassification:
     def test_play_music_is_confirm(self, runner):
         assert runner.classify_safety("spotify_music__play_song", {"uri": "..."}) == SafetyLevel.CONFIRM
 
-    def test_unknown_tool_is_auto(self, runner):
-        assert runner.classify_safety("totally_unknown__something", {}) == SafetyLevel.AUTO
+    def test_unknown_tool_requires_confirmation(self, runner):
+        assert runner.classify_safety("totally_unknown__something", {}) == SafetyLevel.CONFIRM
 
     def test_volume_control_is_confirm(self, runner):
         assert runner.classify_safety("desktop_control__volume_set", {"level": 50}) == SafetyLevel.CONFIRM

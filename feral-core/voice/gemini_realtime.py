@@ -339,6 +339,9 @@ class GeminiRealtimeProxy:
         )
 
         await gs.connect()
+        if not getattr(gs, 'connected', False) and not getattr(gs, '_ws', None):
+            logger.warning("Gemini voice session failed to connect for %s", session_id)
+            return None
         self._sessions[session_id] = gs
         self._node_to_session[node_id] = session_id
         return gs

@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { API_BASE as API } from '../config';
 import { Crosshair, Plus, RefreshCw, CheckCircle2, Circle, BarChart3, Target, Loader2 } from 'lucide-react';
+import { useToast } from '../components/Toast';
 
 export default function Intents() {
+  const { addToast } = useToast();
   const [intentText, setIntentText] = useState('');
   const [compiling, setCompiling] = useState(false);
   const [todayActions, setTodayActions] = useState([]);
@@ -21,12 +23,12 @@ export default function Intents() {
       setTodayActions(todayRes.actions || []);
       setPlans(plansRes.plans || []);
       setStats(statsRes);
-    } catch {
-      // silent
+    } catch (e) {
+      addToast(e.message || 'Failed to load intents');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [addToast]);
 
   useEffect(() => {
     fetchAll();
@@ -45,8 +47,8 @@ export default function Intents() {
       });
       setIntentText('');
       await fetchAll();
-    } catch {
-      // silent
+    } catch (e) {
+      addToast(e.message || 'Failed to compile intent');
     } finally {
       setCompiling(false);
     }
@@ -63,8 +65,8 @@ export default function Intents() {
         body: JSON.stringify({ result: 'Completed via UI' }),
       });
       await fetchAll();
-    } catch {
-      // silent
+    } catch (e) {
+      addToast(e.message || 'Failed to complete action');
     } finally {
       setCompleting('');
     }
@@ -169,7 +171,7 @@ export default function Intents() {
                     )}
                   </button>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-feral-text truncate">{a.description}</div>
+                    <div className="text-sm text-feral-text truncate">{a.action || a.description}</div>
                     {a.tool_hint && (
                       <div className="text-[11px] text-feral-text-muted mt-0.5">
                         Tool: {a.tool_hint}

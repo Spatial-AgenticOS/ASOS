@@ -25,12 +25,27 @@ function updateConnectionStatus() {
   });
 }
 
+function renderMarkdown(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+}
+
 function addMessage(role, text) {
   if (emptyState.parentNode) emptyState.remove();
 
   const div = document.createElement('div');
   div.className = `msg ${role}`;
-  div.textContent = text;
+  if (role === 'assistant') {
+    div.innerHTML = renderMarkdown(text);
+  } else {
+    div.textContent = text;
+  }
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 
@@ -85,7 +100,29 @@ chrome.runtime.onMessage.addListener((msg) => {
     showTyping(false);
     const data = msg.data;
 
-    if (data.type === 'text_response' || data.type === 'assistant_reply') {
+    if (data.type === 'stream_delta') {
+      const text = data.payload?.text || '';
+      if (text) {
+        if (emptyState.parentNode) emptyState.remove();
+        let streamEl = document.getElementById('streaming-msg');
+        if (!streamEl) {
+          streamEl = document.createElement('div');
+          streamEl.id = 'streaming-msg';
+          streamEl.className = 'msg assistant';
+          messagesEl.appendChild(streamEl);
+        }
+        streamEl.dataset.raw = (streamEl.dataset.raw || '') + text;
+        streamEl.innerHTML = renderMarkdown(streamEl.dataset.raw);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+
+        if (data.payload?.final) {
+          const finalText = streamEl.dataset.raw;
+          streamEl.removeAttribute('id');
+          delete streamEl.dataset.raw;
+          messages.push({ role: 'assistant', text: finalText, ts: Date.now() });
+        }
+      }
+    } else if (data.type === 'text_response' || data.type === 'assistant_reply') {
       const text = data.payload?.text || data.payload?.content || JSON.stringify(data.payload);
       addMessage('assistant', text);
     } else if (data.type === 'error') {

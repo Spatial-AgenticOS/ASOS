@@ -2,11 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Brain, Cpu, Activity, Database, MessageSquare, Puzzle,
-  Wifi, WifiOff, Zap, Eye, Shield, BookOpen, Clock, TrendingUp,
-  Sparkles, Lock, CheckCircle, XCircle, AlertTriangle,
-  Heart, Thermometer, Wind, Sun, CloudRain, RefreshCw,
-  Search, Music, Home, Bluetooth, Radio, Globe,
-  ArrowRight, ChevronRight, Loader2,
+  Wifi, WifiOff, Zap, Shield, BookOpen, Clock, TrendingUp,
+  Sparkles, Heart, Thermometer, Wind, Sun, RefreshCw,
+  Search, Bluetooth, Radio, Globe, ChevronRight, Loader2,
 } from 'lucide-react';
 
 import { API_BASE as API, WS_URL } from '../config';
@@ -52,7 +50,7 @@ export default function Dashboard() {
       if (genesis && !genesis.error && (genesis.sequences_tracked > 0 || genesis.tools_generated > 0)) setGenesisStats(genesis);
       setLoading(false);
     });
-  }, []);
+  }, [addToast]);
 
   useEffect(() => {
     refresh();
@@ -70,6 +68,13 @@ export default function Dashboard() {
     } catch (e) { addToast(e.message || 'Dashboard connection error'); }
     return () => { if (ws) ws.close(); };
   }, [refresh]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetch(`${API}/api/llm/status`).then(r => r.json()).then(setLlmStatus).catch(() => {});
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   const executeQuickAction = async (action) => {
     setQuickActionLoading(action);
@@ -128,7 +133,7 @@ export default function Dashboard() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Control Center</h1>
             <p className="text-xs text-feral-text-muted mt-0.5">
-              FERAL Brain v{info?.version || '1.0.0'}
+              FERAL Brain v{info?.version || '2026.4.16'}
               {d.llm_available && <span className="ml-2 text-emerald-400">LLM ready</span>}
             </p>
           </div>
@@ -193,7 +198,12 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div className="bg-feral-card border border-feral-border rounded-xl p-5">
+          <div className="bg-feral-card border border-feral-border rounded-xl p-5" style={{ position: 'relative' }}>
+            {dashboard?.demo && (
+              <div style={{ position: 'absolute', top: 8, right: 8, background: '#78350f', color: '#fbbf24', fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>
+                DEMO DATA
+              </div>
+            )}
             <div className="flex items-center gap-2 mb-4">
               <Heart size={16} className="text-rose-400" />
               <h2 className="font-semibold text-sm">Live Health</h2>

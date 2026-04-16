@@ -76,6 +76,7 @@ export default function SetupWizard({ onComplete }) {
   const [validating, setValidating] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
   const [identity, setIdentity] = useState({
     userName: '', location: '', language: 'English', occupation: '', interests: '',
     techLevel: 'intermediate', useCase: 'personal-assistant', commStyle: 'concise',
@@ -136,6 +137,7 @@ export default function SetupWizard({ onComplete }) {
       navigate('/');
     } catch (e) {
       console.error('Setup failed:', e);
+      setError(e.message || 'Setup failed. Please try again.');
     }
     setSaving(false);
   };
@@ -182,7 +184,7 @@ export default function SetupWizard({ onComplete }) {
             );
           })}
         </div>
-        <div className="mt-auto pt-8 text-xs opacity-30">FERAL v1.0.0</div>
+        <div className="mt-auto pt-8 text-xs opacity-30">FERAL v2026.4.16</div>
       </div>
 
       {/* Right Panel */}
@@ -577,7 +579,12 @@ export default function SetupWizard({ onComplete }) {
                   <SummaryRow label="Streaming" value={(settings.features?.streaming) ? 'On' : 'Off'} />
                   <SummaryRow label="Self-Learning" value={(settings.features?.self_learning ?? true) ? 'On' : 'Off'} />
                 </div>
-                <button onClick={handleFinish} disabled={saving}
+                {error && (
+                  <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 text-red-400 text-sm px-4 py-3 rounded-xl">
+                    <AlertCircle size={16} /> {error}
+                  </div>
+                )}
+                <button onClick={() => { setError(null); handleFinish(); }} disabled={saving}
                   className="px-8 py-4 bg-feral-accent text-white rounded-xl font-bold text-lg hover:bg-feral-accent/90 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-3 mx-auto">
                   {saving ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
                   Launch FERAL
@@ -739,7 +746,7 @@ function MCPServerList() {
 function SkillsList() {
   const [skills, setSkills] = useState([]);
   useEffect(() => {
-    fetch(`${API}/skills`).then(r => r.json()).then(setSkills).catch(() => {});
+    fetch(`${API}/api/skills`).then(r => r.json()).then(setSkills).catch(() => {});
   }, []);
 
   if (!skills.length) {

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import TheOrb from '../components/TheOrb';
 import { API_BASE } from '../config';
+import { useToast } from '../components/Toast';
 
 function formatClock(d) {
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
@@ -16,6 +17,7 @@ function formatDate(d) {
 
 export default function Ambient() {
   const navigate = useNavigate();
+  const { addToast } = useToast();
   const [clock, setClock] = useState(new Date());
   const [dashboard, setDashboard] = useState(null);
   const [greeting, setGreeting] = useState(null);
@@ -32,7 +34,8 @@ export default function Ambient() {
       if (dashRes) setDashboard(dashRes);
       if (greetRes && !greetRes.error) setGreeting(greetRes);
       setOrbMode(dashRes?.llm_available ? 'idle' : 'disconnected');
-    } catch {
+    } catch (e) {
+      addToast(e.message || 'Failed to load ambient data');
       setOrbMode('disconnected');
     } finally {
       setLoading(false);

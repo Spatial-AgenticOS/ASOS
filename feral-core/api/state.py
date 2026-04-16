@@ -183,10 +183,12 @@ class BrainState:
 
     async def init(self):
         _boot_start = time.time()
-        self.skill_registry.load_builtin_skills()
+        with boot_subsystem(self._boot_report, "SkillRegistry", optional=False):
+            self.skill_registry.load_builtin_skills()
 
         from agents.llm_provider import LLMProvider
-        _shared_llm = LLMProvider()
+        with boot_subsystem(self._boot_report, "LLMProvider", optional=False):
+            _shared_llm = LLMProvider()
         self.learner = Learner(llm=_shared_llm, memory=self.memory)
         self.scene = SceneAnalyzer(llm=_shared_llm)
         scene_cooldown = int(os.environ.get("FERAL_SCENE_COOLDOWN", "10"))
@@ -288,69 +290,77 @@ class BrainState:
             self.taskflows = TaskFlowRuntime(memory_store=self.memory)
             await self.taskflows.start()
 
-        self.orchestrator = Orchestrator(
-            skill_registry=self.skill_registry,
-            send_to_client=self.send_to_session,
-            daemons=self.daemons,
-            memory=self.memory,
-            vision_buffer=self.vision_buffer,
-            perception=self.perception,
-            learner=self.learner,
-            taskflows=self.taskflows,
-        )
-        self.orchestrator.set_llm(_shared_llm)
-        if self.vault:
-            self.orchestrator.set_vault(self.vault)
-        if self.wasm_sandbox:
-            self.orchestrator.executor.set_wasm_sandbox(self.wasm_sandbox)
-        if self.mcp_client:
-            self.orchestrator.set_mcp_client(self.mcp_client)
-        if self.tool_genesis:
-            self.orchestrator.set_tool_genesis(self.tool_genesis)
-        if self.agent_mitosis:
-            self.orchestrator.set_mitosis_engine(self.agent_mitosis)
+        with boot_subsystem(self._boot_report, "Orchestrator", optional=False):
+            self.orchestrator = Orchestrator(
+                skill_registry=self.skill_registry,
+                send_to_client=self.send_to_session,
+                daemons=self.daemons,
+                memory=self.memory,
+                vision_buffer=self.vision_buffer,
+                perception=self.perception,
+                learner=self.learner,
+                taskflows=self.taskflows,
+            )
+            self.orchestrator.set_llm(_shared_llm)
+            if self.vault:
+                self.orchestrator.set_vault(self.vault)
+            if self.wasm_sandbox:
+                self.orchestrator.executor.set_wasm_sandbox(self.wasm_sandbox)
+            if self.mcp_client:
+                self.orchestrator.set_mcp_client(self.mcp_client)
+            if self.tool_genesis:
+                self.orchestrator.set_tool_genesis(self.tool_genesis)
+            if self.agent_mitosis:
+                self.orchestrator.set_mitosis_engine(self.agent_mitosis)
 
-        self.realtime_proxy = RealtimeProxy(
-            skill_registry=self.skill_registry,
-            skill_executor=self.orchestrator.executor if self.orchestrator else None,
-            memory=self.memory,
-            perception=self.perception,
-            send_to_node=self._send_dict_to_node,
-            send_to_session=self.send_to_session,
-            identity_workspace=self.identity_workspace,
-        )
+        with boot_subsystem(self._boot_report, "RealtimeProxy"):
+            self.realtime_proxy = RealtimeProxy(
+                skill_registry=self.skill_registry,
+                skill_executor=self.orchestrator.executor if self.orchestrator else None,
+                memory=self.memory,
+                perception=self.perception,
+                send_to_node=self._send_dict_to_node,
+                send_to_session=self.send_to_session,
+                identity_workspace=self.identity_workspace,
+            )
 
-        self.voice_router = VoiceRouter(
-            realtime_proxy=self.realtime_proxy,
-            audio_pipeline=self.audio,
-            orchestrator=self.orchestrator,
-            memory=self.memory,
-            perception=self.perception,
-            wake_word_detector=self.wake_word,
-            send_to_session=self.send_to_session,
-            send_to_node=self._send_dict_to_node,
-        )
+        with boot_subsystem(self._boot_report, "VoiceRouter"):
+            self.voice_router = VoiceRouter(
+                realtime_proxy=self.realtime_proxy,
+                audio_pipeline=self.audio,
+                orchestrator=self.orchestrator,
+                memory=self.memory,
+                perception=self.perception,
+                wake_word_detector=self.wake_word,
+                send_to_session=self.send_to_session,
+                send_to_node=self._send_dict_to_node,
+            )
 
-        self.gemini_proxy = GeminiRealtimeProxy(
-            skill_registry=self.skill_registry,
-            skill_executor=self.orchestrator.executor if self.orchestrator else None,
-            memory=self.memory,
-            perception=self.perception,
-            send_to_node=self._send_dict_to_node,
-            send_to_session=self.send_to_session,
-        )
-        self.voice_router.set_gemini_proxy(self.gemini_proxy)
+        with boot_subsystem(self._boot_report, "GeminiRealtimeProxy"):
+            self.gemini_proxy = GeminiRealtimeProxy(
+                skill_registry=self.skill_registry,
+                skill_executor=self.orchestrator.executor if self.orchestrator else None,
+                memory=self.memory,
+                perception=self.perception,
+                send_to_node=self._send_dict_to_node,
+                send_to_session=self.send_to_session,
+            )
+            if self.voice_router:
+                self.voice_router.set_gemini_proxy(self.gemini_proxy)
 
-        self.gateway_registry = MethodRegistry()
-        register_core_methods(self.gateway_registry, self)
+        with boot_subsystem(self._boot_report, "MethodRegistry"):
+            self.gateway_registry = MethodRegistry()
+            register_core_methods(self.gateway_registry, self)
 
-        self.hardware_mesh = HardwareMesh(
-            device_registry=self.device_registry,
-            daemons=self.daemons,
-        )
+        with boot_subsystem(self._boot_report, "HardwareMesh"):
+            self.hardware_mesh = HardwareMesh(
+                device_registry=self.device_registry,
+                daemons=self.daemons,
+            )
 
-        self.identity_workspace = IdentityWorkspace()
-        self.identity_workspace.sync_tools_from_registry(self.skill_registry)
+        with boot_subsystem(self._boot_report, "IdentityWorkspace"):
+            self.identity_workspace = IdentityWorkspace()
+            self.identity_workspace.sync_tools_from_registry(self.skill_registry)
 
         self.screen_loop = None
         with boot_subsystem(self._boot_report, "ScreenLoop"):
@@ -374,13 +384,15 @@ class BrainState:
                 send_to_session=self.send_to_session,
             )
 
-        self.genui_engine = GenUIEngine(llm=_shared_llm)
-        self.service_providers = ServiceProviderRegistry()
-        if self.orchestrator:
-            self.orchestrator.set_genui_engine(self.genui_engine)
+        with boot_subsystem(self._boot_report, "GenUIEngine"):
+            self.genui_engine = GenUIEngine(llm=_shared_llm)
+            self.service_providers = ServiceProviderRegistry()
+            if self.orchestrator:
+                self.orchestrator.set_genui_engine(self.genui_engine)
 
-        self.browser = BrowserController()
-        self._register_browser_skill()
+        with boot_subsystem(self._boot_report, "BrowserController"):
+            self.browser = BrowserController()
+            self._register_browser_skill()
 
         with boot_subsystem(self._boot_report, "ApprovalManager"):
             from security.exec_approvals import ApprovalManager
@@ -755,7 +767,11 @@ class BrainState:
             creds = _json.loads(creds_path.read_text())
             env_keys = [
                 "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
-                "GROQ_API_KEY", "TAVILY_API_KEY",
+                "GROQ_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY",
+                "MOONSHOT_API_KEY", "DASHSCOPE_API_KEY",
+                "TAVILY_API_KEY", "BRAVE_API_KEY", "EXA_API_KEY",
+                "SERPER_API_KEY", "GITHUB_TOKEN", "SPOTIFY_CLIENT_ID",
+                "PERPLEXITY_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CSE_ID",
             ]
             loaded = []
             for key in env_keys:

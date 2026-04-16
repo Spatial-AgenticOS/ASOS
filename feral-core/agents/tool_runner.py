@@ -86,7 +86,8 @@ class ToolRunner:
         if any(p in name_lower for p in auto_patterns):
             return SafetyLevel.AUTO
 
-        return SafetyLevel.AUTO
+        # Default: require confirmation for unknown tools
+        return SafetyLevel.CONFIRM
 
     def enforce_safety(self, tool_name: str, args: dict, session_id: str = "", surface: str = "websocket") -> Optional[dict]:
         """

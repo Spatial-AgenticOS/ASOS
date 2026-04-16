@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Activity, AlertTriangle, Phone, MessageSquarePlus, History, Sparkles, Command } from 'lucide-react';
 import { RealtimeVoiceEngine } from './lib/voiceRealtime';
 import { VisionCapture } from './lib/visionCapture';
+import { API_BASE } from './config';
 import ProactiveToast from './components/ProactiveToast';
 import TheOrb from './components/TheOrb';
 import AmbientStrip from './components/AmbientStrip';
@@ -29,6 +30,7 @@ export default function App() {
   const [attachedFiles, setAttachedFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const pttActiveRef = useRef(false);
+  const voiceProviderRef = useRef('openai');
 
   const voiceEngineRef = useRef(null);
   const visionRef = useRef(null);
@@ -53,6 +55,18 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [session.messages, session.isThinking]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/config`)
+      .then(r => r.json())
+      .then(config => {
+        const mode = config?.features?.voice_input_mode || config?.voice_input_mode;
+        if (mode === 'push_to_talk') setPushToTalk(true);
+        const provider = config?.features?.voice_provider || config?.voice_provider;
+        if (provider) voiceProviderRef.current = provider;
+      })
+      .catch(() => {});
+  }, []);
 
   // Push-to-talk: hold Space to unmute, release to mute
   useEffect(() => {
@@ -131,7 +145,7 @@ export default function App() {
         },
       });
       voiceEngineRef.current = engine;
-      await engine.start();
+      await engine.start(voiceProviderRef.current || 'openai');
       if (pushToTalk) engine.muteMic();
       setIsRecording(true);
       setVoiceMode('realtime');
@@ -268,6 +282,24 @@ export default function App() {
           >
             <History size={15} />
           </button>
+          <button
+            onClick={() => snapshots.setSessionPanelOpen(true)}
+            className={`p-2 rounded-lg transition ${snapshots.sessionPanelOpen ? 'text-feral-accent bg-feral-accent-dim' : 'text-feral-text-muted hover:text-feral-text hover:bg-feral-card-hover'}`}
+            title="Session Snapshots"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v14a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h10"/>
+            </svg>
+          </button>
+          <button
+            onClick={() => wiki.setWikiOpen(v => !v)}
+            className={`p-2 rounded-lg transition ${wiki.wikiOpen ? 'text-feral-accent bg-feral-accent-dim' : 'text-feral-text-muted hover:text-feral-text hover:bg-feral-card-hover'}`}
+            title="Wiki"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+            </svg>
+          </button>
           <button onClick={() => setPaletteOpen(true)} className="p-2 rounded-lg text-feral-text-muted hover:text-feral-text hover:bg-feral-card-hover transition" title="Command Palette (⌘K)">
             <Command size={15} />
           </button>
@@ -359,6 +391,7 @@ export default function App() {
         isRecording={isRecording}
         isThinking={session.isThinking}
         isStreaming={session.isStreaming}
+        voiceState={voiceState}
         cameraOn={cameraOn}
         currentThreadId={threads.currentThreadId}
         onSubmit={handleSend}

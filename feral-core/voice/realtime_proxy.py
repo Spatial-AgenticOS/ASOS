@@ -367,6 +367,9 @@ class RealtimeProxy:
         )
 
         await rs.connect()
+        if not getattr(rs, 'connected', False) and not getattr(rs, '_ws', None):
+            logger.warning("Voice session failed to connect for %s", session_id)
+            return None
         self._sessions[session_id] = rs
         self._node_to_session[node_id] = session_id
         return rs

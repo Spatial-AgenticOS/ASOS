@@ -4,8 +4,24 @@ import re
 
 from models.protocol import FeralMessage, SDUIPayload
 
+GREETINGS = {
+    "hello", "hey", "hi", "sup", "yo", "howdy", "good morning", "good evening",
+    "good afternoon", "good night", "what's up", "whats up", "how are you",
+    "how you doing", "how's it going", "hows it going", "greetings",
+}
+
 
 async def direct_execute(orchestrator, session_id: str, text: str, skills):
+    cleaned = text.strip().lower().rstrip("!.,?")
+    if cleaned in GREETINGS or any(cleaned.startswith(g + " ") for g in GREETINGS) or any(cleaned.startswith(g) for g in ("hi ", "hey ", "hello ")):
+        await orchestrator._send_text(
+            session_id,
+            "Hey! I'm running in direct mode right now (no LLM connected). "
+            "I can still help with specific tasks \u2014 try 'search [topic]', 'what's the weather', "
+            "'read my notes', or check Settings to add an API key or start Ollama."
+        )
+        return
+
     if not skills:
         all_skills = list(orchestrator.skills.skills.values())
         sdui = {

@@ -361,12 +361,6 @@ class Orchestrator:
 
         # Step 1: Semantic Tool Routing
         relevant_skills = await self._route_prompt(text)
-        tools = self.skills.get_tools_for_skills(relevant_skills)
-
-        if self._mcp_client:
-            mcp_tools = self._mcp_client.to_llm_tool_definitions()
-            if mcp_tools:
-                tools = (tools or []) + mcp_tools
 
         if relevant_skills:
             logger.info(f"  Matched: {[s.brand.name for s in relevant_skills]}")
@@ -375,7 +369,15 @@ class Orchestrator:
             await self._direct_execute(session_id, text, relevant_skills)
             return
 
-        # Full Agentic Mode
+        # Full Agentic Mode — inject core skills only for LLM tool routing
+        relevant_skills = self._ensure_core_skills(relevant_skills)
+        tools = self.skills.get_tools_for_skills(relevant_skills)
+
+        if self._mcp_client:
+            mcp_tools = self._mcp_client.to_llm_tool_definitions()
+            if mcp_tools:
+                tools = (tools or []) + mcp_tools
+
         perception_frame = self.perception.get_frame(session_id)
         system_prompt = self._build_system_prompt(perception_frame, relevant_skills, session_id)
 
@@ -390,6 +392,7 @@ class Orchestrator:
 
         max_iterations = self._max_iterations
         refusal_retry_used = False
+        sent_response = False
         for _ in range(max_iterations):
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -484,9 +487,13 @@ class Orchestrator:
                     await self._emit_brain_event(session_id, "memory_write", {"type": "episodic"})
 
                 await self._send_text(session_id, text_content)
+                sent_response = True
                 break
             else:
                 break
+
+        if not sent_response:
+            await self._send_text(session_id, "I processed your request but have nothing to report.")
 
         self.conversation_history[session_id] = history[-self._conversation_max_per_session:]
         self._evict_stale_sessions()
@@ -514,6 +521,7 @@ class Orchestrator:
             )
 
         relevant_skills = await self._route_prompt(text)
+        relevant_skills = self._ensure_core_skills(relevant_skills)
         tools = self.skills.get_tools_for_skills(relevant_skills)
 
         if self._mcp_client:
@@ -760,7 +768,7 @@ class Orchestrator:
 
         if not self.llm.available or len(self.skills.skills) <= 5:
             results = self._fallback_skills_for_query(text, top_k=5)
-            return self._ensure_core_skills(self._apply_routing_penalties(results))
+            return self._apply_routing_penalties(results)
 
         prompt = "You are a Semantic Tool Router. Select up to 5 relevant tool IDs for the user's query.\n"
         prompt += "Available Tools:\n"
@@ -787,11 +795,11 @@ class Orchestrator:
                 if isinstance(sid, str) and sid in self.skills.skills:
                     relevant.append(self.skills.skills[sid])
             results = relevant[:5] if relevant else self._fallback_skills_for_query(text, top_k=5)
-            return self._ensure_core_skills(self._apply_routing_penalties(results))
+            return self._apply_routing_penalties(results)
         except Exception as e:
             logger.warning(f"RoutePrompt failed, falling back to heuristic: {e}")
             results = self._fallback_skills_for_query(text, top_k=5)
-            return self._ensure_core_skills(self._apply_routing_penalties(results))
+            return self._apply_routing_penalties(results)
 
     def _ensure_core_skills(self, skills: list[SkillManifest]) -> list[SkillManifest]:
         """Guarantee core skills like desktop_control are always available to the LLM."""

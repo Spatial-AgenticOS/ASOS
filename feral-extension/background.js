@@ -93,6 +93,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     });
   } else if (info.menuItemId === 'feral-save') {
     sendToFeral(`Save this to memory: "${info.selectionText}"`, { ...pageContext, action: 'save_to_memory' });
+    chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
   }
 });
 

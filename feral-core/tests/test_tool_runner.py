@@ -115,8 +115,8 @@ class TestClassifySafety:
     def test_auto_for_safe_readonly_tools(self, tool_name):
         assert self.runner.classify_safety(tool_name, {}) == SafetyLevel.AUTO
 
-    def test_unknown_tool_defaults_to_auto(self):
-        assert self.runner.classify_safety("totally_unknown__something", {}) == SafetyLevel.AUTO
+    def test_unknown_tool_defaults_to_confirm(self):
+        assert self.runner.classify_safety("totally_unknown__something", {}) == SafetyLevel.CONFIRM
 
     # ── Pattern ordering: CONFIRM must be checked BEFORE AUTO ─────────────
 
@@ -146,7 +146,7 @@ class TestClassifySafety:
     # ── Edge cases ────────────────────────────────────────────────────────
 
     def test_empty_tool_name(self):
-        assert self.runner.classify_safety("", {}) == SafetyLevel.AUTO
+        assert self.runner.classify_safety("", {}) == SafetyLevel.CONFIRM
 
     def test_case_insensitive(self):
         assert self.runner.classify_safety("Device__FACTORY_RESET", {}) == SafetyLevel.DENY
@@ -192,11 +192,13 @@ class TestEnforceSafety:
         assert result is not None
         assert "Surface Policy" in result.get("error", "")
 
-    def test_surface_local_cli_allows_tool(self):
+    def test_surface_local_cli_confirms_unknown_tool(self):
         result = self.runner.enforce_safety(
             "system.run", {}, session_id="s1", surface="local_cli",
         )
-        assert result is None
+        # Unknown tools now default to CONFIRM, so even local CLI gets a confirmation request
+        assert result is not None
+        assert result.get("safety_level") == "confirm"
 
     # ── Hybrid mode: AUTO passes, CONFIRM requires approval ───────────────
 

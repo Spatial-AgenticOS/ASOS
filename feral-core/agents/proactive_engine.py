@@ -115,6 +115,10 @@ class ProactiveEngine:
     def stop(self):
         self._running = False
 
+    async def evaluate(self, session_id: str = ""):
+        """Public entry point for on-demand evaluation."""
+        await self._evaluate()
+
     def record_dismiss(self, trigger_id: str):
         state = self._trigger_states.setdefault(trigger_id, TriggerState())
         state.dismiss_count += 1
@@ -146,7 +150,7 @@ class ProactiveEngine:
         for frame in frames:
             if frame.heart_rate > 0:
                 # Elevated HR
-                if frame.heart_rate > 100 and (now - self._last_hr_alert > 300):
+                if frame.heart_rate > 100 and self._can_fire("hr_elevated"):
                     messages.append(ProactiveMessage(
                         trigger_id="hr_elevated",
                         priority=Priority.IMPORTANT,
@@ -156,10 +160,9 @@ class ProactiveEngine:
                         action="Take a break",
                         action_payload={"smart_home": "set_scene", "scene": "calming"},
                     ))
-                    self._last_hr_alert = now
 
                 # Low SpO2
-                if 0 < frame.spo2_pct < 94:
+                if 0 < frame.spo2_pct < 94 and self._can_fire("spo2_low"):
                     messages.append(ProactiveMessage(
                         trigger_id="spo2_low",
                         priority=Priority.CRITICAL,

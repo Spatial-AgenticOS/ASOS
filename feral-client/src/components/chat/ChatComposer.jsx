@@ -4,7 +4,7 @@ import VoiceWaveform from '../VoiceWaveform';
 
 export default function ChatComposer({
   inputText, setInputText, isRecording, isThinking, isStreaming,
-  cameraOn, currentThreadId,
+  voiceState, cameraOn, currentThreadId,
   onSubmit, onToggleRecording, onToggleCamera, onStartNewThread,
   fileInputRef, attachedFiles = [], setAttachedFiles,
 }) {
@@ -78,7 +78,7 @@ export default function ChatComposer({
           {isRecording ? <MicOff size={16} /> : <Mic size={16} />}
         </button>
         {isRecording && (
-          <VoiceWaveform mode={isThinking ? 'thinking' : isStreaming ? 'speaking' : 'listening'} />
+          <VoiceWaveform mode={voiceState === 'reconnecting' || voiceState === 'degraded' ? voiceState : isThinking ? 'thinking' : isStreaming ? 'speaking' : 'listening'} />
         )}
         <div className="flex-1 relative">
           <textarea

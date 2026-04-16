@@ -340,9 +340,19 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
         ).model_dump(),
     ).model_dump())
 
+    if greeting:
+        state.memory.working_push(session_id, {"role": "assistant", "content": greeting})
+
     try:
         while True:
-            raw = await ws.receive_json()
+            try:
+                raw = await ws.receive_json()
+            except (ValueError, TypeError) as e:
+                logger.warning("Malformed message from session %s: %s", session_id[:8], e)
+                await state.send_to_session(session_id, FeralMessage(
+                    type="error", payload={"text": "Invalid message format. Please send valid JSON."}
+                ))
+                continue
             raw["session_id"] = session_id
 
             msg_type = raw.get("type", "")
@@ -533,6 +543,12 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
                 )
             except Exception as e:
                 logger.debug(f"Identity maintenance skipped: {e}")
+        state.sessions.pop(session_id, None)
+        state.audio.clear_session(session_id)
+        state.perception.clear(session_id)
+        state.memory.working_clear(session_id)
+    except Exception as exc:
+        logger.error(f"Unexpected error in session {session_id[:8]}: {exc}", exc_info=True)
         state.sessions.pop(session_id, None)
         state.audio.clear_session(session_id)
         state.perception.clear(session_id)
