@@ -1,0 +1,35 @@
+---
+title: "Channels — Setup Guide"
+---
+
+## Telegram
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) → copy the token.
+2. Set `FERAL_TELEGRAM_BOT_TOKEN` or add to `settings.json` under `channels.telegram.bot_token`.
+3. FERAL polls for messages automatically. Send a message to the bot to register the chat.
+
+## Discord
+
+1. Create an application at [discord.com/developers](https://discord.com/developers/applications).
+2. Add a Bot → copy the token. Enable **Message Content Intent**.
+3. Invite with `https://discord.com/api/oauth2/authorize?client_id=YOUR_APP_ID&permissions=2048&scope=bot`.
+4. Set `FERAL_DISCORD_BOT_TOKEN`.
+
+## Slack
+
+1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps).
+2. Enable **Socket Mode** → copy the `xapp-` token. Add bot scopes: `chat:write`, `channels:history`.
+3. Set `FERAL_SLACK_BOT_TOKEN` (xoxb) and `FERAL_SLACK_APP_TOKEN` (xapp).
+
+## WhatsApp
+
+1. Set up WhatsApp Cloud API via [Meta Business](https://business.facebook.com/).
+2. Copy the access token and phone number ID.
+3. Set `FERAL_WHATSAPP_ACCESS_TOKEN`, `FERAL_WHATSAPP_PHONE_ID`.
+4. Configure the webhook URL pointing to `POST /api/webhooks/whatsapp` on your FERAL server.
+
+## Troubleshooting
+
+- **Rate-limited (429)** — FERAL retries up to 3 times with exponential backoff (1s, 2s, 4s).
+- **Webhook not receiving** — Ensure your server is publicly reachable and the webhook URL is registered with the platform.
+- **Bot not responding** — Check logs under `feral.channel.<name>` for send errors.

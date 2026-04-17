@@ -14,4 +14,5 @@ const wsBase = apiBase.startsWith('https://')
   : apiBase.replace(/^http:\/\//, 'ws://');
 
 export const API_BASE = apiBase;
+export const WS_BASE = wsBase;
 export const WS_URL = `${wsBase}/v1/session`;

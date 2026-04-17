@@ -217,6 +217,135 @@ TOOL_KEYS = [
 ]
 
 # ═══════════════════════════════════════════════════════════
+# Messaging Channels
+# ═══════════════════════════════════════════════════════════
+
+CHANNELS = [
+    {
+        "id": "telegram",
+        "name": "Telegram Bot",
+        "fields": [("FERAL_TELEGRAM_BOT_TOKEN", "Bot token from @BotFather")],
+        "validate_url": lambda fv: f"https://api.telegram.org/bot{fv['FERAL_TELEGRAM_BOT_TOKEN']}/getMe",
+    },
+    {
+        "id": "slack",
+        "name": "Slack",
+        "fields": [
+            ("FERAL_SLACK_BOT_TOKEN", "Bot token (xoxb-...)"),
+            ("FERAL_SLACK_APP_TOKEN", "App-level token (xapp-...) — optional for Socket Mode"),
+        ],
+        "validate_url": "https://slack.com/api/auth.test",
+        "validate_headers": lambda fv: {"Authorization": f"Bearer {fv['FERAL_SLACK_BOT_TOKEN']}"},
+    },
+    {
+        "id": "discord",
+        "name": "Discord Bot",
+        "fields": [("FERAL_DISCORD_BOT_TOKEN", "Bot token from Discord Developer Portal")],
+        "validate_url": "https://discord.com/api/v10/users/@me",
+        "validate_headers": lambda fv: {"Authorization": f"Bot {fv['FERAL_DISCORD_BOT_TOKEN']}"},
+    },
+    {
+        "id": "whatsapp",
+        "name": "WhatsApp Cloud API",
+        "fields": [
+            ("WHATSAPP_PHONE_NUMBER_ID", "Phone number ID from Meta Business"),
+            ("WHATSAPP_ACCESS_TOKEN", "Permanent access token"),
+            ("WHATSAPP_VERIFY_TOKEN", "Webhook verify token (you pick)"),
+        ],
+        "validate_url": lambda fv: f"https://graph.facebook.com/v18.0/{fv['WHATSAPP_PHONE_NUMBER_ID']}",
+        "validate_headers": lambda fv: {"Authorization": f"Bearer {fv['WHATSAPP_ACCESS_TOKEN']}"},
+    },
+]
+
+# ═══════════════════════════════════════════════════════════
+# Shared Validation Helpers
+# ═══════════════════════════════════════════════════════════
+
+
+async def validate_provider_key(provider: str, key: str) -> tuple[bool, str]:
+    """Validate an LLM provider API key by hitting its models endpoint.
+    Returns (success, message).
+    """
+    try:
+        import httpx
+    except ImportError:
+        return True, "httpx not installed, skipping validation"
+
+    endpoints: dict[str, tuple[str, dict]] = {
+        "openai": ("https://api.openai.com/v1/models", {"Authorization": f"Bearer {key}"}),
+        "anthropic": ("https://api.anthropic.com/v1/models", {"x-api-key": key, "anthropic-version": "2023-06-01"}),
+        "gemini": (f"https://generativelanguage.googleapis.com/v1/models?key={key}", {}),
+        "groq": ("https://api.groq.com/openai/v1/models", {"Authorization": f"Bearer {key}"}),
+        "openrouter": ("https://openrouter.ai/api/v1/models", {"Authorization": f"Bearer {key}"}),
+        "deepseek": ("https://api.deepseek.com/models", {"Authorization": f"Bearer {key}"}),
+        "kimi": ("https://api.moonshot.cn/v1/models", {"Authorization": f"Bearer {key}"}),
+        "qwen": ("https://dashscope.aliyuncs.com/compatible-mode/v1/models", {"Authorization": f"Bearer {key}"}),
+    }
+
+    if provider not in endpoints:
+        return True, "No validation available for this provider"
+
+    url, headers = endpoints[provider]
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, headers=headers)
+            if r.status_code == 200:
+                return True, "Key is valid!"
+            return False, f"HTTP {r.status_code} — key may be invalid or expired"
+    except Exception as e:
+        return False, f"Connection error: {e}"
+
+
+async def _validate_channel(channel: dict, field_values: dict[str, str]) -> tuple[bool, str]:
+    """Validate channel credentials by calling the provider's API."""
+    try:
+        import httpx
+    except ImportError:
+        return True, "httpx not installed, skipping validation"
+
+    validate_url = channel.get("validate_url")
+    if not validate_url:
+        return True, "No validation endpoint"
+
+    url = validate_url(field_values) if callable(validate_url) else validate_url
+    headers: dict[str, str] = {}
+    hdr_fn = channel.get("validate_headers")
+    if hdr_fn and callable(hdr_fn):
+        headers = hdr_fn(field_values)
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, headers=headers)
+            if r.status_code == 200:
+                return True, f"{channel['name']} connected!"
+            return False, f"Validation failed (HTTP {r.status_code})"
+    except Exception as e:
+        return False, f"Connection error: {e}"
+
+
+async def _validate_home_assistant(url: str, token: str) -> tuple[bool, str]:
+    """Validate Home Assistant by hitting GET {url}/api/."""
+    try:
+        import httpx
+    except ImportError:
+        return True, "httpx not installed, skipping validation"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                f"{url.rstrip('/')}/api/",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("message") == "API running.":
+                    return True, "Home Assistant connected!"
+                return True, "Home Assistant responded"
+            return False, f"HTTP {r.status_code}"
+    except Exception as e:
+        return False, f"Connection error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════
 # Personality Presets
 # ═══════════════════════════════════════════════════════════
 
@@ -323,6 +452,9 @@ class OnboardWizard:
         await self._step_personality()
         await self._step_device_pairing()
         await self._step_tool_keys()
+        await self._step_channels()
+        await self._step_home_assistant()
+        self._step_api_key()
         self._save_all()
         self._step_finish()
 
@@ -424,12 +556,11 @@ class OnboardWizard:
 
                 if valid:
                     self.c.print("  [green]Key is valid![/]")
-                    self.creds[provider["env_key"]] = api_key
-                    os.environ[provider["env_key"]] = api_key
                 else:
-                    self.c.print("  [yellow]Could not validate key (might still work). Saving anyway.[/]")
-                    self.creds[provider["env_key"]] = api_key
-                    os.environ[provider["env_key"]] = api_key
+                    self.c.print("  [yellow]Key could not be validated — saving anyway. Check it with `feral doctor`.[/]")
+
+                self.creds[provider["env_key"]] = api_key
+                os.environ[provider["env_key"]] = api_key
 
         self.c.print()
 
@@ -764,6 +895,128 @@ class OnboardWizard:
 
         self.c.print()
 
+    # ── Step 7: Messaging Channels ───────────────────────
+
+    async def _step_channels(self):
+        self.c.print(Panel(
+            "[bold]Step 7 · Messaging Channels (Optional)[/]\n"
+            "[dim]FERAL can talk on Telegram, Slack, Discord, and WhatsApp.[/]",
+            style="blue",
+        ))
+
+        if not Confirm.ask("  Connect messaging channels?", default=False):
+            self.c.print("  [dim]Skipped. Configure later: feral setup[/]")
+            self.c.print()
+            return
+
+        configured: list[str] = []
+        for ch in CHANNELS:
+            if not Confirm.ask(f"  Configure {ch['name']}?", default=False):
+                continue
+
+            while True:
+                field_values: dict[str, str] = {}
+                for env_key, hint in ch["fields"]:
+                    existing = self.creds.get(env_key)
+                    if existing:
+                        masked = existing[:6] + "..." if len(existing) > 8 else "***"
+                        self.c.print(f"    {env_key}: {masked} [green](existing)[/]")
+                        if Confirm.ask("    Use existing?", default=True):
+                            field_values[env_key] = existing
+                            continue
+                    self.c.print(f"    [dim]{hint}[/]")
+                    is_secret = any(kw in env_key.lower() for kw in ("token", "secret", "key", "password"))
+                    val = Prompt.ask(f"    {env_key}", password=is_secret)
+                    if val.strip():
+                        field_values[env_key] = val.strip()
+
+                if not field_values:
+                    break
+
+                with Progress(SpinnerColumn(), TextColumn("{task.description}")) as prog:
+                    prog.add_task(f"Validating {ch['name']}...", total=None)
+                    ok, msg = await _validate_channel(ch, field_values)
+
+                if ok:
+                    self.c.print(f"    [green]{msg}[/]")
+                    self.creds.update(field_values)
+                    configured.append(ch["name"])
+                    break
+                else:
+                    self.c.print(f"    [yellow]{msg}[/]")
+                    action = Prompt.ask("    Retry / Save anyway / Skip",
+                                        choices=["retry", "save", "skip"], default="retry")
+                    if action == "save":
+                        self.creds.update(field_values)
+                        configured.append(ch["name"])
+                        break
+                    elif action == "skip":
+                        break
+
+        self.config["channels"] = configured
+        self.c.print()
+
+    # ── Step 8: Home Assistant ───────────────────────────
+
+    async def _step_home_assistant(self):
+        self.c.print(Panel(
+            "[bold]Step 8 · Home Assistant (Optional)[/]\n"
+            "[dim]Connect FERAL to your Home Assistant for smart home control.[/]",
+            style="blue",
+        ))
+
+        if not Confirm.ask("  Do you use Home Assistant?", default=False):
+            self.c.print("  [dim]Skipped[/]")
+            self.c.print()
+            return
+
+        while True:
+            ha_url = Prompt.ask("  Home Assistant URL", default="http://homeassistant.local:8123")
+            ha_token = Prompt.ask("  Long-lived access token", password=True)
+
+            if not ha_url or not ha_token:
+                break
+
+            with Progress(SpinnerColumn(), TextColumn("{task.description}")) as prog:
+                prog.add_task("Validating Home Assistant...", total=None)
+                ok, msg = await _validate_home_assistant(ha_url, ha_token)
+
+            if ok:
+                self.c.print(f"  [green]{msg}[/]")
+                self.creds["HA_URL"] = ha_url
+                self.creds["HA_TOKEN"] = ha_token
+                self.config["home_assistant"] = True
+                break
+            else:
+                self.c.print(f"  [yellow]{msg}[/]")
+                action = Prompt.ask("  Retry / Save anyway / Skip",
+                                    choices=["retry", "save", "skip"], default="retry")
+                if action == "save":
+                    self.creds["HA_URL"] = ha_url
+                    self.creds["HA_TOKEN"] = ha_token
+                    self.config["home_assistant"] = True
+                    break
+                elif action == "skip":
+                    break
+
+        self.c.print()
+
+    # ── FERAL API Key ─────────────────────────────────────
+
+    def _step_api_key(self):
+        from api.keys import load_or_generate_api_key, get_api_key_path
+
+        load_or_generate_api_key()
+        key_path = get_api_key_path()
+        self.c.print(Panel(
+            f"[bold]FERAL API Key[/]\n\n"
+            f"  Stored at: [cyan]{key_path}[/]\n"
+            f"  [dim]Clients (iOS, Android, browser) use this to authenticate.\n"
+            f"  Set FERAL_API_KEY env var to override.[/]",
+            style="green",
+        ))
+        self.c.print()
+
     # ── Save & Finish ──────────────────────────────────────
 
     def _save_all(self):
@@ -795,6 +1048,12 @@ class OnboardWizard:
             "features": {
                 "multi_agent": bool(self.config.get("multi_agent", True)),
             },
+            "channels": {
+                "configured": self.config.get("channels", []),
+            },
+            "home_assistant": {
+                "enabled": bool(self.config.get("home_assistant")),
+            },
             "meta": {
                 "local_preset": self.config.get("local_preset", ""),
                 "setup_complete": True,
@@ -822,20 +1081,21 @@ class OnboardWizard:
         provider_name = PROVIDERS.get(self.config.get("provider", ""), {}).get("name", "?")
         model = self.config.get("model", "default")
         agent_name = self.config.get("agent_name", "FERAL")
+        tool_count = sum(1 for tk in TOOL_KEYS if tk["env"] in self.creds)
+        channels = self.config.get("channels", [])
+        channel_str = ", ".join(channels) if channels else "none"
+        ha_status = "connected" if self.config.get("home_assistant") else "not configured"
 
         self.c.print(Panel.fit(
-            f"[bold green]Setup Complete![/]\n\n"
-            f"  Provider:    {provider_name}\n"
-            f"  Model:       {model}\n"
-            f"  Agent:       {agent_name}\n"
-            f"  Config:      {FERAL_HOME}\n\n"
-            f"[bold]Start your agent:[/]\n"
-            f"  [cyan]feral start[/]\n\n"
-            f"[dim]Files you can edit anytime:[/]\n"
-            f"  {FERAL_HOME}/USER.md       — about you\n"
-            f"  {FERAL_HOME}/SOUL.md       — agent personality\n"
-            f"  {FERAL_HOME}/MEMORY.md     — agent's long-term memory\n"
-            f"  {FERAL_HOME}/IDENTITY.yaml — structured identity config",
+            f"[bold green]FERAL Setup Complete[/]\n\n"
+            f"  LLM Provider:    {provider_name}\n"
+            f"  LLM Model:       {model}\n"
+            f"  Agent:           {agent_name}\n"
+            f"  Tool Keys:       {tool_count} configured\n"
+            f"  Channels:        {channel_str}\n"
+            f"  Home Assistant:  {ha_status}\n"
+            f"  FERAL API Key:   ~/.feral/api_key [dim](keep this safe)[/]\n\n"
+            f"[bold]Starting FERAL on http://localhost:9090 ...[/]",
             border_style="green",
             padding=(1, 2),
         ))
@@ -861,45 +1121,9 @@ class OnboardWizard:
             self.c.print("  [yellow]Could not pull vision model. You can pull manually: ollama pull llava:7b[/]")
 
     async def _validate_key(self, provider: str, key: str) -> bool:
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                if provider == "openai":
-                    r = await client.get("https://api.openai.com/v1/models",
-                                         headers={"Authorization": f"Bearer {key}"})
-                    return r.status_code == 200
-                elif provider == "anthropic":
-                    r = await client.get("https://api.anthropic.com/v1/models",
-                                         headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
-                    return r.status_code == 200
-                elif provider == "gemini":
-                    r = await client.get(f"https://generativelanguage.googleapis.com/v1/models?key={key}")
-                    return r.status_code == 200
-                elif provider == "groq":
-                    r = await client.get("https://api.groq.com/openai/v1/models",
-                                         headers={"Authorization": f"Bearer {key}"})
-                    return r.status_code == 200
-                elif provider == "openrouter":
-                    r = await client.get("https://openrouter.ai/api/v1/models",
-                                         headers={"Authorization": f"Bearer {key}"})
-                    return r.status_code == 200
-                elif provider == "deepseek":
-                    r = await client.get("https://api.deepseek.com/models",
-                                         headers={"Authorization": f"Bearer {key}"})
-                    return r.status_code == 200
-                elif provider == "kimi":
-                    r = await client.get("https://api.moonshot.cn/v1/models",
-                                         headers={"Authorization": f"Bearer {key}"})
-                    return r.status_code == 200
-                elif provider == "qwen":
-                    r = await client.get(
-                        "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
-                        headers={"Authorization": f"Bearer {key}"},
-                    )
-                    return r.status_code == 200
-        except Exception:
-            pass
-        return False
+        """Backward-compat wrapper around the module-level validate_provider_key."""
+        ok, _ = await validate_provider_key(provider, key)
+        return ok
 
     async def _check_ollama(self):
         try:
@@ -1019,8 +1243,26 @@ class OnboardWizardPlain:
             else:
                 api_key = input(f"  Enter {provider['name']} API key: ").strip()
             if api_key:
-                self.creds[provider["env_key"]] = api_key
-                os.environ[provider["env_key"]] = api_key
+                while True:
+                    print("  Validating key...")
+                    ok, msg = await validate_provider_key(provider_id, api_key)
+                    if ok:
+                        print(f"  {msg}")
+                        self.creds[provider["env_key"]] = api_key
+                        os.environ[provider["env_key"]] = api_key
+                        break
+                    else:
+                        print(f"  {msg}")
+                        retry = input("  Retry with different key? (y/N): ").strip().lower()
+                        if retry in ("y", "yes"):
+                            api_key = input(f"  Enter {provider['name']} API key: ").strip()
+                            if not api_key:
+                                break
+                        else:
+                            print("  Saving anyway.")
+                            self.creds[provider["env_key"]] = api_key
+                            os.environ[provider["env_key"]] = api_key
+                            break
         print()
 
         # Model
@@ -1191,6 +1433,89 @@ class OnboardWizardPlain:
                             self.creds[ek] = extra_val
         print()
 
+        # Channels
+        print("Step 7: Messaging Channels (optional)")
+        print("  FERAL can talk on Telegram, Slack, Discord, and WhatsApp.")
+        configure_channels = input("  Connect messaging channels? (y/N): ").strip().lower()
+        configured_channels: list[str] = []
+        if configure_channels in ("y", "yes"):
+            for ch in CHANNELS:
+                setup_ch = input(f"  Configure {ch['name']}? (y/N): ").strip().lower()
+                if setup_ch not in ("y", "yes"):
+                    continue
+                while True:
+                    field_values: dict[str, str] = {}
+                    for env_key, hint in ch["fields"]:
+                        existing_val = self.creds.get(env_key)
+                        if existing_val:
+                            print(f"    {env_key}: {existing_val[:6]}... (existing)")
+                            use_ex = input("    Use existing? (Y/n): ").strip().lower()
+                            if use_ex not in ("n", "no"):
+                                field_values[env_key] = existing_val
+                                continue
+                        print(f"    {hint}")
+                        val = input(f"    {env_key}: ").strip()
+                        if val:
+                            field_values[env_key] = val
+                    if not field_values:
+                        break
+                    print(f"  Validating {ch['name']}...")
+                    ch_ok, ch_msg = await _validate_channel(ch, field_values)
+                    if ch_ok:
+                        print(f"    {ch_msg}")
+                        self.creds.update(field_values)
+                        configured_channels.append(ch["name"])
+                        break
+                    else:
+                        print(f"    {ch_msg}")
+                        action = input("    [r]etry / [s]ave anyway / s[k]ip: ").strip().lower()
+                        if action in ("s", "save"):
+                            self.creds.update(field_values)
+                            configured_channels.append(ch["name"])
+                            break
+                        elif action in ("k", "skip"):
+                            break
+        self.config["channels"] = configured_channels
+        print()
+
+        # Home Assistant
+        print("Step 8: Home Assistant (optional)")
+        ha_setup = input("  Do you use Home Assistant? (y/N): ").strip().lower()
+        if ha_setup in ("y", "yes"):
+            while True:
+                ha_url = input("  Home Assistant URL [http://homeassistant.local:8123]: ").strip()
+                ha_url = ha_url or "http://homeassistant.local:8123"
+                ha_token = input("  Long-lived access token: ").strip()
+                if not ha_url or not ha_token:
+                    break
+                print("  Validating Home Assistant...")
+                ha_ok, ha_msg = await _validate_home_assistant(ha_url, ha_token)
+                if ha_ok:
+                    print(f"  {ha_msg}")
+                    self.creds["HA_URL"] = ha_url
+                    self.creds["HA_TOKEN"] = ha_token
+                    self.config["home_assistant"] = True
+                    break
+                else:
+                    print(f"  {ha_msg}")
+                    ha_action = input("  [r]etry / [s]ave anyway / s[k]ip: ").strip().lower()
+                    if ha_action in ("s", "save"):
+                        self.creds["HA_URL"] = ha_url
+                        self.creds["HA_TOKEN"] = ha_token
+                        self.config["home_assistant"] = True
+                        break
+                    elif ha_action in ("k", "skip"):
+                        break
+        print()
+
+        # FERAL API Key
+        from api.keys import load_or_generate_api_key as _gen_key, get_api_key_path as _key_path
+        _gen_key()
+        _kp = _key_path()
+        print(f"  FERAL API Key stored at: {_kp}")
+        print("  Clients (iOS, Android, browser) use this to authenticate.")
+        print()
+
         # Vision settings for plain wizard
         if self.config.get("vlm_provider"):
             settings_vision = {
@@ -1225,6 +1550,12 @@ class OnboardWizardPlain:
             "features": {
                 "multi_agent": bool(self.config.get("multi_agent", True)),
             },
+            "channels": {
+                "configured": self.config.get("channels", []),
+            },
+            "home_assistant": {
+                "enabled": bool(self.config.get("home_assistant")),
+            },
             "meta": {
                 "local_preset": self.config.get("local_preset", ""),
                 "setup_complete": True,
@@ -1248,14 +1579,24 @@ class OnboardWizardPlain:
 
         settings_path.write_text(json.dumps(existing_settings, indent=2))
 
-        print("=" * 60)
-        print("  Setup complete!")
-        print(f"  Agent: {agent_name}")
-        print(f"  Config: {FERAL_HOME}")
+        tool_count = sum(1 for tk in TOOL_KEYS if tk["env"] in self.creds)
+        channels_list = self.config.get("channels", [])
+        channel_str = ", ".join(channels_list) if channels_list else "none"
+        ha_status = "connected" if self.config.get("home_assistant") else "not configured"
+
+        print("=" * 55)
+        print("  FERAL Setup Complete")
+        print("=" * 55)
+        print(f"  LLM Provider:    {provider_info.get('name', '?')}")
+        print(f"  LLM Model:       {self.config.get('model', 'default')}")
+        print(f"  Agent:           {agent_name}")
+        print(f"  Tool Keys:       {tool_count} configured")
+        print(f"  Channels:        {channel_str}")
+        print(f"  Home Assistant:  {ha_status}")
+        print(f"  FERAL API Key:   ~/.feral/api_key (keep this safe)")
         print()
-        print("  Start your agent:")
-        print("    feral start")
-        print("=" * 60)
+        print("  Starting FERAL on http://localhost:9090 ...")
+        print("=" * 55)
         print()
 
 

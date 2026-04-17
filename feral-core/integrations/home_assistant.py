@@ -16,6 +16,7 @@ from typing import Optional
 import httpx
 
 logger = logging.getLogger("feral.integrations.ha")
+ws_logger = logging.getLogger("feral.integrations.ha.ws")
 
 
 class HomeAssistantIntegration:

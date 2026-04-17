@@ -1,0 +1,30 @@
+---
+title: "Browser Automation — Setup & Troubleshooting"
+---
+
+## Starting Chrome with Debug Port
+
+```bash
+# Linux
+google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/feral-chrome
+
+# macOS
+open -a "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=/tmp/feral-chrome
+```
+
+FERAL auto-launches Chrome if no running instance is detected on port 9222.
+
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `FERAL_CDP_PORT` | `9222` | Chrome DevTools Protocol port |
+| `FERAL_CDP_HOST` | `localhost` | CDP host address |
+
+## Troubleshooting
+
+- **Connection refused on port 9222** — Chrome isn't running with `--remote-debugging-port=9222`. Start it manually or let FERAL auto-launch.
+- **Profile lock / conflicts** — Two Chrome instances sharing the same `--user-data-dir` will conflict. Use a dedicated dir like `/tmp/feral-chrome`.
+- **Playwright not available** — FERAL falls back to raw CDP. Install `playwright` and run `playwright install chromium` for full click/type support.
+- **Stale page refs** — ARIA refs are tied to the latest `snapshot()`. If a ref stops working, take a fresh snapshot.
+- **Checking logs** — Browser logs under `feral.skill.browser`. Set `FERAL_LOG_LEVEL=DEBUG` for per-CDP-method elapsed_ms timing.

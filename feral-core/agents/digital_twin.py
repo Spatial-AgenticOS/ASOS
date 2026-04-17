@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from agents.identity_loader import IdentityLoader
     from agents.llm_provider import LLMProvider
 
-logger = logging.getLogger("feral.agents.digital_twin")
+logger = logging.getLogger("feral.digital_twin")
 
 
 class DigitalTwin:

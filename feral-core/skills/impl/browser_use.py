@@ -17,11 +17,12 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional, Callable
 from uuid import uuid4
 
-logger = logging.getLogger("feral.browser")
+logger = logging.getLogger("feral.skill.browser")
 
 CDP_PORT = int(os.getenv("FERAL_CDP_PORT", "9222"))
 CDP_HOST = os.getenv("FERAL_CDP_HOST", "localhost")
@@ -124,8 +125,10 @@ class CDPConnection:
         if params:
             msg["params"] = params
 
+        t0 = time.monotonic()
         await self._ws.send(json.dumps(msg))
         result = await asyncio.wait_for(future, timeout=timeout)
+        logger.debug("CDP %s elapsed_ms=%.1f", method, (time.monotonic() - t0) * 1000)
         return result
 
     def add_event_listener(self, listener: Callable[[dict], None]):

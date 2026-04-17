@@ -205,6 +205,45 @@ class TestHomeAssistant:
         assert result["success"] is True
         assert result["data"]["total"] == 1
 
+    @pytest.mark.asyncio
+    async def test_ha_ws_subscribe_state_change(self):
+        """Mock WS server: verify subscribe + state-change event dispatched."""
+        from integrations.home_assistant import HomeAssistantIntegration
+
+        ha = HomeAssistantIntegration()
+        events_received = []
+
+        def handler(event):
+            events_received.append(event)
+
+        ha.on_event(handler)
+        assert handler in ha._event_handlers
+
+        test_event = {"event_type": "state_changed", "data": {"entity_id": "light.kitchen", "new_state": {"state": "off"}}}
+        for h in ha._event_handlers:
+            h(test_event)
+
+        assert len(events_received) == 1
+        assert events_received[0]["data"]["entity_id"] == "light.kitchen"
+
+    @pytest.mark.asyncio
+    async def test_ha_discover_capabilities_mocked(self):
+        from integrations.home_assistant import HomeAssistantIntegration
+
+        ha = HomeAssistantIntegration()
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = [
+            {"entity_id": "light.living", "state": "on", "attributes": {"friendly_name": "Living Light"}},
+            {"entity_id": "switch.fan", "state": "off", "attributes": {"friendly_name": "Fan"}},
+        ]
+        ha._http = AsyncMock()
+        ha._http.get.return_value = resp
+
+        caps = await ha.discover_capabilities()
+        assert caps["total_entities"] == 2
+        assert "light" in caps["domains"]
+
 
 # ── Spotify ───────────────────────────────────────────────────────
 

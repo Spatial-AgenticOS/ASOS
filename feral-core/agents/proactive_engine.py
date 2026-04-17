@@ -25,6 +25,7 @@ import json
 import logging
 import math
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -80,6 +81,7 @@ class ProactiveEngine:
         health_aggregator=None,
         baseline_engine=None,
         check_interval_s: float = 15.0,
+        config: dict | None = None,
     ):
         self._perception = perception
         self._memory = memory
@@ -92,14 +94,31 @@ class ProactiveEngine:
         self._running = False
         self._callbacks: list[Callable[[ProactiveMessage], Awaitable[None]]] = []
         self._trigger_states: dict[str, TriggerState] = {}
+        self._trigger_counts: dict[str, int] = defaultdict(int)
         self._first_interaction_today = True
         self._last_hr_alert = 0.0
         self._last_break_suggestion = 0.0
         self._last_llm_eval = 0.0
         self._session_start = time.time()
 
+        cfg = config or {}
+        features = cfg.get("features", {})
+        self._nag_cooldown_s = float(features.get("proactive_nag_cooldown_s", 300))
+
     def on_message(self, callback: Callable[[ProactiveMessage], Awaitable[None]]):
         self._callbacks.append(callback)
+
+    def stats(self) -> dict:
+        """Per-trigger fire counts and current cooldown state."""
+        return {
+            "trigger_counts": dict(self._trigger_counts),
+            "trigger_states": {
+                tid: {"fire_count": s.fire_count, "dismiss_count": s.dismiss_count, "cooldown_s": s.cooldown_s}
+                for tid, s in self._trigger_states.items()
+            },
+            "nag_cooldown_s": self._nag_cooldown_s,
+            "running": self._running,
+        }
 
     async def start(self):
         self._running = True
@@ -437,9 +456,10 @@ class ProactiveEngine:
         return (time.time() - state.last_fired) >= state.cooldown_s
 
     def _record_fire(self, trigger_id: str):
-        state = self._trigger_states.setdefault(trigger_id, TriggerState())
+        state = self._trigger_states.setdefault(trigger_id, TriggerState(cooldown_s=self._nag_cooldown_s))
         state.last_fired = time.time()
         state.fire_count += 1
+        self._trigger_counts[trigger_id] += 1
 
     async def _deliver(self, msg: ProactiveMessage):
         logger.info("Proactive [%s] %s: %s", msg.priority.name, msg.trigger_id, msg.title)

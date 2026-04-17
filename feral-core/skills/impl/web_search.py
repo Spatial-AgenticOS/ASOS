@@ -14,7 +14,7 @@ import httpx
 from skills.base import BaseSkill
 from skills.impl import register_skill
 
-logger = logging.getLogger("feral.skills.web_search")
+logger = logging.getLogger("feral.skill.search")
 
 
 # ---------------------------------------------------------------------------
@@ -174,29 +174,35 @@ class BraveProvider(SearchProvider):
 
 class DuckDuckGoProvider(SearchProvider):
     name = "duckduckgo"
+    _ddgs_available: Optional[bool] = None
 
     def __init__(self, client: Optional[httpx.AsyncClient] = None):
         self._client = client or httpx.AsyncClient(timeout=15.0)
 
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
-        try:
-            from duckduckgo_search import DDGS
+        if DuckDuckGoProvider._ddgs_available is not False:
+            try:
+                from duckduckgo_search import DDGS
 
-            out: list[SearchResult] = []
-            with DDGS() as ddgs:
-                for i, r in enumerate(ddgs.text(query, max_results=max_results)):
-                    out.append(
-                        SearchResult(
-                            title=str(r.get("title", "") or ""),
-                            url=str(r.get("href", "") or r.get("url", "") or ""),
-                            snippet=str(r.get("body", "") or ""),
-                            score=float(max(0, max_results - i)),
+                DuckDuckGoProvider._ddgs_available = True
+                out: list[SearchResult] = []
+                with DDGS() as ddgs:
+                    for i, r in enumerate(ddgs.text(query, max_results=max_results)):
+                        out.append(
+                            SearchResult(
+                                title=str(r.get("title", "") or ""),
+                                url=str(r.get("href", "") or r.get("url", "") or ""),
+                                snippet=str(r.get("body", "") or ""),
+                                score=float(max(0, max_results - i)),
+                            )
                         )
-                    )
-            if out:
-                return out
-        except Exception as e:
-            logger.debug("duckduckgo_search package failed: %s", e)
+                if out:
+                    return out
+            except ImportError:
+                DuckDuckGoProvider._ddgs_available = False
+                logger.warning("duckduckgo_search not installed — DDG DDGS disabled, using HTTP fallback")
+            except Exception as e:
+                logger.debug("duckduckgo_search package failed: %s", e)
 
         return await self._instant_answer_http(query, max_results)
 
@@ -445,11 +451,12 @@ class WebSearchEngine:
         providers.append(DuckDuckGoProvider())
         return cls(providers)
 
-    async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+    async def search(self, query: str, max_results: int = 5) -> tuple[list[SearchResult], str]:
+        """Search with failover. Returns (results, provider_used_name)."""
         cached = self._cache.get(query)
         if cached is not None:
             logger.debug("search cache hit for %r", query)
-            return [SearchResult(**r) for r in cached]
+            return [SearchResult(**r) for r in cached], "cache"
 
         last_err: Optional[Exception] = None
         for p in self.providers:
@@ -461,14 +468,15 @@ class WebSearchEngine:
                         query,
                         [{"title": r.title, "url": r.url, "snippet": r.snippet, "score": r.score} for r in results],
                     )
-                    return results
+                    logger.info("search query=%r provider=%s results=%d", query[:60], p.name, len(results))
+                    return results, p.name
             except Exception as e:
                 last_err = e
                 logger.debug("provider %s failed: %s", p.name, e)
                 continue
         if last_err:
             raise last_err
-        return []
+        return [], ""
 
     async def search_instant(self, query: str, max_results: int = 5) -> tuple[list[SearchResult], Optional[str]]:
         for p in self.providers:
@@ -486,7 +494,7 @@ class WebSearchEngine:
                     return _deduplicate(results), ans
                 except Exception as e:
                     logger.debug("ddg instant: %s", e)
-        results = await self.search(query, max_results=max_results)
+        results, _ = await self.search(query, max_results=max_results)
         return results, None
 
 
@@ -532,11 +540,11 @@ class WebSearchSkill(BaseSkill):
 
         try:
             if endpoint_id == "web_search":
-                results = await engine.search(query, max_results=max_results)
+                results, provider_used = await engine.search(query, max_results=max_results)
                 return {
                     "success": True,
                     "status_code": 200,
-                    "data": {"results": _results_to_payload(results)},
+                    "data": {"results": _results_to_payload(results), "provider_used": provider_used},
                     "error": None,
                 }
             if endpoint_id == "instant_answer":

@@ -1,0 +1,32 @@
+---
+title: "Digital Twin — Guide & Ethics"
+---
+
+## What is the Digital Twin?
+
+FERAL's Digital Twin is a cognitive replica that can answer questions "as the user" by drawing on their full memory corpus, identity files, knowledge graph, and personality profile.
+
+## How It Works
+
+1. **Identity** — Loaded from `~/.feral/USER.md` (name, personality traits, priorities).
+2. **Memory** — Recent episodes and semantic search over long-term memory.
+3. **Knowledge Graph** — Structured triples (subject → predicate → object) extracted from conversations.
+4. **LLM** — Synthesizes all context to answer "as you would."
+
+## Ethical Bounds — Act-as-User
+
+The Digital Twin operates under strict ethical boundaries:
+
+- **Read-only by default** — The twin can answer questions and predict preferences but cannot take actions on behalf of the user without explicit approval.
+- **No impersonation** — The twin must never be used to communicate with others pretending to be the user.
+- **Transparency** — Any output from the twin should be clearly labeled as AI-generated.
+- **User control** — The user can disable the twin at any time via `settings.json` → `features.digital_twin_enabled: false`.
+- **Data locality** — All memory and identity data stays on the user's device. The twin never sends personal data to external services beyond the configured LLM API.
+
+## Troubleshooting
+
+- **Twin returns generic answers** — Ensure `~/.feral/USER.md` exists with personality info. More memory = better answers.
+- **"wasn't able to reason" error** — LLM API is down or misconfigured. Check `OPENAI_API_KEY` or your configured provider.
+- **Slow responses** — The twin queries memory + KG + LLM sequentially. Check network latency to your LLM provider.
+- **Predictions low confidence** — Not enough relevant memories. Use FERAL more to build up context.
+- **Checking logs** — `feral.digital_twin` logger. Set `FERAL_LOG_LEVEL=DEBUG` for prompt details.

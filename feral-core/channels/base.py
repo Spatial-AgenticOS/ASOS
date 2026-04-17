@@ -103,6 +103,23 @@ class Channel(ABC):
     def active_chat_ids(self) -> list[str]:
         return list(self._known_chat_ids)
 
+    @staticmethod
+    async def _http_with_retry(client, method: str, url: str, **kw):
+        """Exponential-backoff retry for 429 / 503 responses (up to 3 attempts)."""
+        fn = getattr(client, method.lower(), None) or client.request
+        r = None
+        for attempt in range(3):
+            if fn is client.request:
+                r = await fn(method, url, **kw)
+            else:
+                r = await fn(url, **kw)
+            if hasattr(r, "status_code") and r.status_code in (429, 503):
+                logger.warning("Channel HTTP %s %s returned %d (attempt %d/3)", method, url[:80], r.status_code, attempt + 1)
+                await asyncio.sleep(2 ** attempt)
+                continue
+            return r
+        return r
+
 
 class TelegramChannel(Channel):
     """Telegram bot — full bidirectional with voice/image support."""
@@ -219,6 +236,7 @@ class TelegramChannel(Channel):
     async def send(self, channel_id: str, response: ChannelResponse):
         if not response.text and not response.image_b64:
             return
+        tg_logger = logging.getLogger("feral.channel.telegram")
         try:
             payload = {
                 "chat_id": channel_id,
@@ -232,9 +250,9 @@ class TelegramChannel(Channel):
                         for b in response.buttons
                     ]
                 }
-            await self._http.post(f"{self._base_url}/sendMessage", json=payload)
+            await self._http_with_retry(self._http, "POST", f"{self._base_url}/sendMessage", json=payload)
         except Exception as e:
-            logger.error(f"Telegram send error: {e}")
+            tg_logger.error("Telegram send error: %s", e)
 
 
 class DiscordChannel(Channel):
@@ -337,11 +355,12 @@ class DiscordChannel(Channel):
     async def send(self, channel_id: str, response: ChannelResponse):
         if not response.text:
             return
+        dc_logger = logging.getLogger("feral.channel.discord")
         try:
             url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
-            await self._http.post(url, json={"content": response.text})
+            await self._http_with_retry(self._http, "POST", url, json={"content": response.text})
         except Exception as e:
-            logger.error(f"Discord send error: {e}")
+            dc_logger.error("Discord send error: %s", e)
 
 
 class SlackChannel(Channel):
@@ -458,9 +477,9 @@ class SlackChannel(Channel):
                         ],
                     },
                 ]
-            await self._http.post("https://slack.com/api/chat.postMessage", json=payload)
+            await self._http_with_retry(self._http, "POST", "https://slack.com/api/chat.postMessage", json=payload)
         except Exception as e:
-            logger.error(f"Slack send error: {e}")
+            logging.getLogger("feral.channel.slack").error("Slack send error: %s", e)
 
 
 class WhatsAppChannel(Channel):
@@ -525,10 +544,12 @@ class WhatsAppChannel(Channel):
 
     async def send_text(self, chat_id: str, text: str, **kwargs) -> dict:
         """Send a text message via WhatsApp Cloud API."""
+        wa_logger = logging.getLogger("feral.channel.whatsapp")
         if not self._running or not self._http:
             return {"success": False, "error": "WhatsApp not running"}
         try:
-            response = await self._http.post(
+            response = await self._http_with_retry(
+                self._http, "POST",
                 f"https://graph.facebook.com/v18.0/{self._phone_id}/messages",
                 headers={
                     "Authorization": f"Bearer {self._access_token}",
@@ -544,7 +565,7 @@ class WhatsAppChannel(Channel):
             response.raise_for_status()
             return {"success": True, "data": response.json()}
         except Exception as e:
-            logger.error(f"WhatsApp send failed: {e}")
+            wa_logger.error("WhatsApp send failed: %s", e)
             return {"success": False, "error": str(e)}
 
     async def send(self, channel_id: str, response: ChannelResponse):

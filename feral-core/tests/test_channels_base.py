@@ -426,3 +426,45 @@ async def test_discord_send_skips_when_no_text():
     ch._http = mock_http
     await ch.send("ch", ChannelResponse(text=""))
     mock_http.post.assert_not_called()
+
+
+# ── Rate-limit retry ─────────────────────────────────────────────────────────
+
+
+class TestHttpWithRetry:
+    @pytest.mark.asyncio
+    async def test_retry_on_429_then_succeeds(self):
+        from channels.base import Channel
+
+        mock_client = MagicMock()
+        resp_429 = MagicMock(status_code=429)
+        resp_200 = MagicMock(status_code=200)
+        mock_client.post = AsyncMock(side_effect=[resp_429, resp_200])
+
+        result = await Channel._http_with_retry(mock_client, "POST", "https://api.example.com/send", json={"text": "hi"})
+        assert result.status_code == 200
+        assert mock_client.post.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_exhausted_returns_last_response(self):
+        from channels.base import Channel
+
+        mock_client = MagicMock()
+        resp_503 = MagicMock(status_code=503)
+        mock_client.post = AsyncMock(return_value=resp_503)
+
+        result = await Channel._http_with_retry(mock_client, "POST", "https://api.example.com/send")
+        assert result.status_code == 503
+        assert mock_client.post.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_success(self):
+        from channels.base import Channel
+
+        mock_client = MagicMock()
+        resp_200 = MagicMock(status_code=200)
+        mock_client.get = AsyncMock(return_value=resp_200)
+
+        result = await Channel._http_with_retry(mock_client, "GET", "https://api.example.com/ok")
+        assert result.status_code == 200
+        assert mock_client.get.call_count == 1

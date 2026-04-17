@@ -455,11 +455,11 @@ def test_step_finish_summary_contains_provider_model_agent_and_paths(wizard_home
     w._step_finish()
 
     text = console.export_text(clear=False)
-    assert "Setup Complete!" in text
+    assert "Setup Complete" in text
     assert "Anthropic" in text
     assert "claude-sonnet-4-20250514" in text
     assert "MyAgent" in text
-    assert str(wizard_home) in text or "USER.md" in text
+    assert "api_key" in text or "localhost:9090" in text
 
 
 def test_step_finish_defaults_when_config_sparse(wizard_home):
@@ -470,5 +470,5 @@ def test_step_finish_defaults_when_config_sparse(wizard_home):
     w.config = {}
     w._step_finish()
     text = console.export_text(clear=False)
-    assert "Setup Complete!" in text
+    assert "Setup Complete" in text
     assert "default" in text or "?" in text

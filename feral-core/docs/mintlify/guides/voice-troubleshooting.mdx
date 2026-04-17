@@ -1,0 +1,11 @@
+---
+title: "Voice — Troubleshooting"
+---
+
+## Common Issues
+
+- **No API key** — Set `OPENAI_API_KEY` (for OpenAI Realtime) or `GEMINI_API_KEY` / `GOOGLE_API_KEY` (for Gemini Live). The proxy logs `no OPENAI_API_KEY` or `no GEMINI_API_KEY` if missing.
+- **Network / firewall** — Both providers use outbound WebSocket (`wss://`). Ensure ports 443 are open. The proxy retries 3 times with exponential backoff before failing.
+- **Expired or invalid key** — A `401` from the provider appears as `Realtime API error` in logs. Rotate the key and restart.
+- **Wrong model name** — Default models are `gpt-4o-realtime-preview-2024-12-17` (OpenAI) and `gemini-2.0-flash-live-001` (Gemini). Override with `FERAL_GEMINI_LIVE_MODEL` env var.
+- **Checking logs** — Voice logs under `feral.voice.openai` and `feral.voice.gemini`. Set `FERAL_LOG_LEVEL=DEBUG` to see per-chunk latency and connection attempts.

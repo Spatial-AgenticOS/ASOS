@@ -16,6 +16,11 @@ NC='\033[0m'
 
 VENV_DIR="$HOME/.feral-env"
 
+SKIP_WIZARD=0
+for arg in "$@"; do
+    [ "$arg" = "--skip-wizard" ] && SKIP_WIZARD=1
+done
+
 echo -e "${BOLD}${CYAN}"
 echo "  ╔══════════════════════════════════════════════════╗"
 echo "  ║            F E R A L  Installer                    ║"
@@ -85,22 +90,22 @@ install_success=false
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../feral-core/pyproject.toml" ]; then
     REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
     echo -e "  ${DIM}From local repo: $REPO_ROOT${NC}"
-    if $PYTHON -m pip install --upgrade --force-reinstall -e "$REPO_ROOT/feral-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+    if $PYTHON -m pip install --upgrade --force-reinstall -e "$REPO_ROOT/feral-core[all]" 2>&1 | tee "$PIP_LOG" | tail -5; then
         install_success=true
     fi
 else
     echo -e "  ${DIM}Installing from GitHub...${NC}"
-    if $PYTHON -m pip install --upgrade --force-reinstall "feral-ai[llm] @ git+https://github.com/FERAL-AI/FERAL-AI.git#subdirectory=feral-core" 2>&1 | tee "$PIP_LOG" | tail -5; then
+    if $PYTHON -m pip install --upgrade --force-reinstall "feral-ai[all] @ git+https://github.com/FERAL-AI/FERAL-AI.git#subdirectory=feral-core" 2>&1 | tee "$PIP_LOG" | tail -5; then
         install_success=true
     else
         echo -e "  ${DIM}Git install failed. Trying PyPI...${NC}"
-        if $PYTHON -m pip install --upgrade --force-reinstall "feral-ai[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+        if $PYTHON -m pip install --upgrade --force-reinstall "feral-ai[all]" 2>&1 | tee "$PIP_LOG" | tail -5; then
             install_success=true
         else
             echo -e "  ${DIM}PyPI failed. Cloning repo...${NC}"
             TMPDIR=$(mktemp -d)
             if git clone --depth 1 https://github.com/FERAL-AI/FERAL-AI.git "$TMPDIR/feral" 2>/dev/null; then
-                if $PYTHON -m pip install --upgrade --force-reinstall -e "$TMPDIR/feral/feral-core[llm]" 2>&1 | tee "$PIP_LOG" | tail -5; then
+                if $PYTHON -m pip install --upgrade --force-reinstall -e "$TMPDIR/feral/feral-core[all]" 2>&1 | tee "$PIP_LOG" | tail -5; then
                     install_success=true
                 fi
             fi
@@ -115,8 +120,8 @@ if [ "$install_success" = false ]; then
     echo ""
     echo "  Common fixes:"
     echo "    1. Upgrade pip:  $PYTHON -m pip install --upgrade pip"
-    echo "    2. Retry:        source ~/.feral-env/bin/activate && pip install feral-ai[llm]"
-    echo "    3. Manual clone: git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI/feral-core && pip install -e .[llm]"
+    echo "    2. Retry:        source ~/.feral-env/bin/activate && pip install feral-ai[all]"
+    echo "    3. Manual clone: git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI/feral-core && pip install -e .[all]"
     exit 1
 fi
 
@@ -160,33 +165,13 @@ echo -e "${GREEN}${BOLD}  Installed!${NC}"
 echo ""
 
 FERAL_CREDS="$HOME/.feral/credentials.json"
-if [ ! -f "$FERAL_CREDS" ] || [ ! -s "$FERAL_CREDS" ]; then
-    echo -e "  ${BOLD}First-time setup — let's configure your agent.${NC}"
-    echo ""
-    echo -e "  ${DIM}You can do this two ways:${NC}"
-    echo ""
-    echo -e "  ${CYAN}Option A: Terminal wizard (quick, 2 minutes)${NC}"
-    echo "    feral setup"
-    echo ""
-    echo -e "  ${CYAN}Option B: Web UI wizard (full configuration)${NC}"
-    echo "    feral serve"
-    echo "    Then open http://localhost:9090 — the setup wizard starts automatically."
-    echo ""
 
-    read -r -p "  Run the terminal wizard now? [Y/n] " answer </dev/tty 2>/dev/null || answer="y"
-    answer=${answer:-y}
-
-    if [[ "$answer" =~ ^[Yy]$ ]]; then
-        if command -v feral &> /dev/null; then
-            feral setup
-        else
-            $PYTHON -m cli.setup_wizard 2>/dev/null || {
-                echo -e "  ${DIM}Wizard not available. Start with: feral serve${NC}"
-            }
-        fi
+if ([ ! -f "$FERAL_CREDS" ] || [ ! -s "$FERAL_CREDS" ]) && [ "$SKIP_WIZARD" = 0 ]; then
+    echo -e "  ${CYAN}Running setup wizard...${NC}"
+    if command -v feral &> /dev/null; then
+        feral setup || { echo "  Wizard failed, exiting"; exit 1; }
     else
-        echo ""
-        echo -e "  ${DIM}No problem. Run 'feral serve' and configure via the web UI.${NC}"
+        $PYTHON -m cli.setup_wizard || { echo "  Wizard failed"; exit 1; }
     fi
     echo ""
 fi
@@ -210,3 +195,11 @@ echo "    feral doctor     Check what's working"
 echo "    feral serve      Headless server mode"
 echo "    feral status     Current brain status"
 echo ""
+
+# ─── Auto-Start FERAL Brain ──────────────────────────────
+echo -e "  ${CYAN}Starting FERAL Brain...${NC}"
+if command -v feral &> /dev/null; then
+    exec feral start
+else
+    exec "$PYTHON" -m cli.main start
+fi

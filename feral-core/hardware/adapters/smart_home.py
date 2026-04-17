@@ -25,7 +25,7 @@ from hardware.protocol import (
     HUPResult,
 )
 
-logger = logging.getLogger("feral.hup.smart_home")
+logger = logging.getLogger("feral.hardware.hue")
 
 
 class PhilipsHueAdapter:
@@ -44,17 +44,54 @@ class PhilipsHueAdapter:
     def _base_url(self) -> str:
         return f"http://{self._bridge_ip}/api/{self._api_key}"
 
-    async def discover_bridge(self) -> Optional[str]:
-        """Discover Hue bridge via meethue.com or mDNS."""
+    async def discover_bridge(self) -> Optional[dict]:
+        """Discover Hue bridge via meethue.com, mDNS fallback, or manual env."""
         try:
             r = await self._client.get("https://discovery.meethue.com/", timeout=5)
             bridges = r.json()
             if bridges:
                 self._bridge_ip = bridges[0].get("internalipaddress", "")
-                return self._bridge_ip
+                logger.info("Hue bridge found via meethue.com: %s", self._bridge_ip)
+                return {"success": True, "ip": self._bridge_ip, "method": "meethue"}
         except Exception as e:
-            logger.warning(f"Hue bridge discovery failed: {e}")
-        return None
+            logger.warning("meethue.com discovery failed: %s — trying mDNS", e)
+
+        try:
+            from zeroconf import Zeroconf, ServiceBrowser
+            import socket
+            zc = Zeroconf()
+            found_ip = None
+
+            class Listener:
+                def add_service(self, zc_inst, stype, name):
+                    nonlocal found_ip
+                    info = zc_inst.get_service_info(stype, name)
+                    if info and info.addresses:
+                        found_ip = socket.inet_ntoa(info.addresses[0])
+
+                def remove_service(self, *a):
+                    pass
+
+                def update_service(self, *a):
+                    pass
+
+            ServiceBrowser(zc, "_hue._tcp.local.", Listener())
+            await asyncio.sleep(3)
+            zc.close()
+            if found_ip:
+                self._bridge_ip = found_ip
+                logger.info("Hue bridge found via mDNS: %s", found_ip)
+                return {"success": True, "ip": found_ip, "method": "mdns"}
+        except ImportError:
+            logger.debug("zeroconf not installed — skipping mDNS discovery")
+        except Exception as e:
+            logger.warning("mDNS discovery failed: %s", e)
+
+        return {
+            "success": False,
+            "reason": "bridge_not_found",
+            "hint": "Set HUE_BRIDGE_IP manually",
+        }
 
     async def register(self, device_type: str = "feral-brain") -> Optional[str]:
         """Register with the bridge (user must press the button first)."""

@@ -10,10 +10,11 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Optional, Callable
 from uuid import uuid4
 
-logger = logging.getLogger("feral.voice.gemini_realtime")
+logger = logging.getLogger("feral.voice.gemini")
 
 GEMINI_WS_URL = (
     "wss://generativelanguage.googleapis.com/ws/"
@@ -131,6 +132,7 @@ class GeminiRealtimeSession:
         """Stream a chunk of PCM16 audio at 16 kHz to Gemini."""
         if not self._connected:
             return
+        t0 = time.monotonic()
         await self._send({
             "realtimeInput": {
                 "audio": {
@@ -139,6 +141,7 @@ class GeminiRealtimeSession:
                 },
             },
         })
+        logger.debug("audio_chunk sent session=%s latency_ms=%.1f", self.session_id, (time.monotonic() - t0) * 1000)
 
     async def send_video(self, frame_b64: str, mime_type: str = "image/jpeg"):
         """Stream a video/image frame to Gemini for multimodal context."""

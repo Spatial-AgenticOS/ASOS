@@ -219,3 +219,49 @@ class TestStopStart:
         engine._running = True
         engine.stop()
         assert engine._running is False
+
+
+class TestTriggerCounters:
+    def test_counter_increments_on_fire(self, engine):
+        engine._record_fire("test_trigger")
+        assert engine._trigger_counts["test_trigger"] == 1
+        engine._record_fire("test_trigger")
+        assert engine._trigger_counts["test_trigger"] == 2
+
+    def test_stats_returns_counts(self, engine):
+        engine._record_fire("a")
+        engine._record_fire("a")
+        engine._record_fire("b")
+        s = engine.stats()
+        assert s["trigger_counts"]["a"] == 2
+        assert s["trigger_counts"]["b"] == 1
+        assert "nag_cooldown_s" in s
+
+    def test_stats_empty_engine(self, engine):
+        s = engine.stats()
+        assert s["trigger_counts"] == {}
+        assert s["running"] is False
+
+
+class TestNagCooldown:
+    def test_default_nag_cooldown(self, engine):
+        assert engine._nag_cooldown_s == 300
+
+    def test_custom_nag_cooldown_from_config(self):
+        eng = ProactiveEngine(
+            config={"features": {"proactive_nag_cooldown_s": 600}},
+        )
+        assert eng._nag_cooldown_s == 600
+
+    def test_cooldown_applied_to_new_triggers(self, engine):
+        engine._nag_cooldown_s = 120
+        engine._record_fire("custom_cd")
+        state = engine._trigger_states["custom_cd"]
+        assert state.cooldown_s == 120
+
+    @pytest.mark.asyncio
+    async def test_cooldown_honored_blocks_second_fire(self, engine):
+        """After firing, the same trigger can't fire again within cooldown."""
+        engine._nag_cooldown_s = 9999
+        engine._record_fire("once")
+        assert engine._can_fire("once") is False

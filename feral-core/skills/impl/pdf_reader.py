@@ -16,9 +16,10 @@ from typing import Any, Dict, List
 from skills.base import BaseSkill
 from skills.impl import register_skill
 
-logger = logging.getLogger("feral.pdf_reader")
+logger = logging.getLogger("feral.skill.pdf")
 
 MAX_CHARS = 200_000
+MAX_PAGES = 1000
 
 
 def _get_fitz():
@@ -132,6 +133,12 @@ class PDFReaderSkill(BaseSkill):
         doc = fitz.open(str(path))
         try:
             total_pages = int(doc.page_count)
+            if total_pages > MAX_PAGES:
+                doc.close()
+                raise ValueError(
+                    f"PDF has {total_pages} pages, exceeding the {MAX_PAGES}-page limit. "
+                    "Split the document or increase MAX_PAGES."
+                )
             if total_pages == 0:
                 return {
                     "path": str(path), "total_pages": 0, "pages_read": 0,

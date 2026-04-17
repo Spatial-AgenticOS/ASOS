@@ -22,7 +22,7 @@ from uuid import uuid4
 
 import httpx
 
-logger = logging.getLogger("feral.voice.realtime")
+logger = logging.getLogger("feral.voice.openai")
 
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 DEFAULT_MODEL = "gpt-4o-realtime-preview-2024-12-17"
@@ -160,10 +160,12 @@ class RealtimeSession:
         """Relay PCM16 audio from the phone to OpenAI Realtime."""
         if not self._connected:
             return
+        t0 = time.monotonic()
         await self._send({
             "type": "input_audio_buffer.append",
             "audio": audio_b64,
         })
+        logger.debug("audio_chunk sent session=%s latency_ms=%.1f", self.session_id, (time.monotonic() - t0) * 1000)
 
     async def send_text(self, text: str):
         """Send a text message into the realtime conversation."""

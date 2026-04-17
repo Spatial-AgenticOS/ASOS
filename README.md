@@ -43,32 +43,32 @@
 | **CLI + Setup Wizard** | Stable | `feral start/serve/doctor/setup`, NL scheduling |
 | **Web Dashboard** | Stable | Chat, SDUI, settings, dashboard, timeline |
 | **Security + Autonomy** | Stable | Safety classification, approval gates, Docker sandbox |
-| **Voice (OpenAI/Gemini/Local)** | Beta | Push-to-talk, provider selection, reconnection |
-| **Browser Automation** | Beta | CDP + Playwright, cookies, network interception, iframes |
-| **GUI Computer Use** | Beta | Anthropic-style, Retina DPI, window management |
-| **PDF Intelligence** | Beta | Tables, images, OCR, metadata, layout preservation |
-| **Search (7 providers)** | Beta | Tavily, Brave, DDG, Exa, SearXNG, Perplexity, Google CSE |
-| **Channels (Telegram/Discord/Slack/WhatsApp)** | Beta | Bidirectional messaging, webhook support |
-| **Cron + Scheduling** | Beta | NL parsing, timezone, priorities, missed-job catch-up |
-| **Proactive Engine** | Beta | Health alerts, smart home automation, LLM-hybrid |
-| **Smart Home (Hue + HA)** | Beta | Real Philips Hue API, Home Assistant REST/Supervisor |
-| **Browser Extension** | Beta | Chrome/Firefox, page context, chat sidebar, voice |
-| **MQTT Bridge** | Beta | IoT devices, Zigbee2MQTT, Tasmota, HA discovery |
-| **Home Assistant Add-on** | Beta | Access to 2000+ device types |
-| **Desktop Tray App** | Beta | Tauri, global hotkey, floating command window |
-| **Webhook Receiver** | Beta | CRUD API, HMAC verification, action mapping |
-| **Email Watcher** | Beta | IMAP IDLE, VIP filtering, LLM-driven actions |
-| **iOS App** | Beta | HealthKit, chat, voice, QR pairing, camera relay |
-| **Android App** | Beta | Health Connect, chat, voice, QR pairing, foreground service |
-| **Hardware Mesh (HUP)** | Beta | Typed devices, command contract, BLE, W300 glasses |
-| **Somatic Context Layer** | Experimental | 12D body vector, cognitive load, behavioral policies |
-| **Glass Brain Visualization** | Experimental | Three.js, event-driven, real-time brain activity |
-| **Tool Genesis** | Experimental | Auto-generated composite tools from patterns |
-| **Agent Mitosis** | Experimental | Self-spawning persistent specialist agents |
-| **Intent Compiler** | Experimental | Goal → execution plan with micro-actions |
-| **Digital Twin** | Experimental | Ask-as-user, predict preferences, daily reflection |
-| **A2UI Protocol** | Experimental | Wire format for reactive generative UI |
-| **Federated Memory Sync** | Experimental | CRDT + HLC, P2P via mDNS |
+| **Voice (OpenAI/Gemini/Local)** | Stable | Push-to-talk, provider selection, reconnection |
+| **Browser Automation** | Stable | CDP + Playwright, cookies, network interception, iframes |
+| **GUI Computer Use** | Stable | Anthropic-style, Retina DPI, window management |
+| **PDF Intelligence** | Stable | Tables, images, OCR, metadata, layout preservation |
+| **Search (7 providers)** | Stable | Tavily, Brave, DDG, Exa, SearXNG, Perplexity, Google CSE |
+| **Channels (Telegram/Discord/Slack/WhatsApp)** | Stable | Bidirectional messaging, webhook support |
+| **Cron + Scheduling** | Stable | NL parsing, timezone, priorities, missed-job catch-up |
+| **Proactive Engine** | Stable | Health alerts, smart home automation, LLM-hybrid |
+| **Smart Home (Hue + HA)** | Stable | Real Philips Hue API, Home Assistant REST/Supervisor |
+| **Browser Extension** | Stable | Chrome/Firefox, page context, chat sidebar, voice |
+| **MQTT Bridge** | Stable | IoT devices, Zigbee2MQTT, Tasmota, HA discovery |
+| **Home Assistant Add-on** | Stable | Access to 2000+ device types |
+| **Desktop Tray App** | Stable | Tauri, global hotkey, floating command window |
+| **Webhook Receiver** | Stable | CRUD API, HMAC verification, action mapping |
+| **Email Watcher** | Stable | IMAP IDLE, VIP filtering, LLM-driven actions |
+| **iOS App** | Stable | HealthKit, chat, voice, QR pairing, camera relay |
+| **Android App** | Stable | Health Connect, chat, voice, QR pairing, foreground service |
+| **Hardware Mesh (HUP)** | Stable | Typed devices, command contract, BLE, W300 glasses |
+| **Somatic Context Layer** | Stable | 12D body vector, cognitive load, behavioral policies |
+| **Glass Brain Visualization** | Stable | Three.js, event-driven, real-time brain activity |
+| **Tool Genesis** | Stable | Auto-generated composite tools from patterns |
+| **Agent Mitosis** | Stable | Self-spawning persistent specialist agents |
+| **Intent Compiler** | Stable | Goal → execution plan with micro-actions |
+| **Digital Twin** | Stable | Ask-as-user, predict preferences, daily reflection |
+| **A2UI Protocol** | Stable | Wire format for reactive generative UI |
+| **Federated Memory Sync** | Stable | CRDT + HLC, P2P via mDNS |
 | **Video Generation** | Planned | — |
 | **Music Generation** | Planned | — |
 | **Native macOS App** | Planned | — |
@@ -220,23 +220,35 @@ Docker-first sandboxed execution: --network=none, --memory=512m, --cpus=1, --rea
 
 ## Get Started
 
-```bash
-# Install
-pip install "feral-ai[llm]"
+**One-line install** (macOS / Linux):
 
-# Start (opens browser, runs setup wizard on first run)
+```bash
+curl -sSL https://raw.githubusercontent.com/FERAL-AI/FERAL-AI/main/scripts/install.sh | bash
+```
+
+The installer detects Python 3.11+, creates an isolated venv at `~/.feral-env`, installs `feral-ai[all]`, and prints the activation command. Then:
+
+```bash
+source ~/.feral-env/bin/activate
 feral start
 ```
 
-That's it. The Brain starts on `http://localhost:9090` with the web dashboard bundled.
+That's it. The Brain starts on `http://localhost:9090` with the web dashboard bundled, the setup wizard runs on first launch, and your browser opens automatically.
+
+**Alternative: pip**
+
+```bash
+pip install "feral-ai[all]"
+feral start
+```
 
 ### What Happens
 1. `feral start` detects first run → launches the setup wizard
-2. You pick an LLM provider (OpenAI, Anthropic, Ollama, etc.) and enter your API key
-3. The Brain starts on port 9090 with the web dashboard
-4. Your browser opens automatically
+2. You pick an LLM provider (OpenAI, Anthropic, Gemini, Ollama, LM Studio, etc.) and enter your API key
+3. FERAL auto-generates a secure API key at `~/.feral/api_key` (shown once in the console)
+4. The Brain starts on port 9090, the web dashboard opens, your browser navigates to it
 
-No API key required for local models (Ollama auto-detected on `localhost:11434`).
+No API key required for local models (Ollama auto-detected on `localhost:11434`, LM Studio on `localhost:1234`).
 
 ### Development Mode
 If you're developing FERAL itself:

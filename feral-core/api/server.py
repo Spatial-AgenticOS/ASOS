@@ -67,6 +67,7 @@ from api.routes.tool_genesis import router as tool_genesis_router
 from api.routes.agent_mitosis import router as agent_mitosis_router
 from api.routes.intents import router as intents_router
 from api.routes.webhooks import router as webhooks_router
+from api.routes.ambient import router as ambient_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -136,53 +137,25 @@ app.add_middleware(RateLimitMiddleware)
 # Optional REST API Key Middleware (Part C)
 # ─────────────────────────────────────────────
 
+from api.keys import load_or_generate_api_key as _generate_key_impl
+from api.keys import load_api_key as _load_api_key
+from api.keys import get_api_key_path as _get_api_key_path
+
+
 def _load_or_generate_api_key() -> str:
     """Load FERAL_API_KEY from env or ~/.feral/api_key; generate on first boot."""
-    import secrets
-
-    env_key = os.environ.get("FERAL_API_KEY", "").strip()
-    if env_key:
-        return env_key
-
-    key_path = Path(os.environ.get("FERAL_HOME", str(Path.home() / ".feral"))) / "api_key"
-    if key_path.exists():
-        key = key_path.read_text().strip()
-        if key:
-            return key
-
-    key_path.parent.mkdir(parents=True, exist_ok=True)
-    key = secrets.token_urlsafe(32)
-    key_path.write_text(key)
-    try:
-        os.chmod(key_path, 0o600)
-    except OSError:
-        pass
-
-    print("=" * 70)
-    print("FERAL: Generated new API key on first boot.")
-    print(f"Location: {key_path}")
-    print(f"Key: {key}")
-    print("Use this key to authenticate clients (iOS, Android, browser ext).")
-    print("Set FERAL_API_KEY env var to override.")
-    print("=" * 70)
+    key_path = _get_api_key_path()
+    existed = (key_path.exists() and key_path.read_text().strip()) or os.environ.get("FERAL_API_KEY", "").strip()
+    key = _generate_key_impl()
+    if not existed:
+        print("=" * 70)
+        print("FERAL: Generated new API key on first boot.")
+        print(f"Location: {key_path}")
+        print(f"Key: {key}")
+        print("Use this key to authenticate clients (iOS, Android, browser ext).")
+        print("Set FERAL_API_KEY env var to override.")
+        print("=" * 70)
     return key
-
-
-def _load_api_key():
-    """Legacy pure loader: returns key from env or ~/.feral/api_key, or None.
-    
-    Used by older callers that want to read without generating.
-    The boot path uses _load_or_generate_api_key() which always returns a key.
-    """
-    env_key = os.environ.get("FERAL_API_KEY", "").strip()
-    if env_key:
-        return env_key
-    key_path = Path(os.environ.get("FERAL_HOME", str(Path.home() / ".feral"))) / "api_key"
-    if key_path.exists():
-        key = key_path.read_text().strip()
-        if key:
-            return key
-    return None
 
 
 FERAL_API_KEY = _load_or_generate_api_key()
@@ -262,6 +235,7 @@ app.include_router(tool_genesis_router)
 app.include_router(agent_mitosis_router)
 app.include_router(intents_router)
 app.include_router(webhooks_router)
+app.include_router(ambient_router)
 
 
 # ─────────────────────────────────────────────
