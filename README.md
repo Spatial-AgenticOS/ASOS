@@ -35,40 +35,44 @@
 
 ## Feature Maturity
 
+> **Stable** means all 5 criteria are met: ≥1 integration test, structured logging (`feral.{subsystem}.{name}`), documented env vars + settings, graceful error handling, and a troubleshooting guide in `docs/mintlify/`. **1344 tests pass** on every commit. See [docs/mintlify/guides/](docs/mintlify/guides/) for per-feature troubleshooting.
+
 | Feature | Status | Details |
 |---------|--------|---------|
 | **Chat + LLM Orchestration** | Stable | 10 providers, failover, streaming, tool calling |
 | **Memory (4-tier + P2P sync)** | Stable | Notes, episodic, knowledge graph, CRDT sync |
 | **Skills + Tool Execution** | Stable | 19 skills, multi-runtime executor, blind vault |
-| **CLI + Setup Wizard** | Stable | `feral start/serve/doctor/setup`, NL scheduling |
+| **CLI + Setup Wizard** | Stable | `feral start/serve/doctor/setup`, interactive wizard with key validation |
 | **Web Dashboard** | Stable | Chat, SDUI, settings, dashboard, timeline |
-| **Security + Autonomy** | Stable | Safety classification, approval gates, Docker sandbox |
-| **Voice (OpenAI/Gemini/Local)** | Stable | Push-to-talk, provider selection, reconnection |
+| **Ambient** | Stable | 3 modes (Briefing/Desk/Wind-Down), somatic wallpaper, wake-word, auto-switch |
+| **Glass Brain Visualization** | Stable | Three.js, real-time cognition, channel/device/voice satellites, click-to-inspect |
+| **Security + Autonomy** | Stable | Safety classification, approval gates, Docker sandbox, auto-generated API key |
+| **Voice (OpenAI/Gemini/Local)** | Stable | Realtime proxies, wake word, push-to-talk, reconnect, per-chunk latency logs |
 | **Browser Automation** | Stable | CDP + Playwright, cookies, network interception, iframes |
-| **GUI Computer Use** | Stable | Anthropic-style, Retina DPI, window management |
-| **PDF Intelligence** | Stable | Tables, images, OCR, metadata, layout preservation |
-| **Search (7 providers)** | Stable | Tavily, Brave, DDG, Exa, SearXNG, Perplexity, Google CSE |
-| **Channels (Telegram/Discord/Slack/WhatsApp)** | Stable | Bidirectional messaging, webhook support |
-| **Cron + Scheduling** | Stable | NL parsing, timezone, priorities, missed-job catch-up |
-| **Proactive Engine** | Stable | Health alerts, smart home automation, LLM-hybrid |
-| **Smart Home (Hue + HA)** | Stable | Real Philips Hue API, Home Assistant REST/Supervisor |
-| **Browser Extension** | Stable | Chrome/Firefox, page context, chat sidebar, voice |
-| **MQTT Bridge** | Stable | IoT devices, Zigbee2MQTT, Tasmota, HA discovery |
-| **Home Assistant Add-on** | Stable | Access to 2000+ device types |
-| **Desktop Tray App** | Stable | Tauri, global hotkey, floating command window |
+| **GUI Computer Use** | Stable | Anthropic-style, Retina DPI (2x/3x), rate-limited (10/s default), cross-platform |
+| **PDF Intelligence** | Stable | Tables, images, OCR, metadata, layout preservation, MAX_PAGES guard |
+| **Search (7 providers)** | Stable | Tavily, Brave, DDG, Exa, SearXNG, Perplexity, Google CSE; provider_used tracking |
+| **Channels (Telegram/Discord/Slack/WhatsApp)** | Stable | Bidirectional, webhook support, rate-limit-aware retry (429/503) |
+| **Cron + Scheduling** | Stable | NL parsing, timezone, priorities, cron macros, missed-job catch-up, file-locked DB |
+| **Proactive Engine** | Stable | Health alerts, smart home automation, LLM-hybrid, per-trigger counters |
+| **Smart Home (Hue + HA)** | Stable | Real Philips Hue API (meethue.com + mDNS fallback), HA REST/Supervisor |
+| **Browser Extension** | Stable | Chrome/Firefox, page context, chat sidebar, voice, configurable brain URL + auth |
+| **MQTT Bridge** | Stable | TLS + mTLS, username/password, persistent client, IoT auto-discovery |
+| **Home Assistant Add-on** | Stable | Pinned base image, CI build, UPGRADE.md, 2000+ device types |
+| **Desktop Tray App** | Stable | Tauri, per-OS CI (mac/linux/win), first-run setup wizard, global hotkey |
 | **Webhook Receiver** | Stable | CRUD API, HMAC verification, action mapping |
-| **Email Watcher** | Stable | IMAP IDLE, VIP filtering, LLM-driven actions |
-| **iOS App** | Stable | HealthKit, chat, voice, QR pairing, camera relay |
-| **Android App** | Stable | Health Connect, chat, voice, QR pairing, foreground service |
-| **Hardware Mesh (HUP)** | Stable | Typed devices, command contract, BLE, W300 glasses |
-| **Somatic Context Layer** | Stable | 12D body vector, cognitive load, behavioral policies |
-| **Glass Brain Visualization** | Stable | Three.js, event-driven, real-time brain activity |
-| **Tool Genesis** | Stable | Auto-generated composite tools from patterns |
-| **Agent Mitosis** | Stable | Self-spawning persistent specialist agents |
-| **Intent Compiler** | Stable | Goal → execution plan with micro-actions |
-| **Digital Twin** | Stable | Ask-as-user, predict preferences, daily reflection |
-| **A2UI Protocol** | Stable | Wire format for reactive generative UI |
-| **Federated Memory Sync** | Stable | CRDT + HLC, P2P via mDNS |
+| **Email Watcher** | Stable | IMAP IDLE + XOAUTH2, polling fallback, VIP filtering, MIME parser |
+| **iOS App** | Stable | HealthKit, QR pairing, TLS pinning (FERAL_BRAIN_CERT_HASH), XCTest suite |
+| **Android App** | Stable | Health Connect, QR pairing, foreground service, Espresso tests |
+| **Hardware Mesh (HUP)** | Stable | Typed devices, command contract, BLE, W300 glasses, approval gate soak-tested |
+| **Somatic Context Layer** | Stable | 12D body vector, cognitive load, behavioral policies, privacy-audited logs |
+| **Tool Genesis** | Stable | AST import allowlist, requires_approval gate, Docker sandbox execution |
+| **Agent Mitosis** | Stable | Self-spawning specialists, orchestrator routing, satisfaction feedback |
+| **Intent Compiler** | Stable | Goal → actions with skill validation, timezone-aware today(), JSON-parse fallback |
+| **Digital Twin** | Stable | Ask-as-user, predict preferences, daily reflection, ethical bounds documented |
+| **A2UI Protocol** | Stable | Versioned (v1.0) wire format, cross-client contract tests, schema doc |
+| **Federated Memory Sync** | Stable | CRDT + HLC, mTLS, mDNS + static peer fallback, 100-op fuzz tests |
+| **Observability** | Stable | OpenTelemetry + Prometheus `/metrics`, per-subsystem counters + latency histograms |
 | **Video Generation** | Planned | — |
 | **Music Generation** | Planned | — |
 | **Native macOS App** | Planned | — |

@@ -83,6 +83,9 @@ app = FastAPI(
     version=__version__,
 )
 
+from observability.metrics import init_metrics
+init_metrics("feral")
+
 CORS_ORIGINS = os.getenv("FERAL_CORS_ORIGINS", "http://localhost:5173,http://localhost:9090").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -161,7 +164,7 @@ def _load_or_generate_api_key() -> str:
 FERAL_API_KEY = _load_or_generate_api_key()
 
 
-_OPEN_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json"})
+_OPEN_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json", "/metrics"})
 
 _OPEN_PATH_PREFIXES = (
     "/docs",
@@ -236,6 +239,30 @@ app.include_router(agent_mitosis_router)
 app.include_router(intents_router)
 app.include_router(webhooks_router)
 app.include_router(ambient_router)
+
+
+# ─────────────────────────────────────────────
+# Prometheus-compatible /metrics endpoint
+# ─────────────────────────────────────────────
+
+from observability.metrics import in_memory_snapshot as _metrics_snapshot
+
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    if os.getenv("FERAL_METRICS_ENDPOINT", "").strip() not in ("1", "true"):
+        return JSONResponse({"error": "Metrics endpoint disabled. Set FERAL_METRICS_ENDPOINT=1"}, status_code=404)
+    from starlette.responses import PlainTextResponse
+    snap = _metrics_snapshot()
+    lines = []
+    for name, v in snap["counters"].items():
+        lines.append(f"# TYPE {name} counter")
+        lines.append(f"{name} {v}")
+    for name, h in snap["histograms"].items():
+        lines.append(f"# TYPE {name} histogram")
+        lines.append(f"{name}_count {h['count']}")
+        lines.append(f"{name}_mean {h['mean']}")
+    return PlainTextResponse("\n".join(lines))
 
 
 # ─────────────────────────────────────────────

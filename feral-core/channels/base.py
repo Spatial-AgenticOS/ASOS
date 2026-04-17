@@ -85,6 +85,12 @@ class Channel(ABC):
     async def _emit_comms_event(self, direction: str, sender_or_recipient: str, preview: str = "", extra: dict = None):
         """Emit brain_event for Glass Brain comms visualization. direction: 'in' or 'out'."""
         try:
+            from observability.metrics import increment
+            channel_name = self.__class__.__name__.replace("Channel", "").lower()
+            increment("feral.channel.message_total", attributes={"channel": channel_name, "direction": direction})
+        except Exception:
+            pass
+        try:
             from api.state import state
             if not state.orchestrator:
                 return

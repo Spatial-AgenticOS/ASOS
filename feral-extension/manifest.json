@@ -4,7 +4,7 @@
   "version": "2026.4.16",
   "description": "Your AI brain, right in your browser. Chat, voice, page context, and proactive alerts.",
   "permissions": ["activeTab", "storage", "sidePanel", "contextMenus", "notifications"],
-  "host_permissions": ["http://localhost:9090/*", "https://localhost:9443/*"],
+  "host_permissions": ["*://*/*"],
   "background": {
     "service_worker": "background.js"
   },

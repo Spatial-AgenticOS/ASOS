@@ -108,15 +108,26 @@ class SkillExecutor:
         logger.info(f"Executing: {tool_name} → {endpoint.method} {endpoint.url}")
         logger.info(f"  args: {args}")
 
+        from observability.metrics import increment, observe
+        import time as _time
+        increment("feral.skill.invocations_total", attributes={"skill": skill.skill_id, "endpoint": endpoint.id})
+        _t0 = _time.time()
+        try:
+            return await self._execute_inner(tool_name, args, skill, endpoint)
+        finally:
+            observe("feral.skill.exec_latency_ms", (_time.time() - _t0) * 1000,
+                    {"skill": skill.skill_id, "endpoint": endpoint.id})
+
+    async def _execute_inner(
+        self, tool_name: str, args: dict, skill: SkillManifest, endpoint: SkillEndpoint,
+    ) -> dict:
         # 1. Check if there's a Python implementation backing this skill
         from skills.impl import get_implementation
         impl = get_implementation(skill.skill_id)
         if impl:
             logger.info(f"Executing via Python backing class: {impl.__class__.__name__}")
             try:
-                # Provide the vault mapped appropriately
                 result = await impl.execute(endpoint.id, args, self._vault)
-                # Ensure the return format is standard
                 if isinstance(result, dict) and "success" in result:
                     return {
                         "success": result["success"],

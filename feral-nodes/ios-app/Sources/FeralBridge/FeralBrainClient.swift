@@ -18,6 +18,7 @@
 
 import Foundation
 import CoreLocation
+import CommonCrypto
 
 // MARK: - Protocol
 
@@ -597,7 +598,7 @@ class FeralBrainClient: NSObject {
     var connectionState: BrainConnectionState { state }
 }
 
-// MARK: - URLSession Delegate
+// MARK: - URLSession Delegate (with optional TLS pinning)
 
 extension FeralBrainClient: URLSessionWebSocketDelegate {
     
@@ -608,5 +609,44 @@ extension FeralBrainClient: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "Unknown"
         handleDisconnect(reason: "Closed: \(closeCode) — \(reasonStr)")
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        guard let expectedHash = ProcessInfo.processInfo.environment["FERAL_BRAIN_CERT_HASH"],
+              !expectedHash.isEmpty else {
+            print("[FERAL TLS] No FERAL_BRAIN_CERT_HASH set — using system CAs (not pinned)")
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        guard let serverCert = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
+              let leafCert = serverCert.first else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        let certData = SecCertificateCopyData(leafCert) as Data
+        var hash = [UInt8](repeating: 0, count: 32)
+        _ = certData.withUnsafeBytes { bytes in
+            CC_SHA256(bytes.baseAddress, CC_LONG(certData.count), &hash)
+        }
+        let certHash = hash.map { String(format: "%02x", $0) }.joined()
+
+        if certHash.lowercased() == expectedHash.lowercased() {
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+        } else {
+            print("[FERAL TLS] Certificate pin mismatch! Expected: \(expectedHash), got: \(certHash)")
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        }
     }
 }

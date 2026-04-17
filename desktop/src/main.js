@@ -2,6 +2,17 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 const appEl = document.getElementById('app');
+const CONFIG_KEY = 'feral_desktop_config';
+
+function loadConfig() {
+  try {
+    return JSON.parse(localStorage.getItem(CONFIG_KEY)) || {};
+  } catch { return {}; }
+}
+
+function saveConfig(cfg) {
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
+}
 
 // ---------------------------------------------------------------------------
 // SVG assets (inline so no external file is needed)
@@ -85,6 +96,40 @@ function showBrain(url) {
   appEl.innerHTML = `<iframe src="${url}" title="FERAL" class="frame" allow="clipboard-read; clipboard-write"></iframe>`;
 }
 
+function showSetupWizard(onComplete) {
+  const cfg = loadConfig();
+  appEl.innerHTML = `
+    <div class="splash" style="justify-content: center;">
+      <div class="splash-logo">
+        <div class="glow-ring"></div>
+        <div class="glow-ring"></div>
+        <img src="/icons/128x128.png" alt="FERAL" style="width:80px;height:80px;border-radius:14px;box-shadow:0 4px 24px rgba(99,102,241,.3);" />
+      </div>
+      <div class="splash-title" style="margin-bottom:0.3rem;">Welcome to FERAL</div>
+      <div class="splash-subtitle" style="margin-bottom:1.5rem;">Configure your Brain connection to get started.</div>
+      <div style="width:100%;max-width:380px;text-align:left;">
+        <label style="display:block;font-size:.78rem;color:var(--muted);margin-bottom:4px;">Brain URL</label>
+        <input id="setup-url" type="text" placeholder="http://localhost:9090"
+          value="${cfg.brainUrl || 'http://localhost:9090'}"
+          style="width:100%;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.9rem;outline:none;margin-bottom:14px;" />
+        <label style="display:block;font-size:.78rem;color:var(--muted);margin-bottom:4px;">API Key <span style="color:var(--border);">(optional)</span></label>
+        <input id="setup-key" type="password" placeholder="feral_..."
+          value="${cfg.apiKey || ''}"
+          style="width:100%;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.9rem;outline:none;margin-bottom:18px;" />
+        <button class="btn" type="button" id="setup-go" style="width:100%;">Connect</button>
+        <p id="setup-err" style="color:#ef4444;font-size:.8rem;margin-top:8px;display:none;"></p>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('setup-go').onclick = () => {
+    const url = document.getElementById('setup-url').value.trim() || 'http://localhost:9090';
+    const key = document.getElementById('setup-key').value.trim();
+    saveConfig({ brainUrl: url, apiKey: key, setupDone: true });
+    onComplete(url, key);
+  };
+}
+
 function showError(msg) {
   appEl.innerHTML = `
     <div class="error-wrap">
@@ -135,6 +180,11 @@ async function waitForBrain() {
 // ---------------------------------------------------------------------------
 
 async function boot() {
+  const cfg = loadConfig();
+  if (!cfg.setupDone) {
+    showSetupWizard((_url, _key) => { boot(); });
+    return;
+  }
   showStarting();
   try {
     await invoke('start_brain');

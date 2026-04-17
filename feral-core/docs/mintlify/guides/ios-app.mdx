@@ -1,0 +1,85 @@
+---
+title: "iOS App"
+description: "Set up, pair, and configure the FERAL Node iOS app."
+---
+
+## Overview
+
+The FERAL Node iOS app turns your iPhone into a FERAL edge node. It forwards HealthKit data, camera frames, voice audio, and location to your Brain, and receives orchestrated responses back.
+
+## Requirements
+
+- iOS 16+
+- Xcode 15+
+- A running FERAL Brain (local or remote)
+
+## Setup
+
+1. Open `feral-nodes/ios-app/` in Xcode.
+2. Select your development team in Signing & Capabilities.
+3. Build and run on a device (camera/BLE require a physical device).
+
+## QR Pairing
+
+The fastest way to connect is via QR code:
+
+1. On the Brain dashboard, click **Add Device** → **QR Code**.
+2. In the iOS app, go to Settings → **Scan QR**.
+3. Point the camera at the QR code.
+
+Expected QR formats:
+
+**JSON format (current):**
+```json
+{"host":"192.168.1.100","port":9090,"apiKey":"your-key","nodeName":"my-iphone"}
+```
+
+**URL format (planned):**
+```
+feral://pair?brain=192.168.1.100:9090&token=abc123&name=my-iphone
+```
+
+## Permission Requests
+
+The app requests the following permissions (configured in `Info.plist`):
+
+| Permission | Key | Purpose |
+|-----------|-----|---------|
+| Camera | `NSCameraUsageDescription` | QR scanning and perception pipeline |
+| Microphone | `NSMicrophoneUsageDescription` | Voice commands |
+| Location | `NSLocationWhenInUseUsageDescription` | Context-aware assistance |
+| HealthKit | `NSHealthShareUsageDescription` | Health monitoring (HR, SpO2, steps, sleep) |
+| Bluetooth | `NSBluetoothAlwaysUsageDescription` | FERAL Glasses sensor data |
+
+## TLS Pinning
+
+For production deployments, pin the Brain's TLS certificate:
+
+1. Get the SHA-256 hash of your server's DER certificate:
+   ```bash
+   openssl x509 -in server.crt -outform DER | openssl dgst -sha256
+   ```
+2. Set the `FERAL_BRAIN_CERT_HASH` environment variable (or Xcode scheme env) to the hash.
+3. The app will reject connections to servers with a different certificate.
+
+When `FERAL_BRAIN_CERT_HASH` is not set, the app trusts system CAs and logs a warning.
+
+## Running Tests
+
+```bash
+cd feral-nodes/ios-app
+swift test
+```
+
+Or in Xcode: Product → Test (Cmd+U). Test suites:
+
+- **ConnectionManagerTests** — QR parsing, connection state, URL construction
+- **HealthKitManagerTests** — HK type validation, unit conversions, payload format
+- **QRScannerTests** — both JSON and `feral://` protocol parsing
+
+## Troubleshooting
+
+- **"Not connected"** — Verify the Brain host is reachable from the phone's network.
+- **HealthKit empty** — Grant HealthKit permissions in Settings → Privacy → Health.
+- **QR scan fails** — Ensure the QR contains valid JSON with `host`, `port`, `apiKey`, `nodeName`.
+- **TLS errors** — Double-check `FERAL_BRAIN_CERT_HASH` matches your server cert.

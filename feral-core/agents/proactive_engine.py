@@ -464,6 +464,12 @@ class ProactiveEngine:
     async def _deliver(self, msg: ProactiveMessage):
         logger.info("Proactive [%s] %s: %s", msg.priority.name, msg.trigger_id, msg.title)
 
+        try:
+            from observability.metrics import increment
+            increment("feral.proactive.trigger_total", attributes={"trigger": msg.trigger_id})
+        except Exception:
+            pass
+
         if msg.action_payload:
             await self._execute_automation(msg)
 

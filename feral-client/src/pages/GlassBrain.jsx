@@ -7,7 +7,9 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 const API = import.meta.env.VITE_BRAIN_URL || `http://${location.hostname}:9090`;
-const WS_URL = import.meta.env.VITE_BRAIN_WS || `ws://${location.hostname}:9090/v1/session`;
+const storedKey = typeof localStorage !== 'undefined' ? (localStorage.getItem('feral_api_key') || '') : '';
+const WS_BASE = import.meta.env.VITE_BRAIN_WS || `ws://${location.hostname}:9090/v1/session`;
+const WS_URL = `${WS_BASE}${storedKey ? `${WS_BASE.includes('?') ? '&' : '?'}token=${encodeURIComponent(storedKey)}` : ''}`;
 
 const COLORS = {
   brain: 0x06b6d4,

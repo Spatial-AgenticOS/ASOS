@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import os
+import ssl
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -37,6 +38,47 @@ logger = logging.getLogger("feral.memory.sync")
 SYNC_PORT = int(os.getenv("FERAL_SYNC_PORT", str(brain_port())))
 SYNC_PASSPHRASE = os.getenv("FERAL_SYNC_PASSPHRASE", "")
 SERVICE_TYPE = "_feral._tcp.local."
+
+# TLS mutual auth configuration
+SYNC_TLS_CERT = os.getenv("FERAL_SYNC_TLS_CERT", "")
+SYNC_TLS_KEY = os.getenv("FERAL_SYNC_TLS_KEY", "")
+SYNC_TLS_CA = os.getenv("FERAL_SYNC_TLS_CA", "")
+SYNC_REQUIRE_CLIENT_CERT = os.getenv("FERAL_SYNC_REQUIRE_CLIENT_CERT", "").lower() in ("1", "true", "yes")
+
+# Static peer list fallback (comma-separated host:port pairs)
+SYNC_PEERS = [p.strip() for p in os.getenv("FERAL_SYNC_PEERS", "").split(",") if p.strip()]
+
+_MDNS_DISCOVERY_TIMEOUT = 30  # seconds before falling back to static peers
+
+
+def build_server_ssl_context() -> Optional[ssl.SSLContext]:
+    """Build an SSL context for the sync WebSocket server, or None if TLS is not configured."""
+    if not SYNC_TLS_CERT or not SYNC_TLS_KEY:
+        return None
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=SYNC_TLS_CERT, keyfile=SYNC_TLS_KEY)
+    if SYNC_TLS_CA:
+        ctx.load_verify_locations(cafile=SYNC_TLS_CA)
+    if SYNC_REQUIRE_CLIENT_CERT:
+        ctx.verify_mode = ssl.CERT_REQUIRED
+    else:
+        ctx.verify_mode = ssl.CERT_OPTIONAL
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    logger.info("Sync TLS server context created (client_cert=%s)", "required" if SYNC_REQUIRE_CLIENT_CERT else "optional")
+    return ctx
+
+
+def build_client_ssl_context() -> Optional[ssl.SSLContext]:
+    """Build an SSL context for outgoing sync connections, or None if TLS is not configured."""
+    if not SYNC_TLS_CA and not SYNC_TLS_CERT:
+        return None
+    ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    if SYNC_TLS_CA:
+        ctx.load_verify_locations(cafile=SYNC_TLS_CA)
+    if SYNC_TLS_CERT and SYNC_TLS_KEY:
+        ctx.load_cert_chain(certfile=SYNC_TLS_CERT, keyfile=SYNC_TLS_KEY)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
 
 
 def _parse_hlc(hlc_str: str) -> tuple:
@@ -318,8 +360,27 @@ class SyncEngine:
             pass
         return "127.0.0.1"
 
+    def _load_static_peers(self):
+        """Load peers from FERAL_SYNC_PEERS env var (host:port pairs)."""
+        for entry in SYNC_PEERS:
+            try:
+                host, port_str = entry.rsplit(":", 1)
+                port = int(port_str)
+                peer_id = f"static-{host}:{port}"
+                if peer_id not in self._peers:
+                    self._peers[peer_id] = {
+                        "address": host,
+                        "port": port,
+                        "discovered_at": time.time(),
+                        "source": "static",
+                    }
+                    logger.info("Static peer added: %s:%d", host, port)
+            except (ValueError, IndexError):
+                logger.warning("Invalid static peer entry: %s (expected host:port)", entry)
+
     async def start_discovery(self):
-        """Start mDNS service advertisement and peer discovery."""
+        """Start mDNS service advertisement and peer discovery, with static peer fallback."""
+        mdns_ok = False
         try:
             from zeroconf import Zeroconf, ServiceBrowser, ServiceInfo
             import socket
@@ -356,6 +417,7 @@ class SyncEngine:
                                 "address": peer_addr,
                                 "port": info.port,
                                 "discovered_at": time.time(),
+                                "source": "mdns",
                             }
                             logger.info(f"Discovered peer: {peer_id} at {peer_addr}:{info.port}")
 
@@ -366,12 +428,38 @@ class SyncEngine:
                     pass
 
             ServiceBrowser(self._zeroconf, SERVICE_TYPE, PeerListener(self))
+            mdns_ok = True
             self._running = True
+
+            # Schedule a fallback check: if no mDNS peers found after timeout, add static peers
+            if SYNC_PEERS:
+                asyncio.get_event_loop().call_later(
+                    _MDNS_DISCOVERY_TIMEOUT,
+                    self._check_mdns_fallback,
+                )
 
         except ImportError:
             logger.warning("zeroconf not installed — mDNS discovery disabled. Install with: pip install zeroconf")
         except Exception as e:
             logger.warning(f"mDNS discovery failed: {e}")
+
+        if not mdns_ok:
+            self._running = True
+            if SYNC_PEERS:
+                logger.info("Using static peer list as primary discovery method")
+                self._load_static_peers()
+            else:
+                logger.warning("No mDNS and no static peers configured — sync is offline")
+
+    def _check_mdns_fallback(self):
+        """Called after mDNS timeout; adds static peers if no mDNS peers were found."""
+        mdns_peers = [p for p in self._peers.values() if p.get("source") == "mdns"]
+        if not mdns_peers:
+            logger.warning(
+                "No mDNS peers discovered within %ds — falling back to static peer list (%d entries)",
+                _MDNS_DISCOVERY_TIMEOUT, len(SYNC_PEERS),
+            )
+            self._load_static_peers()
 
     async def stop_discovery(self):
         if self._zeroconf:
@@ -387,17 +475,20 @@ class SyncEngine:
         if not peer:
             return {"success": False, "error": f"Peer {peer_id} not found"}
 
+        t0 = time.time()
         try:
             import websockets
 
             addr = peer["address"]
             port = peer["port"]
-            uri = f"ws://{addr}:{port}/sync"
+            client_ssl = build_client_ssl_context()
+            scheme = "wss" if client_ssl else "ws"
+            uri = f"{scheme}://{addr}:{port}/sync"
 
             ws = None
             for _attempt in range(3):
                 try:
-                    ws = await websockets.connect(uri)
+                    ws = await websockets.connect(uri, ssl=client_ssl)
                     break
                 except Exception:
                     if _attempt == 2:
@@ -431,6 +522,12 @@ class SyncEngine:
                 remote_changes = remote_changes_msg.get("changes", [])
                 applied = self.apply_remote_changes(remote_changes)
 
+                elapsed_ms = (time.time() - t0) * 1000
+                logger.info(
+                    "Sync complete: peer=%s ops_sent=%d ops_received=%d elapsed_ms=%.1f tls=%s",
+                    peer_id, len(changes_for_peer), applied, elapsed_ms, bool(client_ssl),
+                )
+
                 return {
                     "success": True,
                     "sent": len(changes_for_peer),
@@ -441,6 +538,8 @@ class SyncEngine:
         except ImportError:
             return {"success": False, "error": "websockets not installed"}
         except Exception as e:
+            elapsed_ms = (time.time() - t0) * 1000
+            logger.warning("Sync failed: peer=%s error=%s elapsed_ms=%.1f", peer_id, e, elapsed_ms)
             return {"success": False, "error": str(e)}
 
     def export_to_bundle(self) -> dict:

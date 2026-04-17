@@ -1,13 +1,31 @@
 let ws = null;
 let wsUrl = 'ws://localhost:9090/v1/session';
+let apiKey = '';
 let reconnectTimer = null;
 let messageCallbacks = new Map();
+
+function brainHttpBase() {
+  try {
+    const u = new URL(wsUrl);
+    const scheme = u.protocol === 'wss:' ? 'https:' : 'http:';
+    return `${scheme}//${u.host}`;
+  } catch {
+    return 'http://localhost:9090';
+  }
+}
+
+function authHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (apiKey) h['Authorization'] = `Bearer ${apiKey}`;
+  return h;
+}
 
 function connect() {
   if (ws && ws.readyState === WebSocket.OPEN) return;
 
   try {
-    ws = new WebSocket(wsUrl);
+    const url = apiKey ? `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(apiKey)}` : wsUrl;
+    ws = new WebSocket(url);
 
     ws.onopen = () => {
       console.log('[FERAL] Connected to Brain');
@@ -105,7 +123,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ connected: ws && ws.readyState === WebSocket.OPEN });
   } else if (msg.type === 'set_brain_url') {
     wsUrl = msg.url;
-    chrome.storage.local.set({ brainUrl: msg.url });
+    if (msg.apiKey !== undefined) apiKey = msg.apiKey;
+    chrome.storage.local.set({ brainUrl: msg.url, ...(msg.apiKey !== undefined && { apiKey: msg.apiKey }) });
     if (ws) ws.close();
     connect();
     sendResponse({ ok: true });
@@ -116,7 +135,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true;
 });
 
-chrome.storage.local.get(['brainUrl'], (result) => {
+chrome.storage.local.get(['brainUrl', 'apiKey'], (result) => {
   if (result.brainUrl) wsUrl = result.brainUrl;
+  if (result.apiKey) apiKey = result.apiKey;
   connect();
 });

@@ -2,6 +2,7 @@ package ai.feral.node
 
 import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.*
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
@@ -13,6 +14,16 @@ class HealthConnectManager(private val context: Context) {
     private var client: HealthConnectClient? = null
     private var onData: ((Map<String, Any>) -> Unit)? = null
     private var job: Job? = null
+
+    companion object {
+        val REQUIRED_PERMISSIONS = setOf(
+            HealthPermission.getReadPermission(HeartRateRecord::class),
+            HealthPermission.getReadPermission(OxygenSaturationRecord::class),
+            HealthPermission.getReadPermission(SleepSessionRecord::class),
+            HealthPermission.getReadPermission(StepsRecord::class),
+            HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
+        )
+    }
     
     fun setCallback(callback: (Map<String, Any>) -> Unit) { onData = callback }
     
@@ -30,6 +41,7 @@ class HealthConnectManager(private val context: Context) {
                 readSpO2()
                 readSteps()
                 readSleep()
+                readActiveCalories()
                 delay(30_000)
             }
         }
@@ -92,6 +104,19 @@ class HealthConnectManager(private val context: Context) {
                 ChronoUnit.MINUTES.between(it.startTime, it.endTime)
             }
             onData?.invoke(mapOf("type" to "sleep", "hours" to totalMinutes / 60.0, "source" to "health_connect"))
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun readActiveCalories() {
+        val c = client ?: return
+        try {
+            val startOfDay = Instant.now().truncatedTo(ChronoUnit.DAYS)
+            val response = c.readRecords(ReadRecordsRequest(
+                ActiveCaloriesBurnedRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(startOfDay, Instant.now())
+            ))
+            val totalKcal = response.records.sumOf { it.energy.inKilocalories }
+            onData?.invoke(mapOf("type" to "active_calories", "kcal" to totalKcal, "source" to "health_connect"))
         } catch (_: Exception) {}
     }
 }

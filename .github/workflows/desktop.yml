@@ -1,0 +1,28 @@
+name: Desktop Build
+on:
+  push:
+    paths: ['desktop/**']
+    tags: ['v*']
+  pull_request:
+    paths: ['desktop/**']
+jobs:
+  build:
+    strategy:
+      matrix:
+        platform: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux deps
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - working-directory: desktop
+        run: npm ci
+      - working-directory: desktop
+        run: npm run tauri build -- --debug

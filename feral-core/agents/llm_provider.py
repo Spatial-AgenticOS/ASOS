@@ -381,17 +381,23 @@ class LLMProvider:
             body["tools"] = clean_tools
             body["tool_choice"] = "auto"
 
+        from observability.metrics import increment, measure
+        increment("feral.llm.calls_total", attributes={"provider": self.provider, "model": self.model})
         try:
             async def _do_chat():
                 resp = await self.client.post("/chat/completions", json=body)
                 resp.raise_for_status()
                 return resp.json()
 
-            return await _retry_llm_call(_do_chat)
+            with measure("feral.llm.latency", {"provider": self.provider, "model": self.model}):
+                result = await _retry_llm_call(_do_chat)
+            return result
         except httpx.HTTPStatusError as e:
+            increment("feral.llm.errors_total", attributes={"provider": self.provider, "model": self.model})
             logger.error(f"LLM API error: {e.response.status_code} — {e.response.text[:500]}")
             return {"error": str(e), "choices": []}
         except Exception as e:
+            increment("feral.llm.errors_total", attributes={"provider": self.provider, "model": self.model})
             logger.error(f"LLM call failed: {e}")
             return {"error": str(e), "choices": []}
 
@@ -1083,17 +1089,22 @@ class LLMProvider:
         if self._local_engine and self.provider in ("local", "hybrid"):
             return await self.chat(messages, tools, **kwargs)
 
+        from observability.metrics import increment, measure
+
         candidates = self._build_candidate_list()
         last_error: Optional[Exception] = None
 
         for provider_name, config in candidates:
             if not self._cooldown.should_probe(provider_name):
                 continue
+            increment("feral.llm.calls_total", attributes={"provider": provider_name, "model": config.get("model", self.model)})
             try:
-                result = await self._call_provider(provider_name, config, messages, tools, **kwargs)
+                with measure("feral.llm.latency", {"provider": provider_name, "model": config.get("model", self.model)}):
+                    result = await self._call_provider(provider_name, config, messages, tools, **kwargs)
                 self._cooldown.record_success(provider_name)
                 return result
             except Exception as e:
+                increment("feral.llm.errors_total", attributes={"provider": provider_name})
                 reason = classify_error(e)
                 self._cooldown.record_failure(provider_name, reason)
                 logger.warning("Provider %s failed (%s): %s", provider_name, reason.value, e)

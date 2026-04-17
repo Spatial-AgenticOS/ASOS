@@ -1,0 +1,60 @@
+---
+title: "Browser Extension"
+description: "Install and configure the FERAL AI browser extension for Chrome/Edge."
+---
+
+## Overview
+
+The FERAL browser extension adds a side panel chat, context menus ("Ask FERAL about this", "Summarize this page", "Save to memory"), proactive notifications, and a floating action button on every page.
+
+## Installation (Dev Mode)
+
+1. Clone the repo and navigate to `feral-extension/`.
+2. Open Chrome → `chrome://extensions` → enable **Developer mode**.
+3. Click **Load unpacked** → select the `feral-extension/` folder.
+4. The FERAL icon appears in the toolbar.
+
+## Configuration
+
+Click the FERAL icon → **Settings** (or right-click → Options).
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Brain URL | WebSocket endpoint for your FERAL brain | `ws://localhost:9090/v1/session` |
+| API Key | Bearer token sent with every request | (empty) |
+| Auto Connect | Reconnect on startup | On |
+| Show Float Button | Overlay button on every page | On |
+| Auto Context | Attach page context to every message | Off |
+| Notify Alerts | Show OS notifications for brain alerts | On |
+
+## How It Works
+
+- **background.js** (service worker) maintains a persistent WebSocket to the Brain. On disconnect, it retries every 3 seconds.
+- **content.js** injects the floating button and extracts page context (URL, title, selected text, meta tags).
+- **sidepanel.js** provides the full chat UI with streaming, voice input, and quick actions.
+- When the API Key is set, it is appended as `?token=<key>` on the WebSocket URL and as `Authorization: Bearer <key>` on HTTP requests.
+
+## Running Tests
+
+```bash
+cd feral-extension
+npm install
+npm test
+```
+
+Tests use Vitest with jsdom and cover:
+- WebSocket reconnect logic
+- Context menu registration
+- Notification firing
+- Page context extraction
+- Settings persistence
+
+## Host Permissions
+
+The manifest uses `*://*/*` to allow connecting to any Brain URL. If you prefer a locked-down extension, replace with your specific domain in `manifest.json` → `host_permissions`.
+
+## Troubleshooting
+
+- **Badge shows "!"** — The extension cannot reach the Brain. Check the Brain URL in options.
+- **No notifications** — Ensure Chrome notification permissions are granted and "Notify Alerts" is on in settings.
+- **Floating button missing** — Check "Show Float Button" in settings. Some sites with strict CSP may block content scripts.

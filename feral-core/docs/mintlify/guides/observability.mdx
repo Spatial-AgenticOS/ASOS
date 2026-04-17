@@ -1,0 +1,100 @@
+---
+title: "Observability & Metrics"
+description: "Prometheus-compatible metrics and OpenTelemetry export for FERAL"
+---
+
+## Overview
+
+FERAL exposes operational metrics across all major subsystems. Metrics work in
+two modes:
+
+1. **In-memory counters** (always available, zero dependencies)
+2. **OpenTelemetry SDK** (when `opentelemetry-sdk` is installed) — exports to
+   any OTLP-compatible backend
+
+## Enable Prometheus Scraping
+
+```bash
+# Expose the /metrics endpoint
+export FERAL_METRICS_ENDPOINT=1
+
+# Start FERAL
+feral serve
+```
+
+Then configure your Prometheus `scrape_configs`:
+
+```yaml
+scrape_configs:
+  - job_name: feral
+    static_configs:
+      - targets: ["localhost:9090"]
+    metrics_path: /metrics
+```
+
+## Export to OTLP (Grafana Cloud, Honeycomb, etc.)
+
+Install the OpenTelemetry extras:
+
+```bash
+pip install feral-ai[observability]
+```
+
+Set the OTLP endpoint:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com:4318
+
+# Optional: also log metrics to console
+export FERAL_METRICS_CONSOLE=1
+```
+
+FERAL auto-detects the SDK at startup and begins exporting.
+
+## Metrics Reference
+
+### LLM
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `feral.llm.calls_total` | Counter | `provider`, `model` | Total LLM API calls |
+| `feral.llm.errors_total` | Counter | `provider`, `model` | Failed LLM API calls |
+| `feral.llm.latency_ms` | Histogram | `provider`, `model` | LLM call latency in ms |
+
+### Channels
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `feral.channel.message_total` | Counter | `channel`, `direction` | Messages sent/received per channel |
+
+### Proactive Engine
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `feral.proactive.trigger_total` | Counter | `trigger` | Proactive triggers fired |
+
+### Skills
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `feral.skill.invocations_total` | Counter | `skill`, `endpoint` | Skill endpoint invocations |
+| `feral.skill.exec_latency_ms` | Histogram | `skill`, `endpoint` | Skill execution latency in ms |
+
+## Programmatic Access
+
+```python
+from observability.metrics import increment, observe, measure, in_memory_snapshot
+
+# Counter
+increment("my_custom.counter", attributes={"env": "prod"})
+
+# Histogram
+observe("my_custom.latency_ms", 42.5)
+
+# Context manager (auto-records duration)
+with measure("my_custom.operation"):
+    do_work()
+
+# Debug snapshot
+print(in_memory_snapshot())
+```

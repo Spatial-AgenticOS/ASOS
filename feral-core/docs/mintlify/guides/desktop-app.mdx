@@ -1,0 +1,85 @@
+---
+title: "Desktop App"
+description: "Install and configure the FERAL Desktop app (Tauri 2)."
+---
+
+## Overview
+
+FERAL Desktop wraps the Brain web UI in a native window with system tray, global shortcuts, and auto-start. Built with [Tauri 2](https://v2.tauri.app/).
+
+## Prerequisites
+
+- **Rust toolchain** — `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **Node.js 20+**
+- **Platform tools:** Xcode (macOS), Visual Studio Build Tools (Windows), `libgtk-3-dev libwebkit2gtk-4.1-dev` (Linux)
+
+## Development
+
+```bash
+cd desktop
+npm install
+npm run tauri:dev
+```
+
+## First-Run Setup Wizard
+
+On first launch the app shows a setup wizard. Enter:
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| Brain URL | HTTP(S) address of your FERAL brain | `http://localhost:9090` |
+| API Key | Optional authentication token | (empty) |
+
+Settings are persisted in `localStorage` and can be changed later from the app UI.
+
+## Building for Production
+
+```bash
+npm run tauri:build
+```
+
+### macOS Code Signing & Notarization
+
+1. Obtain an Apple Developer certificate (Developer ID Application).
+2. Set environment variables:
+   ```bash
+   export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+   export APPLE_ID="your@email.com"
+   export APPLE_PASSWORD="app-specific-password"
+   export APPLE_TEAM_ID="TEAMID"
+   ```
+3. Tauri signs and notarizes automatically when `signingIdentity` is set in `tauri.conf.json` → `bundle.macOS`.
+4. Produces `.dmg` and `.app` in `src-tauri/target/release/bundle/`.
+
+### Windows Code Signing
+
+1. Obtain an EV Code Signing certificate (DigiCert, Sectigo, etc.).
+2. Set `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+3. Use `signtool.exe` post-build or configure via CI with `actions/setup-dotnet`.
+4. Produces `.msi` and `.exe` installers.
+
+### Linux Packaging
+
+```bash
+npm run tauri:build
+# Produces AppImage + .deb in src-tauri/target/release/bundle/
+```
+
+For Flatpak or Snap packaging, see [Tauri Linux docs](https://v2.tauri.app/distribute/linux/).
+
+## CI/CD
+
+The `.github/workflows/desktop.yml` workflow builds on macOS, Ubuntu, and Windows on every push/PR touching `desktop/`.
+
+## Global Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| Cmd/Ctrl+Shift+T | Voice activation |
+| Cmd/Ctrl+Shift+F | Toggle floating chat window |
+
+## Troubleshooting
+
+- **"Could not start brain"** — Ensure `feral-core` is adjacent to `desktop/` or set `FERAL_CORE_DIR`.
+- **Blank window** — Check that port 9090 is not blocked; the Brain must be reachable.
+- **Linux build fails** — Install all system dependencies: `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`.

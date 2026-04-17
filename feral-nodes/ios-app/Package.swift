@@ -12,5 +12,10 @@ let package = Package(
             name: "FeralBridge",
             path: "Sources/FeralBridge"
         ),
+        .testTarget(
+            name: "FeralNodeTests",
+            dependencies: ["FeralBridge"],
+            path: "FeralNodeTests"
+        ),
     ]
 )
