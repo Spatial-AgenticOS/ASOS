@@ -1,13 +1,91 @@
 """Setup, configuration, identity, and credential endpoints."""
 
 import os
-from fastapi import APIRouter
+import socket
 
+from fastapi import APIRouter, Request
+
+from api.keys import load_api_key
 from api.state import state
 from config.loader import feral_home
 from config.runtime import ollama_base_url
 
 router = APIRouter()
+
+
+def _lan_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+@router.get("/api/session/client-key")
+async def session_client_key(request: Request):
+    """Expose FERAL_API_KEY to same-origin browser on localhost (or when already authenticated)."""
+    from security.session_auth import is_localhost
+
+    key = load_api_key()
+    if not key:
+        return {"key": None}
+    host = request.client.host if request.client else None
+    auth = request.headers.get("authorization", "")
+    if is_localhost(host) or auth == f"Bearer {key}":
+        return {"key": key}
+    return {"key": None}
+
+
+@router.get("/api/setup/phone-access")
+async def phone_access():
+    """Three supported ways to use FERAL from a phone."""
+    from config.runtime import brain_port
+
+    port = brain_port()
+    ip = _lan_ip()
+    base_http = f"http://{ip}:{port}"
+    ws_daemon = f"ws://{ip}:{port}/v1/daemon"
+    ws_session = f"ws://{ip}:{port}/v1/session"
+    return {
+        "local_ip": ip,
+        "port": port,
+        "paths": [
+            {
+                "id": "native_app",
+                "label": "FERAL Node app (recommended)",
+                "steps": [
+                    "Install the FERAL Node app (iOS / Android)",
+                    "Open Settings → Devices → pair phone",
+                    "Scan the QR code",
+                ],
+                "qr_path": "/api/devices/pair/qr",
+            },
+            {
+                "id": "browser",
+                "label": "Phone web browser",
+                "steps": [
+                    "Put the phone on the same Wi‑Fi as this machine",
+                    f"Open {base_http}",
+                    "Enter the API key from Settings (or ~/.feral/api_key)",
+                ],
+                "url": base_http,
+            },
+            {
+                "id": "daemon",
+                "label": "Phone bridge daemon (advanced)",
+                "steps": [
+                    "On the phone (e.g. Termux) install the feral-phone-bridge package",
+                    "Point it at the brain WebSocket",
+                ],
+                "command": f"feral-phone-bridge --brain {ws_daemon} --api-key <FERAL_API_KEY>",
+                "ws_daemon": ws_daemon,
+                "ws_session": ws_session,
+            },
+        ],
+    }
 
 
 # ── Setup ──

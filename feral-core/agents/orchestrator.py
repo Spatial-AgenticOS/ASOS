@@ -82,7 +82,16 @@ class Orchestrator:
     """
 
     # Class-level constants kept on Orchestrator for backward compat
-    ALWAYS_INCLUDE_SKILLS = {"desktop_control", "computer_use", "browser", "desktop_automation", "screen_capture", "system_settings", "agentic_computer_use"}
+    ALWAYS_INCLUDE_SKILLS = {
+        "desktop_control",
+        "computer_use",
+        "browser",
+        "desktop_automation",
+        "screen_capture",
+        "system_settings",
+        "agentic_computer_use",
+        "messaging",
+    }
 
     def __init__(
         self,

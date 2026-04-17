@@ -155,3 +155,21 @@ class TestLoadStoredCredentials:
         from api.state import BrainState
         BrainState._load_stored_credentials()
         assert os.environ.get("TAVILY_API_KEY") == "tavily-alias-key"
+
+    def test_loads_channel_and_ha_keys(self, tmp_path, monkeypatch):
+        creds = {
+            "FERAL_TELEGRAM_BOT_TOKEN": "tg-bot-xx",
+            "HA_URL": "http://ha.local:8123",
+            "HA_TOKEN": "ha-secret",
+        }
+        (tmp_path / "credentials.json").write_text(json.dumps(creds))
+        monkeypatch.setenv("FERAL_HOME", str(tmp_path))
+        for k in creds:
+            monkeypatch.delenv(k, raising=False)
+
+        from api.state import BrainState
+        BrainState._load_stored_credentials()
+
+        assert os.environ.get("FERAL_TELEGRAM_BOT_TOKEN") == "tg-bot-xx"
+        assert os.environ.get("HA_URL") == "http://ha.local:8123"
+        assert os.environ.get("HA_TOKEN") == "ha-secret"

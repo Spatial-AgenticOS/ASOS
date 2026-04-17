@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useToast } from '../components/Toast';
+import { apiFetch, ensureClientApiKey } from '../api';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -7,9 +8,14 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 const API = import.meta.env.VITE_BRAIN_URL || `http://${location.hostname}:9090`;
-const storedKey = typeof localStorage !== 'undefined' ? (localStorage.getItem('feral_api_key') || '') : '';
 const WS_BASE = import.meta.env.VITE_BRAIN_WS || `ws://${location.hostname}:9090/v1/session`;
-const WS_URL = `${WS_BASE}${storedKey ? `${WS_BASE.includes('?') ? '&' : '?'}token=${encodeURIComponent(storedKey)}` : ''}`;
+
+function buildWsUrl(token) {
+  const t = token || '';
+  if (!t) return WS_BASE;
+  const sep = WS_BASE.includes('?') ? '&' : '?';
+  return `${WS_BASE}${sep}token=${encodeURIComponent(t)}`;
+}
 
 const COLORS = {
   brain: 0x06b6d4,
@@ -51,6 +57,9 @@ const EVENT_MODES = {
 
 export default function GlassBrain() {
   const { addToast } = useToast();
+  const [wsToken, setWsToken] = useState(
+    () => (typeof localStorage !== 'undefined' ? localStorage.getItem('feral_api_key') || '' : ''),
+  );
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const eventsRef = useRef([]);
@@ -217,12 +226,23 @@ export default function GlassBrain() {
   const unmountedRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
+    ensureClientApiKey().then(() => {
+      if (cancelled) return;
+      const k = typeof localStorage !== 'undefined' ? localStorage.getItem('feral_api_key') || '' : '';
+      setWsToken(k);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     unmountedRef.current = false;
     let ws;
     let reconnectTimer;
 
     function connect() {
-      ws = new WebSocket(WS_URL);
+      const url = buildWsUrl(wsToken);
+      ws = new WebSocket(url);
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
@@ -233,8 +253,20 @@ export default function GlassBrain() {
           }
         } catch (e) { addToast(e.message || 'Failed to parse brain event'); }
       };
-      ws.onclose = () => { if (!unmountedRef.current) reconnectTimer = setTimeout(connect, 3000); };
-      ws.onerror = () => { ws.close(); };
+      ws.onclose = (ev) => {
+        if (!unmountedRef.current) {
+          if (ev.code !== 1000) {
+            addToast(
+              `Brain WebSocket closed (${ev.code}). Check Settings → API key. ${!wsToken ? 'No API key in browser storage.' : ''}`,
+            );
+          }
+          reconnectTimer = setTimeout(connect, 3000);
+        }
+      };
+      ws.onerror = () => {
+        addToast('Cannot connect to brain WebSocket — open Settings and confirm API key, or use http://localhost:9090 on this machine.');
+        try { ws.close(); } catch (e) { /* ignore */ }
+      };
     }
     connect();
 
@@ -243,7 +275,7 @@ export default function GlassBrain() {
       clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
-  }, [handleBrainEvent]);
+  }, [handleBrainEvent, wsToken, addToast]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -418,8 +450,11 @@ export default function GlassBrain() {
 
     const fetchStats = async () => {
       try {
-        const r = await fetch(`${API}/api/dashboard`);
-        if (!r.ok) return;
+        const r = await apiFetch('/api/dashboard');
+        if (!r.ok) {
+          addToast(`Dashboard ${r.status}: add API key in Settings or open via localhost`);
+          return;
+        }
         const data = await r.json();
         setStats(data);
       } catch (e) { addToast(e.message || 'Failed to load dashboard stats'); }

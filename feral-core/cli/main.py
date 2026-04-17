@@ -480,6 +480,12 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
   ║   Starting agent on port {port}{tls_label:7s}  ║
   ╚══════════════════════════════════════╝
 """)
+    _bh = brain_bind_host()
+    if _bh == "0.0.0.0":
+        print(
+            "  [WARN] Brain listens on all interfaces (LAN). "
+            "Set FERAL_BIND_HOST=127.0.0.1 or FERAL_SECURE_MODE=strict to restrict.\n",
+        )
 
     # Start server in background thread
     server_ready = threading.Event()

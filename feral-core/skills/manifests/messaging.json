@@ -1,6 +1,6 @@
 {
-    "skill_id": "messaging_sms",
-    "version": "1.0.0",
+    "skill_id": "messaging",
+    "version": "2.0.0",
     "author": "feral-core",
     "brand": {
         "name": "Messaging",
@@ -9,71 +9,111 @@
         "logo_url": "",
         "icon_set": "sf_symbols"
     },
-    "description": "Send SMS and WhatsApp messages using Twilio. Read recent messages and manage conversations.",
+    "description": "Send messages on any connected channel: Telegram, Slack, Discord, WhatsApp, or SMS (Twilio). Use messaging.send for all proactive outreach; use list_chats to discover known Telegram chats.",
     "trigger_phrases": [
         "send a text",
         "text someone",
         "send a message",
         "message",
+        "telegram",
+        "slack",
+        "discord",
+        "whatsapp",
         "sms",
-        "send sms to",
-        "whatsapp message",
         "notify",
-        "tell them",
-        "let them know"
+        "tell them"
     ],
     "categories": ["messaging", "communication"],
     "auth": {
-        "type": "api_key",
-        "api_key_header": "Authorization"
+        "type": "none"
     },
     "endpoints": [
         {
-            "id": "send_sms",
-            "method": "POST",
-            "url": "https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
-            "description": "Send an SMS text message to a phone number.",
+            "id": "send",
+            "method": "PYTHON",
+            "url": "internal://messaging/send",
+            "description": "Send a message on a specific channel (telegram, slack, discord, whatsapp, sms). Target is chat_id, channel id, phone E.164, or @username for Telegram if the user has messaged the bot before.",
             "params": [
-                {"name": "account_sid", "type": "string", "required": true, "description": "Twilio Account SID"},
-                {"name": "To", "type": "string", "required": true, "description": "Recipient phone number in E.164 format (e.g. +1234567890)"},
-                {"name": "From", "type": "string", "required": true, "description": "Your Twilio phone number"},
-                {"name": "Body", "type": "string", "required": true, "description": "The message content"}
+                {
+                    "name": "channel",
+                    "type": "string",
+                    "required": true,
+                    "description": "telegram | slack | discord | whatsapp | sms",
+                    "enum": ["telegram", "slack", "discord", "whatsapp", "sms"]
+                },
+                {
+                    "name": "target",
+                    "type": "string",
+                    "required": true,
+                    "description": "chat_id, slack channel id, discord channel id, whatsapp id, E.164 phone, or @username (Telegram, if known)"
+                },
+                {
+                    "name": "text",
+                    "type": "string",
+                    "required": true,
+                    "description": "Message body"
+                },
+                {
+                    "name": "reply_to",
+                    "type": "string",
+                    "required": false,
+                    "description": "Optional thread/message id for threading (platform-specific)"
+                }
             ],
-            "returns_description": "{sid, status, to, from, body, date_created}",
+            "returns_description": "{success, data, error}",
             "ui_hint": "detail_card"
         },
         {
-            "id": "list_messages",
-            "method": "GET",
-            "url": "https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
-            "description": "List recent SMS messages.",
+            "id": "broadcast",
+            "method": "PYTHON",
+            "url": "internal://messaging/broadcast",
+            "description": "Send the same text to every chat the bot has seen on that channel (best-effort).",
             "params": [
-                {"name": "account_sid", "type": "string", "required": true, "description": "Twilio Account SID"},
-                {"name": "PageSize", "type": "number", "required": false, "default": "20", "description": "Number of messages to return"}
+                {
+                    "name": "channel",
+                    "type": "string",
+                    "required": true,
+                    "description": "telegram | slack | discord | whatsapp",
+                    "enum": ["telegram", "slack", "discord", "whatsapp"]
+                },
+                {
+                    "name": "text",
+                    "type": "string",
+                    "required": true,
+                    "description": "Message body"
+                }
             ],
-            "returns_description": "{messages: [{sid, to, from, body, status, date_sent}]}",
+            "returns_description": "{success, data, error}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "list_chats",
+            "method": "PYTHON",
+            "url": "internal://messaging/list_chats",
+            "description": "List known chats (Telegram: from stored contacts + active session). For Discord Slack list APIs, pass guild_id when required.",
+            "params": [
+                {
+                    "name": "channel",
+                    "type": "string",
+                    "required": true,
+                    "description": "telegram | slack | discord | whatsapp | sms",
+                    "enum": ["telegram", "slack", "discord", "whatsapp", "sms"]
+                },
+                {
+                    "name": "guild_id",
+                    "type": "string",
+                    "required": false,
+                    "description": "Discord guild id for discord list_channels"
+                }
+            ],
+            "returns_description": "{chats: [...]}",
             "ui_hint": "list"
         }
     ],
-    "flows": [
-        {
-            "id": "send_and_confirm",
-            "description": "Send a message and show confirmation",
-            "steps": [
-                {"endpoint_id": "send_sms"}
-            ]
-        }
-    ],
+    "flows": [],
     "crons": [],
-    "triggers": [
-        {
-            "id": "high_stress_alert",
-            "condition": "biometric.heart_rate_bpm > 160 && biometric.inferred_state == 'stressed'",
-            "action_flow_id": "send_and_confirm",
-            "cooldown_seconds": 1800
-        }
-    ],
-    "permissions": ["messaging", "contacts"],
+    "triggers": [],
+    "permissions": ["messaging"],
     "requires_daemon": false,
-    "max_calls_per_hour": 100
+    "max_calls_per_hour": 200
 }

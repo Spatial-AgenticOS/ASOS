@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import socket
+import sys
 import textwrap
 
 from config.loader import feral_home
@@ -407,6 +408,19 @@ def _looks_like_vision_model(model_name: str) -> bool:
     return any(token in lower for token in ("llava", "moondream", "qwen2-vl", "minicpm-v", "bakllava", "gemma3"))
 
 
+def ask_choice(prompt_text: str, choices: list[str], default: str) -> str:
+    """Rich Prompt.ask rejects empty input before applying default; this honors Enter = default."""
+    if not HAS_RICH:
+        raise RuntimeError("ask_choice requires the 'rich' package")
+    while True:
+        raw = Prompt.ask(prompt_text, default=default, show_default=True)
+        if raw is None or str(raw).strip() == "":
+            return default
+        if raw in choices:
+            return raw
+        print(f"  Valid options: {', '.join(choices)}. Press Enter to use '{default}'.")
+
+
 def _get_local_ip() -> str:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -442,6 +456,9 @@ class OnboardWizard:
         self.creds: dict = {}
 
     async def run(self):
+        if not sys.stdin.isatty():
+            print("FERAL setup requires an interactive terminal. Run `feral setup` directly.")
+            sys.exit(2)
         FERAL_HOME.mkdir(parents=True, exist_ok=True)
         self._load_existing_creds()
 
@@ -472,19 +489,16 @@ class OnboardWizard:
         self.c.print()
         self.c.print(Panel.fit(
             "[bold cyan]Welcome to FERAL[/]\n"
-            "[bold]The Open AI Operating System[/]\n\n"
-            "[dim]FERAL is not just another computer-use agent.[/]\n\n"
-            "Unlike tools like OpenClaw that only control your screen,\n"
-            "FERAL is a [bold]full platform[/]:\n\n"
-            "  [cyan]•[/] Learns new skills on the fly — the agent teaches itself\n"
-            "  [cyan]•[/] Controls hardware — glasses, robots, sensors, home devices\n"
-            "  [cyan]•[/] Generates dynamic UI — no hardcoded apps, just data\n"
-            "  [cyan]•[/] Privacy-first memory — your data stays on YOUR machine\n"
-            "  [cyan]•[/] Multi-device — phone as bridge to glasses, wristbands, robots\n\n"
-            "[dim]Built for AI developers to extend: add skills, hardware daemons,\n"
-            "GenUI providers, and more. Our vision is a native AI OS built on NixOS\n"
-            "that runs on PCs, phones, and embedded devices.[/]\n\n"
-            "[bold green]This wizard sets everything up in about 3 minutes.[/]",
+            "[bold]Unleashed AI — local-first brain[/]\n\n"
+            "[bold]Why FERAL is different:[/]\n"
+            "  [green]•[/] [bold]Ambient[/] — full-screen companion modes (desk / briefing / wind-down)\n"
+            "  [green]•[/] [bold]Glass Brain[/] — real-time cognition + comms visualization\n"
+            "  [green]•[/] [bold]Somatic context[/] — biometrics can steer prompts and alerts\n"
+            "  [green]•[/] [bold]Hardware mesh[/] — glasses, wristband, robots, Home Assistant\n"
+            "  [green]•[/] [bold]Channels[/] — one messaging tool across Telegram, Slack, Discord, WhatsApp\n\n"
+            "[dim]Computer-use agents are a dime a dozen. FERAL is built to sit at the center\n"
+            "of your life — local, extensible, and wired end-to-end.[/]\n\n"
+            "[bold green]This wizard takes about 3 minutes.[/]",
             border_style="cyan",
             padding=(1, 2),
         ))
@@ -520,7 +534,7 @@ class OnboardWizard:
         self.c.print(table)
         self.c.print()
 
-        choice = Prompt.ask(
+        choice = ask_choice(
             "Choose provider",
             choices=provider_keys,
             default="openai",
@@ -625,7 +639,7 @@ class OnboardWizard:
             default_marker = " [green](recommended)[/]" if m == provider["default_model"] else ""
             self.c.print(f"  {i}. {m}{default_marker}")
 
-        model = Prompt.ask(
+        model = ask_choice(
             "Choose model",
             choices=provider["models"],
             default=provider["default_model"],
@@ -662,21 +676,21 @@ class OnboardWizard:
         self.c.print()
         self.c.print("  [dim]These help your agent match your style:[/]")
         tech_levels = ["beginner", "intermediate", "advanced", "developer"]
-        tech_level = Prompt.ask(
+        tech_level = ask_choice(
             "  Tech skill level",
             choices=tech_levels,
             default="intermediate",
         )
 
         use_cases = ["personal-assistant", "developer-tool", "health-monitoring", "home-automation", "research", "other"]
-        use_case = Prompt.ask(
+        use_case = ask_choice(
             "  Primary use case",
             choices=use_cases,
             default="personal-assistant",
         )
 
         comm_styles = ["detailed", "concise", "casual", "formal"]
-        comm_style = Prompt.ask(
+        comm_style = ask_choice(
             "  Communication preference",
             choices=comm_styles,
             default="concise",
@@ -745,7 +759,7 @@ class OnboardWizard:
             p = PERSONALITY_PRESETS[key]
             self.c.print(f"  {i}. [cyan]{p['label']}[/] — {p['desc']}")
 
-        choice = Prompt.ask(
+        choice = ask_choice(
             "Choose personality",
             choices=preset_keys,
             default="assistant",
@@ -834,22 +848,14 @@ class OnboardWizard:
         )
 
         local_ip = _get_local_ip()
-        self.c.print(f"  [dim]Your local IP: {local_ip}[/]")
-        self.c.print(f"  [dim]Daemon WebSocket: ws://{local_ip}:9090/v1/daemon[/]")
+        self.c.print("\n[bold]Phone as a bridge (optional)[/]")
+        self.c.print(
+            "  To connect your phone, install the FERAL Node app and scan the QR code "
+            "under [cyan]Settings → Devices[/] after the brain starts.",
+        )
+        self.c.print(f"  Local brain URL (same Wi‑Fi): [cyan]http://{local_ip}:9090[/]")
+        self.c.print(f"  Daemon WebSocket: [cyan]ws://{local_ip}:9090/v1/daemon[/]")
         self.c.print()
-
-        pair_phone = Confirm.ask("  Pair a phone as a bridge now?", default=False)
-        if pair_phone:
-            phone_url = Prompt.ask(
-                "  Phone bridge URL (or press Enter to use auto-discovery)",
-                default="",
-            )
-            if phone_url:
-                self.config["phone_bridge_url"] = phone_url
-                self.c.print("  [green]Phone bridge URL saved[/]")
-            else:
-                self.c.print("  [dim]Auto-discovery will find your phone when you start FERAL.[/]")
-                self.config["phone_bridge_url"] = "auto"
 
         register_glasses = Confirm.ask("  Register FERAL glasses?", default=False)
         if register_glasses:
@@ -857,8 +863,8 @@ class OnboardWizard:
             self.config["glasses_model"] = model
             self.c.print(f"  [green]Registered: {model}[/]")
 
-        if not pair_phone and not register_glasses:
-            self.c.print("  [dim]Skipped. You can pair devices later: feral devices pair[/]")
+        if not register_glasses:
+            self.c.print("  [dim]Skipped glasses registration. Pair devices anytime: Settings → Devices[/]")
 
         self.c.print()
 
@@ -944,8 +950,11 @@ class OnboardWizard:
                     break
                 else:
                     self.c.print(f"    [yellow]{msg}[/]")
-                    action = Prompt.ask("    Retry / Save anyway / Skip",
-                                        choices=["retry", "save", "skip"], default="retry")
+                    action = ask_choice(
+                        "    Retry / Save anyway / Skip",
+                        choices=["retry", "save", "skip"],
+                        default="retry",
+                    )
                     if action == "save":
                         self.creds.update(field_values)
                         configured.append(ch["name"])
@@ -989,8 +998,11 @@ class OnboardWizard:
                 break
             else:
                 self.c.print(f"  [yellow]{msg}[/]")
-                action = Prompt.ask("  Retry / Save anyway / Skip",
-                                    choices=["retry", "save", "skip"], default="retry")
+                action = ask_choice(
+                    "  Retry / Save anyway / Skip",
+                    choices=["retry", "save", "skip"],
+                    default="retry",
+                )
                 if action == "save":
                     self.creds["HA_URL"] = ha_url
                     self.creds["HA_TOKEN"] = ha_token
@@ -1193,6 +1205,9 @@ class OnboardWizardPlain:
         self.creds: dict = {}
 
     async def run(self):
+        if not sys.stdin.isatty():
+            print("FERAL setup requires an interactive terminal. Run `feral setup` directly.")
+            sys.exit(2)
         FERAL_HOME.mkdir(parents=True, exist_ok=True)
 
         creds_path = FERAL_HOME / "credentials.json"
@@ -1404,12 +1419,10 @@ class OnboardWizardPlain:
         print("Step 5: Device Pairing (optional)")
         print("  Architecture: Glasses/Sensors -> Phone (Bridge) -> Brain (This PC) -> Actions")
         local_ip = _get_local_ip()
-        print(f"  Your local IP: {local_ip}")
+        print("  To pair a phone: install the FERAL Node app and scan the QR code in")
+        print("  Settings > Devices after the brain is running.")
+        print(f"  Local brain URL: http://{local_ip}:9090")
         print(f"  Daemon WebSocket: ws://{local_ip}:9090/v1/daemon")
-        pair = input("  Pair a phone bridge now? (y/N): ").strip().lower()
-        if pair in ("y", "yes"):
-            url = input("  Phone bridge URL (Enter for auto-discovery): ").strip()
-            self.config["phone_bridge_url"] = url or "auto"
         glasses = input("  Register FERAL glasses? (y/N): ").strip().lower()
         if glasses in ("y", "yes"):
             model = input("  Glasses model (W300/W610/other) [W610]: ").strip() or "W610"

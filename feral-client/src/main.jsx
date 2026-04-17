@@ -12,6 +12,7 @@ import GlassBrain from './pages/GlassBrain';
 import Intents from './pages/Intents';
 import AppShell from './components/AppShell';
 import { API_BASE } from './config';
+import { ensureClientApiKey } from './api';
 import { ToastProvider } from './components/Toast';
 import 'highlight.js/styles/github-dark.css';
 import './index.css';
@@ -75,6 +76,7 @@ function Root() {
           <Route path="/taskflows" element={setupComplete ? <TaskFlows /> : <Navigate to="/setup" />} />
           <Route path="/timeline" element={setupComplete ? <Timeline /> : <Navigate to="/setup" />} />
           <Route path="/glass-brain" element={setupComplete ? <GlassBrain /> : <Navigate to="/setup" />} />
+          <Route path="/glass" element={setupComplete ? <GlassBrain /> : <Navigate to="/setup" />} />
           <Route path="/intents" element={setupComplete ? <Intents /> : <Navigate to="/setup" />} />
         </Route>
         <Route path="/ambient" element={setupComplete ? <Ambient /> : <Navigate to="/setup" />} />

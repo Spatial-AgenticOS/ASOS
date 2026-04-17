@@ -35,13 +35,13 @@
 
 ## Feature Maturity
 
-> **Stable** means all 5 criteria are met: ≥1 integration test, structured logging (`feral.{subsystem}.{name}`), documented env vars + settings, graceful error handling, and a troubleshooting guide in `docs/mintlify/`. **1344 tests pass** on every commit. See [docs/mintlify/guides/](docs/mintlify/guides/) for per-feature troubleshooting.
+> **Stable** means all 5 criteria are met: ≥1 integration test, structured logging (`feral.{subsystem}.{name}`), documented env vars + settings, graceful error handling, and a troubleshooting guide in `docs/mintlify/`. **1345 tests pass** on every commit. See [docs/mintlify/guides/](docs/mintlify/guides/) for per-feature troubleshooting.
 
 | Feature | Status | Details |
 |---------|--------|---------|
 | **Chat + LLM Orchestration** | Stable | 10 providers, failover, streaming, tool calling |
 | **Memory (4-tier + P2P sync)** | Stable | Notes, episodic, knowledge graph, CRDT sync |
-| **Skills + Tool Execution** | Stable | 19 skills, multi-runtime executor, blind vault |
+| **Skills + Tool Execution** | Stable | 20 skills, multi-runtime executor, blind vault |
 | **CLI + Setup Wizard** | Stable | `feral start/serve/doctor/setup`, interactive wizard with key validation |
 | **Web Dashboard** | Stable | Chat, SDUI, settings, dashboard, timeline |
 | **Ambient** | Stable | 3 modes (Briefing/Desk/Wind-Down), somatic wallpaper, wake-word, auto-switch |
@@ -76,6 +76,24 @@
 | **Video Generation** | Planned | — |
 | **Music Generation** | Planned | — |
 | **Native macOS App** | Planned | — |
+
+### FERAL vs typical agent shells (e.g. OpenClaw)
+
+| Capability | OpenClaw-style agents | FERAL |
+|------------|------------------------|-------|
+| Computer + browser control | Yes | Yes |
+| Telegram / Slack / Discord | Yes | Yes (unified `messaging` tool + credential bridge) |
+| Wearable health (HR / SpO₂ / HRV) in context | No | Yes |
+| Proactive biometric alerts | No | Yes |
+| Somatic-aware system prompts | No | Yes |
+| Ambient full-screen companion (multi-mode) | No | Yes |
+| Glass Brain live cognition + comms viz | No | Yes |
+| Federated P2P memory sync | No | Yes |
+| Intent Compiler (goals → micro-actions) | No | Yes |
+| Digital Twin (ask-as-user) | No | Yes |
+| Tool Genesis (user-defined tools, sandboxed) | Limited | Yes |
+| Agent Mitosis (specialist workers) | Limited | Yes |
+| Hardware mesh (glasses, wristband, nodes) | Limited | Yes |
 
 ---
 

@@ -68,7 +68,7 @@ class TestClassifySafety:
     # ── CONFIRM ───────────────────────────────────────────────────────────
 
     @pytest.mark.parametrize("tool_name", [
-        "messaging_sms__send_sms",
+        "messaging__send",
         "github__post_comment",
         "project__create_issue",
         "notes_memory__delete_note",
@@ -208,11 +208,11 @@ class TestEnforceSafety:
 
     def test_hybrid_confirm_requires_approval(self):
         result = self.runner.enforce_safety(
-            "messaging__send_sms", {"to": "+1"}, session_id="s1",
+            "messaging__send", {"channel": "sms", "target": "+1", "text": "hi"}, session_id="s1",
         )
         assert result is not None
         assert result["status"] == "pending_approval"
-        assert result["tool_name"] == "messaging__send_sms"
+        assert result["tool_name"] == "messaging__send"
 
     # ── Strict mode: even AUTO non-readonly needs approval ────────────────
 
@@ -231,7 +231,9 @@ class TestEnforceSafety:
 
     def test_loose_confirm_auto_executes(self):
         runner = _make_runner("loose")
-        result = runner.enforce_safety("messaging__send_sms", {"to": "+1"}, session_id="s1")
+        result = runner.enforce_safety(
+            "messaging__send", {"channel": "sms", "target": "+1", "text": "hi"}, session_id="s1",
+        )
         assert result is None
 
     def test_loose_deny_still_blocked(self):
@@ -244,9 +246,11 @@ class TestEnforceSafety:
 
     def test_standing_approval_bypasses_confirm(self):
         self.runner._approval_mgr.grant_approval(
-            "messaging__send_sms", "s1", scope="session",
+            "messaging__send", "s1", scope="session",
         )
-        result = self.runner.enforce_safety("messaging__send_sms", {"to": "+1"}, session_id="s1")
+        result = self.runner.enforce_safety(
+            "messaging__send", {"channel": "sms", "target": "+1", "text": "hi"}, session_id="s1",
+        )
         assert result is None
 
 
@@ -321,7 +325,7 @@ class TestApprovalLifecycle:
 
     def test_approve_pending_returns_tool_info(self):
         pending = self.runner.enforce_safety(
-            "messaging__send_sms", {"to": "+1"}, session_id="s1",
+            "messaging__send", {"channel": "sms", "target": "+1", "text": "hi"}, session_id="s1",
         )
         assert pending is not None
         assert pending["status"] == "pending_approval"
@@ -329,12 +333,12 @@ class TestApprovalLifecycle:
 
         result = self.runner.approve_pending(req_id)
         assert result is not None
-        assert result["tool_name"] == "messaging__send_sms"
-        assert result["args"] == {"to": "+1"}
+        assert result["tool_name"] == "messaging__send"
+        assert result["args"] == {"channel": "sms", "target": "+1", "text": "hi"}
 
     def test_deny_pending_returns_denial(self):
         pending = self.runner.enforce_safety(
-            "messaging__send_sms", {"to": "+1"}, session_id="s1",
+            "messaging__send", {"channel": "sms", "target": "+1", "text": "hi"}, session_id="s1",
         )
         assert pending is not None
         req_id = pending["request_id"]
@@ -352,7 +356,7 @@ class TestApprovalLifecycle:
 
     def test_double_approve_returns_none(self):
         pending = self.runner.enforce_safety(
-            "messaging__send_sms", {"to": "+1"}, session_id="s1",
+            "messaging__send", {"channel": "sms", "target": "+1", "text": "hi"}, session_id="s1",
         )
         assert pending is not None
         req_id = pending["request_id"]
@@ -423,7 +427,7 @@ class TestExecuteToolCallForLLM:
         )
         assert result["status"] == "PermissionOutcome::Deny"
 
-    async def test_anti_loop_blocks_after_five(self):
+    async def test_anti_loop_blocks_after_three_identical(self):
         runner = _make_runner("loose")
         skill = MagicMock()
         skill.endpoints = [MagicMock(id="do_thing")]
@@ -431,12 +435,12 @@ class TestExecuteToolCallForLLM:
         runner._orch.executor.execute = AsyncMock(return_value={"success": True, "data": None})
 
         call = {"name": "test__do_thing", "args": {"x": 1}}
-        for _ in range(4):
+        for _ in range(2):
             await runner.execute_tool_call_for_llm("s1", call, [])
 
         result = await runner.execute_tool_call_for_llm("s1", call, [])
         assert result.get("anti_loop_blocked") is True
-        assert result["anti_loop_streak"] == 5
+        assert result["anti_loop_streak"] == 3
 
     async def test_successful_execution_returns_result(self):
         skill = MagicMock()
@@ -498,7 +502,7 @@ class TestExecuteToolCallForLLM:
         assert result["status"] == "command_sent_to_hardware_daemon"
         ws.send_json.assert_called_once()
 
-    async def test_anti_loop_guidance_attached_at_streak_3(self):
+    async def test_anti_loop_guidance_attached_at_streak_2(self):
         skill = MagicMock()
         ep = MagicMock()
         ep.id = "act"
@@ -507,12 +511,11 @@ class TestExecuteToolCallForLLM:
         self.orch.executor.execute = AsyncMock(return_value={"success": True, "data": None})
 
         call = {"name": "t__act", "args": {"k": "v"}}
-        for _ in range(2):
-            await self.runner.execute_tool_call_for_llm("s1", call, [])
+        await self.runner.execute_tool_call_for_llm("s1", call, [])
 
         result = await self.runner.execute_tool_call_for_llm("s1", call, [])
         assert "_anti_loop_guidance" in result
-        assert result["_anti_loop_streak"] == 3
+        assert result["_anti_loop_streak"] == 2
 
     async def test_subagent_spawn_respects_safety_gate(self):
         """In strict mode, subagent__spawn_subagent is not read-only,

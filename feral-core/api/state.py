@@ -275,8 +275,6 @@ class BrainState:
             register_instance("calendar_google", self.calendar)
         if self.email:
             register_instance("email", self.email)
-        if self.messaging and self.messaging.connected:
-            register_instance("messaging_sms", self.messaging)
         if self.health_aggregator:
             register_instance("health_data", self.health_aggregator)
         if self.google_drive:
@@ -775,6 +773,12 @@ class BrainState:
                 "TAVILY_API_KEY", "BRAVE_API_KEY", "EXA_API_KEY",
                 "SERPER_API_KEY", "GITHUB_TOKEN", "SPOTIFY_CLIENT_ID",
                 "PERPLEXITY_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CSE_ID",
+                "FERAL_TELEGRAM_BOT_TOKEN",
+                "FERAL_SLACK_BOT_TOKEN", "FERAL_SLACK_APP_TOKEN", "FERAL_SLACK_SIGNING_SECRET",
+                "FERAL_DISCORD_BOT_TOKEN",
+                "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_VERIFY_TOKEN",
+                "HA_URL", "HA_TOKEN",
+                "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER",
             ]
             loaded = []
             for key in env_keys:

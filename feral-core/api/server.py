@@ -1107,4 +1107,10 @@ if __name__ == "__main__":
     ║   Voice · GenUI · Hardware          ║
     ╚══════════════════════════════════════╝
     """)
-    uvicorn.run(app, host=brain_bind_host(), port=brain_port(), log_level="info")
+    _h = brain_bind_host()
+    if _h == "0.0.0.0":
+        logger.warning(
+            "Brain listening on all interfaces (LAN). Set FERAL_BIND_HOST=127.0.0.1 or "
+            "FERAL_SECURE_MODE=strict to restrict access."
+        )
+    uvicorn.run(app, host=_h, port=brain_port(), log_level="info")

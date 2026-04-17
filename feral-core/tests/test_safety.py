@@ -28,7 +28,7 @@ class TestSafetyClassification:
         assert runner.classify_safety("github_api__get_repos", {}) == SafetyLevel.AUTO
 
     def test_send_message_is_confirm(self, runner):
-        assert runner.classify_safety("messaging_sms__send_sms", {"to": "+1234", "body": "hi"}) == SafetyLevel.CONFIRM
+        assert runner.classify_safety("messaging__send", {"channel": "telegram", "target": "1", "text": "hi"}) == SafetyLevel.CONFIRM
 
     def test_robot_move_normal_is_confirm(self, runner):
         assert runner.classify_safety("robot_ext__robot_move", {"direction": "forward", "speed": 30}) == SafetyLevel.CONFIRM

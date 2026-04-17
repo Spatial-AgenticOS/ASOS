@@ -210,6 +210,16 @@ class TelegramChannel(Channel):
         user_id = str(user.get("id", ""))
         username = user.get("first_name", "") or user.get("username", "")
         self._known_chat_ids.add(chat_id)
+        try:
+            from channels.contact_store import get_contact_store
+            get_contact_store().remember(
+                "telegram",
+                chat_id,
+                username=user.get("username"),
+                first_name=user.get("first_name"),
+            )
+        except Exception:
+            pass
 
         text = message.get("text", "")
         is_voice = "voice" in message
@@ -235,8 +245,19 @@ class TelegramChannel(Channel):
     async def _handle_callback(self, callback: dict):
         chat_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
         data = callback.get("data", "")
-        user_id = str(callback.get("from", {}).get("id", ""))
+        cb_from = callback.get("from", {})
+        user_id = str(cb_from.get("id", ""))
         self._known_chat_ids.add(chat_id)
+        try:
+            from channels.contact_store import get_contact_store
+            get_contact_store().remember(
+                "telegram",
+                chat_id,
+                username=cb_from.get("username"),
+                first_name=cb_from.get("first_name"),
+            )
+        except Exception:
+            pass
 
         channel_msg = ChannelMessage(
             channel_type="telegram",

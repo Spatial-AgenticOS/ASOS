@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
+import { apiFetch } from '../api';
 import { useTheme } from '../hooks/useTheme';
 import { useToast } from '../components/Toast';
 
@@ -1484,29 +1485,54 @@ export default function Settings() {
 }
 
 function PhoneBridgeSection() {
+  const [phoneInfo, setPhoneInfo] = useState(null);
+  useEffect(() => {
+    apiFetch('/api/setup/phone-access')
+      .then(r => r.json())
+      .then(setPhoneInfo)
+      .catch(() => setPhoneInfo(null));
+  }, []);
+
+  const paths = phoneInfo?.paths || [];
+
   return (
     <Section title="Connect Your Phone" icon={Smartphone}>
       <div style={{ padding: 24, background: 'rgba(6,182,212,0.05)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: 12 }}>
         <p className="text-xs text-feral-text-muted mb-4">
-          For full phone capabilities (HealthKit, Health Connect, motion sensors, camera, voice),
-          install the FERAL Node app and scan the QR code below.
+          Three ways to use FERAL from your phone: native app (best), same Wi‑Fi browser, or an advanced bridge daemon.
         </p>
-        <div className="flex gap-4 items-center flex-wrap">
-          <div className="text-center">
-            <img src="/api/devices/pair/qr" alt="Pairing QR" className="rounded-lg bg-white p-2" style={{ width: 200, height: 200 }} />
+        {phoneInfo?.local_ip && (
+          <p className="text-[11px] font-mono text-feral-accent mb-3">LAN IP: {phoneInfo.local_ip} · port {phoneInfo.port}</p>
+        )}
+        <div className="flex gap-4 items-start flex-wrap">
+          <div className="text-center flex-shrink-0">
+            <img src={`${API}/api/devices/pair/qr`} alt="Pairing QR" className="rounded-lg bg-white p-2" style={{ width: 200, height: 200 }} />
             <div className="text-[11px] mt-2 text-feral-text-muted">Scan with FERAL Node app</div>
           </div>
-          <div className="flex flex-col gap-2">
-            <a href="https://apps.apple.com/" target="_blank" rel="noopener noreferrer"
-              className="px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-feral-text text-xs no-underline hover:border-feral-border-bright transition">
-              Download for iOS
-            </a>
-            <a href="https://play.google.com/" target="_blank" rel="noopener noreferrer"
-              className="px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-feral-text text-xs no-underline hover:border-feral-border-bright transition">
-              Download for Android
-            </a>
-            <div className="text-[10px] text-feral-text-muted mt-2">
-              Or run the hardware daemon: <code className="bg-feral-bg px-1.5 py-0.5 rounded font-mono text-[10px]">python -m feral_nodes.hardware_daemon</code>
+          <div className="flex flex-col gap-4 min-w-[200px] flex-1">
+            {paths.map(p => (
+              <div key={p.id} className="border border-feral-border rounded-lg p-3 bg-feral-bg/40">
+                <div className="text-sm font-medium text-feral-text mb-1">{p.label}</div>
+                <ol className="text-[11px] text-feral-text-muted list-decimal pl-4 space-y-1">
+                  {(p.steps || []).map((s, i) => <li key={i}>{s}</li>)}
+                </ol>
+                {p.url && (
+                  <div className="mt-2 text-[11px] font-mono break-all text-feral-accent">{p.url}</div>
+                )}
+                {p.command && (
+                  <div className="mt-2 text-[10px] font-mono bg-feral-bg px-2 py-1 rounded break-all">{p.command}</div>
+                )}
+              </div>
+            ))}
+            <div className="flex gap-2 flex-wrap">
+              <a href="https://apps.apple.com/" target="_blank" rel="noopener noreferrer"
+                className="px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-feral-text text-xs no-underline hover:border-feral-border-bright transition">
+                App Store
+              </a>
+              <a href="https://play.google.com/" target="_blank" rel="noopener noreferrer"
+                className="px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-feral-text text-xs no-underline hover:border-feral-border-bright transition">
+                Google Play
+              </a>
             </div>
           </div>
         </div>
