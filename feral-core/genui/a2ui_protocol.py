@@ -116,12 +116,18 @@ class A2UISurface:
         }
 
 
+A2UI_VERSION = "1.0"
+
+# TODO(v2): Add signed marketplace trust verification for third-party surfaces.
+
+
 @dataclass
 class A2UIMessage:
     """A wire-format message from server to client."""
     message_type: MessageType
     surface_id: str
     payload: dict = field(default_factory=dict)
+    a2ui_version: str = A2UI_VERSION
 
     @staticmethod
     def begin_rendering(surface: A2UISurface) -> A2UIMessage:
@@ -156,6 +162,7 @@ class A2UIMessage:
 
     def to_dict(self) -> dict:
         return {
+            "a2ui_version": self.a2ui_version,
             "type": self.message_type.value,
             "surfaceId": self.surface_id,
             **self.payload,

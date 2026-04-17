@@ -82,6 +82,32 @@ class Channel(ABC):
     def set_handler(self, handler: MessageHandler):
         self._handler = handler
 
+    async def _emit_comms_event(self, direction: str, sender_or_recipient: str, preview: str = "", extra: dict = None):
+        """Emit brain_event for Glass Brain comms visualization. direction: 'in' or 'out'."""
+        try:
+            from api.state import state
+            if not state.orchestrator:
+                return
+            payload = {
+                "channel": self.__class__.__name__.replace("Channel", "").lower(),
+                "direction": direction,
+            }
+            if direction == "in":
+                payload["sender"] = sender_or_recipient
+            else:
+                payload["recipient"] = sender_or_recipient
+            payload["preview"] = (preview or "")[:100]
+            if extra:
+                payload.update(extra)
+            event_type = "channel_message_in" if direction == "in" else "channel_message_out"
+            for sid in list(state.sessions.keys()):
+                try:
+                    await state.orchestrator._emit_brain_event(sid, event_type, payload)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     @abstractmethod
     async def start(self):
         ...
@@ -196,6 +222,7 @@ class TelegramChannel(Channel):
             is_voice=is_voice,
             image_b64=image_b64,
         )
+        await self._emit_comms_event("in", username or user_id, text)
         response = await self._handler(channel_msg)
         await self.send(chat_id, response)
 
@@ -212,6 +239,7 @@ class TelegramChannel(Channel):
             text=data,
             metadata={"callback": True},
         )
+        await self._emit_comms_event("in", user_id, data, {"callback": True})
         response = await self._handler(channel_msg)
         await self.send(chat_id, response)
 
@@ -251,6 +279,7 @@ class TelegramChannel(Channel):
                     ]
                 }
             await self._http_with_retry(self._http, "POST", f"{self._base_url}/sendMessage", json=payload)
+            await self._emit_comms_event("out", channel_id, response.text)
         except Exception as e:
             tg_logger.error("Telegram send error: %s", e)
 
@@ -344,6 +373,7 @@ class DiscordChannel(Channel):
                 text=text,
                 username=username,
             )
+            await self._emit_comms_event("in", username or user_id, text)
             response = await self._handler(channel_msg)
             await self.send(channel_id, response)
 
@@ -359,6 +389,7 @@ class DiscordChannel(Channel):
         try:
             url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
             await self._http_with_retry(self._http, "POST", url, json={"content": response.text})
+            await self._emit_comms_event("out", channel_id, response.text)
         except Exception as e:
             dc_logger.error("Discord send error: %s", e)
 
@@ -449,6 +480,7 @@ class SlackChannel(Channel):
                 user_id=user_id,
                 text=text,
             )
+            await self._emit_comms_event("in", user_id, text)
             response = await self._handler(channel_msg)
             await self.send(channel_id, response)
 
@@ -478,6 +510,7 @@ class SlackChannel(Channel):
                     },
                 ]
             await self._http_with_retry(self._http, "POST", "https://slack.com/api/chat.postMessage", json=payload)
+            await self._emit_comms_event("out", channel_id, response.text)
         except Exception as e:
             logging.getLogger("feral.channel.slack").error("Slack send error: %s", e)
 
@@ -536,6 +569,7 @@ class WhatsAppChannel(Channel):
                             text=text,
                             channel_id=self._phone_id,
                         )
+                        await self._emit_comms_event("in", sender, text)
                         response = await self._handler(channel_msg)
                         if response and response.text:
                             await self.send_text(sender, response.text)
@@ -563,6 +597,7 @@ class WhatsAppChannel(Channel):
                 },
             )
             response.raise_for_status()
+            await self._emit_comms_event("out", chat_id, text)
             return {"success": True, "data": response.json()}
         except Exception as e:
             wa_logger.error("WhatsApp send failed: %s", e)
@@ -624,6 +659,10 @@ class ChannelManager:
 
     def get_channel(self, channel_type: str) -> Optional[Channel]:
         return self._channels.get(channel_type)
+
+    @property
+    def channels(self) -> dict[str, Channel]:
+        return self._channels
 
     @property
     def active_channels(self) -> list[str]:

@@ -137,6 +137,22 @@ class EmailWatcher:
 
             self._processed_count += 1
 
+            is_vip = any(vip.lower() in sender.lower() for vip in self._vip_senders) if self._vip_senders else False
+
+            try:
+                from api.state import state
+                if state.orchestrator:
+                    loop = asyncio.get_event_loop()
+                    for sid in list(state.sessions.keys()):
+                        loop.call_soon_threadsafe(
+                            asyncio.create_task,
+                            state.orchestrator._emit_brain_event(sid, "email_received", {
+                                "from": sender, "subject": subject, "vip": is_vip,
+                            }),
+                        )
+            except Exception:
+                pass
+
             if self._on_email:
                 loop = asyncio.get_event_loop()
                 loop.call_soon_threadsafe(asyncio.create_task, self._on_email(incoming))

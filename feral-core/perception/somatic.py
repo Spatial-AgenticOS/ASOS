@@ -24,6 +24,8 @@ class SomaticVector:
     skin_temp_c: float = 0.0        # skin temperature
     spo2_pct: float = 0.0           # blood oxygen saturation
     activity_level: float = 0.0     # 0=sedentary, 0.5=walking, 1.0=running
+    steps_today: int = 0            # step count since midnight
+    battery_pct: float = 0.0        # wearable battery percentage
 
     # Behavioral (from interaction telemetry)
     typing_speed_wpm: float = 0.0   # words per minute
@@ -37,6 +39,9 @@ class SomaticVector:
     circadian_phase: float = 0.0    # 0-1 where 0=midnight, 0.5=noon
     sleep_debt_hours: float = 0.0   # estimated accumulated sleep debt
     cognitive_load: float = 0.0     # 0-1 composite cognitive load index
+    stress_level: float = 0.0       # 0-1 composite stress index
+    fatigue_level: float = 0.0      # 0-1 estimated fatigue
+    last_sleep_quality: float = 0.0 # 0-1 last night's sleep quality
 
     def to_compact_string(self) -> str:
         """Serialize to a compact token-efficient string for LLM context."""
@@ -69,6 +74,8 @@ class SomaticVector:
             "skin_temp_c": self.skin_temp_c,
             "spo2_pct": self.spo2_pct,
             "activity_level": self.activity_level,
+            "steps_today": self.steps_today,
+            "battery_pct": self.battery_pct,
             "typing_speed_wpm": self.typing_speed_wpm,
             "interaction_gap_s": self.interaction_gap_s,
             "ambient_light_lux": self.ambient_light_lux,
@@ -76,6 +83,9 @@ class SomaticVector:
             "circadian_phase": self.circadian_phase,
             "sleep_debt_hours": self.sleep_debt_hours,
             "cognitive_load": self.cognitive_load,
+            "stress_level": self.stress_level,
+            "fatigue_level": self.fatigue_level,
+            "last_sleep_quality": self.last_sleep_quality,
         }
 
 
@@ -87,6 +97,36 @@ class BehavioralPolicy:
     tone: str = "normal"  # "calm", "energetic", "concise", "normal"
     proactive_level: str = "normal"  # "silent", "reduced", "normal", "active"
     tool_restrictions: list[str] = field(default_factory=list)
+    suggestion: str = "normal"
+
+    @classmethod
+    def from_vector(cls, v: "SomaticVector") -> "BehavioralPolicy":
+        """Derive a behavioral policy directly from a somatic vector."""
+        policy = cls()
+        if v.cognitive_load > 0.7:
+            policy.max_response_tokens = 150
+            policy.suppress_non_urgent = True
+            policy.tone = "calm"
+            policy.proactive_level = "reduced"
+            policy.suggestion = "calm voice, shorter responses"
+            policy.tool_restrictions = ["financial", "delete", "send_email"]
+        elif v.cognitive_load > 0.4:
+            policy.tone = "normal"
+            policy.suggestion = "normal"
+        else:
+            policy.tone = "normal"
+            policy.proactive_level = "active"
+            policy.suggestion = "normal"
+
+        if 0 < v.spo2_pct < 94:
+            policy.tone = "calm"
+            policy.suppress_non_urgent = True
+
+        hour = v.circadian_phase * 24
+        if hour < 5 or hour > 23:
+            policy.tone = "calm"
+            policy.suppress_non_urgent = True
+        return policy
 
 
 class SomaticEngine:
@@ -103,7 +143,9 @@ class SomaticEngine:
         return self._vectors[session_id]
 
     def update_biometrics(self, session_id: str, heart_rate: float = 0, hrv_ms: float = 0,
-                          spo2_pct: float = 0, skin_temp_c: float = 0, activity_level: float = 0):
+                          spo2_pct: float = 0, skin_temp_c: float = 0, activity_level: float = 0,
+                          steps_today: int = 0, battery_pct: float = 0,
+                          last_sleep_quality: float = 0):
         v = self.get_vector(session_id)
         if heart_rate > 0:
             v.heart_rate = heart_rate
@@ -115,7 +157,18 @@ class SomaticEngine:
             v.skin_temp_c = skin_temp_c
         if activity_level >= 0:
             v.activity_level = activity_level
+        if steps_today > 0:
+            v.steps_today = steps_today
+        if battery_pct > 0:
+            v.battery_pct = battery_pct
+        if last_sleep_quality > 0:
+            v.last_sleep_quality = last_sleep_quality
         v.timestamp = time.time()
+        logger.debug(
+            "Biometrics updated session=%s HR=%.0f HRV=%.0f SpO2=%.0f",
+            session_id[:8], v.heart_rate, v.hrv_ms, v.spo2_pct,
+        )
+        logger.info("Somatic context updated for session %s", session_id[:8])
         self._recompute_cognitive_load(session_id)
 
     def update_interaction(self, session_id: str, text_length: int = 0):
@@ -191,6 +244,35 @@ class SomaticEngine:
 
         total_weight = sum(w for _, _, w in signals)
         v.cognitive_load = sum(val * w for _, val, w in signals) / total_weight if total_weight > 0 else 0.0
+        self._recompute_stress(session_id)
+        self._recompute_fatigue(session_id)
+
+    def _recompute_stress(self, session_id: str):
+        """Compute stress index from HR and HRV: high HR + low HRV = high stress."""
+        v = self.get_vector(session_id)
+        signals = []
+        if v.heart_rate > 0 and v.activity_level < 0.3:
+            hr_stress = max(0, min(1, (v.heart_rate - 60) / 60.0))
+            signals.append(hr_stress * 0.5)
+        if v.hrv_ms > 0:
+            hrv_stress = max(0, 1.0 - (v.hrv_ms / 100.0))
+            signals.append(hrv_stress * 0.5)
+        v.stress_level = sum(signals) if signals else 0.0
+
+    def _recompute_fatigue(self, session_id: str):
+        """Compute fatigue from sleep debt + circadian dip + low sleep quality."""
+        v = self.get_vector(session_id)
+        fatigue = 0.0
+        if v.sleep_debt_hours > 0:
+            fatigue += min(0.5, v.sleep_debt_hours / 8.0)
+        hour = v.circadian_phase * 24
+        if hour < 6 or hour > 22:
+            fatigue += 0.2
+        elif 13 <= hour <= 15:
+            fatigue += 0.1
+        if 0 < v.last_sleep_quality < 0.5:
+            fatigue += 0.2
+        v.fatigue_level = min(1.0, fatigue)
 
     def get_behavioral_policy(self, session_id: str) -> BehavioralPolicy:
         """Generate behavioral policy based on current somatic state."""
@@ -245,13 +327,21 @@ class SomaticEngine:
 
         return "\n".join(lines)
 
+    def build_context_injection(self, session_id: str) -> str:
+        """Build a context injection string summarizing the somatic state."""
+        return self.build_system_prompt_section(session_id)
+
     def update_from_perception_frame(self, session_id: str, sensors: dict):
         """Bridge: extract biometric fields from a perception sensor dict and
         forward them to the somatic vector."""
         vitals = sensors.get("vitals", {})
         hr = vitals.get("ppg_heart_rate") or sensors.get("ppg_heart_rate") or sensors.get("heart_rate_bpm") or 0
+        hrv = vitals.get("hrv_ms") or sensors.get("hrv_ms") or 0
         spo2 = vitals.get("spo2_pct") or sensors.get("spo2_pct") or 0
         temp = vitals.get("skin_temperature_c") or 0
+        steps = vitals.get("steps_today") or sensors.get("steps_today") or 0
+        battery = sensors.get("battery_pct") or sensors.get("device", {}).get("battery_pct") or 0
+        sleep_q = sensors.get("last_sleep_quality") or vitals.get("last_sleep_quality") or 0
         env = sensors.get("environment", {})
         lux = env.get("ambient_light_lux") or 0
 
@@ -262,9 +352,13 @@ class SomaticEngine:
         self.update_biometrics(
             session_id,
             heart_rate=float(hr),
+            hrv_ms=float(hrv),
             spo2_pct=float(spo2),
             skin_temp_c=float(temp),
             activity_level=activity,
+            steps_today=int(steps),
+            battery_pct=float(battery),
+            last_sleep_quality=float(sleep_q),
         )
         if lux:
             self.update_environment(session_id, ambient_light_lux=float(lux))

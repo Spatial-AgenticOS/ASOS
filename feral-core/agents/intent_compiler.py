@@ -35,10 +35,14 @@ class ExecutionPlan:
     adaptations: int = 0
 
 class IntentCompiler:
-    def __init__(self, llm=None, db_path: Optional[str] = None):
+    def __init__(self, llm=None, db_path: Optional[str] = None, skill_registry=None,
+                 user_timezone: str = "UTC"):
         self._llm = llm
         self._plans: dict[str, ExecutionPlan] = {}
         self._db_path = db_path
+        self._skill_registry = skill_registry
+        self._user_timezone = user_timezone
+        self._rejected_actions: list[dict] = []
         if db_path:
             self._init_db()
 
@@ -103,6 +107,23 @@ class IntentCompiler:
         finally:
             conn.close()
 
+    def _validate_action(self, action: dict, skill_registry=None) -> tuple[bool, str]:
+        """Check that action.tool references a real skill endpoint."""
+        tool = action.get("tool", "")
+        if not tool:
+            return False, "empty tool"
+        if tool == "manual":
+            return True, "ok"
+        parts = tool.split(".")
+        if len(parts) < 2:
+            return False, f"tool must be skill.endpoint, got {tool}"
+        skill_id = parts[0]
+        if skill_registry:
+            skills = getattr(skill_registry, "skills", {})
+            if skills and skill_id not in skills:
+                return False, f"unknown skill: {skill_id}"
+        return True, "ok"
+
     async def compile_intent(self, intent: str) -> ExecutionPlan:
         plan = ExecutionPlan(intent=intent)
 
@@ -113,7 +134,7 @@ class IntentCompiler:
                     f"Goal: {intent}\n\n"
                     f"Return a JSON array of objects with fields:\n"
                     f'- "description": what to do (1 sentence)\n'
-                    f'- "tool_hint": which tool/skill might help (or "manual")\n'
+                    f'- "tool": which tool/skill to use in skill.endpoint format (or "manual")\n'
                     f'- "difficulty": 0.0-1.0 how hard\n\n'
                     f"Return ONLY valid JSON array."
                 )
@@ -127,15 +148,31 @@ class IntentCompiler:
                     text = text.split("\n", 1)[1].rsplit("```", 1)[0]
 
                 actions_data = json.loads(text)
-                plan.micro_actions = [
-                    MicroAction(
-                        description=a.get("description", ""),
-                        tool_hint=a.get("tool_hint", "manual"),
-                        difficulty=min(1, max(0, float(a.get("difficulty", 0.5)))),
+                valid_actions = []
+                for a in actions_data[:10]:
+                    tool_ref = a.get("tool", a.get("tool_hint", "manual"))
+                    ok, reason = self._validate_action(
+                        {"tool": tool_ref}, self._skill_registry,
                     )
-                    for a in actions_data[:10]
+                    if ok:
+                        valid_actions.append(
+                            MicroAction(
+                                description=a.get("description", ""),
+                                tool_hint=tool_ref,
+                                difficulty=min(1, max(0, float(a.get("difficulty", 0.5)))),
+                            )
+                        )
+                    else:
+                        logger.warning("Intent action rejected (%s): %s", reason, a.get("description", "")[:80])
+                        self._rejected_actions.append({"action": a, "reason": reason})
+                plan.micro_actions = valid_actions if valid_actions else [
+                    MicroAction(description=intent, tool_hint="manual")
                 ]
                 plan.goal_description = f"Compiled from intent: {intent}"
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning("Intent compilation JSON parse failed, single-action fallback: %s", e)
+                plan.micro_actions = [MicroAction(description=intent, tool_hint="manual")]
+                plan.goal_description = intent
             except Exception as e:
                 logger.warning(f"Intent compilation failed, creating basic plan: {e}")
                 plan.micro_actions = [MicroAction(description=intent, tool_hint="manual")]
@@ -165,23 +202,37 @@ class IntentCompiler:
         self._save_plan(plan)
         return True
 
-    def get_today_actions(self) -> list[dict]:
+    def get_today_actions(self, tz_name: str | None = None) -> list[dict]:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(tz_name or self._user_timezone)
+        today = datetime.now(tz).date()
+
         actions = []
         for plan in self._plans.values():
             if plan.status != "active":
                 continue
             for action in plan.micro_actions:
-                if not action.completed:
-                    actions.append({
-                        "plan_id": plan.plan_id,
-                        "intent": plan.intent,
-                        "action": action.description,
-                        "action_id": action.action_id,
-                        "tool_hint": action.tool_hint,
-                        "difficulty": action.difficulty,
-                        "progress": plan.progress,
-                    })
-                    break  # one action per plan per day
+                if action.completed:
+                    continue
+                if action.scheduled_time:
+                    try:
+                        sched_dt = datetime.fromisoformat(action.scheduled_time)
+                        if hasattr(sched_dt, "date") and sched_dt.date() != today:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                actions.append({
+                    "plan_id": plan.plan_id,
+                    "intent": plan.intent,
+                    "action": action.description,
+                    "action_id": action.action_id,
+                    "tool_hint": action.tool_hint,
+                    "difficulty": action.difficulty,
+                    "progress": plan.progress,
+                })
+                break  # one action per plan per day
         return actions
 
     def list_plans(self) -> list[dict]:

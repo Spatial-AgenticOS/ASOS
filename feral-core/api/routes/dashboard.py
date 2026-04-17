@@ -194,8 +194,15 @@ async def _get_dashboard_data() -> dict:
             }
             break
 
+    channel_types = []
+    if state.channel_manager and hasattr(state.channel_manager, 'channels'):
+        for ch_id, ch in state.channel_manager.channels.items():
+            if getattr(ch, 'enabled', False):
+                channel_types.append({"type": ch_id, "connected": getattr(ch, '_running', False)})
+
     return {
         "devices": devices_list, "device_count": len(state.daemons),
+        "channels": channel_types,
         "session_count": len(state.sessions), "health": latest_health,
         "memory": stats, "skills_count": len(state.skill_registry.skills),
         "llm_available": _check_llm_available(),

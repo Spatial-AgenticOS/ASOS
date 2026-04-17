@@ -347,6 +347,17 @@ class GeminiRealtimeProxy:
             return None
         self._sessions[session_id] = gs
         self._node_to_session[node_id] = session_id
+
+        try:
+            from api.state import state
+            if state.orchestrator:
+                for sid in list(state.sessions.keys()):
+                    await state.orchestrator._emit_brain_event(sid, "voice_session", {
+                        "active": True, "provider": "gemini", "session_id": session_id,
+                    })
+        except Exception:
+            pass
+
         return gs
 
     async def stop_session(self, session_id: str):
@@ -354,6 +365,16 @@ class GeminiRealtimeProxy:
         if gs:
             self._node_to_session.pop(gs.node_id, None)
             await gs.disconnect()
+
+            try:
+                from api.state import state
+                if state.orchestrator:
+                    for sid in list(state.sessions.keys()):
+                        await state.orchestrator._emit_brain_event(sid, "voice_session", {
+                            "active": False, "provider": "gemini", "session_id": session_id,
+                        })
+            except Exception:
+                pass
 
     def has_session(self, session_id: str) -> bool:
         return session_id in self._sessions

@@ -292,6 +292,30 @@ class Orchestrator:
         return RefusalHandler.capability_key(text)
 
     # ─────────────────────────────────────────────
+    # Specialist Routing (Agent Mitosis)
+    # ─────────────────────────────────────────────
+
+    def route_to_specialist(self, query: str) -> Optional[dict]:
+        """Check if a mitosis specialist should handle this query.
+
+        Returns {"agent_id": ..., "system_prompt": ...} or None.
+        """
+        if not self._mitosis_engine:
+            return None
+        agent_id = self._mitosis_engine.match_specialist(query)
+        if not agent_id:
+            return None
+        specialist = self._mitosis_engine.get_specialist(agent_id)
+        if not specialist:
+            return None
+        logger.info("Routing to specialist %s for query: %s", agent_id, query[:60])
+        return {
+            "agent_id": specialist.agent_id,
+            "system_prompt": specialist.system_prompt,
+            "name": specialist.name,
+        }
+
+    # ─────────────────────────────────────────────
     # Brain Event Bus (Glass Brain visualization)
     # ─────────────────────────────────────────────
 

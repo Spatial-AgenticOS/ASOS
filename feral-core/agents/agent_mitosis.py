@@ -168,6 +168,24 @@ class AgentMitosisEngine:
             logger.warning(f"Agent Mitosis spawn failed: {e}")
             return None
 
+    def match_specialist(self, query: str) -> Optional[str]:
+        """Return the agent_id of the best-matched specialist, or None."""
+        topic = self._classify_topic(query, [])
+        if not topic:
+            return None
+        for pid, spec in self._specialists.items():
+            pattern = self._patterns.get(pid)
+            if pattern and pattern.topic_cluster == topic:
+                return spec.agent_id
+        return None
+
+    def get_specialist(self, agent_id: str) -> Optional[SpecialistAgent]:
+        """Return a specialist by agent_id."""
+        for spec in self._specialists.values():
+            if spec.agent_id == agent_id:
+                return spec
+        return None
+
     def record_feedback(self, agent_id: str, positive: bool):
         for pid, spec in self._specialists.items():
             if spec.agent_id == agent_id:

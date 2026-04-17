@@ -248,6 +248,17 @@ class HardwareMesh:
 
         try:
             await ws.send_json(msg)
+
+            try:
+                from api.state import state
+                if state.orchestrator:
+                    for sid in list(state.sessions.keys()):
+                        await state.orchestrator._emit_brain_event(sid, "device_route", {
+                            "from_node": "brain", "to_node": node_id, "payload_kind": command,
+                        })
+            except Exception:
+                pass
+
             result = await asyncio.wait_for(future, timeout=timeout)
 
             success = result.get("success", False)

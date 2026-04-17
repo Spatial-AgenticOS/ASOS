@@ -374,6 +374,17 @@ class RealtimeProxy:
             return None
         self._sessions[session_id] = rs
         self._node_to_session[node_id] = session_id
+
+        try:
+            from api.state import state
+            if state.orchestrator:
+                for sid in list(state.sessions.keys()):
+                    await state.orchestrator._emit_brain_event(sid, "voice_session", {
+                        "active": True, "provider": "openai", "session_id": session_id,
+                    })
+        except Exception:
+            pass
+
         return rs
 
     async def stop_session(self, session_id: str):
@@ -382,6 +393,16 @@ class RealtimeProxy:
             node_id = rs.node_id
             await rs.disconnect()
             self._node_to_session.pop(node_id, None)
+
+            try:
+                from api.state import state
+                if state.orchestrator:
+                    for sid in list(state.sessions.keys()):
+                        await state.orchestrator._emit_brain_event(sid, "voice_session", {
+                            "active": False, "provider": "openai", "session_id": session_id,
+                        })
+            except Exception:
+                pass
 
     async def relay_audio(self, node_id: str, audio_b64: str):
         """Relay audio from a phone node to its OpenAI Realtime session."""

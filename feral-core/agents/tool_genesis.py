@@ -1,5 +1,6 @@
 """Tool Genesis — agents that build their own tools from observed patterns."""
 from __future__ import annotations
+import ast
 import json
 import hashlib
 import logging
@@ -10,6 +11,39 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger("feral.tool_genesis")
+
+ALLOWED_IMPORTS = {
+    "json", "math", "re", "datetime", "itertools", "functools",
+    "collections", "statistics", "typing",
+    "asyncio", "httpx",
+}
+
+
+def _ast_safety_check(code: str) -> tuple[bool, str]:
+    """Return (safe, reason). Reject dangerous imports + exec/eval/compile/open/__import__."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return False, f"syntax error: {e}"
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [n.name.split(".")[0] for n in (node.names or [])]
+            if isinstance(node, ast.ImportFrom) and node.module:
+                names.append(node.module.split(".")[0])
+            for name in names:
+                if name not in ALLOWED_IMPORTS:
+                    return False, f"import not allowed: {name}"
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in (
+                "exec", "eval", "compile", "__import__", "open",
+            ):
+                return False, f"forbidden call: {node.func.id}"
+            if isinstance(node.func, ast.Attribute) and node.func.attr in (
+                "system", "popen", "spawn", "fork",
+            ):
+                return False, f"forbidden call: .{node.func.attr}"
+    return True, "ok"
 
 @dataclass
 class ToolSequence:
@@ -32,6 +66,8 @@ class GeneratedTool:
     last_used: float = 0.0
     use_count: int = 0
     performance_vs_manual: float = 1.0  # ratio: generated/manual execution time
+    requires_approval: bool = True
+    approved: bool = False
 
 SEQUENCE_THRESHOLD = 3  # how many times before proposing
 RETIREMENT_DAYS = 30
@@ -104,6 +140,12 @@ class ToolGenesisEngine:
                 {"role": "user", "content": prompt},
             ])
             text, _ = self._llm.extract_response(response)
+            code = text.strip()
+
+            safe, reason = _ast_safety_check(code)
+            if not safe:
+                logger.warning("Tool Genesis: AST safety check failed for %s: %s", sequence_id, reason)
+                return None
 
             tool_id = f"genesis_{sequence_id}"
             name = f"auto_{'_then_'.join(t.split('__')[-1] for t in seq.tools[:3])}"
@@ -113,15 +155,57 @@ class ToolGenesisEngine:
                 name=name,
                 description=f"Auto-generated: {' → '.join(seq.tools)}",
                 source_sequence=seq.tools,
-                python_code=text.strip(),
+                python_code=code,
+                requires_approval=True,
+                approved=False,
             )
             self._generated[sequence_id] = tool
             self._persist_generated(sequence_id)
-            logger.info(f"Tool Genesis: created {tool_id} from sequence {seq.tools}")
+            logger.info("Tool Genesis: created %s from sequence %s (pending approval)", tool_id, seq.tools)
             return tool
         except Exception as e:
             logger.warning(f"Tool Genesis generation failed: {e}")
             return None
+
+    def approve_tool(self, tool_id: str) -> bool:
+        """Mark a generated tool as approved for execution."""
+        for sig, gt in self._generated.items():
+            if gt.tool_id == tool_id:
+                gt.approved = True
+                self._persist_generated(sig)
+                logger.info("Tool Genesis: approved %s", tool_id)
+                return True
+        return False
+
+    async def execute_tool(self, tool_id: str, args: dict) -> dict:
+        """Execute a generated tool in the sandbox. Must be approved first."""
+        tool = None
+        for gt in self._generated.values():
+            if gt.tool_id == tool_id:
+                tool = gt
+                break
+        if not tool:
+            return {"success": False, "error": f"unknown tool: {tool_id}"}
+        if tool.requires_approval and not tool.approved:
+            return {"success": False, "error": "Tool must be approved first (call approve_tool)"}
+
+        safe, reason = _ast_safety_check(tool.python_code)
+        if not safe:
+            return {"success": False, "error": f"safety check failed: {reason}"}
+
+        try:
+            from skills.impl.code_interpreter import _run_sandboxed
+        except ImportError:
+            _run_sandboxed = None
+
+        if _run_sandboxed is None:
+            return {"success": False, "error": "sandbox runtime not available"}
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as work_dir:
+            wrapper = f"{tool.python_code}\n\nimport json, sys\nresult = main({json.dumps(args)})\nprint(json.dumps(result))"
+            result = await _run_sandboxed(wrapper, "python", work_dir, timeout=10)
+        return {"success": result.get("exit_code") == 0, "output": result.get("stdout", ""), "error": result.get("stderr", "")}
 
     def record_usage(self, tool_id: str):
         for sig, gt in self._generated.items():
