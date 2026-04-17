@@ -1,0 +1,77 @@
+---
+title: "Contributing to Docs"
+description: "How to add, edit, and preview FERAL documentation pages."
+---
+
+## Where the docs live
+
+Source: `docs/mintlify/` in the main [FERAL repo](https://github.com/FERAL-AI/FERAL-AI).
+
+Live site: [docs.feral.sh](https://docs.feral.sh) (hosted by Mintlify).
+
+## How to add a new page
+
+1. Create an `.mdx` file under `docs/mintlify/` in the appropriate folder (`guides/`, `reference/`, `hardware/`, `channels/`, etc.). Use the standard frontmatter:
+   ```mdx
+   ---
+   title: "My New Page"
+   description: "One-sentence summary for search + SEO."
+   ---
+   ```
+2. Add the page to the navigation in `docs/mintlify/docs.json` under the right group. Example:
+   ```json
+   {
+     "group": "Guides",
+     "pages": [
+       "guides/existing-page",
+       "guides/my-new-page"
+     ]
+   }
+   ```
+3. Commit and push to `main`. Mintlify auto-deploys in ~1 minute.
+
+<Warning>
+  If you add an `.mdx` file but forget to list it in `docs.json`, the page returns 404. Mintlify does NOT auto-discover pages.
+</Warning>
+
+## Editing existing pages
+
+Just edit the `.mdx` in-place, commit, push. Mintlify picks up the change within ~1 minute.
+
+## Previewing locally
+
+```bash
+npm i -g mintlify
+cd docs/mintlify
+mintlify dev
+```
+
+Opens at http://localhost:3000. Hot-reloads on save.
+
+## Style conventions
+
+- Use frontmatter `title` + `description` on every page (powers search + OG)
+- Use Mintlify components for callouts: `<Note>`, `<Warning>`, `<Tip>`, `<Check>`
+- Code fences with language: `py`, `bash`, `jsx`, `swift`, `kotlin`
+- Link between docs pages with relative paths: `[See Skills](/guides/skills)`
+- External repo links use full URLs
+
+## How deployment works
+
+```mermaid
+flowchart LR
+  PR[Pull request] --> Main[main branch]
+  Main -->|"webhook"| Mint[Mintlify CI]
+  Mint --> DFS[docs.feral.sh]
+```
+
+- `main` branch = production docs
+- Mintlify validates `docs.json` and every page on build
+- A broken page reference in `docs.json` fails the whole deploy — check Mintlify dashboard for errors
+
+## Troubleshooting
+
+- **404 after push**: page not in `docs.json` navigation
+- **Mintlify build fails**: `docs.json` references a non-existent page, OR frontmatter is malformed
+- **Broken link**: relative paths are case-sensitive; use all-lowercase filenames and matching references
+- **Search not finding a page**: missing or empty `description` in frontmatter

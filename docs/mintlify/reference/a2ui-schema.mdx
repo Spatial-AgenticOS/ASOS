@@ -1,0 +1,91 @@
+---
+title: "A2UI Schema Reference"
+description: "Wire format for Agent-to-User Interface (GenUI) events"
+---
+
+# A2UI Schema v1.0
+
+The A2UI protocol defines how the FERAL brain sends structured UI to any client renderer (iOS, web, Android, CLI).
+
+## Version
+
+All A2UI messages include `"a2ui_version": "1.0"`. Receivers should check compatibility before rendering.
+
+## Message Types
+
+| Type | Purpose |
+|---|---|
+| `beginRendering` | Initial surface with full component tree + data model |
+| `surfaceUpdate` | Incremental component patches |
+| `dataModelUpdate` | Data-only patches (re-render bound values) |
+| `deleteSurface` | Remove a surface from the client |
+
+## Message Envelope
+
+```json
+{
+  "a2ui_version": "1.0",
+  "type": "beginRendering | surfaceUpdate | dataModelUpdate | deleteSurface",
+  "surfaceId": "string",
+  ...payload fields
+}
+```
+
+## Component Schema
+
+Every component in the tree has:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `componentId` | string | yes | Unique ID within the surface |
+| `type` | ComponentType | yes | One of the registered types below |
+| `properties` | object | no | Type-specific props (value, label, color, etc.) |
+| `children` | string[] | no | Ordered list of child componentIds |
+
+## Core Component Types
+
+| Type | Category | Description |
+|---|---|---|
+| `Text` | Display | Text with style variants (headline, subtitle, body, caption) |
+| `Image` | Display | Image from URL or data URI |
+| `Icon` | Display | Named icon (Lucide set) |
+| `Button` | Input | Interactive button with action_id |
+| `Checkbox` | Input | Boolean toggle |
+| `TextField` | Input | Text input |
+| `Slider` | Input | Numeric range input |
+| `Row` | Layout | Horizontal layout |
+| `Column` | Layout | Vertical layout |
+| `List` | Layout | Scrollable list |
+| `Card` | Layout | Elevated card container |
+| `Tabs` | Layout | Tabbed sections |
+| `Divider` | Layout | Horizontal rule |
+| `Modal` | Layout | Overlay dialog |
+
+## FERAL Extensions
+
+| Type | Description |
+|---|---|
+| `MapView` | Interactive map with markers |
+| `Chart` | Line/bar/pie chart |
+| `MetricCard` | Numeric metric with icon + unit |
+| `GraphView` | Knowledge graph (nodes + links) |
+| `CodeBlock` | Syntax-highlighted code |
+| `ProgressBar` | 0-1 progress indicator |
+| `Table` | Tabular data (headers + rows) |
+| `WebView` | Embedded iframe |
+
+## Data Binding
+
+String values support data-model binding:
+
+```json
+{ "literalString": "Hello" }
+{ "path": "user/name" }
+```
+
+Paths are resolved against the surface's `dataModel` using `/`-separated keys.
+
+## Compatibility
+
+- Clients that receive an unknown `a2ui_version` should render a fallback "update required" message.
+- Unknown component types should render as invisible placeholders, not crash.

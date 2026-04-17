@@ -57,9 +57,14 @@
           "guides/genui",
           "guides/memory",
           "guides/voice",
+          "guides/voice-troubleshooting",
           "guides/security",
           "guides/autonomy",
-          "guides/local-models"
+          "guides/local-models",
+          "guides/browser-automation",
+          "guides/gui-computer-use",
+          "guides/pdf",
+          "guides/digital-twin"
         ]
       },
       {
@@ -69,6 +74,7 @@
           "guides/devices",
           "hardware/wristband",
           "hardware/smart-home",
+          "guides/smart-home",
           "hardware/glasses",
           "hardware/robots"
         ]
@@ -77,6 +83,7 @@
         "group": "Channels",
         "pages": [
           "guides/channels",
+          "guides/channels-setup",
           "channels/telegram",
           "channels/slack",
           "channels/discord",
@@ -86,12 +93,26 @@
       {
         "group": "Connectivity",
         "pages": [
-          "guides/browser-extension",
           "guides/mqtt",
           "guides/home-assistant",
           "guides/email-watcher",
-          "guides/webhooks",
+          "guides/webhooks"
+        ]
+      },
+      {
+        "group": "Native Apps",
+        "pages": [
+          "guides/ios-app",
+          "guides/android-app",
+          "guides/browser-extension",
           "guides/desktop-app"
+        ]
+      },
+      {
+        "group": "Operations",
+        "pages": [
+          "guides/observability",
+          "guides/federated-sync"
         ]
       },
       {
@@ -107,7 +128,8 @@
           "reference/api",
           "reference/websocket",
           "reference/environment",
-          "reference/cli"
+          "reference/cli",
+          "reference/a2ui-schema"
         ]
       },
       {
@@ -121,6 +143,7 @@
         "group": "Community",
         "pages": [
           "contributing",
+          "contributing-docs",
           "deployment"
         ]
       }

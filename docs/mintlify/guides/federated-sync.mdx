@@ -1,0 +1,88 @@
+---
+title: "Federated Memory Sync"
+description: "Peer-to-peer memory replication with TLS mutual auth, mDNS discovery, and static peer fallback"
+---
+
+## Overview
+
+FERAL instances on the same network automatically discover each other via mDNS
+and replicate memory using CRDTs (Conflict-free Replicated Data Types). All sync
+is peer-to-peer — no cloud relay is involved.
+
+## TLS Setup
+
+Generate a CA and peer certificates using OpenSSL:
+
+```bash
+# 1. Create a CA
+openssl req -x509 -newkey rsa:4096 -days 3650 -nodes \
+  -keyout ca-key.pem -out ca-cert.pem \
+  -subj "/CN=FERAL Sync CA"
+
+# 2. Generate server/peer key + CSR
+openssl req -newkey rsa:2048 -nodes \
+  -keyout peer-key.pem -out peer.csr \
+  -subj "/CN=feral-peer"
+
+# 3. Sign with CA
+openssl x509 -req -in peer.csr -CA ca-cert.pem -CAkey ca-key.pem \
+  -CAcreateserial -out peer-cert.pem -days 365
+
+# 4. (Optional) Repeat steps 2–3 for each peer
+```
+
+Configure each FERAL instance:
+
+```bash
+export FERAL_SYNC_TLS_CERT=/path/to/peer-cert.pem
+export FERAL_SYNC_TLS_KEY=/path/to/peer-key.pem
+export FERAL_SYNC_TLS_CA=/path/to/ca-cert.pem
+export FERAL_SYNC_REQUIRE_CLIENT_CERT=true
+```
+
+The passphrase (`FERAL_SYNC_PASSPHRASE`) is still checked as a belt-and-suspenders layer on top of TLS.
+
+## Static Peer List
+
+When mDNS is blocked (enterprise networks, Docker, VPNs), use a static peer list:
+
+```bash
+export FERAL_SYNC_PEERS="192.168.1.10:9090,192.168.1.11:9090"
+```
+
+FERAL will use mDNS first. If no peers are discovered within 30 seconds, it
+falls back to the static list. If mDNS is unavailable entirely (zeroconf not
+installed), static peers are used immediately.
+
+## Troubleshooting mDNS
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "zeroconf not installed" warning | Missing dependency | `pip install feral-ai[sync]` |
+| Peers not discovered | mDNS blocked by firewall | Open UDP port 5353, or use `FERAL_SYNC_PEERS` |
+| Peers discovered but sync fails | Passphrase mismatch | Ensure `FERAL_SYNC_PASSPHRASE` matches on all nodes |
+| TLS handshake error | Certificate not signed by CA | Re-sign peer cert with the same CA |
+| "Invalid passphrase" in logs | Passphrase env var not set on one node | Set `FERAL_SYNC_PASSPHRASE` on all nodes |
+
+## Conflict Resolution
+
+- **Notes / Knowledge:** Last-Writer-Wins by HLC timestamp
+- **Episodes:** Union merge (never delete remote episodes)
+- **Execution log:** Append-only (INSERT OR IGNORE)
+
+## Architecture
+
+```
+Node A                          Node B
+  │                               │
+  ├─ mDNS discover ──────────────►│
+  │◄──────────────── mDNS reply ──┤
+  │                               │
+  ├─ WS connect (TLS) ──────────►│
+  ├─ sync_request + VC ─────────►│
+  │◄──── sync_response + VC ─────┤
+  ├─ sync_data (my ops) ────────►│
+  │◄──── sync_data (your ops) ───┤
+  │                               │
+  └─ CRDT merge locally           └─ CRDT merge locally
+```

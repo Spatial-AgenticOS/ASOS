@@ -1,0 +1,11 @@
+---
+title: "Smart Home — Troubleshooting"
+---
+
+## Common Issues
+
+- **Hue bridge not found** — FERAL tries `discovery.meethue.com` then mDNS (`zeroconf`). If both fail, set `HUE_BRIDGE_IP` manually (e.g. `192.168.1.42`).
+- **Hue "link button not pressed"** — Press the physical button on the bridge, then run `feral setup hue` within 30 seconds to register.
+- **Home Assistant connection refused** — Verify `HA_URL` (default `http://homeassistant.local:8123`) and `HA_TOKEN` (long-lived access token from your HA profile).
+- **Entities not showing** — Run `get_entities` first. If HA returns 0 entities, check that the token has the correct permissions.
+- **Checking logs** — Hue: `feral.hardware.hue`. Home Assistant: `feral.integrations.ha`. Set `FERAL_LOG_LEVEL=DEBUG` for full request/response traces.

@@ -1,0 +1,88 @@
+---
+title: "Android App"
+description: "Set up, configure, and test the FERAL Node Android app."
+---
+
+## Overview
+
+The FERAL Node Android app turns your phone into a FERAL edge node. It connects to the Brain via WebSocket, forwards Health Connect data, and runs a foreground service for persistent connectivity.
+
+## Requirements
+
+- Android 8.0+ (API 26), targeting API 34
+- Android Studio Hedgehog+
+- Health Connect app installed (for health data)
+
+## Setup
+
+1. Open `feral-nodes/android-bridge/` in Android Studio (the root Gradle project).
+2. The `:app` module maps to `feral-nodes/android-app/`.
+3. Sync Gradle, then Run on a device or emulator.
+
+## Health Connect Consent
+
+The app requests the following Health Connect permissions:
+
+| Record Type | Permission |
+|------------|-----------|
+| HeartRateRecord | `health.READ_HEART_RATE` |
+| OxygenSaturationRecord | `health.READ_OXYGEN_SATURATION` |
+| SleepSessionRecord | `health.READ_SLEEP` |
+| StepsRecord | `health.READ_STEPS` |
+| ActiveCaloriesBurnedRecord | `health.READ_ACTIVE_CALORIES_BURNED` |
+
+On first run, the user is prompted to grant these permissions in the Health Connect app.
+
+## Foreground Service
+
+The app runs `FeralForegroundService` to maintain the Brain connection in the background. Required permissions in `AndroidManifest.xml`:
+
+| Permission | Purpose |
+|-----------|---------|
+| `FOREGROUND_SERVICE` | Base foreground service permission |
+| `FOREGROUND_SERVICE_HEALTH` | Health data relay |
+| `FOREGROUND_SERVICE_MICROPHONE` | Voice commands |
+| `FOREGROUND_SERVICE_CONNECTED_DEVICE` | BLE device bridge |
+| `POST_NOTIFICATIONS` | Notification channel (Android 13+) |
+| `BLUETOOTH_CONNECT` | BLE glasses pairing |
+
+### Doze Mode & Battery Optimization
+
+The foreground service keeps the app alive during Doze. However:
+
+- WebSocket connections may be dropped during deep Doze on some OEMs.
+- The service auto-reconnects when connectivity resumes.
+- Users should exempt the app from battery optimization: Settings → Apps → FERAL Node → Battery → Unrestricted.
+- On OEMs with aggressive battery management (Samsung, Xiaomi, Huawei), users may need to add the app to "Don't optimize" lists.
+
+## QR Pairing
+
+1. On the Brain dashboard, click **Add Device** → **QR Code**.
+2. In the Android app, go to Settings → **Scan QR Code to Pair**.
+3. Expected QR format: `{"host":"...","port":9090,"token":"..."}`
+
+## Running Tests
+
+### Unit Tests (JVM)
+```bash
+./gradlew :app:test
+```
+
+Tests in `src/test/java/ai/feral/node/`:
+- `HealthConnectManagerTest` — callback data format, time ranges, permission matrix
+
+### Instrumented Tests (device/emulator)
+```bash
+./gradlew :app:connectedAndroidTest
+```
+
+Tests in `src/androidTest/java/ai/feral/node/`:
+- `MainActivityTest` — Compose UI: 3-tab navigation, health metrics display, settings form
+- `QRScannerActivityTest` — QR JSON parsing, edge cases
+
+## Troubleshooting
+
+- **Health data empty** — Install the Health Connect app and grant permissions.
+- **Service killed** — Exempt from battery optimization; some ROMs aggressively kill background services.
+- **QR scan fails** — Ensure camera permission is granted and the QR contains `host` + `token` keys.
+- **Build errors** — Run from the `android-bridge/` root; `:app` depends on `:bridge`.

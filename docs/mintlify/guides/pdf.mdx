@@ -1,0 +1,11 @@
+---
+title: "PDF Reader — Troubleshooting"
+---
+
+## Common Issues
+
+- **PyMuPDF not installed** — `pip install pymupdf`. The skill raises `RuntimeError` with install instructions if missing.
+- **Password-protected PDFs** — Not currently supported. Decrypt with `qpdf --decrypt input.pdf output.pdf` first.
+- **Scanned-only PDFs (no text layer)** — OCR fallback uses `pytesseract` if installed (`pip install pytesseract`). Without it, extraction returns `[OCR not available]`.
+- **Tables not detected** — PyMuPDF's `find_tables()` requires structured table layouts. Hand-drawn or image-based tables won't extract. Consider exporting from the source app instead.
+- **OCR disabled / slow** — OCR is only triggered when a page has fewer than 20 characters of extractable text. For large scanned docs, expect slower extraction. Set `page_start` / `page_end` to limit scope.

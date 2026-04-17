@@ -1,0 +1,50 @@
+---
+title: "GUI Computer Use"
+description: "Let FERAL control your desktop — click, type, scroll, and read the screen"
+status: "Stable"
+---
+
+# GUI Computer Use
+
+FERAL can see your screen and interact with any desktop application using Anthropic-style computer-use primitives: screenshots, mouse clicks, typing, key combos, scrolling, and window management.
+
+## Permission Requirements
+
+### macOS
+1. Open **System Settings → Privacy & Security → Accessibility**
+2. Add your terminal app (Terminal, iTerm2, or the app running FERAL)
+3. Also grant **Screen Recording** permission for screenshots
+
+### Linux (X11)
+No special permissions needed on X11. Wayland requires `xdg-portal` or running FERAL in an X11 session.
+
+Install one of: `gnome-screenshot`, `scrot`, or `imagemagick` (for the `import` command).
+
+### Windows
+Run FERAL as Administrator if clicking in elevated windows. No special setup otherwise.
+
+## Rate Limits
+
+FERAL enforces a configurable rate limit on GUI actions to prevent runaway automation:
+
+```bash
+export FERAL_GUI_MAX_ACTIONS_PER_S=10   # default: 10 actions/second
+```
+
+Screenshots are exempt from rate limiting. When the limit is exceeded, the action returns `{"success": false, "reason": "rate_limit_exceeded"}`.
+
+## Coordinate Scaling (Retina / HiDPI)
+
+VLMs see a screenshot image (max 1920px wide). On Retina/HiDPI displays, the physical screen is larger. FERAL automatically detects the DPI scale factor and converts coordinates:
+
+- **macOS:** Queries `NSScreen.backingScaleFactor()` (typically 2.0)
+- **Linux:** Reads `GDK_SCALE` environment variable
+- **Windows:** Falls back to 1.0
+
+## Troubleshooting
+
+1. **"Screenshot capture failed"** — Check that Screen Recording permission is granted (macOS) or that `scrot`/`gnome-screenshot` is installed (Linux).
+2. **Clicks land in the wrong spot** — Usually a DPI mismatch. Check the `dpi_scale` value in screenshot responses. Override with `GDK_SCALE` on Linux.
+3. **"rate_limit_exceeded" errors** — Increase `FERAL_GUI_MAX_ACTIONS_PER_S` or slow down the automation loop.
+4. **Typing non-ASCII fails** — Install `pyperclip`. FERAL uses clipboard paste for non-ASCII text.
+5. **Window focus doesn't work** — macOS needs Accessibility permission. Linux needs `wmctrl` or `xdotool`.
