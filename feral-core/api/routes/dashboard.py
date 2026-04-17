@@ -4,7 +4,14 @@ import os
 import time
 from fastapi import APIRouter
 
-from _version import __version__
+try:
+    from _version import __version__
+except ImportError:
+    try:
+        from importlib.metadata import version as _pkg_version
+        __version__ = _pkg_version("feral-ai")
+    except Exception:
+        __version__ = "0.0.0-unknown"
 from api.state import state
 from config.loader import feral_home
 

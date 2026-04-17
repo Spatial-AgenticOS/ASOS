@@ -12,7 +12,14 @@ from typing import Optional
 
 from fastapi import WebSocket
 
-from _version import __version__
+try:
+    from _version import __version__
+except ImportError:
+    try:
+        from importlib.metadata import version as _pkg_version
+        __version__ = _pkg_version("feral-ai")
+    except Exception:
+        __version__ = "0.0.0-unknown"
 from models.protocol import FeralMessage
 from agents.orchestrator import Orchestrator
 from agents.learner import Learner

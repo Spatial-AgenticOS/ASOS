@@ -20,7 +20,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, HTMLResponse, FileResponse
 
-from _version import __version__
+try:
+    from _version import __version__
+except ImportError:
+    try:
+        from importlib.metadata import version as _pkg_version
+        __version__ = _pkg_version("feral-ai")
+    except Exception:
+        __version__ = "0.0.0-unknown"
 from models.protocol import (
     FeralMessage,
     TextCommandPayload,
