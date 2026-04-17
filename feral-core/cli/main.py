@@ -34,14 +34,7 @@ try:
 except ImportError:
     httpx = None
 
-try:
-    from _version import __version__
-except ImportError:
-    try:
-        from importlib.metadata import version as _pkg_version
-        __version__ = _pkg_version("feral-ai")
-    except Exception:
-        __version__ = "0.0.0-unknown"
+from version import VERSION as __version__
 from config.loader import feral_home
 from config.runtime import (
     brain_bind_host,

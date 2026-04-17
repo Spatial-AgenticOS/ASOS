@@ -178,7 +178,7 @@ class TestHealth:
         assert "version" in body
 
     def test_health_returns_version(self, client):
-        from _version import __version__
+        from version import VERSION as __version__
         body = client.get("/health").json()
         assert body["version"] == __version__
 
@@ -201,7 +201,7 @@ class TestDashboard:
         assert r.status_code == 200
         body = r.json()
         assert body["name"] == "FERAL Brain"
-        from _version import __version__
+        from version import VERSION as __version__
         assert body["version"] == __version__
         assert "skills" in body
 
@@ -209,7 +209,7 @@ class TestDashboard:
         r = client.get("/api/system/info")
         assert r.status_code == 200
         body = r.json()
-        from _version import __version__
+        from version import VERSION as __version__
         assert body["version"] == __version__
         assert "memory" in body
         assert "security" in body

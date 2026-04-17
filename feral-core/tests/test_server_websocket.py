@@ -252,7 +252,7 @@ class TestRestStartupEndpoints:
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "ok"
-        from _version import __version__
+        from version import VERSION as __version__
         assert body["version"] == __version__
 
     def test_dashboard_data_shape(self, ws_client):
