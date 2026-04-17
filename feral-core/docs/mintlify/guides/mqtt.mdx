@@ -1,0 +1,87 @@
+---
+title: "MQTT Bridge"
+description: "Connect FERAL to any IoT device via MQTT — smart plugs, sensors, Zigbee2MQTT, Tasmota"
+status: "Stable"
+---
+
+# MQTT Bridge
+
+MQTT is the universal language of IoT. The FERAL MQTT bridge connects to any MQTT broker and gives your AI brain access to smart plugs, temperature sensors, motion detectors, ESP32 boards, and thousands more.
+
+## Quick Setup
+
+```bash
+export FERAL_MQTT_BROKER="mqtt://localhost:1883"
+pip install "feral-ai[mqtt]"    # installs aiomqtt
+```
+
+Optionally narrow which topics FERAL listens to:
+
+```bash
+export FERAL_MQTT_TOPICS="home/+/+,sensor/+,zigbee2mqtt/+"
+```
+
+## TLS Configuration
+
+Enable encrypted connections to your broker:
+
+```bash
+export FERAL_MQTT_TLS=true
+
+# Optional — provide your own CA bundle instead of system defaults:
+export FERAL_MQTT_CA_CERT=/path/to/ca.crt
+
+# Optional — mutual TLS (client certificate auth):
+export FERAL_MQTT_CLIENT_CERT=/path/to/client.crt
+export FERAL_MQTT_CLIENT_KEY=/path/to/client.key
+```
+
+If `FERAL_MQTT_TLS=true` and no `FERAL_MQTT_CA_CERT` is set, FERAL uses Python's default system CA bundle (`ssl.create_default_context()`).
+
+### Broker Authentication
+
+```bash
+export FERAL_MQTT_USERNAME=myuser
+export FERAL_MQTT_PASSWORD=secret
+```
+
+## Default Topics
+
+| Topic Pattern | Source |
+|---|---|
+| `homeassistant/+/+/config` | Home Assistant auto-discovery |
+| `home/+/+` | Common home automation |
+| `sensor/+` | Generic sensors |
+| `zigbee2mqtt/+` | Zigbee2MQTT devices |
+| `tasmota/+/+` | Tasmota firmware devices |
+
+## Home Assistant Auto-Discovery
+
+FERAL supports the Home Assistant MQTT discovery protocol. When a device publishes a config message to `homeassistant/{type}/{id}/config`, FERAL automatically registers it in the hardware mesh. Discovered devices expose their `state_topic` and `command_topic` so the Brain can read state and send commands.
+
+**How it works:**
+1. Device publishes JSON config to `homeassistant/sensor/temp1/config`
+2. FERAL extracts device name, type, manufacturer, state/command topics
+3. FERAL subscribes to the device's state topic
+4. The device appears in `GET /api/devices` and is available to the agent
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `FERAL_MQTT_BROKER` | *(none)* | MQTT broker hostname or URL |
+| `FERAL_MQTT_TOPICS` | *(see defaults)* | Comma-separated topic subscriptions |
+| `FERAL_MQTT_TLS` | `false` | Enable TLS encryption |
+| `FERAL_MQTT_CA_CERT` | *(system CAs)* | Path to CA certificate bundle |
+| `FERAL_MQTT_CLIENT_CERT` | *(none)* | Path to client certificate for mTLS |
+| `FERAL_MQTT_CLIENT_KEY` | *(none)* | Path to client private key for mTLS |
+| `FERAL_MQTT_USERNAME` | *(none)* | Broker authentication username |
+| `FERAL_MQTT_PASSWORD` | *(none)* | Broker authentication password |
+
+## Troubleshooting
+
+1. **No devices appearing?** — Run `mosquitto_sub -t '#' -v` to confirm messages are flowing. Check that `FERAL_MQTT_BROKER` matches your broker's host/port.
+2. **TLS handshake failed?** — Verify the CA cert path is correct and the broker's certificate is valid. Try `openssl s_client -connect broker:8883`.
+3. **Authentication rejected?** — Double-check `FERAL_MQTT_USERNAME` / `FERAL_MQTT_PASSWORD`. Some brokers need an ACL entry for the user.
+4. **Commands not reaching devices?** — Confirm FERAL has publish permissions. Check broker ACLs.
+5. **Connection drops?** — FERAL auto-reconnects after 10 seconds. Check broker logs for keepalive timeouts.

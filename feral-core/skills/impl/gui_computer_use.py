@@ -7,6 +7,8 @@ screenshot, mouse clicks, typing, key combos, scrolling, and window management.
 All coordinates from VLMs are in screenshot-space and automatically divided
 by the DPI scale factor before being passed to pyautogui, so Retina/HiDPI
 displays work correctly out of the box.
+
+Hardened: action rate limiter (configurable), proper logger namespace.
 """
 from __future__ import annotations
 
@@ -19,13 +21,14 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from skills.base import BaseSkill
 from skills.impl import register_skill
 
-logger = logging.getLogger("feral.gui_computer_use")
+logger = logging.getLogger("feral.skill.gui")
 
 _SCREENSHOT_MAX_WIDTH = 1920
 
@@ -70,6 +73,28 @@ def scale_coordinates(x: int, y: int, scale: float) -> Tuple[int, int]:
     if scale <= 0:
         scale = 1.0
     return int(x / scale), int(y / scale)
+
+
+# ── Rate limiter ─────────────────────────────────────────────────
+
+class ActionRateLimiter:
+    """Sliding-window rate limiter for GUI actions."""
+
+    def __init__(self, max_per_second: float = 10.0):
+        self._max_per_second = max_per_second
+        self._timestamps: list[float] = []
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> bool:
+        """Return True if the action is allowed, False if rate-limited."""
+        async with self._lock:
+            now = time.monotonic()
+            cutoff = now - 1.0
+            self._timestamps = [t for t in self._timestamps if t > cutoff]
+            if len(self._timestamps) >= self._max_per_second:
+                return False
+            self._timestamps.append(now)
+            return True
 
 
 # ── Screenshot capture (cross-platform) ─────────────────────────
@@ -159,6 +184,8 @@ class GUIComputerUseSkill(BaseSkill):
     def __init__(self) -> None:
         super().__init__(skill_id="gui_computer_use")
         self._scale: Optional[float] = None
+        max_actions = float(os.getenv("FERAL_GUI_MAX_ACTIONS_PER_S", "10"))
+        self._rate_limiter = ActionRateLimiter(max_per_second=max_actions)
 
     @property
     def scale(self) -> float:
@@ -170,6 +197,16 @@ class GUIComputerUseSkill(BaseSkill):
     async def execute(
         self, endpoint_id: str, args: Dict[str, Any], vault: Dict[str, str],
     ) -> Dict[str, Any]:
+        if endpoint_id != "screenshot":
+            allowed = await self._rate_limiter.acquire()
+            if not allowed:
+                return {
+                    "success": False, "status_code": 429,
+                    "data": None,
+                    "reason": "rate_limit_exceeded",
+                    "error": f"Rate limit exceeded (max {self._rate_limiter._max_per_second}/s)",
+                }
+
         dispatch = {
             "screenshot": self._screenshot,
             "mouse_click": self._mouse_click,

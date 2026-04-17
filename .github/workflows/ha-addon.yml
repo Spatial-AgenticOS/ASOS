@@ -1,0 +1,24 @@
+name: HA Add-on Build
+
+on:
+  push:
+    paths: ['feral-ha-addon/**']
+  pull_request:
+    paths: ['feral-ha-addon/**']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build addon image
+        run: |
+          cd feral-ha-addon
+          docker build \
+            --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.19 \
+            --build-arg FERAL_VERSION=2026.4.16 \
+            -t feral-addon:test .
+
+      - name: Smoke test
+        run: docker run --rm feral-addon:test python3 -c "import sys; print(sys.version)"

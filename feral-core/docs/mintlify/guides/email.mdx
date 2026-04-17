@@ -1,0 +1,97 @@
+---
+title: "Email Watcher"
+description: "Real-time email monitoring for FERAL — Gmail, Outlook, Fastmail via IMAP IDLE"
+status: "Stable"
+---
+
+# Email Watcher
+
+FERAL monitors your inbox in real time via IMAP IDLE and routes incoming emails to the AI brain for triage, summarization, and automated responses.
+
+## Quick Setup — Gmail App Password
+
+1. Enable 2FA on your Google account
+2. Generate an App Password at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+3. Set environment variables:
+
+```bash
+export FERAL_IMAP_HOST=imap.gmail.com
+export FERAL_IMAP_PORT=993
+export FERAL_IMAP_USER=you@gmail.com
+export FERAL_IMAP_PASS=your-app-password
+```
+
+## OAuth2 (Gmail / Google Workspace)
+
+For production or when app passwords are unavailable, use OAuth2:
+
+```bash
+export FERAL_IMAP_HOST=imap.gmail.com
+export FERAL_IMAP_USER=you@gmail.com
+export FERAL_IMAP_OAUTH_TOKEN=ya29.your-access-token
+```
+
+To obtain tokens, use `google-auth-oauthlib`:
+
+```bash
+pip install google-auth-oauthlib
+python -c "
+from google_auth_oauthlib.flow import InstalledAppFlow
+flow = InstalledAppFlow.from_client_secrets_file(
+    'client_secret.json',
+    scopes=['https://mail.google.com/']
+)
+creds = flow.run_local_server(port=0)
+print('Access token:', creds.token)
+print('Refresh token:', creds.refresh_token)
+"
+```
+
+Store the access token in `FERAL_IMAP_OAUTH_TOKEN`. FERAL uses XOAUTH2 SASL for authentication.
+
+## Outlook / Microsoft 365
+
+```bash
+export FERAL_IMAP_HOST=outlook.office365.com
+export FERAL_IMAP_PORT=993
+export FERAL_IMAP_USER=you@outlook.com
+export FERAL_IMAP_PASS=your-password
+```
+
+## Fastmail
+
+```bash
+export FERAL_IMAP_HOST=imap.fastmail.com
+export FERAL_IMAP_PORT=993
+export FERAL_IMAP_USER=you@fastmail.com
+export FERAL_IMAP_PASS=your-app-password
+```
+
+## Filtering
+
+Only process emails from VIP senders or with specific subjects:
+
+```bash
+export FERAL_EMAIL_VIP_SENDERS=boss@company.com,cto@company.com
+export FERAL_EMAIL_FILTER_SUBJECTS=urgent,invoice,alert
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `FERAL_IMAP_HOST` | *(none)* | IMAP server hostname |
+| `FERAL_IMAP_PORT` | `993` | IMAP server port |
+| `FERAL_IMAP_USER` | *(none)* | Email address / username |
+| `FERAL_IMAP_PASS` | *(none)* | Password or app password |
+| `FERAL_IMAP_OAUTH_TOKEN` | *(none)* | OAuth2 access token (overrides password) |
+| `FERAL_EMAIL_VIP_SENDERS` | *(all)* | Comma-separated sender whitelist |
+| `FERAL_EMAIL_FILTER_SUBJECTS` | *(all)* | Comma-separated subject keywords |
+
+## Troubleshooting
+
+1. **"Login failed"** — Gmail: ensure 2FA is on and you're using an app password. Outlook: check if "less secure apps" or OAuth is needed.
+2. **Emails not appearing?** — Verify IDLE is supported (`FERAL_EMAIL_IDLE_SUPPORTED` in stats). Gmail supports IDLE; some hosts don't — FERAL falls back to 60s polling.
+3. **OAuth token expired** — Refresh your token and update `FERAL_IMAP_OAUTH_TOKEN`. For unattended use, implement a token refresh cron.
+4. **Connection drops every 30 min** — This is normal. Gmail kills IDLE after 30 min; FERAL re-issues IDLE every 29 min to stay ahead.
+5. **Missing attachments** — FERAL extracts attachment names but doesn't download files. The body is capped at 5000 characters.

@@ -2,15 +2,36 @@
 
 Subscribes to configurable topics, maps messages to HUP device events,
 publishes commands back. Supports Home Assistant MQTT auto-discovery.
+
+Hardened: TLS support, persistent client, username/password auth.
 """
 import asyncio
 import json
 import logging
 import os
+import ssl
 import time
 from typing import Optional, Callable, Awaitable
 
 logger = logging.getLogger("feral.integrations.mqtt")
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    """Build an SSL context from env vars, falling back to system CA bundle."""
+    ca_cert = os.getenv("FERAL_MQTT_CA_CERT", "")
+    client_cert = os.getenv("FERAL_MQTT_CLIENT_CERT", "")
+    client_key = os.getenv("FERAL_MQTT_CLIENT_KEY", "")
+
+    if ca_cert:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.load_verify_locations(ca_cert)
+    else:
+        ctx = ssl.create_default_context()
+
+    if client_cert and client_key:
+        ctx.load_cert_chain(certfile=client_cert, keyfile=client_key)
+
+    return ctx
 
 
 class MQTTBridge:
@@ -23,8 +44,12 @@ class MQTTBridge:
         self._on_device_event = on_device_event
         self._client = None
         self._running = False
-        self._devices: dict[str, dict] = {}  # topic -> device info
+        self._devices: dict[str, dict] = {}
         self._message_count = 0
+        self._publish_lock = asyncio.Lock()
+        self._tls_enabled = os.getenv("FERAL_MQTT_TLS", "").lower() in ("true", "1", "yes")
+        self._username = os.getenv("FERAL_MQTT_USERNAME", "") or None
+        self._password = os.getenv("FERAL_MQTT_PASSWORD", "") or None
 
     @staticmethod
     def _default_topics() -> list[str]:
@@ -32,12 +57,23 @@ class MQTTBridge:
         if custom:
             return [t.strip() for t in custom.split(",")]
         return [
-            "homeassistant/+/+/config",  # HA auto-discovery
-            "home/+/+",                   # Common home automation pattern
-            "sensor/+",                    # Generic sensors
-            "zigbee2mqtt/+",              # Zigbee2MQTT devices
-            "tasmota/+/+",               # Tasmota devices
+            "homeassistant/+/+/config",
+            "home/+/+",
+            "sensor/+",
+            "zigbee2mqtt/+",
+            "tasmota/+/+",
         ]
+
+    def _client_kwargs(self) -> dict:
+        """Build kwargs dict for aiomqtt.Client()."""
+        kwargs: dict = {"hostname": self._broker_url}
+        if self._tls_enabled:
+            kwargs["tls_context"] = _build_ssl_context()
+        if self._username:
+            kwargs["username"] = self._username
+        if self._password:
+            kwargs["password"] = self._password
+        return kwargs
 
     @property
     def configured(self) -> bool:
@@ -49,26 +85,28 @@ class MQTTBridge:
             return False
 
         try:
-            import aiomqtt
+            import aiomqtt  # noqa: F401
         except ImportError:
             logger.warning("aiomqtt not installed — MQTT bridge disabled. pip install aiomqtt")
             return False
 
         self._running = True
         asyncio.create_task(self._subscribe_loop())
-        logger.info("MQTT bridge started: %s (topics: %s)", self._broker_url, self._topics)
+        logger.info("MQTT bridge started: %s (topics: %s, tls: %s)",
+                     self._broker_url, self._topics, self._tls_enabled)
         return True
 
     async def stop(self):
         self._running = False
+        self._client = None
 
     async def publish(self, topic: str, payload: dict) -> bool:
-        if not self._running:
+        if not self._running or self._client is None:
+            logger.debug("MQTT publish skipped: bridge not running or no persistent client")
             return False
         try:
-            import aiomqtt
-            async with aiomqtt.Client(self._broker_url) as client:
-                await client.publish(topic, json.dumps(payload))
+            async with self._publish_lock:
+                await self._client.publish(topic, json.dumps(payload))
             return True
         except Exception as e:
             logger.error("MQTT publish failed: %s", e)
@@ -78,7 +116,9 @@ class MQTTBridge:
         import aiomqtt
         while self._running:
             try:
-                async with aiomqtt.Client(self._broker_url) as client:
+                kwargs = self._client_kwargs()
+                async with aiomqtt.Client(**kwargs) as client:
+                    self._client = client
                     for topic in self._topics:
                         await client.subscribe(topic)
                         logger.debug("MQTT subscribed: %s", topic)
@@ -88,6 +128,7 @@ class MQTTBridge:
                             break
                         await self._handle_message(str(message.topic), message.payload)
             except Exception as e:
+                self._client = None
                 if self._running:
                     logger.warning("MQTT connection lost: %s — reconnecting in 10s", e)
                     await asyncio.sleep(10)
@@ -123,7 +164,7 @@ class MQTTBridge:
         if len(parts) < 4:
             return
 
-        component_type = parts[1]  # sensor, light, switch, etc.
+        component_type = parts[1]
         device_id = parts[2]
 
         device_info = {
@@ -139,11 +180,9 @@ class MQTTBridge:
 
         self._devices[device_id] = device_info
 
-        if device_info["state_topic"]:
+        if device_info["state_topic"] and self._client:
             try:
-                import aiomqtt
-                async with aiomqtt.Client(self._broker_url) as client:
-                    await client.subscribe(device_info["state_topic"])
+                await self._client.subscribe(device_info["state_topic"])
             except Exception:
                 pass
 
@@ -165,4 +204,5 @@ class MQTTBridge:
             "topics": self._topics,
             "devices_discovered": len(self._devices),
             "messages_received": self._message_count,
+            "tls_enabled": self._tls_enabled,
         }

@@ -1,16 +1,21 @@
-"""FERAL Email Watcher — monitors inbox via IMAP IDLE for real-time email processing."""
+"""FERAL Email Watcher — monitors inbox via IMAP IDLE for real-time email processing.
+
+Hardened: OAuth2 XOAUTH2, IDLE re-issue every 29 min, polling fallback,
+testable _parse_message / _extract_body helpers.
+"""
 import asyncio
+import base64
 import email
 import imaplib
 import logging
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from email.header import decode_header
 from typing import Optional, Callable, Awaitable
 
-logger = logging.getLogger("feral.integrations.email_watcher")
+logger = logging.getLogger("feral.integrations.email")
 
 
 @dataclass
@@ -21,20 +26,32 @@ class IncomingEmail:
     date: str
     message_id: str
     has_attachments: bool
+    attachment_names: list[str] = field(default_factory=list)
+
+
+def _format_xoauth2(user: str, token: str) -> str:
+    """Build an XOAUTH2 SASL string for IMAP AUTHENTICATE."""
+    auth_string = f"user={user}\x01auth=Bearer {token}\x01\x01"
+    return base64.b64encode(auth_string.encode()).decode()
 
 
 class EmailWatcher:
     """Watches an IMAP inbox for new emails and routes them to the orchestrator."""
+
+    IDLE_TIMEOUT_SECONDS = 29 * 60  # re-issue IDLE before Gmail's 30-min limit
+    POLL_INTERVAL_SECONDS = 60
 
     def __init__(self, on_email: Optional[Callable[[IncomingEmail], Awaitable]] = None):
         self._imap_host = os.getenv("FERAL_IMAP_HOST", "")
         self._imap_port = int(os.getenv("FERAL_IMAP_PORT", "993"))
         self._imap_user = os.getenv("FERAL_IMAP_USER", "")
         self._imap_pass = os.getenv("FERAL_IMAP_PASS", "")
+        self._oauth_token = os.getenv("FERAL_IMAP_OAUTH_TOKEN", "")
         self._on_email = on_email
         self._running = False
         self._mail: Optional[imaplib.IMAP4_SSL] = None
         self._processed_count = 0
+        self._idle_supported: Optional[bool] = None
         self._vip_senders = [
             s.strip()
             for s in os.getenv("FERAL_EMAIL_VIP_SENDERS", "").split(",")
@@ -48,17 +65,20 @@ class EmailWatcher:
 
     @property
     def configured(self) -> bool:
-        return bool(self._imap_host and self._imap_user and self._imap_pass)
+        has_auth = bool(self._imap_pass) or bool(self._oauth_token)
+        return bool(self._imap_host and self._imap_user and has_auth)
 
     async def start(self) -> bool:
         if not self.configured:
             logger.info(
-                "Email watcher: not configured (set FERAL_IMAP_HOST, FERAL_IMAP_USER, FERAL_IMAP_PASS)"
+                "Email watcher: not configured (set FERAL_IMAP_HOST, FERAL_IMAP_USER, "
+                "and FERAL_IMAP_PASS or FERAL_IMAP_OAUTH_TOKEN)"
             )
             return False
         self._running = True
         asyncio.create_task(self._watch_loop())
-        logger.info("Email watcher started: %s@%s", self._imap_user, self._imap_host)
+        logger.info("Email watcher started: %s@%s (oauth=%s)",
+                     self._imap_user, self._imap_host, bool(self._oauth_token))
         return True
 
     async def stop(self):
@@ -80,8 +100,16 @@ class EmailWatcher:
 
     def _connect_and_idle(self):
         self._mail = imaplib.IMAP4_SSL(self._imap_host, self._imap_port)
-        self._mail.login(self._imap_user, self._imap_pass)
+
+        if self._oauth_token:
+            auth_string = _format_xoauth2(self._imap_user, self._oauth_token)
+            self._mail.authenticate("XOAUTH2", lambda _: auth_string.encode())
+            logger.debug("Authenticated via XOAUTH2")
+        else:
+            self._mail.login(self._imap_user, self._imap_pass)
+
         self._mail.select("INBOX")
+        self._idle_supported = self._check_idle_support()
 
         while self._running:
             status, data = self._mail.search(None, "UNSEEN")
@@ -90,14 +118,43 @@ class EmailWatcher:
                 for msg_id in msg_ids[-5:]:
                     self._process_message(msg_id)
 
-            # IDLE wait (fallback polling if IDLE is unsupported)
+            if self._idle_supported:
+                self._do_idle_wait()
+            else:
+                logger.debug("IDLE not supported, polling every %ds", self.POLL_INTERVAL_SECONDS)
+                time.sleep(self.POLL_INTERVAL_SECONDS)
+
+    def _check_idle_support(self) -> bool:
+        """Return True if the server advertises IDLE capability."""
+        try:
+            _typ, caps = self._mail.capability()
+            cap_str = b" ".join(caps).decode().upper()
+            return "IDLE" in cap_str
+        except Exception:
+            return False
+
+    def _do_idle_wait(self):
+        """Issue IDLE, wait up to IDLE_TIMEOUT_SECONDS, then DONE."""
+        try:
+            tag = self._mail._new_tag().decode()
+            self._mail.send(f"{tag} IDLE\r\n".encode())
+            self._mail.readline()
+
+            start = time.monotonic()
+            self._mail.sock.settimeout(self.IDLE_TIMEOUT_SECONDS)
             try:
-                self._mail.send(b"a IDLE\r\n")
                 self._mail.readline()
-                self._mail.send(b"DONE\r\n")
-                self._mail.readline()
-            except Exception:
-                time.sleep(30)
+            except (TimeoutError, OSError):
+                pass
+            finally:
+                self._mail.sock.settimeout(None)
+
+            self._mail.send(b"DONE\r\n")
+            self._mail.readline()
+        except Exception as e:
+            logger.debug("IDLE failed, falling back to poll: %s", e)
+            self._idle_supported = False
+            time.sleep(self.POLL_INTERVAL_SECONDS)
 
     def _process_message(self, msg_id: bytes):
         try:
@@ -106,38 +163,24 @@ class EmailWatcher:
                 return
 
             raw = data[0][1]
-            msg = email.message_from_bytes(raw)
-
-            sender = self._decode_header(msg.get("From", ""))
-            subject = self._decode_header(msg.get("Subject", ""))
-            date = msg.get("Date", "")
-            message_id = msg.get("Message-ID", "")
+            incoming = self._parse_message(raw)
+            if incoming is None:
+                return
 
             if self._vip_senders and not any(
-                vip.lower() in sender.lower() for vip in self._vip_senders
+                vip.lower() in incoming.sender.lower() for vip in self._vip_senders
             ):
                 if self._filter_subjects and not any(
-                    f.lower() in subject.lower() for f in self._filter_subjects
+                    f.lower() in incoming.subject.lower() for f in self._filter_subjects
                 ):
                     return
 
-            body = self._extract_body(msg)
-            has_attachments = any(
-                part.get_content_disposition() == "attachment" for part in msg.walk()
-            )
-
-            incoming = IncomingEmail(
-                sender=sender,
-                subject=subject,
-                body=body[:5000],
-                date=date,
-                message_id=message_id,
-                has_attachments=has_attachments,
-            )
-
             self._processed_count += 1
 
-            is_vip = any(vip.lower() in sender.lower() for vip in self._vip_senders) if self._vip_senders else False
+            is_vip = (
+                any(vip.lower() in incoming.sender.lower() for vip in self._vip_senders)
+                if self._vip_senders else False
+            )
 
             try:
                 from api.state import state
@@ -147,7 +190,9 @@ class EmailWatcher:
                         loop.call_soon_threadsafe(
                             asyncio.create_task,
                             state.orchestrator._emit_brain_event(sid, "email_received", {
-                                "from": sender, "subject": subject, "vip": is_vip,
+                                "from": incoming.sender,
+                                "subject": incoming.subject,
+                                "vip": is_vip,
                             }),
                         )
             except Exception:
@@ -158,6 +203,39 @@ class EmailWatcher:
                 loop.call_soon_threadsafe(asyncio.create_task, self._on_email(incoming))
         except Exception as e:
             logger.warning("Failed to process email %s: %s", msg_id, e)
+
+    @staticmethod
+    def _parse_message(raw: bytes) -> Optional[IncomingEmail]:
+        """Parse raw RFC-822 bytes into an IncomingEmail. Exposed for unit testing."""
+        try:
+            msg = email.message_from_bytes(raw)
+        except Exception:
+            return None
+
+        sender = EmailWatcher._decode_header(msg.get("From", ""))
+        subject = EmailWatcher._decode_header(msg.get("Subject", ""))
+        date = msg.get("Date", "")
+        message_id = msg.get("Message-ID", "")
+        body = EmailWatcher._extract_body(msg)
+
+        attachment_names: list[str] = []
+        has_attachments = False
+        for part in msg.walk():
+            if part.get_content_disposition() == "attachment":
+                has_attachments = True
+                fname = part.get_filename()
+                if fname:
+                    attachment_names.append(EmailWatcher._decode_header(fname))
+
+        return IncomingEmail(
+            sender=sender,
+            subject=subject,
+            body=body[:5000],
+            date=date,
+            message_id=message_id,
+            has_attachments=has_attachments,
+            attachment_names=attachment_names,
+        )
 
     @staticmethod
     def _decode_header(value: str) -> str:
@@ -172,9 +250,13 @@ class EmailWatcher:
 
     @staticmethod
     def _extract_body(msg: email.message.Message) -> str:
+        """Extract the best text body from a MIME message. Exposed for unit testing."""
         if msg.is_multipart():
             for part in msg.walk():
                 ctype = part.get_content_type()
+                disp = part.get_content_disposition()
+                if disp == "attachment":
+                    continue
                 if ctype == "text/plain":
                     payload = part.get_payload(decode=True)
                     if payload:
@@ -189,7 +271,11 @@ class EmailWatcher:
         else:
             payload = msg.get_payload(decode=True)
             if payload:
-                return payload.decode(errors="replace")
+                text = payload.decode(errors="replace")
+                if msg.get_content_type() == "text/html":
+                    text = re.sub(r"<[^>]+>", " ", text)
+                    text = re.sub(r"\s+", " ", text).strip()
+                return text
         return ""
 
     def stats(self) -> dict:
@@ -200,4 +286,6 @@ class EmailWatcher:
             "user": self._imap_user,
             "processed": self._processed_count,
             "vip_senders": self._vip_senders,
+            "oauth": bool(self._oauth_token),
+            "idle_supported": self._idle_supported,
         }

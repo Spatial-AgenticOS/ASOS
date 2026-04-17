@@ -1,12 +1,17 @@
 """
 FERAL Proactive Scheduler
 SQLite-backed job scheduler for reminders, health checks, data sync, and proactive insights.
+
+Hardened: file lock for multi-process safety, cron macro support (@daily etc.),
+missed-job catch-up within 1-day window.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -14,6 +19,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Optional
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -21,6 +27,47 @@ from zoneinfo import ZoneInfo
 from config.loader import feral_data_home
 
 logger = logging.getLogger("feral.scheduler")
+
+_ONE_DAY_SECONDS = 86400
+
+
+class FileLock:
+    """Advisory file lock using fcntl.flock for multi-process SQLite safety."""
+
+    def __init__(self, lock_path: str):
+        self._lock_path = lock_path
+        self._fd: int | None = None
+
+    def acquire(self) -> bool:
+        try:
+            self._fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR)
+            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except (OSError, IOError):
+            if self._fd is not None:
+                os.close(self._fd)
+                self._fd = None
+            return False
+
+    def release(self) -> None:
+        if self._fd is not None:
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+
+    def __enter__(self):
+        if not self.acquire():
+            raise RuntimeError(f"Could not acquire lock: {self._lock_path}")
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+
+    def __del__(self):
+        self.release()
 
 
 class JobType(str, Enum):
@@ -79,6 +126,19 @@ def _compute_next_run(cron_expr: str, from_time: float, tz: timezone | ZoneInfo 
     raw = cron_expr.strip()
     if not raw:
         return from_time + 60.0
+
+    # Cron macros
+    _macros = {
+        "@yearly":  "0 0 1 1 *",
+        "@annually": "0 0 1 1 *",
+        "@monthly": "0 0 1 * *",
+        "@weekly":  "0 0 * * 0",
+        "@daily":   "0 0 * * *",
+        "@midnight": "0 0 * * *",
+        "@hourly":  "0 * * * *",
+    }
+    if raw.lower() in _macros:
+        raw = _macros[raw.lower()]
 
     # every N minutes
     m = re.match(r"^every\s+(\d+)\s*m(?:inutes?)?$", raw, re.I)
@@ -164,6 +224,7 @@ class CronService:
         config = config or {}
         self._db_path = db_path or _default_db_path()
         self._lock = threading.Lock()
+        self._file_lock = FileLock(self._db_path + ".lock")
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._callback: Optional[Callable[[ScheduledJob], None]] = None
@@ -231,6 +292,7 @@ class CronService:
         self.stop()
         with self._lock:
             self._conn.close()
+        self._file_lock.release()
 
     @staticmethod
     def _row_to_job(row: sqlite3.Row) -> ScheduledJob:
@@ -651,22 +713,32 @@ class CronService:
         return deleted
 
     def _catchup_missed_jobs(self) -> None:
-        """On boot, fire jobs whose next_run passed while the brain was down."""
+        """On boot, fire jobs whose next_run passed while the brain was down.
+
+        Only catches up jobs missed within the last 24 hours to avoid
+        avalanche-firing very old jobs after a long outage.
+        """
         now = time.time()
+        cutoff = now - _ONE_DAY_SECONDS
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, description, next_run, cron_expr FROM scheduled_jobs WHERE enabled = 1 AND next_run < ?",
-                (now,),
+                "SELECT id, description, next_run, cron_expr FROM scheduled_jobs "
+                "WHERE enabled = 1 AND next_run < ? AND next_run >= ?",
+                (now, cutoff),
             ).fetchall()
+        caught_up = 0
         for row in rows:
             job_id, name, next_run, _cron = row["id"], row["description"], row["next_run"], row["cron_expr"]
-            logger.info("Missed job '%s' (id=%d, was due %.0fs ago) — queuing now", name, job_id, now - next_run)
+            logger.info("Missed job '%s' (id=%d, was due %.0fs ago) — catching up", name, job_id, now - next_run)
             job = self.get_job(job_id)
             if job and self._callback:
                 try:
                     self._callback(job)
+                    caught_up += 1
                 finally:
                     self.mark_completed(job_id)
+        if caught_up:
+            logger.info("Caught up %d missed jobs", caught_up)
 
     def _loop(self) -> None:
         self._catchup_missed_jobs()
