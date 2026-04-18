@@ -93,6 +93,11 @@ jobs:
         run: npm audit --audit-level=high 2>&1 || echo "::warning::npm audit found vulnerabilities"
         continue-on-error: true
 
+      - name: Coverage gate note
+        run: |
+          echo "::notice::vitest coverage gate: 20/40/18/20 (stmts/branches/funcs/lines)."
+          echo "::notice::New pages, hooks, or lib files must ship with a matching smoke test in src/__tests__/ so this gate stays honest."
+
       - name: Run tests with coverage
         run: npx vitest run --coverage
 

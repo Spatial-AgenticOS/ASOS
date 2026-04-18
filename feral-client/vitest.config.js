@@ -14,15 +14,20 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],
-      // These thresholds reflect TODAY'S reality, not an aspiration. When a
-      // page or hook is added, ship a matching smoke test in the same PR so
-      // these numbers stay honest. Target ladder lives in CHANGELOG; raise
-      // here in the same commit as the test that earned it.
+      // Thresholds are REAL gates, not aspirations. As of the smoke-test
+      // batch in v2026.4.14 the actual numbers are ~28/54/22/28; we leave
+      // a small safety margin so individual file changes don't regress
+      // the gate.
+      //
+      // Rule: when a new page, hook, or lib file is added, ship a matching
+      // smoke test in the same PR. If the new file drops total statements
+      // below 20%, either (a) write more tests, or (b) explicitly raise
+      // this ceiling with justification in the commit message.
       thresholds: {
-        statements: 8,
-        branches: 15,
-        functions: 15,
-        lines: 8,
+        statements: 20,
+        branches: 40,
+        functions: 18,
+        lines: 20,
       },
     },
   },
