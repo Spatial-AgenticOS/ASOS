@@ -1,4 +1,4 @@
-#!/usr/bin/env bashio
+#!/usr/bin/with-contenv bashio
 
 # Read config from Home Assistant
 LLM_PROVIDER=$(bashio::config 'llm_provider')

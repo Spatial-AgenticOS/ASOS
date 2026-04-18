@@ -1,24 +1,58 @@
 name: HA Add-on Build
 
 on:
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
   push:
-    paths: ['feral-ha-addon/**']
+    paths:
+      - "feral-ha-addon/**"
+      - ".github/workflows/ha-addon.yml"
   pull_request:
-    paths: ['feral-ha-addon/**']
+    paths:
+      - "feral-ha-addon/**"
+      - ".github/workflows/ha-addon.yml"
+  workflow_dispatch:
+    inputs:
+      feral_version:
+        description: "feral-ai PyPI version (calver, no v prefix)"
+        required: false
+        default: "2026.4.9"
+
+permissions:
+  contents: read
+
+env:
+  FERAL_VERSION: "2026.4.9"
 
 jobs:
   build:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Resolve FERAL_VERSION
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "FERAL_VERSION=${{ github.event.inputs.feral_version }}" >> "$GITHUB_ENV"
+          fi
 
       - name: Build addon image
         run: |
           cd feral-ha-addon
           docker build \
             --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.19 \
-            --build-arg FERAL_VERSION=2026.4.9 \
+            --build-arg "FERAL_VERSION=${FERAL_VERSION}" \
             -t feral-addon:test .
 
-      - name: Smoke test
-        run: docker run --rm feral-addon:test python3 -c "import sys; print(sys.version)"
+      - name: Smoke test (import installed package)
+        run: |
+          docker run --rm feral-addon:test python3 -c \
+            "import importlib.metadata as m; import version; print(m.version('feral-ai'), version.VERSION, 'ok')"
