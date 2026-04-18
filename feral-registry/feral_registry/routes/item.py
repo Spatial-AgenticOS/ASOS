@@ -40,7 +40,7 @@ async def get_item(
         sha256=item.sha256,
         size_bytes=item.size_bytes,
         signature_b64=item.signature_b64,
-        download_url=f"{settings.public_base_url}/blobs/{item.sha256}",
+        download_url=f"{settings.public_base_url}/api/v1/blobs/{item.sha256}",
         downloads=item.downloads,
         verified=item.verified,
         created_at=item.created_at,

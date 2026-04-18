@@ -136,15 +136,18 @@ def _verify(item: dict, tarball: Path) -> bytes:
         print(f"  signature verification failed: sha256 mismatch ({actual_hex} != {expected_hex})")
         sys.exit(1)
 
-    sig_b64 = item.get("signature") or ""
-    pub_hex = item.get("publisher_pubkey_hex") or ""
+    sig_b64 = item.get("signature_b64") or item.get("signature") or ""
+    pub_hex = item.get("publisher_pubkey") or item.get("publisher_pubkey_hex") or ""
     if not sig_b64 or not pub_hex:
         print("  signature verification failed: missing signature or publisher key in registry response")
         sys.exit(1)
 
     try:
         vk = VerifyKey(pub_hex, encoder=HexEncoder)
-        vk.verify(actual, base64.b64decode(sig_b64))
+        # The registry signs over ``sha256_hex.encode("ascii")``
+        # (see feral-registry/feral_registry/signing.py::verify_bundle_signature).
+        # The client must verify the same bytes.
+        vk.verify(actual_hex.encode("ascii"), base64.b64decode(sig_b64))
     except (BadSignatureError, ValueError, TypeError) as exc:
         print(f"  signature verification failed: {exc}")
         sys.exit(1)

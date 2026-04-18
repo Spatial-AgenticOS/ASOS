@@ -98,6 +98,6 @@ async def publish(
     return PublishResponse(
         id=item.id,
         sha256=sha,
-        download_url=f"{settings.public_base_url}/blobs/{sha}",
+        download_url=f"{settings.public_base_url}/api/v1/blobs/{sha}",
         verified=verified,
     )
