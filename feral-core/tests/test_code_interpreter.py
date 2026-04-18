@@ -22,6 +22,12 @@ async def test_code_interpreter_unknown_endpoint() -> None:
 
 @pytest.mark.asyncio
 async def test_code_interpreter_captures_csv_artifact(tmp_path, monkeypatch) -> None:
+    # Force the host-subprocess path. On CI the Docker binary is on PATH but
+    # running `--user nobody` against the tmp mount fails with a permission
+    # error that has nothing to do with the skill's artifact-capture logic.
+    monkeypatch.setattr(
+        "skills.impl.code_interpreter.DOCKER_AVAILABLE", False, raising=False
+    )
     monkeypatch.setenv("FERAL_ARTIFACTS_DIR", str(tmp_path))
     skill = CodeInterpreterSkill()
     code = (
