@@ -1,0 +1,42 @@
+{
+  "name": "@feral-ai/node-sdk",
+  "version": "1.0.0",
+  "description": "Official FERAL Hardware Unification Protocol (HUP v1) client SDK for Node.js / TypeScript.",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "prepare": "tsc"
+  },
+  "bin": {
+    "feral-node": "dist/cli.js"
+  },
+  "keywords": [
+    "feral",
+    "hup",
+    "hardware",
+    "websocket",
+    "iot",
+    "robotics"
+  ],
+  "dependencies": {
+    "ws": "^8.16.0",
+    "zod": "^3.23.8",
+    "bonjour-service": "^1.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.4.0"
+  }
+}

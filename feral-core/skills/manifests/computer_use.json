@@ -9,7 +9,7 @@
         "logo_url": "",
         "icon_set": "sf_symbols"
     },
-    "description": "Execute shell commands, read/write/edit files, search codebases, and fetch web content. The core tools that make FERAL a real coding agent.",
+    "description": "General-purpose computer control: run arbitrary shell commands, Python one-liners, AppleScript, file-system operations anywhere on disk (Desktop, home, temp), and `curl`-style network calls. This is FERAL's `exec` escape hatch — use it when a specialized skill does not exist but the task is expressible as a shell/Python script. For repository-scoped code editing, search, and build tooling, use `coding_tools` instead.",
     "trigger_phrases": [
         "run", "execute", "bash", "shell", "command",
         "read file", "show file", "cat",

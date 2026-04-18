@@ -1,0 +1,9 @@
+{
+  "node_id": "my_daemon",
+  "name": "My FERAL Daemon",
+  "firmware_version": "0.1.0",
+  "node_type": "sensor",
+  "capabilities": "heart_rate, battery, buzzer",
+  "author": "Your Name",
+  "manufacturer": "Acme"
+}

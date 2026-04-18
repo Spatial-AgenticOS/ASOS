@@ -43,7 +43,6 @@ class ToolRunner:
     def __init__(self, orchestrator: "Orchestrator", autonomy_mode: str = "hybrid"):
         self._orch = orchestrator
         self._tool_repeat_state: dict[str, dict] = {}
-        self._tool_alternate_history: dict[str, list[str]] = {}
         self._active_subagent_tasks = 0
         self._daemon_session_map: dict[str, str] = {}
         self._pending_approvals: dict[str, dict] = {}
@@ -233,22 +232,6 @@ class ToolRunner:
     def clear_session(self, session_id: str):
         """Remove anti-loop state for a disconnected session."""
         self._tool_repeat_state.pop(session_id, None)
-        self._tool_alternate_history.pop(session_id, None)
-
-    def register_tool_sequence(self, session_id: str, tool_name: str) -> str | None:
-        """Detect A→B→A→B ping-pong between two different tools (runaway alternation)."""
-        hist = self._tool_alternate_history.setdefault(session_id, [])
-        hist.append(tool_name)
-        if len(hist) > 10:
-            hist[:] = hist[-10:]
-        if len(hist) >= 4:
-            a, b, c, d = hist[-4:]
-            if a == c and b == d and a != b:
-                return (
-                    f"STOP: ping-pong detected between '{a}' and '{b}'. "
-                    "Pick one approach, summarize what failed, and ask the user."
-                )
-        return None
 
     # ─────────────────────────────────────────────
     # Daemon Command Execution
@@ -314,11 +297,10 @@ class ToolRunner:
 
         streak = self.register_tool_attempt(session_id, tool_name, args)
         anti_loop_note = None
-        if streak >= 3:
-            guide = self.anti_loop_guidance(tool_name, streak)
+        if streak >= 5:
             message = (
-                f"Anti-loop guard: blocked '{tool_name}' with identical arguments "
-                f"({streak}x in a row). {guide}"
+                f"Anti-loop guard: blocked repeated call '{tool_name}' with identical "
+                f"arguments ({streak}x in a row)."
             )
             logger.warning(message)
             return {
@@ -327,16 +309,7 @@ class ToolRunner:
                 "anti_loop_blocked": True,
                 "anti_loop_streak": streak,
             }
-        ping = self.register_tool_sequence(session_id, tool_name)
-        if ping:
-            logger.warning(ping)
-            return {
-                "success": False,
-                "error": ping,
-                "anti_loop_blocked": True,
-                "anti_loop_reason": "ping_pong",
-            }
-        if streak == 2:
+        if streak >= 3:
             anti_loop_note = self.anti_loop_guidance(tool_name, streak)
             logger.warning(anti_loop_note)
 

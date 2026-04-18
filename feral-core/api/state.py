@@ -275,6 +275,8 @@ class BrainState:
             register_instance("calendar_google", self.calendar)
         if self.email:
             register_instance("email", self.email)
+        if self.messaging and self.messaging.connected:
+            register_instance("messaging_sms", self.messaging)
         if self.health_aggregator:
             register_instance("health_data", self.health_aggregator)
         if self.google_drive:
@@ -399,6 +401,25 @@ class BrainState:
         with boot_subsystem(self._boot_report, "DockerSandbox"):
             from security.docker_sandbox import get_sandbox
             self.docker_sandbox = get_sandbox()
+        # The sandbox object may import cleanly even when the Docker daemon
+        # is not actually reachable — in that case we can't execute anything,
+        # so mark the subsystem DEGRADED rather than the misleading green OK.
+        try:
+            if self.docker_sandbox is None:
+                self._boot_report.mark_degraded(
+                    "DockerSandbox",
+                    "Docker not installed — code execution skill disabled",
+                )
+            elif hasattr(self.docker_sandbox, "available") and not self.docker_sandbox.available():
+                self._boot_report.mark_degraded(
+                    "DockerSandbox",
+                    "Docker daemon not running — start Docker Desktop to enable code exec",
+                )
+        except Exception as _e:
+            self._boot_report.mark_degraded(
+                "DockerSandbox",
+                f"availability probe failed: {type(_e).__name__}",
+            )
 
         with boot_subsystem(self._boot_report, "CronService"):
             from agents.scheduler import CronService
@@ -491,9 +512,27 @@ class BrainState:
                 await self.email_watcher.start()
 
         with boot_subsystem(self._boot_report, "mDNS"):
-            from services.mdns import advertise_brain
+            from services.mdns import advertise_brain, discover_phone_bridge
             from config.runtime import brain_port
             advertise_brain(port=brain_port())
+
+            try:
+                settings = self.config.get_settings() if hasattr(self.config, "get_settings") else {}
+            except Exception:
+                settings = {}
+            phone_url = (settings or {}).get("phone_bridge_url") or os.environ.get("FERAL_PHONE_BRIDGE_URL", "")
+            if phone_url == "auto":
+                discovered = discover_phone_bridge(timeout=2.5)
+                if discovered:
+                    logger.info("mDNS: phone bridge auto-discovered at %s", discovered)
+                    os.environ["FERAL_PHONE_BRIDGE_URL"] = discovered
+                    try:
+                        if hasattr(self.config, "set_setting"):
+                            self.config.set_setting("phone_bridge_url_resolved", discovered)
+                    except Exception:
+                        pass
+                else:
+                    logger.info("mDNS: no phone bridge found on LAN (continuing without)")
 
         # Wire inbound channels to the orchestrator
         await self._start_channels()
@@ -597,24 +636,49 @@ class BrainState:
 
         self.channel_manager.set_handler(_channel_message_handler)
 
+        def _cred(key: str) -> str:
+            """Read a channel credential from env, falling back to credentials.json."""
+            v = os.environ.get(key, "")
+            if v:
+                return v
+            try:
+                if self.config and hasattr(self.config, "get_credential"):
+                    v = self.config.get_credential(key) or ""
+                    if v:
+                        os.environ[key] = v
+                        return v
+            except Exception:
+                pass
+            try:
+                import json as _json
+                creds_path = feral_home() / "credentials.json"
+                if creds_path.exists():
+                    creds = _json.loads(creds_path.read_text())
+                    v = creds.get(key) or ""
+                    if v:
+                        os.environ[key] = v
+            except Exception:
+                pass
+            return v
+
         channel_configs = {
             "telegram": {
-                "bot_token": os.environ.get("FERAL_TELEGRAM_BOT_TOKEN", ""),
-                "enabled": bool(os.environ.get("FERAL_TELEGRAM_BOT_TOKEN")),
+                "bot_token": _cred("FERAL_TELEGRAM_BOT_TOKEN"),
+                "enabled": bool(_cred("FERAL_TELEGRAM_BOT_TOKEN")),
             },
             "discord": {
-                "bot_token": os.environ.get("FERAL_DISCORD_BOT_TOKEN", ""),
-                "enabled": bool(os.environ.get("FERAL_DISCORD_BOT_TOKEN")),
+                "bot_token": _cred("FERAL_DISCORD_BOT_TOKEN"),
+                "enabled": bool(_cred("FERAL_DISCORD_BOT_TOKEN")),
             },
             "slack": {
-                "bot_token": os.environ.get("FERAL_SLACK_BOT_TOKEN", ""),
-                "app_token": os.environ.get("FERAL_SLACK_APP_TOKEN", ""),
-                "enabled": bool(os.environ.get("FERAL_SLACK_BOT_TOKEN")),
+                "bot_token": _cred("FERAL_SLACK_BOT_TOKEN"),
+                "app_token": _cred("FERAL_SLACK_APP_TOKEN"),
+                "enabled": bool(_cred("FERAL_SLACK_BOT_TOKEN")),
             },
             "whatsapp": {
-                "access_token": os.environ.get("FERAL_WHATSAPP_ACCESS_TOKEN", ""),
-                "phone_number_id": os.environ.get("FERAL_WHATSAPP_PHONE_NUMBER_ID", ""),
-                "enabled": bool(os.environ.get("FERAL_WHATSAPP_ACCESS_TOKEN")),
+                "access_token": _cred("FERAL_WHATSAPP_ACCESS_TOKEN"),
+                "phone_number_id": _cred("FERAL_WHATSAPP_PHONE_NUMBER_ID"),
+                "enabled": bool(_cred("FERAL_WHATSAPP_ACCESS_TOKEN") and _cred("FERAL_WHATSAPP_PHONE_NUMBER_ID")),
             },
         }
 
@@ -773,12 +837,12 @@ class BrainState:
                 "TAVILY_API_KEY", "BRAVE_API_KEY", "EXA_API_KEY",
                 "SERPER_API_KEY", "GITHUB_TOKEN", "SPOTIFY_CLIENT_ID",
                 "PERPLEXITY_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CSE_ID",
+                # Messaging channels
                 "FERAL_TELEGRAM_BOT_TOKEN",
                 "FERAL_SLACK_BOT_TOKEN", "FERAL_SLACK_APP_TOKEN", "FERAL_SLACK_SIGNING_SECRET",
                 "FERAL_DISCORD_BOT_TOKEN",
-                "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_VERIFY_TOKEN",
-                "HA_URL", "HA_TOKEN",
-                "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER",
+                "FERAL_WHATSAPP_PHONE_NUMBER_ID", "FERAL_WHATSAPP_ACCESS_TOKEN",
+                "FERAL_WHATSAPP_VERIFY_TOKEN", "FERAL_WHATSAPP_APP_SECRET",
             ]
             loaded = []
             for key in env_keys:

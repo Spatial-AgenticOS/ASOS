@@ -1,0 +1,106 @@
+{
+    "skill_id": "self_introspection",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Self Introspection",
+        "primary_color": "#14b8a6",
+        "secondary_color": "#0f172a",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Answers meta-questions about FERAL itself: what skills exist, which channels are live, which hardware is connected, what specialists (Mitosis) have spawned, what capability proposals are pending approval, what version+model is running. Use this whenever the user asks 'what can you do', 'what skills do you have', 'are you connected to X', 'what's running right now', or any question about FERAL's own surface.",
+    "trigger_phrases": [
+        "what can you do",
+        "what skills do you have",
+        "what are your capabilities",
+        "what tools do you have",
+        "list your skills",
+        "list your capabilities",
+        "are you connected",
+        "what channels",
+        "what devices",
+        "who are you",
+        "introspect",
+        "about yourself",
+        "your status",
+        "specialists",
+        "pending proposals",
+        "pending skills"
+    ],
+    "categories": ["system", "meta", "self"],
+    "auth": {"type": "none"},
+    "endpoints": [
+        {
+            "id": "list_capabilities",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "Return the full list of registered skills on this FERAL instance with their endpoints. Use this instead of guessing whether a capability exists.",
+            "params": [],
+            "returns_description": "{skills: [{skill_id, name, description, endpoints: [id,description]}], active_channels, connected_devices, autonomy_mode, version}",
+            "ui_hint": "list"
+        },
+        {
+            "id": "describe_skill",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "Return full details (endpoints, params, description) for a single skill by id.",
+            "params": [
+                {"name": "skill_id", "type": "string", "required": true, "description": "The skill_id to describe."}
+            ],
+            "returns_description": "{skill_id, name, description, endpoints}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "active_channels",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "List the messaging channels currently connected on this brain.",
+            "params": [],
+            "returns_description": "{channels: [{name, running, bot_username}]}",
+            "ui_hint": "list"
+        },
+        {
+            "id": "connected_devices",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "List hardware daemons / HUP nodes currently registered.",
+            "params": [],
+            "returns_description": "{devices: [{node_id, type, capabilities, last_seen}]}",
+            "ui_hint": "list"
+        },
+        {
+            "id": "current_session",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "Return the current runtime snapshot: agent version, active LLM model, autonomy mode, host.",
+            "params": [],
+            "returns_description": "{version, model, host, os, autonomy_mode}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "list_specialists",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "List Agent-Mitosis specialist agents that have spawned on this instance and which domain/skills they cover.",
+            "params": [],
+            "returns_description": "{specialists: [{id, domain, allowed_skills, confidence}]}",
+            "ui_hint": "list"
+        },
+        {
+            "id": "list_pending_proposals",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "List Tool-Genesis proposals waiting for user approval (hybrid autonomy) or recently auto-promoted skills (loose autonomy).",
+            "params": [],
+            "returns_description": "{proposals: [{tool_id, name, pattern, autonomy, created_at, preview}]}",
+            "ui_hint": "list"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": [],
+    "requires_daemon": false,
+    "max_calls_per_hour": 1000
+}

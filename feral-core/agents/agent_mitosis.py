@@ -186,6 +186,65 @@ class AgentMitosisEngine:
                 return spec
         return None
 
+    def route_to_specialist(self, query: str, session_id: str = "") -> Optional[SpecialistAgent]:
+        """Classify the query and return the matching specialist (or None).
+
+        Used by the orchestrator at the top of ``handle_command`` to swap in a
+        specialist's system prompt + narrow tool set for this turn. Mirrors
+        OpenClaw's ``sessions_spawn`` + ``allowAgents`` pattern: instead of
+        always running the generalist, we pick the domain-limb that has
+        better context for this kind of work.
+        """
+        agent_id = self.match_specialist(query)
+        if not agent_id:
+            return None
+        spec = self.get_specialist(agent_id)
+        if spec is None:
+            return None
+        spec.last_active = time.time()
+        for pid, s in self._specialists.items():
+            if s.agent_id == spec.agent_id:
+                self._persist_specialist(pid)
+                break
+        return spec
+
+    def propose_specialist(
+        self,
+        pattern_tag: str,
+        skills_used: list[str],
+        sample_prompts: Optional[list[str]] = None,
+    ) -> Optional[str]:
+        """Record a lightweight specialist proposal from Tool Genesis.
+
+        Called when genesis notices a repeated tool-call sequence. We seed a
+        TaskPattern so that the usual ``get_spawn_proposals`` → ``spawn_specialist``
+        pipeline picks it up. Returns the new ``pattern_id`` on success.
+        """
+        if not pattern_tag:
+            return None
+        pattern_id = f"pattern_{pattern_tag}"
+        if pattern_id in self._patterns:
+            p = self._patterns[pattern_id]
+            p.occurrence_count += SPAWN_THRESHOLD  # fast-track: genesis already saw it repeat
+            p.last_seen = time.time()
+            for t in skills_used or []:
+                if t not in p.tool_affinities:
+                    p.tool_affinities.append(t)
+            if sample_prompts:
+                for sp in sample_prompts:
+                    if sp not in p.sample_prompts and len(p.sample_prompts) < 5:
+                        p.sample_prompts.append(sp[:200])
+        else:
+            self._patterns[pattern_id] = TaskPattern(
+                pattern_id=pattern_id,
+                topic_cluster=pattern_tag,
+                tool_affinities=list(skills_used or []),
+                occurrence_count=SPAWN_THRESHOLD,
+                sample_prompts=list((sample_prompts or [])[:5]),
+            )
+        self._persist_pattern(pattern_id)
+        return pattern_id
+
     def record_feedback(self, agent_id: str, positive: bool):
         for pid, spec in self._specialists.items():
             if spec.agent_id == agent_id:

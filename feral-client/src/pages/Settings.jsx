@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 
 import { API_BASE as API } from '../config';
-import { apiFetch } from '../api';
 import { useTheme } from '../hooks/useTheme';
 import { useToast } from '../components/Toast';
 
@@ -57,6 +56,15 @@ export default function Settings() {
   const [newWebhook, setNewWebhook] = useState({ name: '', secret: '', action: 'chat' });
   const [creatingWebhook, setCreatingWebhook] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState('');
+  // Tool Genesis / Proposed Skills
+  const [proposals, setProposals] = useState([]);
+  const [proposalActionBusy, setProposalActionBusy] = useState('');
+  // Marketplace subtabs
+  const [marketplaceSubtab, setMarketplaceSubtab] = useState('skills');
+  const [catalogItems, setCatalogItems] = useState({ skill: [], daemon: [], mcp: [] });
+  const [catalogLoading, setCatalogLoading] = useState({ skill: false, daemon: false, mcp: false });
+  const [catalogError, setCatalogError] = useState({ skill: false, daemon: false, mcp: false });
+  const [installingItem, setInstallingItem] = useState('');
 
   const fetchWebhooks = async () => {
     setWebhooksLoading(true);
@@ -88,6 +96,100 @@ export default function Settings() {
       await fetch(`${API}/api/webhooks/${webhookId}`, { method: 'DELETE' });
       await fetchWebhooks();
     } catch (e) { addToast(e.message || 'Failed to delete webhook'); }
+  };
+
+  // ── Tool Genesis: Proposed Skills ──────────────────────────────────────
+  const fetchProposals = async () => {
+    try {
+      const res = await fetch(`${API}/api/tool-genesis/pending`);
+      if (!res.ok) { setProposals([]); return; }
+      const data = await res.json();
+      setProposals(data.proposals || []);
+    } catch {
+      setProposals([]);
+    }
+  };
+
+  const approveProposal = async (toolId) => {
+    setProposalActionBusy(`approve:${toolId}`);
+    try {
+      const res = await fetch(`${API}/api/tool-genesis/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool_id: toolId }),
+      });
+      if (res.ok) {
+        addToast('Skill approved and loaded');
+        setProposals(prev => prev.filter(p => p.tool_id !== toolId));
+      } else {
+        addToast('Approve failed');
+      }
+    } catch (e) {
+      addToast(e.message || 'Approve failed');
+    } finally {
+      setProposalActionBusy('');
+    }
+  };
+
+  const rejectProposal = async (toolId) => {
+    setProposalActionBusy(`reject:${toolId}`);
+    try {
+      const res = await fetch(`${API}/api/tool-genesis/${toolId}`, { method: 'DELETE' });
+      if (res.ok) {
+        addToast('Skill rejected');
+        setProposals(prev => prev.filter(p => p.tool_id !== toolId));
+      } else {
+        addToast('Reject failed');
+      }
+    } catch (e) {
+      addToast(e.message || 'Reject failed');
+    } finally {
+      setProposalActionBusy('');
+    }
+  };
+
+  // ── Marketplace catalog (skills / daemons / mcp) ───────────────────────
+  const fetchCatalog = async (kind) => {
+    setCatalogLoading(prev => ({ ...prev, [kind]: true }));
+    setCatalogError(prev => ({ ...prev, [kind]: false }));
+    try {
+      const res = await fetch(`${API}/api/marketplace/catalog?kind=${kind}`);
+      if (!res.ok) {
+        setCatalogError(prev => ({ ...prev, [kind]: true }));
+        setCatalogItems(prev => ({ ...prev, [kind]: [] }));
+        return;
+      }
+      const data = await res.json();
+      setCatalogItems(prev => ({ ...prev, [kind]: data.items || data.results || [] }));
+    } catch {
+      setCatalogError(prev => ({ ...prev, [kind]: true }));
+      setCatalogItems(prev => ({ ...prev, [kind]: [] }));
+    } finally {
+      setCatalogLoading(prev => ({ ...prev, [kind]: false }));
+    }
+  };
+
+  const installCatalogItem = async (kind, id) => {
+    const tag = `${kind}:${id}`;
+    setInstallingItem(tag);
+    try {
+      const res = await fetch(`${API}/api/marketplace/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, id }),
+      });
+      if (res.ok) {
+        addToast(`${kind === 'skill' ? 'Skill' : kind === 'daemon' ? 'Daemon' : 'MCP server'} installed`);
+        if (kind === 'skill') fetchInstalledSkills();
+      } else {
+        addToast('Install failed — marketplace may be unavailable');
+        setCatalogError(prev => ({ ...prev, [kind]: true }));
+      }
+    } catch (e) {
+      addToast(e.message || 'Install failed');
+    } finally {
+      setInstallingItem('');
+    }
   };
 
   const copyWebhookUrl = (url) => {
@@ -195,7 +297,17 @@ export default function Settings() {
     fetchInstalledSkills();
     fetchSpecialists();
     fetchWebhooks();
+    fetchProposals();
+    const proposalPollId = setInterval(fetchProposals, 5000);
+    return () => clearInterval(proposalPollId);
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'marketplace') return;
+    const kindMap = { skills: 'skill', daemons: 'daemon', mcp: 'mcp' };
+    const kind = kindMap[marketplaceSubtab] || 'skill';
+    fetchCatalog(kind);
+  }, [activeTab, marketplaceSubtab]);
 
   const updateSetting = async (section, key, value) => {
     setConfig(prev => ({
@@ -361,6 +473,82 @@ export default function Settings() {
             );
           })}
         </div>
+
+        {/* Proposed Skills (Tool Genesis) — always visible above tab content when there are proposals */}
+        {proposals.length > 0 && (
+          <Section title="Proposed Skills" icon={Sparkles}>
+            <p className="text-xs text-feral-text-muted mb-4">
+              FERAL's Tool Genesis has drafted new skills from detected patterns. Review, then approve to load or reject to discard.
+            </p>
+            <div className="space-y-3">
+              {proposals.map((p) => {
+                const approving = proposalActionBusy === `approve:${p.tool_id}`;
+                const rejecting = proposalActionBusy === `reject:${p.tool_id}`;
+                const chain = Array.isArray(p.source_sequence) ? p.source_sequence : [];
+                const preview = (p.preview || '').slice(0, 400);
+                return (
+                  <div key={p.tool_id} className="bg-feral-bg/30 rounded-lg border border-feral-border p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold truncate">{p.name || p.tool_id}</div>
+                        <div className="text-[11px] text-feral-text-muted font-mono truncate">{p.tool_id}</div>
+                        {p.description && (
+                          <div className="text-xs text-feral-text-secondary mt-1">{p.description}</div>
+                        )}
+                      </div>
+                      <div className="flex gap-2 flex-shrink-0">
+                        <button
+                          onClick={() => approveProposal(p.tool_id)}
+                          disabled={proposalActionBusy !== ''}
+                          className="px-3 py-1.5 text-xs rounded-lg bg-green-500/20 border border-green-500/30 text-green-300 hover:bg-green-500/30 transition disabled:opacity-50 flex items-center gap-1.5"
+                        >
+                          {approving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                          Approve
+                        </button>
+                        <button
+                          onClick={() => rejectProposal(p.tool_id)}
+                          disabled={proposalActionBusy !== ''}
+                          className="px-3 py-1.5 text-xs rounded-lg bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 transition disabled:opacity-50 flex items-center gap-1.5"
+                        >
+                          {rejecting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                    {chain.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1 text-[11px]">
+                        <span className="text-feral-text-muted mr-1">Source:</span>
+                        {chain.map((step, idx) => (
+                          <React.Fragment key={`${p.tool_id}-step-${idx}`}>
+                            <span className="bg-feral-bg/50 text-feral-text-secondary px-2 py-0.5 rounded-full font-mono">
+                              {typeof step === 'string' ? step : (step.name || step.id || JSON.stringify(step))}
+                            </span>
+                            {idx < chain.length - 1 && (
+                              <span className="text-feral-text-muted">→</span>
+                            )}
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    )}
+                    {preview && (
+                      <pre className="bg-feral-bg/60 border border-feral-border rounded-lg p-3 text-[11px] font-mono text-feral-text-secondary overflow-auto max-h-48 whitespace-pre">
+{preview}
+                      </pre>
+                    )}
+                    {p.created_at && (
+                      <div className="text-[10px] text-feral-text-muted">
+                        Created: {(() => {
+                          const ts = typeof p.created_at === 'number' ? p.created_at : Date.parse(p.created_at) / 1000;
+                          return Number.isFinite(ts) ? new Date(ts * 1000).toLocaleString() : String(p.created_at);
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </Section>
+        )}
 
         {/* Identity Tab */}
         {activeTab === 'identity' && identity && (
@@ -797,29 +985,39 @@ export default function Settings() {
                 { id: 'whatsapp', label: 'WhatsApp', fields: [{ key: 'access_token', label: 'Access Token', secret: true }, { key: 'phone_number_id', label: 'Phone Number ID', secret: false }] },
               ].map(ch => {
                 const chCfg = channelsConfig[ch.id] || {};
-                const status = channelStatus?.[ch.id] || channelStatus?.channels?.[ch.id];
-                const isConnected = status?.connected || status?.status === 'connected';
+                const status =
+                  channelStatus?.[ch.id] ||
+                  channelStatus?.details?.[ch.id] ||
+                  channelStatus?.channels?.[ch.id];
+                const isRunning = Boolean(status?.running);
+                const isConnected = Boolean(status?.connected) || status?.status === 'connected' || isRunning;
+                // If the brain is actually running the channel, the toggle should reflect that
+                // even when the user never clicked the switch (fresh wizard install path).
+                const toggleOn = Boolean(chCfg.enabled) || isRunning;
+                const statusLabel = isConnected
+                  ? (status?.bot_username ? `Connected as @${status.bot_username}` : 'Connected')
+                  : (isRunning ? 'Starting…' : 'Disconnected');
                 return (
                   <div key={ch.id} className="bg-feral-bg/30 rounded-lg border border-feral-border p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2.5">
-                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isConnected ? 'bg-green-400' : 'bg-zinc-500'}`} />
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isConnected ? 'bg-green-400' : (isRunning ? 'bg-yellow-400' : 'bg-zinc-500')}`} />
                         <span className="text-sm font-medium">{ch.label}</span>
-                        <span className="text-[10px] text-feral-text-muted">{isConnected ? 'Connected' : 'Disconnected'}</span>
+                        <span className="text-[10px] text-feral-text-muted">{statusLabel}</span>
                       </div>
                       <button
                         onClick={() => setChannelsConfig(prev => ({
                           ...prev,
-                          [ch.id]: { ...prev[ch.id], enabled: !(prev[ch.id]?.enabled) },
+                          [ch.id]: { ...prev[ch.id], enabled: !toggleOn },
                         }))}
                         className={`w-12 h-7 rounded-full transition-all flex items-center px-1 ${
-                          chCfg.enabled ? 'bg-feral-accent justify-end' : 'bg-zinc-700 justify-start'
+                          toggleOn ? 'bg-feral-accent justify-end' : 'bg-zinc-700 justify-start'
                         }`}
                       >
                         <div className="w-5 h-5 bg-white rounded-full shadow transition-all" />
                       </button>
                     </div>
-                    {chCfg.enabled && (
+                    {toggleOn && (
                       <div className="space-y-2 pt-1">
                         {ch.fields.map(f => (
                           <div key={f.key}>
@@ -1215,61 +1413,129 @@ export default function Settings() {
         {/* Marketplace Tab */}
         {activeTab === 'marketplace' && (
           <div className="space-y-5">
-            <Section title="Skill Marketplace" icon={ShoppingBag}>
+            <Section title="Marketplace" icon={ShoppingBag}>
               <p className="text-xs text-feral-text-muted mb-4">
-                Browse and install community skills to extend FERAL's capabilities.
+                Browse and install skills, hardware daemons, and MCP servers from registry.feral.sh.
               </p>
 
-              <div className="flex gap-2 mb-4">
-                <div className="relative flex-1">
-                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-feral-text-muted" />
-                  <input
-                    className="w-full bg-feral-bg border border-feral-border rounded-lg pl-9 pr-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-feral-accent"
-                    placeholder="Search skills..."
-                    value={marketplaceSearch}
-                    onChange={e => setMarketplaceSearch(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') searchMarketplace(marketplaceSearch); }}
-                  />
-                </div>
-                <button
-                  onClick={() => searchMarketplace(marketplaceSearch)}
-                  disabled={marketplaceLoading}
-                  className="px-4 py-2.5 bg-feral-accent text-white rounded-lg text-sm font-medium hover:bg-feral-accent/90 transition disabled:opacity-50 flex items-center gap-1.5"
-                >
-                  {marketplaceLoading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-                  Search
-                </button>
+              {/* Subtab buttons */}
+              <div className="flex gap-1 mb-4 p-1 bg-feral-bg/40 border border-feral-border rounded-lg w-fit">
+                {[
+                  { id: 'skills', label: 'Skills', icon: Sparkles, kind: 'skill' },
+                  { id: 'daemons', label: 'Hardware Daemons', icon: Cpu, kind: 'daemon' },
+                  { id: 'mcp', label: 'MCP Servers', icon: Server, kind: 'mcp' },
+                ].map(sub => {
+                  const SIcon = sub.icon;
+                  const active = marketplaceSubtab === sub.id;
+                  return (
+                    <button
+                      key={sub.id}
+                      onClick={() => setMarketplaceSubtab(sub.id)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${
+                        active
+                          ? 'bg-feral-accent/15 text-feral-accent border border-feral-accent/25'
+                          : 'text-feral-text-muted hover:text-feral-text border border-transparent'
+                      }`}
+                    >
+                      <SIcon size={12} />
+                      {sub.label}
+                    </button>
+                  );
+                })}
               </div>
 
-              {marketplaceResults.length > 0 && (
-                <div className="space-y-2 mb-4">
-                  <div className="text-xs text-feral-text-secondary uppercase tracking-wider">Results</div>
-                  {marketplaceResults.map(skill => (
-                    <div key={skill.skill_id || skill.id} className="flex items-center gap-3 bg-feral-bg/30 border border-feral-border rounded-lg px-4 py-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">{skill.name || skill.skill_id || skill.id}</div>
-                        <div className="text-xs text-feral-text-secondary mt-0.5 truncate">{skill.description || 'No description'}</div>
+              {(() => {
+                const kindMap = { skills: 'skill', daemons: 'daemon', mcp: 'mcp' };
+                const kind = kindMap[marketplaceSubtab] || 'skill';
+                const items = catalogItems[kind] || [];
+                const loading = catalogLoading[kind];
+                const errored = catalogError[kind];
+                const accentIcon = kind === 'daemon' ? Cpu : kind === 'mcp' ? Server : Sparkles;
+                const AccentIcon = accentIcon;
+
+                if (errored) {
+                  return (
+                    <div className="flex items-start gap-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4">
+                      <AlertCircle size={16} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+                      <div className="text-xs text-yellow-100/90">
+                        Marketplace unavailable — the registry.feral.sh service is being provisioned.
                       </div>
-                      <button
-                        onClick={() => installSkill(skill.skill_id || skill.id)}
-                        disabled={installingSkill !== ''}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-feral-accent/15 border border-feral-accent/25 text-feral-accent hover:bg-feral-accent/25 transition disabled:opacity-50 flex-shrink-0"
-                      >
-                        {installingSkill === (skill.skill_id || skill.id)
-                          ? <Loader2 size={12} className="animate-spin" />
-                          : <Download size={12} />}
-                        Install
-                      </button>
                     </div>
-                  ))}
-                </div>
-              )}
+                  );
+                }
+
+                if (loading) {
+                  return (
+                    <div className="flex items-center gap-2 text-xs text-feral-text-muted py-4">
+                      <Loader2 size={14} className="animate-spin" />
+                      Loading catalog…
+                    </div>
+                  );
+                }
+
+                if (items.length === 0) {
+                  return (
+                    <div className="text-center py-6 bg-feral-bg/30 rounded-xl border border-dashed border-feral-border">
+                      <AccentIcon size={28} className="mx-auto opacity-20 mb-2" />
+                      <p className="text-sm text-feral-text-secondary">Nothing here yet</p>
+                      <p className="text-xs text-feral-text-muted mt-1">Check back soon — the catalog is still filling up.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-2">
+                    {items.map(item => {
+                      const id = item.id || item.skill_id || item.slug;
+                      const tag = `${kind}:${id}`;
+                      const busy = installingItem === tag;
+                      const verified = Boolean(item.verified);
+                      return (
+                        <div key={id} className="flex items-start gap-3 bg-feral-bg/30 border border-feral-border rounded-lg px-4 py-3">
+                          <div className="w-9 h-9 rounded-lg bg-feral-accent/10 flex items-center justify-center flex-shrink-0">
+                            <AccentIcon size={16} className="text-feral-accent" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <div className="text-sm font-medium truncate">{item.name || id}</div>
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full flex-shrink-0 ${
+                                verified
+                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                  : 'bg-feral-bg/60 text-feral-text-muted border border-feral-border'
+                              }`}>
+                                {verified ? 'verified' : 'community'}
+                              </span>
+                              {item.version && (
+                                <span className="text-[10px] text-feral-text-muted font-mono">v{item.version}</span>
+                              )}
+                            </div>
+                            {item.description && (
+                              <div className="text-xs text-feral-text-secondary mt-0.5 truncate">{item.description}</div>
+                            )}
+                            {item.author && (
+                              <div className="text-[10px] text-feral-text-muted mt-1">by {item.author}</div>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => installCatalogItem(kind, id)}
+                            disabled={installingItem !== ''}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-feral-accent/15 border border-feral-accent/25 text-feral-accent hover:bg-feral-accent/25 transition disabled:opacity-50 flex-shrink-0"
+                          >
+                            {busy ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                            Install
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </Section>
 
             <Section title="Installed Marketplace Skills" icon={Download}>
               {installedSkills.length === 0 ? (
                 <div className="text-sm text-feral-text-muted bg-feral-bg/30 rounded-lg px-4 py-4 border border-feral-border text-center">
-                  No marketplace skills installed yet. Search above to find and install skills.
+                  No marketplace skills installed yet. Browse the catalog above to find and install skills.
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -1485,54 +1751,29 @@ export default function Settings() {
 }
 
 function PhoneBridgeSection() {
-  const [phoneInfo, setPhoneInfo] = useState(null);
-  useEffect(() => {
-    apiFetch('/api/setup/phone-access')
-      .then(r => r.json())
-      .then(setPhoneInfo)
-      .catch(() => setPhoneInfo(null));
-  }, []);
-
-  const paths = phoneInfo?.paths || [];
-
   return (
     <Section title="Connect Your Phone" icon={Smartphone}>
       <div style={{ padding: 24, background: 'rgba(6,182,212,0.05)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: 12 }}>
         <p className="text-xs text-feral-text-muted mb-4">
-          Three ways to use FERAL from your phone: native app (best), same Wi‑Fi browser, or an advanced bridge daemon.
+          For full phone capabilities (HealthKit, Health Connect, motion sensors, camera, voice),
+          install the FERAL Node app and scan the QR code below.
         </p>
-        {phoneInfo?.local_ip && (
-          <p className="text-[11px] font-mono text-feral-accent mb-3">LAN IP: {phoneInfo.local_ip} · port {phoneInfo.port}</p>
-        )}
-        <div className="flex gap-4 items-start flex-wrap">
-          <div className="text-center flex-shrink-0">
-            <img src={`${API}/api/devices/pair/qr`} alt="Pairing QR" className="rounded-lg bg-white p-2" style={{ width: 200, height: 200 }} />
+        <div className="flex gap-4 items-center flex-wrap">
+          <div className="text-center">
+            <img src="/api/devices/pair/qr" alt="Pairing QR" className="rounded-lg bg-white p-2" style={{ width: 200, height: 200 }} />
             <div className="text-[11px] mt-2 text-feral-text-muted">Scan with FERAL Node app</div>
           </div>
-          <div className="flex flex-col gap-4 min-w-[200px] flex-1">
-            {paths.map(p => (
-              <div key={p.id} className="border border-feral-border rounded-lg p-3 bg-feral-bg/40">
-                <div className="text-sm font-medium text-feral-text mb-1">{p.label}</div>
-                <ol className="text-[11px] text-feral-text-muted list-decimal pl-4 space-y-1">
-                  {(p.steps || []).map((s, i) => <li key={i}>{s}</li>)}
-                </ol>
-                {p.url && (
-                  <div className="mt-2 text-[11px] font-mono break-all text-feral-accent">{p.url}</div>
-                )}
-                {p.command && (
-                  <div className="mt-2 text-[10px] font-mono bg-feral-bg px-2 py-1 rounded break-all">{p.command}</div>
-                )}
-              </div>
-            ))}
-            <div className="flex gap-2 flex-wrap">
-              <a href="https://apps.apple.com/" target="_blank" rel="noopener noreferrer"
-                className="px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-feral-text text-xs no-underline hover:border-feral-border-bright transition">
-                App Store
-              </a>
-              <a href="https://play.google.com/" target="_blank" rel="noopener noreferrer"
-                className="px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-feral-text text-xs no-underline hover:border-feral-border-bright transition">
-                Google Play
-              </a>
+          <div className="flex flex-col gap-2">
+            <a href="https://apps.apple.com/" target="_blank" rel="noopener noreferrer"
+              className="px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-feral-text text-xs no-underline hover:border-feral-border-bright transition">
+              Download for iOS
+            </a>
+            <a href="https://play.google.com/" target="_blank" rel="noopener noreferrer"
+              className="px-4 py-2 bg-feral-card border border-feral-border rounded-lg text-feral-text text-xs no-underline hover:border-feral-border-bright transition">
+              Download for Android
+            </a>
+            <div className="text-[10px] text-feral-text-muted mt-2">
+              Or run the hardware daemon: <code className="bg-feral-bg px-1.5 py-0.5 rounded font-mono text-[10px]">python -m feral_nodes.hardware_daemon</code>
             </div>
           </div>
         </div>

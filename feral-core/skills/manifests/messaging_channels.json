@@ -1,0 +1,92 @@
+{
+    "skill_id": "messaging_channels",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Messaging",
+        "primary_color": "#0088CC",
+        "secondary_color": "#7289DA",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Send messages on FERAL's configured channels (Telegram, Discord, Slack, WhatsApp). Use this to talk to users on any connected channel. This IS your direct line to those apps — call it instead of saying you can't send messages.",
+    "trigger_phrases": [
+        "send a message",
+        "send message",
+        "send a telegram",
+        "telegram message",
+        "send telegram",
+        "text on telegram",
+        "message on telegram",
+        "send on discord",
+        "discord message",
+        "send on slack",
+        "slack message",
+        "send a whatsapp",
+        "whatsapp",
+        "dm",
+        "message to",
+        "tell",
+        "notify",
+        "let them know",
+        "reply on"
+    ],
+    "categories": ["messaging", "communication", "channels"],
+    "auth": {
+        "type": "none"
+    },
+    "endpoints": [
+        {
+            "id": "send",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "Send a message on a configured channel (telegram/slack/discord/whatsapp). This ACTUALLY DELIVERS the message via the channel's official API. Do NOT tell the user to send it themselves — call this tool. If the channel is listed as configured, this will work.",
+            "params": [
+                {"name": "channel", "type": "string", "required": true, "enum": ["telegram", "slack", "discord", "whatsapp"], "description": "Which channel to send on. Only use one that is currently configured (check list_channels first if unsure)."},
+                {"name": "to", "type": "string", "required": true, "description": "Recipient identifier. Telegram: numeric chat_id or @username. Slack: channel id (C123...) or #channel-name or user id (U123...). Discord: numeric channel id. WhatsApp: phone number in E.164 (e.g. +12025551234). If the user only gave a username/handle, pass it with the @."},
+                {"name": "text", "type": "string", "required": true, "description": "The message content to deliver. Plain text; Telegram supports Markdown."},
+                {"name": "reply_to", "type": "string", "required": false, "description": "Optional message id to reply to (channel-specific)."}
+            ],
+            "returns_description": "{success, channel, to, message_id, preview}",
+            "ui_hint": "confirmation"
+        },
+        {
+            "id": "list_channels",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "List which messaging channels are currently configured and running. Call this BEFORE saying you can't send a message — the user's channels are listed here.",
+            "params": [],
+            "returns_description": "{channels: [{name, running, known_chats, bot_username}]}",
+            "ui_hint": "list"
+        },
+        {
+            "id": "list_recent_chats",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "List recently active chat ids on a given channel. Useful when the user says 'send to the last person I was talking to'.",
+            "params": [
+                {"name": "channel", "type": "string", "required": true, "enum": ["telegram", "slack", "discord", "whatsapp"], "description": "Channel to query."}
+            ],
+            "returns_description": "{channel, chats: [chat_id]}",
+            "ui_hint": "list"
+        },
+        {
+            "id": "resolve_chat_id",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "Resolve a @username or handle to a numeric chat_id on a channel that supports it (Telegram). Use before send if the user only provided a @handle.",
+            "params": [
+                {"name": "channel", "type": "string", "required": true, "enum": ["telegram"], "description": "Channel to resolve on."},
+                {"name": "handle", "type": "string", "required": true, "description": "The @username or handle to resolve."}
+            ],
+            "returns_description": "{chat_id, title}",
+            "ui_hint": "detail_card"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": ["messaging"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 500
+}

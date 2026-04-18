@@ -1,0 +1,27 @@
+# Build metadata for a vendor HUP v1 daemon. Edit version + deps to suit.
+# The daemon depends only on feral-node-sdk for protocol compliance.
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "{{cookiecutter.node_id}}"
+version = "{{cookiecutter.firmware_version}}"
+description = "{{cookiecutter.name}} — FERAL HUP v1 hardware daemon."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "{{cookiecutter.author}}" }]
+dependencies = [
+  "feral-node-sdk>=1.0.0",
+]
+
+[project.scripts]
+{{cookiecutter.node_id}} = "{{cookiecutter.node_id}}.daemon:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

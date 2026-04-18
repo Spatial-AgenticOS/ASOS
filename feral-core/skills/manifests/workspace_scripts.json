@@ -1,0 +1,83 @@
+{
+    "skill_id": "workspace_scripts",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Workspace Scripts",
+        "primary_color": "#22c55e",
+        "secondary_color": "#0f172a",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "FERAL's never-say-no escape hatch. Writes ad-hoc Python/Node/bash scripts to the user's ~/.feral/workspace/scripts/ folder, executes them in the Docker sandbox (or host with explicit consent), and keeps a reusable catalog. Use this whenever no existing skill fits the user's request — you can still deliver the result by generating a tiny script on the fly. The OpenClaw `exec` equivalent, but with persistence + reuse.",
+    "trigger_phrases": [
+        "write a script",
+        "quick script",
+        "one-liner",
+        "throwaway script",
+        "script for",
+        "run this code",
+        "execute this python",
+        "calculate",
+        "convert",
+        "transform"
+    ],
+    "categories": ["system", "development", "escape_hatch"],
+    "auth": {"type": "none"},
+    "endpoints": [
+        {
+            "id": "run",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "Write code to ~/.feral/workspace/scripts/<uuid>.<ext> and execute it in the sandbox. Supports language in {python, bash, node}. Persistent — the script stays for reuse. On success, a catalog entry is recorded so future turns can reference it by name. Use this when no specialized skill fits but the task is expressible as a short program.",
+            "params": [
+                {"name": "language", "type": "string", "required": true, "enum": ["python", "bash", "node"], "description": "Language for the script."},
+                {"name": "code", "type": "string", "required": true, "description": "Complete source code. For python, print() your answer. For bash/node, echo / console.log."},
+                {"name": "name", "type": "string", "required": false, "description": "Short human-friendly name for the catalog (e.g. 'csv_to_json'). Auto-generated if omitted."},
+                {"name": "args", "type": "string", "required": false, "description": "Optional stringified JSON args forwarded to the script as env var FERAL_ARGS."},
+                {"name": "timeout", "type": "integer", "required": false, "description": "Max seconds (default 30)."}
+            ],
+            "returns_description": "{script_id, path, stdout, stderr, exit_code, catalog_entry}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "list_catalog",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "List previously-saved scripts that succeeded. Each entry has id, name, language, path, args_schema (if provided). Use this before writing a new script — a previous one may already do the job.",
+            "params": [],
+            "returns_description": "{scripts: [{id, name, language, path, created_at, last_run, runs}]}",
+            "ui_hint": "list"
+        },
+        {
+            "id": "rerun",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "Re-run a previously-saved script by id, optionally overriding args.",
+            "params": [
+                {"name": "script_id", "type": "string", "required": true, "description": "Catalog id of the script."},
+                {"name": "args", "type": "string", "required": false, "description": "Optional stringified JSON args forwarded as FERAL_ARGS."},
+                {"name": "timeout", "type": "integer", "required": false, "description": "Max seconds (default 30)."}
+            ],
+            "returns_description": "{script_id, stdout, stderr, exit_code}",
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "delete",
+            "method": "CUSTOM",
+            "url": "",
+            "description": "Delete a saved script and its catalog entry.",
+            "params": [
+                {"name": "script_id", "type": "string", "required": true, "description": "Catalog id of the script to delete."}
+            ],
+            "returns_description": "{deleted: true}",
+            "ui_hint": "confirmation"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": ["filesystem", "execute"],
+    "requires_daemon": false,
+    "max_calls_per_hour": 200
+}

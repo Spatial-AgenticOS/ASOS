@@ -151,6 +151,83 @@ class SkillRegistry:
             except Exception as e:
                 logger.error(f"Failed to load skill {skill_file}: {e}")
 
+    def reload_skill(self, skill_id: str) -> bool:
+        """Re-load a skill from disk and hot-swap its implementation.
+
+        Looks for the manifest + optional impl.py under:
+          1. ``~/.feral/skills/<skill_id>/``  (marketplace-installed / promoted)
+          2. ``~/.feral/skills/generated/<skill_id>/`` (Tool Genesis output)
+          3. ``skills/manifests/<skill_id>.json`` (first-party)
+
+        Registers the manifest, invalidates the tool cache for this skill id,
+        and if an ``impl.py`` is present alongside the manifest, re-imports it
+        via ``importlib.util`` so the in-process LLM tool list picks up the
+        new definition without a restart.
+
+        Returns ``True`` on success.
+        """
+        from skills.package import SkillPackage
+
+        candidates: list[Path] = []
+        home = feral_home()
+        candidates.append(home / "skills" / skill_id)
+        candidates.append(home / "skills" / "generated" / skill_id)
+
+        firstparty = Path(__file__).parent / "manifests" / f"{skill_id}.json"
+        if firstparty.exists():
+            candidates.append(firstparty)
+
+        for candidate in candidates:
+            try:
+                if candidate.is_file() and candidate.suffix == ".json":
+                    self.load_from_file(candidate)
+                    logger.info("reload_skill(%s): loaded first-party manifest", skill_id)
+                    return True
+                if candidate.is_dir() and (candidate / "manifest.json").exists():
+                    pkg = SkillPackage(candidate)
+                    if not (pkg.load() and pkg.manifest):
+                        continue
+                    self.skills.pop(skill_id, None)
+                    self._tool_cache.pop(skill_id, None)
+                    self.register(pkg.manifest)
+                    self._reimport_dynamic_impl(candidate, skill_id)
+                    logger.info("reload_skill(%s): hot-reloaded from %s", skill_id, candidate)
+                    return True
+            except Exception as exc:
+                logger.warning("reload_skill(%s) from %s failed: %s", skill_id, candidate, exc)
+        logger.warning("reload_skill(%s): no manifest found in %s", skill_id, candidates)
+        return False
+
+    @staticmethod
+    def _reimport_dynamic_impl(skill_dir: Path, skill_id: str):
+        """Force re-import of impl.py for the given skill, replacing the cached instance."""
+        impl_path = skill_dir / "impl.py"
+        if not impl_path.exists():
+            return
+        try:
+            import importlib.util
+            import sys as _sys
+            module_name = f"feral_skill_{skill_id}"
+            # If previously imported, drop it so we get the new source.
+            _sys.modules.pop(module_name, None)
+            spec = importlib.util.spec_from_file_location(module_name, str(impl_path))
+            if not spec or not spec.loader:
+                return
+            mod = importlib.util.module_from_spec(spec)
+            _sys.modules[module_name] = mod
+            spec.loader.exec_module(mod)
+
+            from skills.base import BaseSkill
+            from skills.impl import register_instance
+            for attr_name in dir(mod):
+                obj = getattr(mod, attr_name)
+                if isinstance(obj, type) and issubclass(obj, BaseSkill) and obj is not BaseSkill:
+                    register_instance(skill_id, obj())
+                    logger.info("reload_skill(%s): reimported impl from %s", skill_id, impl_path)
+                    return
+        except Exception as exc:
+            logger.warning("reload_skill(%s): impl reimport failed: %s", skill_id, exc)
+
     def get_skill(self, skill_id: str):
         """Return the executable BaseSkill implementation for a given skill_id, or None."""
         from skills.impl import get_implementation

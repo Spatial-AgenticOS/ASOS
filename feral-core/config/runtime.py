@@ -25,12 +25,7 @@ def _int_env(*keys: str, default: int) -> int:
 
 
 def brain_bind_host() -> str:
-    explicit = (os.getenv("FERAL_HOST") or os.getenv("FERAL_BIND_HOST") or "").strip()
-    if explicit:
-        return explicit
-    if os.getenv("FERAL_SECURE_MODE", "").strip().lower() in ("strict", "1", "true", "yes"):
-        return "127.0.0.1"
-    return "0.0.0.0"
+    return os.getenv("FERAL_HOST") or os.getenv("FERAL_BIND_HOST") or "127.0.0.1"
 
 
 def brain_port() -> int:

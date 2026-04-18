@@ -1,0 +1,29 @@
+app = "feral-registry"
+primary_region = "iad"
+
+[build]
+
+[env]
+  FERAL_REGISTRY_BLOB_DIR = "/data/blobs"
+  FERAL_REGISTRY_DB_URL = "sqlite+aiosqlite:////data/registry.db"
+  FERAL_REGISTRY_PUBLIC_URL = "https://registry.feral.sh"
+
+[[mounts]]
+  source = "feral_registry_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 200
+    soft_limit = 100
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

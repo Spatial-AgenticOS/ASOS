@@ -69,6 +69,51 @@ class GeneratedTool:
     requires_approval: bool = True
     approved: bool = False
 
+    def to_skill_manifest(self) -> dict:
+        """Render this generated tool as a valid FERAL SkillManifest JSON dict.
+
+        Output shape matches :class:`models.skill_manifest.SkillManifest` so
+        the registry can consume it via ``register(SkillManifest(**data))``.
+        We expose a single endpoint ``invoke`` that accepts the original
+        ``args`` dict and returns whatever the generated function returns.
+        """
+        return {
+            "skill_id": self.tool_id,
+            "version": "1.0.0",
+            "author": "feral-tool-genesis",
+            "brand": {
+                "name": self.name.replace("_", " ").title(),
+                "primary_color": "#8b5cf6",
+                "secondary_color": "#0f172a",
+                "logo_url": "",
+                "icon_set": "sf_symbols",
+            },
+            "description": self.description or f"Auto-generated composite of {' → '.join(self.source_sequence)}.",
+            "trigger_phrases": [self.name.replace("_", " ")],
+            "categories": ["generated", "composite"],
+            "auth": {"type": "none"},
+            "endpoints": [
+                {
+                    "id": "invoke",
+                    "method": "PYTHON",
+                    "url": "",
+                    "description": f"Execute the auto-generated composite. Mirrors: {' → '.join(self.source_sequence)}.",
+                    "params": [
+                        {"name": "args", "type": "string", "required": False,
+                         "description": "Stringified JSON of arguments forwarded to the generated function."}
+                    ],
+                    "returns_description": "{success: bool, data: any, error: str|null}",
+                    "ui_hint": "detail_card",
+                }
+            ],
+            "flows": [],
+            "crons": [],
+            "triggers": [],
+            "permissions": [],
+            "requires_daemon": False,
+            "max_calls_per_hour": 100,
+        }
+
 SEQUENCE_THRESHOLD = 3  # how many times before proposing
 RETIREMENT_DAYS = 30
 
@@ -176,6 +221,152 @@ class ToolGenesisEngine:
                 logger.info("Tool Genesis: approved %s", tool_id)
                 return True
         return False
+
+    # ------------------------------------------------------------------
+    # Promotion pipeline — generated tool → real SkillManifest + impl.py
+    # ------------------------------------------------------------------
+
+    def promote(self, tool_id: str, skill_registry=None) -> dict:
+        """Promote an approved generated tool to a real FERAL skill.
+
+        Writes ``~/.feral/skills/generated/<tool_id>/manifest.json`` and
+        ``impl.py``. If ``skill_registry`` is given, hot-reloads the new
+        skill so the LLM tool list picks it up without a restart.
+
+        Returns ``{promoted: bool, path: str, reason?: str}``.
+        """
+        gt = None
+        for candidate in self._generated.values():
+            if candidate.tool_id == tool_id:
+                gt = candidate
+                break
+        if gt is None:
+            return {"promoted": False, "reason": f"no generated tool {tool_id!r}"}
+        if gt.requires_approval and not gt.approved:
+            return {"promoted": False, "reason": "tool not approved"}
+        safe, reason = _ast_safety_check(gt.python_code)
+        if not safe:
+            return {"promoted": False, "reason": f"AST safety check failed: {reason}"}
+
+        try:
+            from config.loader import feral_home
+            target = feral_home() / "skills" / "generated" / tool_id
+            target.mkdir(parents=True, exist_ok=True)
+
+            manifest = gt.to_skill_manifest()
+            (target / "manifest.json").write_text(json.dumps(manifest, indent=2))
+            (target / "impl.py").write_text(_IMPL_TEMPLATE.format(
+                skill_id=tool_id,
+                body=_indent(gt.python_code, 4),
+            ))
+
+            reloaded = False
+            if skill_registry is not None and hasattr(skill_registry, "reload_skill"):
+                try:
+                    reloaded = bool(skill_registry.reload_skill(tool_id))
+                except Exception as exc:
+                    logger.warning("promote(%s): reload_skill failed: %s", tool_id, exc)
+
+            return {
+                "promoted": True,
+                "path": str(target),
+                "reloaded": reloaded,
+                "skill_id": tool_id,
+            }
+        except Exception as exc:
+            logger.error("promote(%s) failed: %s", tool_id, exc, exc_info=True)
+            return {"promoted": False, "reason": str(exc)}
+
+    async def propose_from_intent(self, intent_text: str, history: list[dict] | None = None) -> Optional[str]:
+        """Ask the LLM to draft a brand-new skill from a free-form intent.
+
+        Used by ``orchestrator._on_capability_gap`` in hybrid autonomy mode
+        when no existing skill fits. Returns the ``tool_id`` of the new
+        (pending) proposal, or ``None`` if the generation failed.
+        """
+        if not self._llm:
+            return None
+        prompt = (
+            "You are FERAL's tool-genesis pipeline. The user needs a capability that no existing "
+            "skill provides. Draft a tiny async Python function named `main(args)` that performs "
+            "the task. Constraints:\n"
+            f"- Only import from: {sorted(ALLOWED_IMPORTS)}\n"
+            "- No exec/eval/compile/__import__/open/subprocess/os.system.\n"
+            "- Must return a dict {'success': bool, 'data': ..., 'error': str|None}.\n"
+            "- Keep it under 50 lines.\n\n"
+            f"User intent:\n\"\"\"\n{intent_text}\n\"\"\"\n\n"
+            "Return ONLY the Python code. No markdown fences, no commentary."
+        )
+        try:
+            response = await self._llm.chat([
+                {"role": "system", "content": "You generate small, safe Python functions. Code only."},
+                {"role": "user", "content": prompt},
+            ])
+            text, _ = self._llm.extract_response(response)
+            code = (text or "").strip()
+            # Strip common markdown fencing if the model ignored the instruction.
+            if code.startswith("```"):
+                code = code.split("\n", 1)[1] if "\n" in code else code
+                if code.endswith("```"):
+                    code = code.rsplit("```", 1)[0]
+                code = code.strip()
+        except Exception as exc:
+            logger.warning("propose_from_intent LLM call failed: %s", exc)
+            return None
+
+        safe, reason = _ast_safety_check(code)
+        if not safe:
+            logger.warning("propose_from_intent: AST safety rejected: %s", reason)
+            return None
+
+        sig = hashlib.md5(f"intent::{intent_text[:200]}".encode()).hexdigest()[:12]
+        tool_id = f"genesis_intent_{sig}"
+        short_name = "auto_intent_" + sig
+        gt = GeneratedTool(
+            tool_id=tool_id,
+            name=short_name,
+            description=f"Auto-drafted from intent: {intent_text[:120]}",
+            source_sequence=[],
+            python_code=code,
+            requires_approval=True,
+            approved=False,
+        )
+        self._generated[sig] = gt
+        self._persist_generated(sig)
+        logger.info("Tool Genesis: proposed %s from intent", tool_id)
+        return tool_id
+
+    def list_pending_proposals(self) -> list[dict]:
+        """Unapproved generated tools — for UI/approval surface."""
+        out = []
+        for gt in self._generated.values():
+            if gt.approved:
+                continue
+            out.append({
+                "tool_id": gt.tool_id,
+                "name": gt.name,
+                "description": gt.description,
+                "source_sequence": list(gt.source_sequence),
+                "created_at": gt.created_at,
+                "preview": (gt.python_code or "")[:400],
+            })
+        return out
+
+    def reject(self, tool_id: str) -> bool:
+        """Delete a pending proposal (user clicked Reject)."""
+        for sig, gt in list(self._generated.items()):
+            if gt.tool_id == tool_id:
+                del self._generated[sig]
+                self._delete_generated(sig)
+                logger.info("Tool Genesis: rejected %s", tool_id)
+                return True
+        return False
+
+    def get_generated(self, tool_id: str) -> Optional[GeneratedTool]:
+        for gt in self._generated.values():
+            if gt.tool_id == tool_id:
+                return gt
+        return None
 
     async def execute_tool(self, tool_id: str, args: dict) -> dict:
         """Execute a generated tool in the sandbox. Must be approved first."""
@@ -330,3 +521,57 @@ class ToolGenesisEngine:
         con.execute("DELETE FROM generated_tools WHERE sig = ?", (sig,))
         con.commit()
         con.close()
+
+
+def _indent(text: str, spaces: int = 4) -> str:
+    pad = " " * spaces
+    return "\n".join(pad + line if line.strip() else line for line in text.splitlines())
+
+
+_IMPL_TEMPLATE = '''"""Auto-generated FERAL skill (Tool Genesis). Do not edit by hand."""
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import Any, Dict
+
+from skills.base import BaseSkill
+
+
+{body}
+
+
+class GeneratedSkill(BaseSkill):
+    def __init__(self):
+        super().__init__("{skill_id}")
+
+    async def execute(self, endpoint_id: str, args: Dict[str, Any], vault: Dict[str, str]) -> Dict[str, Any]:
+        raw = args.get("args")
+        if isinstance(raw, str):
+            try:
+                payload = json.loads(raw) if raw else {{}}
+            except Exception:
+                payload = {{"raw": raw}}
+        elif isinstance(raw, dict):
+            payload = raw
+        else:
+            payload = args
+
+        try:
+            maybe_coro = main(payload)  # noqa: F821 — provided by generated body above
+            if asyncio.iscoroutine(maybe_coro):
+                result = await maybe_coro
+            else:
+                result = maybe_coro
+        except Exception as exc:
+            return {{"success": False, "status_code": 500, "data": None, "error": f"generated tool failed: {{exc}}"}}
+
+        if not isinstance(result, dict):
+            result = {{"success": True, "data": result}}
+        result.setdefault("success", True)
+        result.setdefault("status_code", 200 if result.get("success") else 500)
+        result.setdefault("data", None)
+        result.setdefault("error", None)
+        return result
+'''
+

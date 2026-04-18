@@ -1,21 +1,21 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useToast } from '../components/Toast';
-import { apiFetch, ensureClientApiKey } from '../api';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
-const API = import.meta.env.VITE_BRAIN_URL || `http://${location.hostname}:9090`;
-const WS_BASE = import.meta.env.VITE_BRAIN_WS || `ws://${location.hostname}:9090/v1/session`;
-
-function buildWsUrl(token) {
-  const t = token || '';
-  if (!t) return WS_BASE;
-  const sep = WS_BASE.includes('?') ? '&' : '?';
-  return `${WS_BASE}${sep}token=${encodeURIComponent(t)}`;
-}
+const _scheme = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'https' : 'http';
+const _wsScheme = _scheme === 'https' ? 'wss' : 'ws';
+const _host = (typeof location !== 'undefined' && location.hostname) ? location.hostname : 'localhost';
+const _port = (typeof location !== 'undefined' && location.port && location.port !== '80' && location.port !== '443')
+  ? location.port
+  : '9090';
+const API = import.meta.env.VITE_BRAIN_URL || `${_scheme}://${_host}:${_port}`;
+const WS_BASE = import.meta.env.VITE_BRAIN_WS || `${_wsScheme}://${_host}:${_port}/v1/session`;
+const storedKey = typeof localStorage !== 'undefined' ? (localStorage.getItem('feral_api_key') || '') : '';
+const WS_URL = `${WS_BASE}${storedKey ? `${WS_BASE.includes('?') ? '&' : '?'}token=${encodeURIComponent(storedKey)}` : ''}`;
 
 const COLORS = {
   brain: 0x06b6d4,
@@ -57,9 +57,6 @@ const EVENT_MODES = {
 
 export default function GlassBrain() {
   const { addToast } = useToast();
-  const [wsToken, setWsToken] = useState(
-    () => (typeof localStorage !== 'undefined' ? localStorage.getItem('feral_api_key') || '' : ''),
-  );
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const eventsRef = useRef([]);
@@ -68,6 +65,7 @@ export default function GlassBrain() {
   const [voiceActive, setVoiceActive] = useState(false);
   const [mode, setMode] = useState('all');
   const [inspected, setInspected] = useState(null);
+  const [connError, setConnError] = useState(null);
   const modeRef = useRef(mode);
   const voiceActiveRef = useRef(voiceActive);
 
@@ -226,23 +224,13 @@ export default function GlassBrain() {
   const unmountedRef = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
-    ensureClientApiKey().then(() => {
-      if (cancelled) return;
-      const k = typeof localStorage !== 'undefined' ? localStorage.getItem('feral_api_key') || '' : '';
-      setWsToken(k);
-    });
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
     unmountedRef.current = false;
     let ws;
     let reconnectTimer;
 
     function connect() {
-      const url = buildWsUrl(wsToken);
-      ws = new WebSocket(url);
+      ws = new WebSocket(WS_URL);
+      ws.onopen = () => { setConnError(null); };
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
@@ -254,18 +242,19 @@ export default function GlassBrain() {
         } catch (e) { addToast(e.message || 'Failed to parse brain event'); }
       };
       ws.onclose = (ev) => {
-        if (!unmountedRef.current) {
-          if (ev.code !== 1000) {
-            addToast(
-              `Brain WebSocket closed (${ev.code}). Check Settings → API key. ${!wsToken ? 'No API key in browser storage.' : ''}`,
-            );
-          }
-          reconnectTimer = setTimeout(connect, 3000);
+        if (unmountedRef.current) return;
+        if (ev?.code === 4001) {
+          const msg = 'Glass Brain WS: Unauthorized (4001). Set FERAL_API_KEY in Settings or ensure you are on localhost.';
+          setConnError(msg);
+          addToast(msg);
+          return;
         }
+        setConnError(`Glass Brain WS closed (${ev?.code || '?'}). Reconnecting in 3s…`);
+        reconnectTimer = setTimeout(connect, 3000);
       };
       ws.onerror = () => {
-        addToast('Cannot connect to brain WebSocket — open Settings and confirm API key, or use http://localhost:9090 on this machine.');
-        try { ws.close(); } catch (e) { /* ignore */ }
+        setConnError('Glass Brain WS error. Check the brain is running (feral start).');
+        try { ws.close(); } catch {}
       };
     }
     connect();
@@ -275,7 +264,7 @@ export default function GlassBrain() {
       clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
-  }, [handleBrainEvent, wsToken, addToast]);
+  }, [handleBrainEvent]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -450,14 +439,23 @@ export default function GlassBrain() {
 
     const fetchStats = async () => {
       try {
-        const r = await apiFetch('/api/dashboard');
+        const headers = storedKey ? { 'X-API-Key': storedKey } : {};
+        const r = await fetch(`${API}/api/dashboard`, { headers });
         if (!r.ok) {
-          addToast(`Dashboard ${r.status}: add API key in Settings or open via localhost`);
+          if (r.status === 401 || r.status === 403) {
+            const msg = `Dashboard auth failed (${r.status}). Set FERAL_API_KEY in ~/.feral/api_key or Settings.`;
+            setConnError(msg);
+            addToast(msg);
+          }
           return;
         }
         const data = await r.json();
         setStats(data);
-      } catch (e) { addToast(e.message || 'Failed to load dashboard stats'); }
+      } catch (e) {
+        const msg = e.message || 'Failed to load dashboard stats';
+        setConnError(msg);
+        addToast(msg);
+      }
     };
     fetchStats();
     const interval = setInterval(fetchStats, 5000);
@@ -566,6 +564,40 @@ export default function GlassBrain() {
   return (
     <div style={{ position: 'relative', width: '100%', height: '100vh', background: '#050510' }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
+
+      {connError && (
+        <div
+          role="alert"
+          style={{
+            position: 'absolute',
+            top: 12,
+            left: 12,
+            right: 12,
+            maxWidth: 720,
+            margin: '0 auto',
+            padding: '10px 14px',
+            background: 'rgba(239,68,68,0.15)',
+            border: '1px solid rgba(239,68,68,0.5)',
+            color: '#fecaca',
+            borderRadius: 10,
+            fontFamily: 'monospace',
+            fontSize: 12,
+            zIndex: 50,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <span style={{ color: '#ef4444' }}>●</span>
+          <span style={{ flex: 1 }}>{connError}</span>
+          <button
+            onClick={() => setConnError(null)}
+            style={{ background: 'transparent', border: 'none', color: '#fecaca', cursor: 'pointer' }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Mode toggle toolbar */}
       <div style={{

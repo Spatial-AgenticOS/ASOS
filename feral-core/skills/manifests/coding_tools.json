@@ -9,7 +9,7 @@
         "logo_url": "",
         "icon_set": "sf_symbols"
     },
-    "description": "Execute shell commands, read/write/edit files, search codebases, and fetch web content. The core tools that make FERAL a real coding agent.",
+    "description": "Software-engineering surface: repository-scoped file edits (read/write/edit with anchor-based replacements), codebase search (grep/glob), git, package managers, test/build runners, and HTTP fetch for docs/APIs. Use this when the user is writing code, navigating a repository, running tests, or resolving a programming task. For open-ended shell, system administration, or ad-hoc one-liners that are NOT inside a source-code workflow, use `computer_use` instead.",
     "trigger_phrases": [
         "run", "execute", "bash", "shell", "command",
         "read file", "show file", "cat",

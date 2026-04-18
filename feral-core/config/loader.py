@@ -406,8 +406,21 @@ class ConfigLoader:
 
         env["NODE_API_KEY"] = self._merged.get("security", {}).get("node_api_key", "")
 
-        # Credentials
-        for cred_key in ("OPENAI_API_KEY", "GROQ_API_KEY"):
+        # Credentials — LLMs + messaging channels
+        credential_env_keys = (
+            "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+            "GROQ_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY",
+            "MOONSHOT_API_KEY", "DASHSCOPE_API_KEY",
+            "TAVILY_API_KEY", "BRAVE_API_KEY", "EXA_API_KEY",
+            "SERPER_API_KEY", "PERPLEXITY_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CSE_ID",
+            "GITHUB_TOKEN", "SPOTIFY_CLIENT_ID",
+            "FERAL_TELEGRAM_BOT_TOKEN",
+            "FERAL_SLACK_BOT_TOKEN", "FERAL_SLACK_APP_TOKEN", "FERAL_SLACK_SIGNING_SECRET",
+            "FERAL_DISCORD_BOT_TOKEN",
+            "FERAL_WHATSAPP_PHONE_NUMBER_ID", "FERAL_WHATSAPP_ACCESS_TOKEN",
+            "FERAL_WHATSAPP_VERIFY_TOKEN", "FERAL_WHATSAPP_APP_SECRET",
+        )
+        for cred_key in credential_env_keys:
             if self._credentials.get(cred_key):
                 env[cred_key] = self._credentials[cred_key]
 

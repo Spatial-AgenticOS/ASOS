@@ -1,0 +1,12 @@
+{
+  "id": "{{cookiecutter.node_id}}",
+  "name": "{{cookiecutter.name}}",
+  "version": "{{cookiecutter.firmware_version}}",
+  "node_type": "{{cookiecutter.node_type}}",
+  "author": "{{cookiecutter.author}}",
+  "description": "{{cookiecutter.name}} — FERAL HUP v1 hardware daemon.",
+  "capabilities": ["{{cookiecutter.capabilities}}"],
+  "entrypoint": "python -m {{cookiecutter.node_id}}.daemon",
+  "requires": ["feral-node-sdk>=1.0.0"],
+  "env": {}
+}

@@ -266,9 +266,8 @@ async def test_tool_keys_all_skipped_when_user_declines(fake_feral):
 
 def test_plain_wizard_non_numeric_provider_choice_falls_back_to_openai(fake_feral):
     storage, _root = fake_feral
-    # Invalid provider idx → openai; minimal path through plain run()
-    # Provider+model (3), about-you (5), tech/use/comm (3), feral (1),
-    # personality (3) + device glasses prompt (1), TOOL_KEYS, channels (1) + HA (1)
+    # 25 inputs: invalid provider idx → openai; then minimal path through plain run()
+    # Provider + key + model, about-you×5, tech/use/comm, feral, personality×5, tools×8
     inputs = [
         "not-a-number",
         "sk-plainwizard-12345678901234567890",
@@ -276,11 +275,10 @@ def test_plain_wizard_non_numeric_provider_choice_falls_back_to_openai(fake_fera
         "", "", "", "", "",
         "", "", "",
         "",
-        "", "", "", "",
+        "", "", "", "", "",
     ]
     inputs.extend([""] * len(TOOL_KEYS))
-    inputs.extend(["", ""])  # skip channels + Home Assistant
-    assert len(inputs) == 3 + 5 + 3 + 1 + 4 + len(TOOL_KEYS) + 2
+    assert len(inputs) == 3 + 5 + 3 + 1 + 5 + len(TOOL_KEYS)
 
     it = iter(inputs)
 
@@ -293,8 +291,7 @@ def test_plain_wizard_non_numeric_provider_choice_falls_back_to_openai(fake_fera
     with patch("builtins.input", _fake_input):
         with patch("builtins.print"):
             with patch("cli.setup_wizard._get_local_ip", return_value="192.168.0.5"):
-                with patch("sys.stdin.isatty", return_value=True):
-                    asyncio.run(OnboardWizardPlain().run())
+                asyncio.run(OnboardWizardPlain().run())
 
     assert json.loads(storage["credentials.json"])["OPENAI_API_KEY"].startswith("sk-plainwizard")
     cfg = json.loads(storage["config.json"])

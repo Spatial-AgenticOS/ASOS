@@ -21,15 +21,69 @@ async def marketplace_search(q: str = ""):
     return {"results": results}
 
 
+@router.get("/api/marketplace/catalog")
+async def marketplace_catalog(kind: str = "skill", q: str = "", sort: str = "newest"):
+    """Browse the remote registry catalog, partitioned by kind.
+
+    kind ∈ {"skill", "daemon", "mcp"}. Proxies to the configured
+    ``FERAL_REGISTRY_URL`` (default https://registry.feral.sh) so the
+    Settings UI has a single, stable endpoint across install targets.
+    If the registry is unreachable the client displays a graceful
+    "service being provisioned" banner.
+    """
+    import os
+
+    import httpx
+
+    registry_url = os.environ.get("FERAL_REGISTRY_URL", "https://registry.feral.sh").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{registry_url}/api/v1/catalog",
+                params={"kind": kind, "q": q, "sort": sort},
+            )
+            if resp.status_code != 200:
+                return {"items": [], "error": f"registry returned {resp.status_code}"}
+            data = resp.json()
+            items = data.get("items") or data.get("results") or []
+            return {"items": items, "kind": kind, "source": registry_url}
+    except Exception as exc:
+        return {"items": [], "error": f"registry unreachable: {exc}"}
+
+
 @router.post("/api/marketplace/install")
 async def marketplace_install(body: dict):
-    """Install a skill from the marketplace."""
+    """Install an item from the marketplace.
+
+    Accepts both the legacy shape ``{skill_id, version?, source_url?}`` and
+    the new kind-aware shape ``{kind, id}`` used by the rewritten Settings
+    UI. When ``kind`` is provided we delegate to the remote-registry
+    install path (`feral install`-style) which hot-reloads the skill or
+    registers the daemon / MCP server.
+    """
     if not state.marketplace:
         return {"success": False, "error": "Marketplace not available"}
-    skill_id = body.get("skill_id", "")
+
+    kind = body.get("kind")
+    item_id = body.get("id") or body.get("skill_id")
+
+    if kind in ("skill", "daemon", "mcp") and item_id:
+        try:
+            install_from_registry = getattr(state.marketplace, "install_from_registry", None)
+            if callable(install_from_registry):
+                return await install_from_registry(kind, item_id)
+        except Exception as exc:
+            return {"success": False, "error": f"registry install failed: {exc}"}
+        if kind == "skill":
+            return await state.marketplace.install(item_id, "latest", None)
+        return {
+            "success": False,
+            "error": f"{kind} install requires registry.feral.sh client (pending deploy)",
+        }
+
     version = body.get("version", "latest")
     source_url = body.get("source_url")
-    result = await state.marketplace.install(skill_id, version, source_url)
+    result = await state.marketplace.install(item_id or "", version, source_url)
     return result
 
 

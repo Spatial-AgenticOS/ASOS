@@ -73,6 +73,14 @@ async def health():
     return {"status": "ok", "version": __version__, "boot": boot_data}
 
 
+@router.get("/api/boot-report")
+async def boot_report():
+    """Live boot progress — used by `feral start` for subsystem readouts."""
+    if hasattr(state, "_boot_report"):
+        return state._boot_report.to_dict()
+    return {"current": None, "last": None, "subsystems": [], "summary": {}}
+
+
 @router.get("/api/info")
 async def api_info():
     stats = state.memory.stats()

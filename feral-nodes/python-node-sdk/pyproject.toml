@@ -1,0 +1,48 @@
+# Build and distribution metadata for the FERAL Python node SDK.
+# Implements the Hardware Unification Protocol (HUP v1) client-side.
+# `python3 -m build` should succeed against this file (metadata is
+# self-contained; no private indexes required).
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feral-node-sdk"
+version = "1.0.0"
+description = "Official FERAL Hardware Unification Protocol (HUP v1) client SDK for Python."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "FERAL" }]
+keywords = ["feral", "hup", "hardware", "websocket", "iot", "robotics"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Hardware",
+]
+dependencies = [
+  "websockets>=12",
+  "pydantic>=2.8",
+  "zeroconf>=0.131",
+  "pynacl>=1.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/feral-ai/feral-nodes"
+Specification = "https://github.com/feral-ai/feral-nodes/blob/main/HUP_SPEC.md"
+Issues = "https://github.com/feral-ai/feral-nodes/issues"
+
+[project.scripts]
+feral-node = "feral_node_sdk.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["feral_node_sdk*"]

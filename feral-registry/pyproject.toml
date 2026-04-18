@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feral-registry"
+version = "0.1.0"
+description = "Community marketplace for Feral skills, daemons, and MCPs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Feral" }]
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.32,<1.0",
+  "sqlalchemy[asyncio]>=2.0.30,<3.0",
+  "aiosqlite>=0.20,<1.0",
+  "asyncpg>=0.29,<1.0",
+  "alembic>=1.13,<2.0",
+  "python-jose[cryptography]>=3.3,<4.0",
+  "pynacl>=1.5,<2.0",
+  "httpx>=0.27,<1.0",
+  "pydantic>=2.8,<3.0",
+  "pydantic-settings>=2.4,<3.0",
+  "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<9.0",
+  "pytest-asyncio>=0.23,<1.0",
+  "httpx>=0.27,<1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["feral_registry*"]
+exclude = ["tests*", "scripts*", "alembic*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

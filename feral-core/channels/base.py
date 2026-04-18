@@ -78,6 +78,32 @@ class Channel(ABC):
         self._handler: Optional[MessageHandler] = None
         self._running = False
         self._known_chat_ids: set[str] = set()
+        # Cache of handle/username → chat_id (e.g. "@alice" -> "123456789")
+        self._username_cache: dict[str, str] = {}
+        # Populated by subclasses if the upstream API provides it
+        self._bot_username: Optional[str] = None
+        # Populated to True once the channel has successfully talked to its API
+        self._connected: bool = False
+
+    async def send_direct(self, to: str, text: str, reply_to: Optional[str] = None) -> dict:
+        """Outbound send used by the messaging_channels skill.
+
+        Default implementation wraps ``send(channel_id, ChannelResponse(text=text))``
+        so subclasses that only implemented ``send`` still work. Subclasses that
+        need richer behavior (e.g. resolving @handles) should override.
+        """
+        try:
+            await self.send(to, ChannelResponse(text=text))
+            return {"success": True, "message_id": None, "raw": None}
+        except Exception as e:
+            return {"success": False, "error": str(e), "status_code": 502}
+
+    async def resolve_username(self, handle: str) -> Optional[dict]:
+        """Resolve an ``@handle`` to a channel-specific chat id.
+
+        Default returns None (not supported). Telegram overrides this.
+        """
+        return None
 
     def set_handler(self, handler: MessageHandler):
         self._handler = handler
@@ -171,7 +197,17 @@ class TelegramChannel(Channel):
         self._http = httpx.AsyncClient(timeout=35.0)
         self._base_url = f"https://api.telegram.org/bot{token}"
         self._offset = 0
-        logger.info("Telegram channel started")
+        try:
+            me_resp = await self._http.get(f"{self._base_url}/getMe")
+            me_data = me_resp.json() if me_resp.status_code == 200 else {}
+            if me_data.get("ok"):
+                self._bot_username = me_data.get("result", {}).get("username")
+                self._connected = True
+                logger.info("Telegram channel started (bot: @%s)", self._bot_username)
+            else:
+                logger.error("Telegram getMe failed: %s", me_data)
+        except Exception as e:
+            logger.error("Telegram getMe error: %s", e)
         asyncio.ensure_future(self._poll_loop())
 
     async def stop(self):
@@ -210,16 +246,6 @@ class TelegramChannel(Channel):
         user_id = str(user.get("id", ""))
         username = user.get("first_name", "") or user.get("username", "")
         self._known_chat_ids.add(chat_id)
-        try:
-            from channels.contact_store import get_contact_store
-            get_contact_store().remember(
-                "telegram",
-                chat_id,
-                username=user.get("username"),
-                first_name=user.get("first_name"),
-            )
-        except Exception:
-            pass
 
         text = message.get("text", "")
         is_voice = "voice" in message
@@ -245,19 +271,8 @@ class TelegramChannel(Channel):
     async def _handle_callback(self, callback: dict):
         chat_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
         data = callback.get("data", "")
-        cb_from = callback.get("from", {})
-        user_id = str(cb_from.get("id", ""))
+        user_id = str(callback.get("from", {}).get("id", ""))
         self._known_chat_ids.add(chat_id)
-        try:
-            from channels.contact_store import get_contact_store
-            get_contact_store().remember(
-                "telegram",
-                chat_id,
-                username=cb_from.get("username"),
-                first_name=cb_from.get("first_name"),
-            )
-        except Exception:
-            pass
 
         channel_msg = ChannelMessage(
             channel_type="telegram",
@@ -310,6 +325,98 @@ class TelegramChannel(Channel):
         except Exception as e:
             tg_logger.error("Telegram send error: %s", e)
 
+    async def resolve_username(self, handle: str) -> Optional[dict]:
+        """Map @username → numeric chat_id via Telegram's getChat."""
+        if not handle:
+            return None
+        h = handle.strip()
+        if not h.startswith("@"):
+            h = "@" + h
+        cached = self._username_cache.get(h.lower())
+        if cached:
+            return {"chat_id": cached, "handle": h}
+        if not getattr(self, "_http", None):
+            return None
+        try:
+            resp = await self._http.get(
+                f"{self._base_url}/getChat", params={"chat_id": h}
+            )
+            data = resp.json() if resp.status_code == 200 else {}
+            if data.get("ok"):
+                result = data.get("result", {})
+                chat_id = str(result.get("id", ""))
+                title = result.get("title") or result.get("first_name") or h
+                if chat_id:
+                    self._username_cache[h.lower()] = chat_id
+                    self._known_chat_ids.add(chat_id)
+                    return {"chat_id": chat_id, "title": title, "handle": h}
+        except Exception as e:
+            logger.error("Telegram resolve_username error: %s", e)
+        return None
+
+    async def send_direct(self, to: str, text: str, reply_to: Optional[str] = None) -> dict:
+        """Send a Telegram message to a chat_id or @username."""
+        tg_logger = logging.getLogger("feral.channel.telegram")
+        if not getattr(self, "_http", None) or not self._running:
+            return {"success": False, "error": "Telegram channel not running", "status_code": 503}
+        if not text:
+            return {"success": False, "error": "text is required", "status_code": 400}
+
+        target = to.strip()
+        chat_id: Optional[str] = None
+        if target.startswith("@") or (not target.lstrip("-").isdigit()):
+            resolved = await self.resolve_username(target)
+            if resolved and resolved.get("chat_id"):
+                chat_id = resolved["chat_id"]
+            else:
+                return {
+                    "success": False,
+                    "status_code": 404,
+                    "error": (
+                        f"Could not resolve Telegram handle {target!r}. The user must "
+                        "open your bot in Telegram and send /start at least once so it "
+                        "learns their chat_id."
+                    ),
+                }
+        else:
+            chat_id = target
+
+        payload: dict = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown",
+        }
+        if reply_to:
+            try:
+                payload["reply_to_message_id"] = int(reply_to)
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            r = await self._http_with_retry(
+                self._http, "POST", f"{self._base_url}/sendMessage", json=payload
+            )
+            data = r.json() if getattr(r, "status_code", 0) else {}
+            if not data.get("ok"):
+                desc = data.get("description") or f"HTTP {getattr(r, 'status_code', '?')}"
+                tg_logger.warning("Telegram send_direct failed: %s", desc)
+                return {
+                    "success": False,
+                    "status_code": int(getattr(r, "status_code", 502)),
+                    "error": f"Telegram API: {desc}",
+                }
+            self._known_chat_ids.add(str(chat_id))
+            await self._emit_comms_event("out", str(chat_id), text)
+            return {
+                "success": True,
+                "status_code": 200,
+                "message_id": data.get("result", {}).get("message_id"),
+                "raw": data.get("result"),
+            }
+        except Exception as e:
+            tg_logger.error("Telegram send_direct error: %s", e, exc_info=True)
+            return {"success": False, "status_code": 502, "error": str(e)}
+
 
 class DiscordChannel(Channel):
     """Discord bot — Gateway WebSocket for incoming, REST for outgoing."""
@@ -332,6 +439,7 @@ class DiscordChannel(Channel):
             timeout=10.0,
         )
 
+        self._connected = True
         asyncio.ensure_future(self._gateway_connect())
         logger.info("Discord channel started (Gateway mode)")
 
@@ -420,6 +528,59 @@ class DiscordChannel(Channel):
         except Exception as e:
             dc_logger.error("Discord send error: %s", e)
 
+    async def send_direct(self, to: str, text: str, reply_to: Optional[str] = None) -> dict:
+        dc_logger = logging.getLogger("feral.channel.discord")
+        if not getattr(self, "_http", None) or not self._running:
+            return {"success": False, "status_code": 503, "error": "Discord channel not running"}
+        if not text:
+            return {"success": False, "status_code": 400, "error": "text is required"}
+        target = (to or "").strip()
+        if not target.isdigit():
+            return {
+                "success": False,
+                "status_code": 400,
+                "error": (
+                    f"Discord needs a numeric channel id, got {target!r}. "
+                    "Right-click a channel in Discord with developer mode on → 'Copy Channel ID'."
+                ),
+            }
+        payload: dict = {"content": text}
+        if reply_to:
+            payload["message_reference"] = {"message_id": str(reply_to)}
+        try:
+            r = await self._http_with_retry(
+                self._http, "POST",
+                f"https://discord.com/api/v10/channels/{target}/messages",
+                json=payload,
+            )
+            status = getattr(r, "status_code", 0)
+            if status >= 400:
+                try:
+                    err_body = r.json()
+                except Exception:
+                    err_body = {"message": f"HTTP {status}"}
+                return {
+                    "success": False,
+                    "status_code": int(status),
+                    "error": f"Discord API: {err_body.get('message', 'error')}",
+                }
+            data = {}
+            try:
+                data = r.json()
+            except Exception:
+                pass
+            self._known_chat_ids.add(target)
+            await self._emit_comms_event("out", target, text)
+            return {
+                "success": True,
+                "status_code": 200,
+                "message_id": data.get("id"),
+                "raw": data,
+            }
+        except Exception as e:
+            dc_logger.error("Discord send_direct error: %s", e, exc_info=True)
+            return {"success": False, "status_code": 502, "error": str(e)}
+
 
 class SlackChannel(Channel):
     """Slack bot — Socket Mode for incoming, Web API for outgoing."""
@@ -441,6 +602,19 @@ class SlackChannel(Channel):
             headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
             timeout=10.0,
         )
+
+        try:
+            r = await self._http.post("https://slack.com/api/auth.test")
+            ok = False
+            try:
+                ok = bool(r.json().get("ok"))
+            except Exception:
+                pass
+            self._connected = ok
+            if ok:
+                self._bot_username = r.json().get("user")
+        except Exception as e:
+            logger.warning("Slack auth.test failed: %s", e)
 
         if app_token:
             asyncio.ensure_future(self._socket_mode(app_token))
@@ -541,6 +715,43 @@ class SlackChannel(Channel):
         except Exception as e:
             logging.getLogger("feral.channel.slack").error("Slack send error: %s", e)
 
+    async def send_direct(self, to: str, text: str, reply_to: Optional[str] = None) -> dict:
+        sl_logger = logging.getLogger("feral.channel.slack")
+        if not getattr(self, "_http", None) or not self._running:
+            return {"success": False, "status_code": 503, "error": "Slack channel not running"}
+        if not text:
+            return {"success": False, "status_code": 400, "error": "text is required"}
+        target = (to or "").strip()
+        if target.startswith("#") or target.startswith("@"):
+            target = target[1:] if target[0] == "#" else target
+        payload: dict = {"channel": target, "text": text}
+        if reply_to:
+            payload["thread_ts"] = reply_to
+        try:
+            r = await self._http_with_retry(
+                self._http, "POST",
+                "https://slack.com/api/chat.postMessage", json=payload,
+            )
+            data = {}
+            try:
+                data = r.json()
+            except Exception:
+                pass
+            if not data.get("ok"):
+                err = data.get("error", f"HTTP {getattr(r, 'status_code', '?')}")
+                return {"success": False, "status_code": 502, "error": f"Slack API: {err}"}
+            self._known_chat_ids.add(data.get("channel", target))
+            await self._emit_comms_event("out", target, text)
+            return {
+                "success": True,
+                "status_code": 200,
+                "message_id": data.get("ts"),
+                "raw": data,
+            }
+        except Exception as e:
+            sl_logger.error("Slack send_direct error: %s", e, exc_info=True)
+            return {"success": False, "status_code": 502, "error": str(e)}
+
 
 class WhatsAppChannel(Channel):
     """WhatsApp Cloud API — webhook-based incoming, REST outgoing."""
@@ -560,6 +771,7 @@ class WhatsAppChannel(Channel):
         import httpx
         self._running = True
         self._http = httpx.AsyncClient(timeout=10.0)
+        self._connected = bool(self._access_token and self._phone_id)
         logger.info("WhatsApp channel started (webhook mode)")
 
     async def stop(self):
@@ -635,6 +847,38 @@ class WhatsAppChannel(Channel):
             return
         await self.send_text(channel_id, response.text)
 
+    async def send_direct(self, to: str, text: str, reply_to: Optional[str] = None) -> dict:
+        if not text:
+            return {"success": False, "status_code": 400, "error": "text is required"}
+        target = (to or "").strip().lstrip("+")
+        if not target.isdigit():
+            return {
+                "success": False,
+                "status_code": 400,
+                "error": (
+                    f"WhatsApp needs a phone number in E.164 (digits only), got {to!r}."
+                ),
+            }
+        result = await self.send_text(target, text)
+        if result.get("success"):
+            data = result.get("data") or {}
+            msg_id = None
+            try:
+                msg_id = data.get("messages", [{}])[0].get("id")
+            except Exception:
+                pass
+            return {
+                "success": True,
+                "status_code": 200,
+                "message_id": msg_id,
+                "raw": data,
+            }
+        return {
+            "success": False,
+            "status_code": 502,
+            "error": result.get("error") or "WhatsApp send failed",
+        }
+
 
 class ChannelManager:
     """Manages all messaging channels with proper bidirectional flow."""
@@ -699,12 +943,19 @@ class ChannelManager:
     def stats(self) -> dict:
         channel_details = {}
         for ctype, ch in self._channels.items():
-            channel_details[ctype] = {
-                "running": ch._running,
-                "known_chats": len(ch._known_chat_ids),
+            row = {
+                "running": bool(getattr(ch, "_running", False)),
+                "connected": bool(getattr(ch, "_connected", False)),
+                "known_chats": len(getattr(ch, "_known_chat_ids", []) or []),
             }
+            bot_username = getattr(ch, "_bot_username", None)
+            if bot_username:
+                row["bot_username"] = bot_username
+            channel_details[ctype] = row
         return {
             "active_channels": self.active_channels,
             "channel_count": len(self._channels),
             "details": channel_details,
+            # Flattened per-channel shape the UI consumes via `channelStatus?.[ch.id]`.
+            **channel_details,
         }

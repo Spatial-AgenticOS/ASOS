@@ -480,12 +480,6 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
   ║   Starting agent on port {port}{tls_label:7s}  ║
   ╚══════════════════════════════════════╝
 """)
-    _bh = brain_bind_host()
-    if _bh == "0.0.0.0":
-        print(
-            "  [WARN] Brain listens on all interfaces (LAN). "
-            "Set FERAL_BIND_HOST=127.0.0.1 or FERAL_SECURE_MODE=strict to restrict.\n",
-        )
 
     # Start server in background thread
     server_ready = threading.Event()
@@ -504,24 +498,52 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
     server_thread = threading.Thread(target=_run_server, daemon=True)
     server_thread.start()
 
-    # Wait for server to be healthy
+    # Wait for server to be healthy.
+    #
+    # Cold-boot can easily take 30–60s on first run: LLM probe, embeddings
+    # model download, mDNS discovery, channel start, Docker sandbox init...
+    # FERAL_BOOT_TIMEOUT overrides for slow machines / CI.
     print("  Starting brain...", end="", flush=True)
     health_url = os.getenv("FERAL_HEALTH_URL", f"http://127.0.0.1:{port}/health")
-    for i in range(30):
+    boot_report_url = f"http://127.0.0.1:{port}/api/boot-report"
+    timeout_s = int(os.getenv("FERAL_BOOT_TIMEOUT", "90"))
+    last_subsystem: str | None = None
+    healthy = False
+    for i in range(timeout_s):
         time.sleep(1)
         try:
             if httpx:
                 r = httpx.get(health_url, timeout=2)
                 if r.status_code == 200:
+                    healthy = True
                     break
             else:
                 import urllib.request
                 urllib.request.urlopen(health_url, timeout=2)
+                healthy = True
                 break
         except Exception:
+            pass
+
+        subsystem = None
+        try:
+            if httpx:
+                rr = httpx.get(boot_report_url, timeout=1.5)
+                if rr.status_code == 200:
+                    body = rr.json() or {}
+                    subsystem = body.get("current") or (body.get("last") or {}).get("name")
+        except Exception:
+            subsystem = None
+
+        if subsystem and subsystem != last_subsystem:
+            print(f"\n    [{i+1}s] {subsystem}...", end="", flush=True)
+            last_subsystem = subsystem
+        else:
             print(".", end="", flush=True)
-    else:
-        print("\n  Failed to start. Check logs or run: feral doctor")
+
+    if not healthy:
+        print(f"\n  Failed to start after {timeout_s}s. Check logs or run: feral doctor")
+        print("  Tip: FERAL_BOOT_TIMEOUT=180 feral start   # for slow first runs")
         sys.exit(1)
 
     # Print status
@@ -921,8 +943,14 @@ def cmd_wake_test():
         print("  Tip: Install openwakeword for better detection: pip install openwakeword onnxruntime")
 
 
-def cmd_marketplace(action: str, query: str):
-    """Marketplace CLI commands."""
+def cmd_marketplace(action: str, query: str, registry: str | None = None):
+    """Marketplace CLI commands.
+
+    ``install`` delegates to :mod:`cli.install`, which talks directly to
+    the FERAL registry (default ``https://registry.feral.sh``) with
+    Ed25519 signature verification. ``search``/``list`` still hit the
+    local Brain's marketplace proxy.
+    """
     if action == "search":
         q = query or "all"
         data = _http_get(f"/api/marketplace/search?q={q}")
@@ -934,24 +962,10 @@ def cmd_marketplace(action: str, query: str):
             print(f"  {s.get('name', s.get('skill_id', '?'))} — {s.get('description', '')[:60]}")
     elif action == "install":
         if not query:
-            print("  Usage: feral marketplace install <skill_id>")
+            print("  Usage: feral marketplace install <item_id>")
             return
-        import urllib.request
-        req = urllib.request.Request(
-            f"{HTTP_BASE}/api/marketplace/install",
-            data=json.dumps({"skill_id": query}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read())
-                if result.get("success"):
-                    print(f"  Installed: {query}")
-                else:
-                    print(f"  Failed: {result.get('error', 'unknown')}")
-        except Exception as e:
-            print(f"  Error: {e}")
+        from cli.install import cmd_install
+        cmd_install(query, registry=registry)
     elif action == "list":
         data = _http_get("/api/marketplace/installed")
         skills = data.get("skills", [])
@@ -1086,7 +1100,25 @@ def main():
     # feral marketplace
     mp = sub.add_parser("marketplace", help="Skill marketplace commands")
     mp.add_argument("action", nargs="?", default="search", choices=["search", "install", "list"], help="Action")
-    mp.add_argument("query", nargs="?", default="", help="Search query or skill ID")
+    mp.add_argument("query", nargs="?", default="", help="Search query or item ID")
+    mp.add_argument("--registry", default=None, help="Override registry base URL (default: https://registry.feral.sh)")
+
+    # feral install <item_id> — direct registry install
+    inst_p = sub.add_parser("install", help="Install a published item from the FERAL registry")
+    inst_p.add_argument("item_id", help="Registry item id (from 'feral publish' output)")
+    inst_p.add_argument("--registry", default=None, help="Override registry base URL (default: https://registry.feral.sh)")
+
+    # feral publish --skill <dir> | --daemon <dir>
+    pub_p = sub.add_parser("publish", help="Publish a skill or daemon bundle to the FERAL registry")
+    pub_group = pub_p.add_mutually_exclusive_group(required=True)
+    pub_group.add_argument("--skill", dest="skill_dir", default=None, help="Path to a skill directory with manifest.json")
+    pub_group.add_argument("--daemon", dest="daemon_dir", default=None, help="Path to a daemon directory with manifest.json")
+    pub_p.add_argument("--registry", default=None, help="Override registry base URL (default: https://registry.feral.sh)")
+
+    # feral publisher login|register
+    pubr_p = sub.add_parser("publisher", help="Manage FERAL publisher credentials")
+    pubr_p.add_argument("action", choices=["login", "register"], help="login | register")
+    pubr_p.add_argument("--registry", default=None, help="Override registry base URL (default: https://registry.feral.sh)")
 
     # feral sync
     sp = sub.add_parser("sync", help="Federated memory sync commands")
@@ -1133,7 +1165,23 @@ def main():
     elif args.subcommand == "wake-test":
         cmd_wake_test()
     elif args.subcommand == "marketplace":
-        cmd_marketplace(args.action, args.query)
+        cmd_marketplace(args.action, args.query, registry=getattr(args, "registry", None))
+    elif args.subcommand == "install":
+        from cli.install import cmd_install
+        cmd_install(args.item_id, registry=getattr(args, "registry", None))
+    elif args.subcommand == "publish":
+        from cli.publish import cmd_publish
+        cmd_publish(
+            skill_dir=getattr(args, "skill_dir", None),
+            daemon_dir=getattr(args, "daemon_dir", None),
+            registry=getattr(args, "registry", None),
+        )
+    elif args.subcommand == "publisher":
+        from cli.publish import cmd_publisher_login, cmd_publisher_register
+        if args.action == "login":
+            cmd_publisher_login(registry=getattr(args, "registry", None))
+        else:
+            cmd_publisher_register(registry=getattr(args, "registry", None))
     elif args.subcommand == "sync":
         cmd_sync(args.action, getattr(args, "file", ""))
     elif args.subcommand == "install-service":

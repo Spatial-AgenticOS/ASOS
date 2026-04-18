@@ -48,6 +48,22 @@ async def pending_skills():
     return {"pending": state.skill_gen.get_pending_skills()}
 
 
+@router.post("/api/skills/reload")
+async def reload_skill(skill_id: str):
+    """Hot-reload a skill manifest + impl from disk.
+
+    Thin wrapper around ``state.skill_registry.reload_skill`` used by
+    ``feral install`` after extracting a new skill bundle.
+    """
+    if not state.skill_registry:
+        return {"ok": False, "error": "skill registry not initialized"}
+    try:
+        ok = state.skill_registry.reload_skill(skill_id)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": bool(ok), "skill_id": skill_id}
+
+
 @router.get("/skills")
 async def list_skills():
     return [

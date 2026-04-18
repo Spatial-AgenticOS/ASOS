@@ -105,7 +105,17 @@ except ImportError:
     pass
 
 try:
-    import skills.impl.messaging
+    import skills.impl.messaging_channels
+except ImportError:
+    pass
+
+try:
+    import skills.impl.self_introspection
+except ImportError:
+    pass
+
+try:
+    import skills.impl.workspace_scripts
 except ImportError:
     pass
 

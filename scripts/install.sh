@@ -196,6 +196,39 @@ echo "    feral serve      Headless server mode"
 echo "    feral status     Current brain status"
 echo ""
 
+# ─── Verify installed version matches pinned pyproject.toml ──
+# Catches the "stale wheel from a prior install" foot-gun. Runs AFTER
+# the pip step but BEFORE we exec into `feral start`, so we can bail out
+# with a clean remediation hint instead of booting a mismatched brain.
+PYPROJECT_PATH=""
+for candidate in \
+    "${SCRIPT_DIR:-}/../feral-core/pyproject.toml" \
+    "./feral-core/pyproject.toml" \
+    "./pyproject.toml"; do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+        PYPROJECT_PATH="$candidate"
+        break
+    fi
+done
+
+if [ -n "$PYPROJECT_PATH" ]; then
+    EXPECTED_VERSION="$(grep -E '^version = ' "$PYPROJECT_PATH" | head -n1 | awk -F'"' '{print $2}')"
+    INSTALLED_VERSION="$($PYTHON -c 'import importlib.metadata as m; print(m.version("feral-ai"))' 2>/dev/null || echo unknown)"
+
+    if [ -n "${EXPECTED_VERSION:-}" ] && [ "${INSTALLED_VERSION}" != "${EXPECTED_VERSION}" ]; then
+        echo -e "  ${YELLOW}⚠${NC}  FERAL installed version ${INSTALLED_VERSION} does not match expected ${EXPECTED_VERSION}."
+        echo "    This usually means a stale wheel from a prior install. Re-run with:"
+        echo "      pip install --upgrade --force-reinstall feral-ai==${EXPECTED_VERSION}"
+        exit 1
+    fi
+
+    if [ -n "${EXPECTED_VERSION:-}" ]; then
+        echo -e "  ${GREEN}✓${NC} FERAL ${INSTALLED_VERSION} installed and version-verified."
+    fi
+else
+    echo -e "  ${DIM}(skipped version verification — no pyproject.toml on disk)${NC}"
+fi
+
 # ─── Auto-Start FERAL Brain ──────────────────────────────
 echo -e "  ${CYAN}Starting FERAL Brain...${NC}"
 if command -v feral &> /dev/null; then

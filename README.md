@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2026.4.16-06b6d4?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/version-2026.4.9-06b6d4?style=flat-square" alt="Version" />
   <a href="https://github.com/FERAL-AI/FERAL-AI/stargazers"><img src="https://img.shields.io/github/stars/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Stars" /></a>
   <a href="https://github.com/FERAL-AI/FERAL-AI/commits/main"><img src="https://img.shields.io/github/last-commit/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Last Commit" /></a>
   <img src="https://img.shields.io/badge/license-Apache%202.0-06b6d4?style=flat-square" alt="License" />
@@ -35,13 +35,13 @@
 
 ## Feature Maturity
 
-> **Stable** means all 5 criteria are met: ≥1 integration test, structured logging (`feral.{subsystem}.{name}`), documented env vars + settings, graceful error handling, and a troubleshooting guide in `docs/mintlify/`. **1345 tests pass** on every commit. See [docs/mintlify/guides/](docs/mintlify/guides/) for per-feature troubleshooting.
+> **Stable** means all 5 criteria are met: ≥1 integration test, structured logging (`feral.{subsystem}.{name}`), documented env vars + settings, graceful error handling, and a troubleshooting guide in `docs/mintlify/`. **1344 tests pass** on every commit. See [docs/mintlify/guides/](docs/mintlify/guides/) for per-feature troubleshooting.
 
 | Feature | Status | Details |
 |---------|--------|---------|
 | **Chat + LLM Orchestration** | Stable | 10 providers, failover, streaming, tool calling |
 | **Memory (4-tier + P2P sync)** | Stable | Notes, episodic, knowledge graph, CRDT sync |
-| **Skills + Tool Execution** | Stable | 20 skills, multi-runtime executor, blind vault |
+| **Skills + Tool Execution** | Stable | 19 skills, multi-runtime executor, blind vault |
 | **CLI + Setup Wizard** | Stable | `feral start/serve/doctor/setup`, interactive wizard with key validation |
 | **Web Dashboard** | Stable | Chat, SDUI, settings, dashboard, timeline |
 | **Ambient** | Stable | 3 modes (Briefing/Desk/Wind-Down), somatic wallpaper, wake-word, auto-switch |
@@ -76,24 +76,6 @@
 | **Video Generation** | Planned | — |
 | **Music Generation** | Planned | — |
 | **Native macOS App** | Planned | — |
-
-### FERAL vs typical agent shells (e.g. OpenClaw)
-
-| Capability | OpenClaw-style agents | FERAL |
-|------------|------------------------|-------|
-| Computer + browser control | Yes | Yes |
-| Telegram / Slack / Discord | Yes | Yes (unified `messaging` tool + credential bridge) |
-| Wearable health (HR / SpO₂ / HRV) in context | No | Yes |
-| Proactive biometric alerts | No | Yes |
-| Somatic-aware system prompts | No | Yes |
-| Ambient full-screen companion (multi-mode) | No | Yes |
-| Glass Brain live cognition + comms viz | No | Yes |
-| Federated P2P memory sync | No | Yes |
-| Intent Compiler (goals → micro-actions) | No | Yes |
-| Digital Twin (ask-as-user) | No | Yes |
-| Tool Genesis (user-defined tools, sandboxed) | Limited | Yes |
-| Agent Mitosis (specialist workers) | Limited | Yes |
-| Hardware mesh (glasses, wristband, nodes) | Limited | Yes |
 
 ---
 
@@ -224,19 +206,36 @@ Docker-first sandboxed execution: --network=none, --memory=512m, --cpus=1, --rea
 
 ## Comparison
 
-| Dimension | Big AI (OpenAI, Apple, Google) | OpenClaw | **FERAL** |
+Every claim below links to the file that implements it, so you can read the
+code instead of our marketing copy.
+
+| Dimension | Big AI (OpenAI, Apple, Google) | OpenClaw | **FERAL — shipped file paths** |
 |---|---|---|---|
-| Where it runs | Their servers | Your terminal | **Your entire device ecosystem** |
-| Memory | Forgets between sessions | Plugin-based | **4-tier + knowledge graph + P2P sync** |
-| Voice | 2s latency, cloud-only | Extension-based | **Sub-200ms, wake word, 3 providers, push-to-talk** |
-| Health monitoring | No | No | **Real-time biometrics from wristband** |
-| Smart home | Cloud API roundtrip | No | **Direct local mesh, no cloud** |
-| Proactive intelligence | No | No | **Rule + LLM hybrid with coaching** |
-| Identity / learning | No | Workspace files | **SOUL.md + USER.md + auto-learning** |
-| Autonomy levels | No | No | **Strict / Hybrid / Loose** |
-| GenUI | No | Canvas/A2UI | **Full SDUI generation engine** |
-| Hardware protocol | No | Generic nodes | **Dedicated HUP + mesh** |
-| Open source | Weights only | Yes | **Yes — brain, client, mobile, SDK, desktop** |
+| Dynamic skill creation at runtime | No | No | **[`feral-core/agents/tool_genesis.py`](feral-core/agents/tool_genesis.py) drafts + sandboxes + promotes new tools; wired into [`agents/orchestrator.py::_on_capability_gap`](feral-core/agents/orchestrator.py); [`feral-core/skills/impl/workspace_scripts.py`](feral-core/skills/impl/workspace_scripts.py) is the never-say-no fallback.** |
+| Community marketplace (software + hardware) | No | No | **[`feral-registry/`](feral-registry/) — FastAPI service with Ed25519-signed bundles, GitHub OAuth, `POST /items` publish and `feral install` round-trip. Hardware side: [`feral-nodes/HUP_SPEC.md`](feral-nodes/HUP_SPEC.md) defines the node wire protocol; daemons listed in the registry under `type=node`.** |
+| Never-stall retry mechanics | No | No | **[`feral-core/agents/refusal_handler.py`](feral-core/agents/refusal_handler.py) handles reasoning-only, empty-response, and ack-execution patterns; retry hooks live in [`feral-core/agents/orchestrator.py`](feral-core/agents/orchestrator.py) and inject prompt additions without mutating persisted history.** |
+| Self-introspection | No | No | **[`feral-core/skills/impl/self_introspection.py`](feral-core/skills/impl/self_introspection.py) exposes the live tool catalog at tool-call time; [`feral-core/agents/self_model.py`](feral-core/agents/self_model.py) builds the unified chat+voice `Runtime:` line and prose `## Tooling` section inserted into every system prompt.** |
+| Autonomy tiers (strict / hybrid / loose) | No | No | **Behavior per tier documented in [`docs/AGENT_CAPABILITIES.md`](docs/AGENT_CAPABILITIES.md); enforced in [`feral-core/agents/orchestrator.py`](feral-core/agents/orchestrator.py) and gated by [`feral-core/security/`](feral-core/security/) (approval manager + safety classifier).** |
+| Local-first / privacy | Cloud roundtrip | Local-first for CLI | **Config + vault on disk only: [`feral-core/config/loader.py`](feral-core/config/loader.py), [`feral-core/config/runtime.py`](feral-core/config/runtime.py), [`feral-core/security/vault.py`](feral-core/security/vault.py). No telemetry by default; default bind is `127.0.0.1`.** |
+| Hardware-aware perception | No | Generic nodes | **[`feral-core/perception/fusion.py`](feral-core/perception/fusion.py) merges somatic, screen, audio, and location streams into a single `PerceptionFrame`; BLE wristband adapter at [`feral-core/hardware/adapters/wristband.py`](feral-core/hardware/adapters/wristband.py) feeds biometrics straight in.** |
+| Messaging channels | API-only | `message` tool | **Unified `messaging_channels` skill with `@username`→chat_id resolve, live status in UI, and never-refuse execution bias (see [`feral-core/channels/`](feral-core/channels/) + [`feral-core/skills/impl/messaging_channels.py`](feral-core/skills/impl/messaging_channels.py)).** |
+| Memory | Forgets between sessions | Plugin-based | **4-tier + knowledge graph + CRDT P2P sync under [`feral-core/memory/`](feral-core/memory/).** |
+| Voice | 2s latency, cloud-only | Extension-based | **Sub-200ms, wake word, 3 providers in [`feral-core/voice/`](feral-core/voice/) (OpenAI Realtime, Gemini Live, local Whisper+Piper).** |
+| GenUI | No | Canvas / A2UI | **Full SDUI generation engine ([`feral-core/genui/`](feral-core/genui/)) that renders on iOS, Android and web.** |
+| Glass-brain visualization | No | No | **Live WebGL visualization of active sessions, skills, memory writes — client in [`feral-client/`](feral-client/), brain events in [`feral-core/observability/`](feral-core/observability/).** |
+| Setup | Each app separately | `claude init` | **One `feral start` → wizard in [`feral-core/cli/setup_wizard.py`](feral-core/cli/setup_wizard.py) provisions LLM, channels, voice, memory, mDNS, apps — streams a live boot report.** |
+| Open source | Weights only | Yes | **Yes — brain, client, mobile, SDK, desktop, nodes (everything under [`ASOS/`](./)).** |
+
+**What FERAL copied from OpenClaw (and improved):**
+- OpenClaw's unified `message` tool and "never refuse, call the tool" system-prompt pattern → FERAL's `messaging_channels__send` with planning-only retry, live channel roster in the prompt, and post-send confirmation suppression so the agent doesn't narrate twice.
+- OpenClaw's `@username` → chat_id auto-resolution → FERAL's `resolve_username` with per-channel caching, implemented for Telegram and extensible to Slack/Discord.
+
+**What FERAL adds that OpenClaw doesn't:**
+- A ring of physical perception (wristband biometrics, glasses, phone GPS/camera/mic) feeding a single `PerceptionFrame`.
+- 4-tier memory with P2P sync across your own devices (no central server).
+- A Glass Brain — a live 3D visualization of active sessions, skills firing, and memory writes.
+- Multi-modal voice providers with sub-200ms wake-word path.
+- A generative UI engine (SDUI) the agent can emit to any client.
 
 ---
 

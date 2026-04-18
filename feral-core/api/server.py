@@ -68,6 +68,7 @@ from api.routes.agent_mitosis import router as agent_mitosis_router
 from api.routes.intents import router as intents_router
 from api.routes.webhooks import router as webhooks_router
 from api.routes.ambient import router as ambient_router
+from api.routes.auth import router as auth_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -164,7 +165,10 @@ def _load_or_generate_api_key() -> str:
 FERAL_API_KEY = _load_or_generate_api_key()
 
 
-_OPEN_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json", "/metrics"})
+_OPEN_PATHS = frozenset({
+    "/health", "/docs", "/redoc", "/openapi.json", "/metrics",
+    "/api/auth/local-key", "/api/boot-report",
+})
 
 _OPEN_PATH_PREFIXES = (
     "/docs",
@@ -239,6 +243,7 @@ app.include_router(agent_mitosis_router)
 app.include_router(intents_router)
 app.include_router(webhooks_router)
 app.include_router(ambient_router)
+app.include_router(auth_router)
 
 
 # ─────────────────────────────────────────────
@@ -468,7 +473,14 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
                     if provider == "gemini" and mode == "realtime" and state.gemini_proxy:
                         system_prompt = ""
                         if state.identity_workspace:
-                            system_prompt = state.identity_workspace.build_system_prompt()
+                            try:
+                                frame = state.perception.get_frame(session_id) if getattr(state, "perception", None) else None
+                            except Exception:
+                                frame = None
+                            system_prompt = state.identity_workspace.build_system_prompt(
+                                frame=frame,
+                                skill_registry=getattr(state, "skills", None),
+                            )
 
                         async def _gemini_audio_cb(sid, b64, is_done):
                             try:
@@ -1107,10 +1119,4 @@ if __name__ == "__main__":
     ║   Voice · GenUI · Hardware          ║
     ╚══════════════════════════════════════╝
     """)
-    _h = brain_bind_host()
-    if _h == "0.0.0.0":
-        logger.warning(
-            "Brain listening on all interfaces (LAN). Set FERAL_BIND_HOST=127.0.0.1 or "
-            "FERAL_SECURE_MODE=strict to restrict access."
-        )
-    uvicorn.run(app, host=_h, port=brain_port(), log_level="info")
+    uvicorn.run(app, host=brain_bind_host(), port=brain_port(), log_level="info")

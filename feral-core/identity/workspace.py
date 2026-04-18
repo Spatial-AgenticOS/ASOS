@@ -179,10 +179,16 @@ class IdentityWorkspace:
 
         self.write_tools("\n".join(lines))
 
-    def build_system_prompt(self) -> str:
+    def build_system_prompt(self, *, frame=None, skill_registry=None) -> str:
         """
         Build the complete system prompt from all workspace files.
         Injected at session startup, above any conversation history.
+
+        When ``skill_registry`` is provided we also append the shared
+        ``agents.self_model.build_core_self_model`` block so the voice and
+        chat surfaces see the same tooling catalog, UI routes and runtime
+        line. Passing the perception frame lets the runtime line include
+        connected devices.
         """
         parts = []
 
@@ -216,6 +222,20 @@ class IdentityWorkspace:
         greeting = identity.get("greeting_style", "")
         if greeting:
             parts.append(f"\n## Communication Style\n{greeting}")
+
+        try:
+            from agents.self_model import build_core_self_model
+            full = list(skill_registry.skills.values()) if skill_registry else []
+            core = build_core_self_model(
+                frame=frame,
+                active_skills=full,
+                full_skills=full,
+                include_ui_routes=True,
+            )
+            if core:
+                parts.append("\n" + core)
+        except Exception as exc:
+            logger.debug("self_model unavailable in voice identity workspace: %s", exc)
 
         return "\n".join(parts)
 

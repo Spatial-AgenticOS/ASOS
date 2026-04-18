@@ -121,6 +121,7 @@ class IdentityLoader:
         skills: list["SkillManifest"],
         session_id: str = "",
         identity_text: str | None = None,
+        full_catalog: list["SkillManifest"] | None = None,
     ) -> str:
         """Assemble the full system prompt for an LLM conversation turn.
 
@@ -129,6 +130,9 @@ class IdentityLoader:
                 calls :meth:`load_identity` itself.  The orchestrator passes
                 the result of its own ``_load_identity()`` so that test patches
                 on the orchestrator are honoured.
+            full_catalog: Every registered skill, used to emit the "Available
+                (full catalog)" block so the model never claims a skill does
+                not exist. When None, only the active list is shown.
         """
         identity = identity_text if identity_text is not None else self.load_identity()
 
@@ -152,21 +156,6 @@ class IdentityLoader:
             "4. For MP3 specifically: generate WAV first, then convert with ffmpeg or pydub\n"
             "5. NEVER respond with 'I can\\'t create audio/images/files' — you CAN, via Python + shell\n\n"
             "If you truly lack a specialized skill, call system_settings__create_skill to generate one.\n"
-            "\n## Execution Bias\n"
-            "If the user asks you to do something actionable, do it in the same turn with a real tool call.\n"
-            "Do not stop at a plan or promise-to-act reply. Commentary-only turns are incomplete when tools are available and the next action is clear.\n"
-            "If the work will take multiple steps, send one short progress update before or while acting.\n"
-            "\n## Messaging (Telegram / Slack / Discord / WhatsApp / SMS)\n"
-            "Use the `messaging.send` tool for every proactive outbound message. Do not tell the user to open the app and send manually.\n"
-            "When asked to send to someone on Telegram:\n"
-            "1. Call `messaging.list_chats(channel=\"telegram\")` if you need to resolve a username to a chat.\n"
-            "2. If you have a target chat_id or resolved username, call `messaging.send` with channel + target + text.\n"
-            "3. If they have never messaged the bot, tell them to open the bot link (t.me/…) and tap Start — then you can send.\n"
-            "Never refuse because you \"can't directly send\" — you send via the messaging tool when the channel is configured.\n"
-            "\n## Tool Call Style\n"
-            "When you call a tool, do not narrate the call itself. Just call it.\n"
-            "Announce results, not intentions.\n"
-            "If a tool fails, surface the concrete error and propose the fix; do not fall back to \"please do it yourself\".\n"
         )
 
         if identity:
@@ -226,10 +215,24 @@ class IdentityLoader:
             if memory_context:
                 prompt += f"\n## Memory\n{memory_context}\n"
 
-        # Available skills
-        if skills:
-            skill_summary = ", ".join(s.brand.name for s in skills)
-            prompt += f"\nRelevant skills: {skill_summary}\n"
+        # Prose Tooling catalog (active + full). Replaces the terse
+        # "Relevant skills: ..." line with an OpenClaw-style enumeration so
+        # the LLM can see which tools are live AND which exist at all.
+        try:
+            from agents.self_model import build_tooling_catalog, build_ui_route_map, build_runtime_line
+            tooling_block = build_tooling_catalog(
+                active=skills or [],
+                full=full_catalog or skills or [],
+            )
+            if tooling_block:
+                prompt += f"\n{tooling_block}\n"
+            prompt += f"\n{build_ui_route_map()}\n"
+            prompt_runtime_line = build_runtime_line(frame)
+        except Exception as exc:
+            logger.debug("self_model unavailable in identity_loader: %s", exc)
+            if skills:
+                prompt += "\nRelevant skills: " + ", ".join(s.brand.name for s in skills) + "\n"
+            prompt_runtime_line = None
 
         # Connected nodes
         if frame.connected_nodes:
@@ -241,4 +244,61 @@ class IdentityLoader:
             if somatic_section:
                 prompt += f"\n{somatic_section}\n"
 
+        # Live messaging-channel awareness + execution bias.
+        prompt += self._messaging_channels_section()
+
+        prompt += (
+            "\n## Execution Bias\n"
+            "- If the user asks you to DO work, DO it in the same turn by calling a real tool.\n"
+            "- NEVER describe what the user should do themselves when a tool for it exists.\n"
+            "- NEVER say 'I can't' or 'I'm unable to' when a tool exists for that action.\n"
+            "- For messaging, the tool `messaging_channels__send` IS your direct line to Telegram, Slack,\n"
+            "  Discord, and WhatsApp. Call it — do not tell the user to open the app or paste into the API.\n"
+            "- Never use shell/curl to send messages on those channels; `messaging_channels__send` handles all routing.\n"
+            "- If a tool call fails, report the SPECIFIC error and try again or pick the next best tool.\n"
+            "- Only after a tool call returns may you confirm success in one short sentence.\n"
+        )
+
+        # Runtime line — last so models biased to "recent context" see it.
+        if prompt_runtime_line:
+            prompt += f"\n{prompt_runtime_line}\n"
+
         return prompt
+
+    def _messaging_channels_section(self) -> str:
+        """Inject the live list of configured messaging channels and how to address them.
+
+        Mirrors OpenClaw's ``buildMessageActionDiscoveryInput``: the tool description
+        PROVES the agent can send, so it cannot truthfully say 'I can't'.
+        """
+        try:
+            from api.state import state as _state
+            cm = getattr(_state, "channel_manager", None)
+            if not cm:
+                return ""
+            rows = []
+            for ctype, ch in cm.channels.items():
+                label = ctype
+                bot = getattr(ch, "_bot_username", None)
+                if bot:
+                    label = f"{ctype} (@{bot})"
+                rows.append(label)
+            if not rows:
+                return (
+                    "\n## Messaging Channels\n"
+                    "No messaging channels are currently connected. If the user asks you to send a\n"
+                    "message on Telegram/Slack/Discord/WhatsApp, call `messaging_channels__list_channels`\n"
+                    "to confirm, then tell them to add credentials in Settings → Channels or re-run\n"
+                    "`feral setup`.\n"
+                )
+            channel_list = ", ".join(rows)
+            return (
+                "\n## Messaging Channels (live)\n"
+                f"Configured and running: {channel_list}.\n"
+                "To send a message, call `messaging_channels__send` with:\n"
+                "  channel=<telegram|slack|discord|whatsapp>, to=<chat_id or @handle>, text=<content>.\n"
+                "If the user only gave an @handle on Telegram, call `messaging_channels__resolve_chat_id`\n"
+                "first. Only then call send. Do NOT say you can't — these channels are ready.\n"
+            )
+        except Exception:
+            return ""

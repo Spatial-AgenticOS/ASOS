@@ -17,7 +17,7 @@ jobs:
           cd feral-ha-addon
           docker build \
             --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.19 \
-            --build-arg FERAL_VERSION=2026.4.16 \
+            --build-arg FERAL_VERSION=2026.4.9 \
             -t feral-addon:test .
 
       - name: Smoke test

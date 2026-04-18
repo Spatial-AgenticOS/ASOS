@@ -1,8 +1,83 @@
 # Changelog
 
+<!-- feral-version: 2026.4.9 -->
+
 All notable changes to FERAL are documented here.
 
-## [2026.4.16] - 2026-04-15
+## [2026.4.9] - 2026-04-09
+
+### Pillar 1 — Capability Autopilot (Tool Genesis)
+- Added `GenesisTool.to_skill_manifest()` + `ToolGenesisEngine.promote()` so a
+  sandbox-vetted tool becomes a real, persisted skill in a single call
+  (`feral-core/agents/tool_genesis.py`).
+- Added `/api/tool-genesis/approve`, `/api/tool-genesis/execute`,
+  `/api/tool-genesis/pending` and the matching DELETE routes
+  (`feral-core/api/` — see `tool_genesis` router wiring).
+- Workspace Scripts skill is now the never-say-no escape hatch: the orchestrator
+  falls back to it whenever no better skill matches
+  (`feral-core/skills/impl/workspace_scripts.py`).
+- Autonomy-tiered `_on_capability_gap()` in the orchestrator: `strict` refuses
+  with a diagnostic, `hybrid` drafts + asks for approval, `loose` drafts,
+  sandboxes, promotes, and immediately re-dispatches in the same turn
+  (`feral-core/agents/orchestrator.py`).
+
+### Pillar 2 — Agent Mitosis
+- `route_to_specialist` is now wired into both `handle_command` and
+  `handle_command_stream` so every turn can be redirected to a purpose-built
+  child agent (`feral-core/agents/orchestrator.py`,
+  `feral-core/agents/agent_mitosis.py`).
+- `propose_specialist()` lets Tool Genesis seed a new specialist from detected
+  recurring-intent patterns, inheriting a narrowed tool set
+  (`feral-core/agents/agent_mitosis.py`).
+
+### Pillar 3 — registry.feral.sh community marketplace
+- New `feral-registry/` FastAPI service with publish / catalog / item / flag
+  endpoints and GitHub OAuth (`feral-registry/feral_registry/`).
+- Ed25519 signed bundles — registry signs on publish, clients verify on install
+  (`feral-registry/feral_registry/signing.py`).
+- `feral publish` and remote `feral install` CLI commands for the round-trip
+  (`feral-core/cli/publish.py`, `feral-core/cli/install.py`).
+
+### Pillar 4 — HUP wire spec
+- Published `feral-nodes/HUP_SPEC.md` as the canonical node ↔ brain contract.
+- Clean Python SDK (`feral-nodes/python-node-sdk/`) and TypeScript SDK
+  (`feral-nodes/ts-node-sdk/`) that each implement the full handshake.
+- Hardware daemon cookiecutter template for third-party device builders
+  (`feral-nodes/templates/hardware-daemon/`).
+
+### Pillar 5 — OpenClaw-parity retry mechanics
+- Reasoning-only, empty-response, and ack-execution fast-path retries — the
+  brain no longer stalls on "I'll do that now" responses with zero tool calls
+  (`feral-core/agents/refusal_handler.py`, retry hooks in
+  `feral-core/agents/orchestrator.py`).
+- Prompt-addition injection: corrective nudges are attached to the retry call
+  without polluting persisted history
+  (`feral-core/agents/refusal_handler.py`).
+- `ALWAYS_INCLUDE` expanded to cover `messaging_channels`, `self_introspection`,
+  `workspace_scripts`, and friends so the model sees them every turn
+  (`feral-core/agents/orchestrator.py`).
+
+### Pillar 6 — Self-knowledge
+- Every system prompt now carries a prose `## Tooling` catalog and a single
+  `Runtime:` summary line (`feral-core/agents/self_model.py`).
+- Unified chat/voice self-model via `feral-core/agents/self_model.py` — voice
+  and text share one identity surface.
+- New `self_introspection` skill exposes the catalog at tool-call time
+  (`feral-core/skills/impl/self_introspection.py`).
+- `coding_tools` vs `computer_use` descriptions de-duplicated so the model
+  stops confusing file ops with screen control
+  (`feral-core/skills/impl/coding_tools.py`,
+  `feral-core/skills/impl/computer_use.py`).
+
+### Pillar 7 — Install freshness
+- Added `scripts/bump_version.py` (declarative, `--check` dry-run, warning on
+  missing files) and `feral-core/tests/test_version_consistency.py` to fail CI
+  on drift.
+- `scripts/install.sh` now verifies the installed `feral-ai` package version
+  matches `feral-core/pyproject.toml` and bails with a remediation hint if a
+  stale wheel is cached.
+
+
 
 ### Added
 - Anthropic-style GUI Computer Use: 11 endpoints (screenshot, mouse_click, type_text, key_press, scroll, cursor_position, window_list, window_focus) with Retina DPI auto-detection
