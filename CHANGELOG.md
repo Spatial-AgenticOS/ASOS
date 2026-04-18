@@ -1,8 +1,28 @@
 # Changelog
 
-<!-- feral-version: 2026.4.10 -->
+<!-- feral-version: 2026.4.11 -->
 
 All notable changes to FERAL are documented here.
+
+## [2026.4.11] - 2026-04-09
+
+### Fixed
+- Desktop Build (Tauri): fixed a Rust trait-bound error in
+  `desktop/src-tauri/src/main.rs` where `&Vec<&str>` was being passed to
+  `GsBuilder::with_shortcuts()` (`&&str` does not implement
+  `TryInto<ShortcutWrapper>`). Also switched the tray setup to the
+  non-deprecated `.show_menu_on_left_click(false)`.
+- `scripts/bump_version.py` now preserves every named capture group
+  (e.g. `indent`) in the replacement template so bumping a YAML version
+  string can't silently outdent the surrounding structure. The two
+  `.github/workflows/ha-addon.yml` locations were the trigger
+  (previous release produced a workflow with `default:` and
+  `FERAL_VERSION:` at column 0, which GitHub rejected with "workflow
+  file issue").
+- `feral-core/pyproject.toml`: removed `openwakeword` from the `[all]`
+  extra. `openwakeword` hard-requires `tflite-runtime`, which has no
+  Python 3.12 wheel on PyPI, so `pip install feral-ai[all]` failed on
+  the 3.12 leg of CI. `feral-ai[wake]` (3.11 runtime) still pulls it.
 
 ## [2026.4.10] - 2026-04-09
 
