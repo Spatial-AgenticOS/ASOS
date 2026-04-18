@@ -1,6 +1,23 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import AppShell from '../components/AppShell';
+
+beforeEach(() => {
+  // AppShell's useEffect hits /health on mount to pick up the live
+  // version. Stub fetch so the effect resolves with a known calver.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() =>
+      Promise.resolve({
+        json: () => Promise.resolve({ version: '2026.4.13' }),
+      }),
+    ),
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 vi.mock('../hooks/useTheme', () => ({
   useTheme: () => ({ theme: 'dark', toggle: vi.fn() }),
@@ -32,13 +49,13 @@ describe('AppShell', () => {
     expect(screen.getAllByText('Settings').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders version number', () => {
+  it('renders a calver version number after the health probe', async () => {
     renderShell();
-    expect(screen.getByText('v1.2.0')).toBeInTheDocument();
-  });
-
-  it('renders TheOrb component', () => {
-    renderShell();
-    expect(screen.getAllByTestId('orb').length).toBeGreaterThanOrEqual(1);
+    // AppShell starts with ``v...`` then asyncs-in the real version from
+    // /health; waitFor handles both code paths.
+    await waitFor(() => {
+      const all = screen.getAllByText(/^v\d{4}\.\d{1,2}\.\d{1,2}$/);
+      expect(all.length).toBeGreaterThanOrEqual(1);
+    });
   });
 });

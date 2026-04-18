@@ -6,6 +6,14 @@ vi.mock('../../config', () => ({
   WS_URL: 'ws://localhost:9090/v1/session',
 }));
 
+// The real Toast.jsx returns undefined from useToast() when called outside
+// a <ToastProvider>. Stubbing the hook keeps this test focused on the
+// session lifecycle instead of requiring a whole provider tree.
+vi.mock('../../components/Toast', () => ({
+  useToast: () => ({ addToast: vi.fn() }),
+  ToastProvider: ({ children }) => children,
+}));
+
 class MockWebSocket {
   constructor() {
     this.readyState = 1;
