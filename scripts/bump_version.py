@@ -154,14 +154,14 @@ VERSION_LOCATIONS: tuple[VersionLocation, ...] = (
     ),
     VersionLocation(
         path=".github/workflows/ha-addon.yml",
-        pattern=_p(rf'(?m)^\s*default:\s*"{VERSION_PATTERN}"'),
-        replacement='default: "{version}"',
+        pattern=_p(rf'(?m)^(?P<indent>\s*)default:\s*"{VERSION_PATTERN}"'),
+        replacement='{indent}default: "{version}"',
         description="HA Add-on workflow_dispatch feral_version input default",
     ),
     VersionLocation(
         path=".github/workflows/ha-addon.yml",
-        pattern=_p(rf'(?m)^\s*FERAL_VERSION:\s*"{VERSION_PATTERN}"'),
-        replacement='FERAL_VERSION: "{version}"',
+        pattern=_p(rf'(?m)^(?P<indent>\s*)FERAL_VERSION:\s*"{VERSION_PATTERN}"'),
+        replacement='{indent}FERAL_VERSION: "{version}"',
         description="HA Add-on workflow env default feral-ai PyPI version",
     ),
     VersionLocation(
@@ -200,15 +200,20 @@ def _apply(
 ) -> tuple[str, list[tuple[str, str]]]:
     """Return (new_text, [(old, new), ...]) for each replacement made."""
     replacements: list[tuple[str, str]] = []
-    replacement_template = loc.replacement.format(version=new_version)
 
     def _sub(match: re.Match) -> str:
         old_full = match.group(0)
         old_version = match.group("version")
         if old_version == new_version:
             return old_full
-        replacements.append((old_full, replacement_template))
-        return replacement_template
+        # Preserve any named groups (e.g. ``indent``) in the replacement
+        # template so bumping does not silently reformat a file.
+        fmt_args = {"version": new_version, **(match.groupdict() or {})}
+        fmt_args.pop("version", None)
+        fmt_args["version"] = new_version
+        replacement_rendered = loc.replacement.format(**fmt_args)
+        replacements.append((old_full, replacement_rendered))
+        return replacement_rendered
 
     new_text = loc.pattern.sub(_sub, text)
     return new_text, replacements

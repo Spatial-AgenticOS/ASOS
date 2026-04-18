@@ -104,7 +104,6 @@ all = [
     "wasmtime>=22.0.0",
     "zeroconf>=0.131.0",
     "qrcode[pil]>=7.4",
-    "openwakeword>=0.6.0",
     "onnxruntime>=1.16.0",
     "rich>=13.0.0",
     "faster-whisper>=1.0.0",

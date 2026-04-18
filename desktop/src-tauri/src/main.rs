@@ -177,7 +177,7 @@ fn main() {
 
     let floating_key = floating_shortcut[0].to_string();
     let global_shortcut = GsBuilder::new()
-        .with_shortcuts(&all_shortcuts)
+        .with_shortcuts(all_shortcuts)
         .expect("register global shortcut definitions")
         .with_handler(move |app, shortcut, event| {
             if event.state == ShortcutState::Pressed {
@@ -246,7 +246,7 @@ fn main() {
                 .title("FERAL")
                 .tooltip("FERAL — starting…")
                 .menu(&menu)
-                .menu_on_left_click(false)
+                .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show_hide" => {
                         if let Some(w) = app.get_webview_window("main") {
