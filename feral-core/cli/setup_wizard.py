@@ -1705,7 +1705,7 @@ class OnboardWizardPlain:
         print(f"  Tool Keys:       {tool_count} configured")
         print(f"  Channels:        {channel_str}")
         print(f"  Home Assistant:  {ha_status}")
-        print(f"  FERAL API Key:   ~/.feral/api_key (keep this safe)")
+        print("  FERAL API Key:   ~/.feral/api_key (keep this safe)")
         print()
         print("  Starting FERAL on http://localhost:9090 ...")
         print("=" * 55)

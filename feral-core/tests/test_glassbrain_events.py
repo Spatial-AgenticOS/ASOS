@@ -270,7 +270,7 @@ async def test_hardware_mesh_emits_device_route_on_invoke():
 
     with patch(STATE_PATH, fake_state), \
          patch("asyncio.wait_for", side_effect=fake_wait_for):
-        result = await mesh.invoke("node-A", "camera.snap", {"resolution": "1080p"})
+        await mesh.invoke("node-A", "camera.snap", {"resolution": "1080p"})
 
     brain_calls = [c for c in orch._emit_brain_event.await_args_list if c[0][1] == "device_route"]
     assert len(brain_calls) == 1

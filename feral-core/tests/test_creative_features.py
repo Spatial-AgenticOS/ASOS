@@ -310,7 +310,6 @@ class TestChannelHandoff:
         mock_memory = MagicMock()
         mock_sessions = {}
 
-        channel_session_id = "channel_slack_user1"
         if mock_sessions:
             desktop_sid = next(iter(mock_sessions), None)
         else:

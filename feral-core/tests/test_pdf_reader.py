@@ -81,7 +81,7 @@ async def test_pdf_corrupt_returns_graceful_error(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_pdf_too_many_pages_rejected(tmp_path) -> None:
     """A mock PDF with page_count > MAX_PAGES is rejected cleanly."""
-    fitz = pytest.importorskip("fitz")
+    pytest.importorskip("fitz")
     pdf_path = _create_pdf(tmp_path, pages=1)
 
     mock_doc = MagicMock()

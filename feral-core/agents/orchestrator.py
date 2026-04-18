@@ -555,13 +555,11 @@ class Orchestrator:
         refusal_retry_used = False
         reasoning_retry_count = 0
         empty_retry_used = False
-        ack_fast_path_used = False
         pending_retry_addition: Optional[str] = None
         # OpenClaw-parity: if the user turn is a short ack, inject the fast-path
         # instruction into the very first call (before the model replies).
         if self.refusal_handler.is_ack_execution(text):
             pending_retry_addition = self.refusal_handler.ACK_EXECUTION_FAST_PATH_INSTRUCTION
-            ack_fast_path_used = True
         sent_response = False
         for _ in range(max_iterations):
             effective_system_prompt = system_prompt
@@ -779,12 +777,9 @@ class Orchestrator:
         got_final_text = False
         refusal_retry_used = False
         empty_retry_used = False
-        reasoning_retry_count = 0
-        ack_fast_path_used = False
         pending_retry_addition: Optional[str] = None
         if self.refusal_handler.is_ack_execution(text):
             pending_retry_addition = self.refusal_handler.ACK_EXECUTION_FAST_PATH_INSTRUCTION
-            ack_fast_path_used = True
         for _ in range(self._max_iterations):
             effective_system_prompt = system_prompt
             if pending_retry_addition:

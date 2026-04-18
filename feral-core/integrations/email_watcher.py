@@ -140,7 +140,6 @@ class EmailWatcher:
             self._mail.send(f"{tag} IDLE\r\n".encode())
             self._mail.readline()
 
-            start = time.monotonic()
             self._mail.sock.settimeout(self.IDLE_TIMEOUT_SECONDS)
             try:
                 self._mail.readline()

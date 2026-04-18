@@ -138,7 +138,7 @@ class AgentMitosisEngine:
             f"Topic: {pattern.topic_cluster}\n"
             f"Tools available: {', '.join(pattern.tool_affinities)}\n"
             f"Sample user requests:\n" + "\n".join(f"- {p}" for p in pattern.sample_prompts[:3]) +
-            f"\n\nThe prompt should be 3-5 sentences. Be specific about the agent's expertise."
+            "\n\nThe prompt should be 3-5 sentences. Be specific about the agent's expertise."
         )
 
         try:

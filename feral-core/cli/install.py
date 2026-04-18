@@ -233,7 +233,7 @@ def _append_mcp_config(server_config: dict) -> None:
             existing = {}
     name = server_config.get("name") or server_config.get("id") or "unnamed"
     if isinstance(existing, dict):
-        servers = existing.setdefault("servers", {}) if "servers" in existing or not existing else existing
+        existing.setdefault("servers", {}) if "servers" in existing or not existing else existing
         # If the file is a flat mapping { name: cfg }, keep that shape.
         if "servers" in existing and isinstance(existing["servers"], dict):
             existing["servers"][name] = server_config

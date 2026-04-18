@@ -23,8 +23,6 @@ async def test_cdp_connect_get_page_info_and_disconnect():
     import aiohttp
     from aiohttp import web
 
-    msg_id_counter = 0
-
     async def json_version(request):
         return web.json_response({
             "webSocketDebuggerUrl": f"ws://127.0.0.1:{server_port}/devtools/browser",
