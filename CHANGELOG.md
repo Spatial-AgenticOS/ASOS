@@ -1,8 +1,29 @@
 # Changelog
 
-<!-- feral-version: 2026.4.9 -->
+<!-- feral-version: 2026.4.10 -->
 
 All notable changes to FERAL are documented here.
+
+## [2026.4.10] - 2026-04-09
+
+### Fixed
+- HA Add-on build on Alpine/musl: moved `sqlite-vec` out of the `[llm]` extra
+  into an opt-in `[vec]` extra so `pip install feral-ai[llm]` succeeds on
+  musllinux (HA `amd64-base:3.19`). `sqlite-vec` has no musl wheel upstream and
+  FERAL already falls back to numpy vector search when the extension is
+  absent (`feral-core/memory/embeddings.py::_try_load_sqlite_vec`). Users who
+  want the indexed path install `feral-ai[vec]` explicitly.
+- PyPI publish pipeline: gated the `Publish to PyPI` step behind
+  `environment: pypi` and renamed the workflow file to `publish.yml` so the
+  OIDC trusted-publisher claim matches what is registered on pypi.org.
+- Tauri 2.x desktop build: aligned `app.trayIcon` with the 2.x schema
+  (`iconPath`, `showMenuOnLeftClick`) and added `pkg-config` to the Linux
+  matrix (`desktop/src-tauri/tauri.conf.json`,
+  `.github/workflows/desktop.yml`).
+- HA Add-on workflow: now triggers on `workflow_run` after the Release
+  workflow succeeds, installs `feral-ai[llm]==${FERAL_VERSION}` from PyPI, and
+  no longer depends on monorepo copy semantics
+  (`.github/workflows/ha-addon.yml`, `feral-ha-addon/Dockerfile`).
 
 ## [2026.4.9] - 2026-04-09
 

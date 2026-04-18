@@ -25,7 +25,7 @@ def advertise_brain(port: int = 9090, name: str = "FERAL Brain") -> bool:
             addresses=[socket.inet_aton(ip)],
             port=port,
             properties={
-                "version": "2026.4.9",
+                "version": "2026.4.10",
                 "name": name,
                 "hostname": hostname,
             },
