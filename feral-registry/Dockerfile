@@ -19,6 +19,7 @@ WORKDIR /app
 COPY feral_registry ./feral_registry
 COPY alembic.ini ./alembic.ini
 COPY alembic ./alembic
+COPY scripts ./scripts
 RUN mkdir -p /data/blobs
 EXPOSE 8080
 CMD ["uvicorn", "feral_registry.main:app", "--host", "0.0.0.0", "--port", "8080"]
