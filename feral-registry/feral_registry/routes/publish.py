@@ -15,7 +15,7 @@ from ..auth import current_publisher
 from ..config import Settings, get_settings
 from ..db import get_session
 from ..models import Item, Publisher
-from ..schemas import Manifest, PublishResponse
+from ..schemas import Manifest, PublishResponse, validate_manifest_for_kind
 from ..signing import sha256_bytes, verify_bundle_signature
 
 router = APIRouter()
@@ -48,6 +48,13 @@ async def publish(
         manifest_obj = Manifest.model_validate_json(manifest_json)
     except ValidationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"invalid manifest: {exc}") from exc
+
+    missing = validate_manifest_for_kind(manifest_obj)
+    if missing:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"manifest kind={manifest_obj.kind} is missing required key(s): {', '.join(missing)}",
+        )
 
     data = await bundle.read()
     if not data:

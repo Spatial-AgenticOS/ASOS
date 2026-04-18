@@ -1,8 +1,13 @@
 name: Desktop Build
+# The desktop app (Tauri + Rust + WebView2/WebKit/GTK) is an experimental
+# distribution path. It is NOT part of the install-from-PyPI story and is
+# not uploaded as a release asset yet (needs Tauri signing keys in repo
+# secrets first — TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# for the updater). Until that's set up, we only build on demand and on PRs
+# that specifically touch the desktop/ directory, so broken desktop code
+# cannot block a PyPI release or an HA add-on push.
 on:
-  push:
-    paths: ['desktop/**']
-    tags: ['v*']
+  workflow_dispatch:
   pull_request:
     paths: ['desktop/**']
 jobs:

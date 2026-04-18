@@ -279,23 +279,104 @@ def cmd_install(item_id: str, registry: Optional[str] = None) -> None:
 
     home = _feral_home()
 
+    dispatch_install(kind, manifest, tarball, item_id, home)
+    print(f"  Installed {name} v{version}. Ready to use.")
+
+
+def dispatch_install(
+    kind: str,
+    manifest: dict,
+    tarball: Path,
+    item_id: str,
+    home: Path,
+) -> None:
+    """Route a verified bundle to the correct install target per kind.
+
+    Each of the eight registry categories extracts (or announces) to a
+    different location under ``~/.feral/`` and pings a different
+    hot-reload endpoint on the running Brain (best-effort).
+    """
+    kind = (kind or "skill").lower()
+
     if kind == "skill":
         skill_id = manifest.get("skill_id") or manifest.get("id") or item_id
         dest = home / "skills" / str(skill_id)
         dest.mkdir(parents=True, exist_ok=True)
         _safe_extract(tarball, dest)
         _maybe_reload_skill(str(skill_id))
-    elif kind == "daemon":
-        daemon_id = manifest.get("id") or item_id
+        return
+
+    if kind == "daemon":
+        daemon_id = manifest.get("node_id") or manifest.get("id") or item_id
         dest = home / "daemons" / str(daemon_id)
         dest.mkdir(parents=True, exist_ok=True)
         _safe_extract(tarball, dest)
-    elif kind == "mcp":
-        server_config = manifest.get("server") or manifest
-        _append_mcp_config(server_config)
-        _announce_mcp(server_config)
-    else:
-        print(f"  Unknown item kind '{kind}'. Supported: skill, daemon, mcp.")
-        sys.exit(1)
+        _maybe_post("/api/devices/register", {"daemon_id": str(daemon_id)})
+        return
 
-    print(f"  Installed {name} v{version}. Ready to use.")
+    if kind == "mcp":
+        server_config = manifest.get("server") or manifest.get("mcp_command") or manifest
+        _append_mcp_config(server_config if isinstance(server_config, dict) else {"command": server_config})
+        _announce_mcp(server_config if isinstance(server_config, dict) else {"command": server_config})
+        return
+
+    if kind == "channel":
+        channel_id = manifest.get("channel_id") or manifest.get("id") or item_id
+        dest = home / "channels" / str(channel_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        _safe_extract(tarball, dest)
+        _maybe_post("/api/channels/reload", {"channel_id": str(channel_id)})
+        return
+
+    if kind == "provider":
+        provider_id = manifest.get("provider_id") or manifest.get("id") or item_id
+        dest = home / "providers" / str(provider_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        _safe_extract(tarball, dest)
+        _maybe_post("/api/providers/reload", {"provider_id": str(provider_id)})
+        return
+
+    if kind == "memory":
+        memory_id = manifest.get("memory_id") or manifest.get("id") or item_id
+        dest = home / "memory-backends" / str(memory_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        _safe_extract(tarball, dest)
+        print(f"  Memory backend {memory_id} extracted. Enable it in Settings → Memory.")
+        return
+
+    if kind == "workflow":
+        workflow_id = manifest.get("workflow_id") or manifest.get("id") or item_id
+        dest = home / "workflows" / str(workflow_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        _safe_extract(tarball, dest)
+        _maybe_post("/api/workflows/reload", {"workflow_id": str(workflow_id)})
+        return
+
+    if kind == "agent":
+        agent_id = manifest.get("agent_id") or manifest.get("id") or item_id
+        dest = home / "agents" / str(agent_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        _safe_extract(tarball, dest)
+        _maybe_post("/api/mitosis/reload", {"agent_id": str(agent_id)})
+        return
+
+    print(f"  Unknown item kind '{kind}'. Supported: skill, daemon, mcp, channel, provider, memory, workflow, agent.")
+    sys.exit(1)
+
+
+def _maybe_post(path: str, body: dict) -> None:
+    """Best-effort POST to a running Brain. Silent on failure — the Brain
+    may be offline; installed assets are still on disk for next startup.
+    """
+    base = _brain_base_url()
+    if not base or httpx is None:
+        return
+    try:
+        httpx.post(
+            f"{base}{path}",
+            json=body,
+            headers=_brain_auth_headers(),
+            timeout=5.0,
+        )
+    except Exception:
+        pass

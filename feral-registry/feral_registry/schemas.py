@@ -1,4 +1,31 @@
-"""Pydantic request/response schemas."""
+"""Pydantic request/response schemas.
+
+The registry hosts eight content categories. Each is a ``kind`` in the
+``items`` table; publishers upload a tarball with a ``manifest.json`` at
+the root, and the ``Manifest`` model below accepts any of the eight
+discriminated shapes. Categories:
+
+* ``skill``     — Python skill (manifest + impl.py) loaded into the
+                  SkillRegistry on the user's FERAL brain.
+* ``daemon``    — HUP-speaking hardware daemon, one per physical device
+                  class (wristband, glasses, thermostat, …).
+* ``mcp``       — MCP server spec (command + env) that FERAL can spawn
+                  and talk to over stdio or SSE.
+* ``channel``   — Messaging-channel plugin (Telegram/Discord variants,
+                  WhatsApp, Signal, Matrix, etc.) that plugs into the
+                  ChannelManager.
+* ``provider``  — Alternative LLM provider adapter (Groq, Bedrock,
+                  Ollama, Together, Anthropic, …) plugged in behind the
+                  stable provider contract.
+* ``memory``    — Memory-backend implementation. Exactly one active at a
+                  time per brain (numpy fallback, sqlite-vec, Chroma,
+                  Qdrant, Honcho…).
+* ``workflow``  — Named multi-step procedure the agent can invoke ("PR
+                  triage", "Daily standup composer", …) — a structured
+                  TaskFlow template.
+* ``agent``     — Specialist persona: system prompt + tool permission
+                  list an AgentMitosisEngine can spawn on demand.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +34,37 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Kind = Literal["skill", "daemon", "mcp"]
+Kind = Literal[
+    "skill",
+    "daemon",
+    "mcp",
+    "channel",
+    "provider",
+    "memory",
+    "workflow",
+    "agent",
+]
+
+ALL_KINDS: tuple[Kind, ...] = (
+    "skill",
+    "daemon",
+    "mcp",
+    "channel",
+    "provider",
+    "memory",
+    "workflow",
+    "agent",
+)
 
 
 class Manifest(BaseModel):
+    """Common fields every kind's manifest must carry.
+
+    Per-kind extensions (channel_id, provider_id, mcp_command, etc.) are
+    accepted via ``extra='allow'``. Validators elsewhere enforce the
+    per-kind required keys — see :func:`validate_manifest_for_kind`.
+    """
+
     model_config = ConfigDict(extra="allow")
 
     kind: Kind
@@ -18,6 +72,30 @@ class Manifest(BaseModel):
     version: str = Field(min_length=1, max_length=50)
     description: str | None = None
     author: str | None = None
+
+
+_REQUIRED_PER_KIND: dict[str, tuple[str, ...]] = {
+    # kind: keys that must be present in the manifest on top of the base fields
+    "skill": ("skill_id",),
+    "daemon": ("node_id", "capabilities"),
+    "mcp": ("mcp_command",),
+    "channel": ("channel_id",),
+    "provider": ("provider_id", "models"),
+    "memory": ("memory_id", "interface"),
+    "workflow": ("steps",),
+    "agent": ("system_prompt",),
+}
+
+
+def validate_manifest_for_kind(manifest: Manifest) -> list[str]:
+    """Return a list of missing required keys for the declared kind.
+
+    Used by /publish to reject malformed bundles before we take a blob
+    lock. Empty list means the manifest is conformant.
+    """
+    required = _REQUIRED_PER_KIND.get(manifest.kind, ())
+    raw = manifest.model_dump()
+    return [key for key in required if key not in raw or raw[key] in (None, "", [], {})]
 
 
 class PublishResponse(BaseModel):
