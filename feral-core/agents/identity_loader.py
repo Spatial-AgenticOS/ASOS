@@ -216,7 +216,7 @@ class IdentityLoader:
                 prompt += f"\n## Memory\n{memory_context}\n"
 
         # Prose Tooling catalog (active + full). Replaces the terse
-        # "Relevant skills: ..." line with an OpenClaw-style enumeration so
+        # "Relevant skills: ..." line with a detailed enumeration so
         # the LLM can see which tools are live AND which exist at all.
         try:
             from agents.self_model import build_tooling_catalog, build_ui_route_map, build_runtime_line
@@ -268,8 +268,8 @@ class IdentityLoader:
     def _messaging_channels_section(self) -> str:
         """Inject the live list of configured messaging channels and how to address them.
 
-        Mirrors OpenClaw's ``buildMessageActionDiscoveryInput``: the tool description
-        PROVES the agent can send, so it cannot truthfully say 'I can't'.
+        Builds the tool-discovery block whose description PROVES the agent can
+        send, so it cannot truthfully say 'I can't'.
         """
         try:
             from api.state import state as _state

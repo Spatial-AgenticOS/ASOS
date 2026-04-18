@@ -6,7 +6,7 @@ Docker sandbox when available (falls back to host subprocess with a short
 timeout when Docker is not running), and maintains a catalog.json so past
 successful scripts are reusable on later turns.
 
-This is the OpenClaw-equivalent `exec` surface, but persistent and
+This is FERAL's workspace-scoped `exec` surface, persistent and
 indexable: the agent can rerun or compose past scripts instead of always
 generating new ones.
 """

@@ -537,7 +537,7 @@ class OnboardWizard:
             "[bold cyan]Welcome to FERAL[/]\n"
             "[bold]The Open AI Operating System[/]\n\n"
             "[dim]FERAL is not just another computer-use agent.[/]\n\n"
-            "Unlike tools like OpenClaw that only control your screen,\n"
+            "Unlike tools that only control your screen,\n"
             "FERAL is a [bold]full platform[/]:\n\n"
             "  [cyan]•[/] Learns new skills on the fly — the agent teaches itself\n"
             "  [cyan]•[/] Controls hardware — glasses, robots, sensors, home devices\n"

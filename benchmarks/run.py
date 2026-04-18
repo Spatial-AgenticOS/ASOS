@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FERAL vs OpenHands vs OpenClaw — Reproducible Comparison Benchmark Suite
+FERAL vs OpenHands vs Framework B — Reproducible Comparison Benchmark Suite
 ==========================================================================
 Run:
     python -m benchmarks.run              # default: quick mode
@@ -43,7 +43,7 @@ class BenchmarkResult:
     metric: str
     feral: float
     openhands: float
-    openclaw: float
+    framework_b: float
     unit: str
     category: str = ""
     notes: str = ""
@@ -128,7 +128,7 @@ async def run_feral_task_completion(client: httpx.AsyncClient, quick: bool = Fal
         metric="Task Completion Rate",
         feral=round(rate, 1),
         openhands=comparison["openhands"],
-        openclaw=comparison["openclaw"],
+        framework_b=comparison["framework_b"],
         unit="%",
         category="task_completion",
     )
@@ -152,10 +152,10 @@ def get_task_completion_comparison() -> dict:
     """
     Comparison data from public benchmarks:
     - OpenHands: SWE-bench Lite 27.3% (Dec 2024 CodeAct), general agent ~72%
-    - OpenClaw: focuses on web automation, ~65% on general tasks
-    Source: OpenHands GitHub, OpenClaw docs, SWE-bench leaderboard
+    - Framework B: focuses on web automation, ~65% on general tasks
+    Source: OpenHands GitHub, Framework B docs, SWE-bench leaderboard
     """
-    return {"openhands": 72.0, "openclaw": 65.0}
+    return {"openhands": 72.0, "framework_b": 65.0}
 
 
 # ===================================================================
@@ -225,7 +225,7 @@ async def run_feral_memory_retrieval(client: httpx.AsyncClient, quick: bool = Fa
             metric="Memory Precision@5",
             feral=round(precision_5, 1),
             openhands=comp["openhands_p5"],
-            openclaw=comp["openclaw_p5"],
+            framework_b=comp["framework_b_p5"],
             unit="%",
             category="memory",
         ),
@@ -233,7 +233,7 @@ async def run_feral_memory_retrieval(client: httpx.AsyncClient, quick: bool = Fa
             metric="Memory Recall@10",
             feral=round(recall_10, 1),
             openhands=comp["openhands_r10"],
-            openclaw=comp["openclaw_r10"],
+            framework_b=comp["framework_b_r10"],
             unit="%",
             category="memory",
         ),
@@ -246,7 +246,7 @@ def get_memory_comparison() -> dict:
     - OpenHands: uses single-tier conversation history, no persistent vector memory.
       Effective recall degrades beyond context window. Estimated ~40% precision@5
       on long-horizon fact retrieval.
-    - OpenClaw: has basic memory module but no multi-tier architecture.
+    - Framework B: has basic memory module but no multi-tier architecture.
       Estimated ~55% precision@5.
     - FERAL: 4-tier (working/episodic/semantic/execution) with hybrid FTS+vector
       search, temporal decay, and knowledge graph. Designed for high recall.
@@ -254,8 +254,8 @@ def get_memory_comparison() -> dict:
     return {
         "openhands_p5": 40.0,
         "openhands_r10": 50.0,
-        "openclaw_p5": 55.0,
-        "openclaw_r10": 62.0,
+        "framework_b_p5": 55.0,
+        "framework_b_r10": 62.0,
     }
 
 
@@ -291,7 +291,7 @@ async def run_feral_voice_latency(client: httpx.AsyncClient, quick: bool = False
         metric="Voice Response Latency (p50)",
         feral=round(avg_ms, 0),
         openhands=comp["openhands"],
-        openclaw=comp["openclaw"],
+        framework_b=comp["framework_b"],
         unit="ms",
         category="voice",
         notes="Lower is better",
@@ -303,11 +303,11 @@ def get_voice_latency_comparison() -> dict:
     Comparison context:
     - OpenHands: text-only agent, no native voice pipeline. Estimated 3000ms+
       for text round-trip (API call + LLM inference + response parsing).
-    - OpenClaw: no documented voice support. Estimated 4000ms+ (text fallback).
+    - Framework B: no documented voice support. Estimated 4000ms+ (text fallback).
     - FERAL: direct OpenAI Realtime API / Gemini Live bridge with audio relay,
       typical first-token ~320ms, full response ~800ms.
     """
-    return {"openhands": 3200.0, "openclaw": 4500.0}
+    return {"openhands": 3200.0, "framework_b": 4500.0}
 
 
 # ===================================================================
@@ -354,10 +354,10 @@ async def run_feral_mesh_throughput(client: httpx.AsyncClient, quick: bool = Fal
         metric="Mesh Throughput",
         feral=round(msgs_per_sec, 1),
         openhands=comp["openhands"],
-        openclaw=comp["openclaw"],
+        framework_b=comp["framework_b"],
         unit="msg/s",
         category="mesh",
-        notes="Higher is better. OpenHands/OpenClaw have no hardware mesh.",
+        notes="Higher is better. OpenHands/Framework B have no hardware mesh.",
     )
 
 
@@ -368,19 +368,19 @@ def _simulated_mesh_result() -> BenchmarkResult:
         metric="Mesh Throughput",
         feral=850.0,
         openhands=comp["openhands"],
-        openclaw=comp["openclaw"],
+        framework_b=comp["framework_b"],
         unit="msg/s",
         category="mesh",
-        notes="Simulated (no devices connected). OpenHands/OpenClaw have no hardware mesh.",
+        notes="Simulated (no devices connected). OpenHands/Framework B have no hardware mesh.",
     )
 
 
 def get_mesh_comparison() -> dict:
     """
-    OpenHands and OpenClaw are pure software agents — no hardware mesh.
+    OpenHands and Framework B are pure software agents — no hardware mesh.
     Returning 0 to indicate the feature does not exist.
     """
-    return {"openhands": 0.0, "openclaw": 0.0}
+    return {"openhands": 0.0, "framework_b": 0.0}
 
 
 # ===================================================================
@@ -412,7 +412,7 @@ async def run_feral_install_time(client: httpx.AsyncClient, quick: bool = False)
         metric="Time to First Response",
         feral=round(elapsed_s, 1),
         openhands=comp["openhands"],
-        openclaw=comp["openclaw"],
+        framework_b=comp["framework_b"],
         unit="s",
         category="install",
         notes="Lower is better. Measures warm start (brain already running).",
@@ -425,7 +425,7 @@ def _estimated_install_result() -> BenchmarkResult:
         metric="Time to First Response (estimated)",
         feral=12.0,
         openhands=comp["openhands"],
-        openclaw=comp["openclaw"],
+        framework_b=comp["framework_b"],
         unit="s",
         category="install",
         notes="Estimated cold-start: pip install + brain boot + first response.",
@@ -437,10 +437,10 @@ def get_install_time_comparison() -> dict:
     Comparison context:
     - OpenHands: Docker-based, requires pulling image (~2-5 min first time),
       then container boot. Subsequent starts ~30s.
-    - OpenClaw: pip install + config, ~45s to first response.
+    - Framework B: pip install + config, ~45s to first response.
     - FERAL: single `pip install feral-ai && feral start`, ~12s cold.
     """
-    return {"openhands": 35.0, "openclaw": 45.0}
+    return {"openhands": 35.0, "framework_b": 45.0}
 
 
 # ===================================================================
@@ -449,12 +449,12 @@ def get_install_time_comparison() -> dict:
 
 def generate_markdown_table(results: list[BenchmarkResult]) -> str:
     lines = [
-        "| Metric | FERAL | OpenHands | OpenClaw | Unit | Notes |",
+        "| Metric | FERAL | OpenHands | Framework B | Unit | Notes |",
         "|--------|--------|-----------|----------|------|-------|",
     ]
     for r in results:
         lines.append(
-            f"| {r.metric} | **{r.feral}** | {r.openhands} | {r.openclaw} | {r.unit} | {r.notes} |"
+            f"| {r.metric} | **{r.feral}** | {r.openhands} | {r.framework_b} | {r.unit} | {r.notes} |"
         )
     return "\n".join(lines)
 
@@ -465,7 +465,7 @@ def generate_ascii_chart(results: list[BenchmarkResult]) -> str:
     lines = ["\n  BENCHMARK RESULTS — ASCII BAR CHART", "  " + "=" * 56]
 
     for r in results:
-        max_val = max(r.feral, r.openhands, r.openclaw, 0.001)
+        max_val = max(r.feral, r.openhands, r.framework_b, 0.001)
 
         higher_better = r.unit in ("%", "msg/s")
         label_suffix = " (higher=better)" if higher_better else " (lower=better)"
@@ -473,7 +473,7 @@ def generate_ascii_chart(results: list[BenchmarkResult]) -> str:
         lines.append(f"\n  {r.metric} [{r.unit}]{label_suffix}")
         lines.append("  " + "-" * 56)
 
-        for name, val in [("FERAL   ", r.feral), ("OpenHands", r.openhands), ("OpenClaw ", r.openclaw)]:
+        for name, val in [("FERAL   ", r.feral), ("OpenHands", r.openhands), ("Framework B ", r.framework_b)]:
             bar_len = int((val / max_val) * BAR_WIDTH) if max_val > 0 else 0
             bar = "█" * bar_len
             lines.append(f"  {name} │{bar} {val}")
@@ -515,7 +515,7 @@ def generate_report(results: list[BenchmarkResult], run_ts: float) -> str:
 | System | Source |
 |--------|--------|
 | OpenHands | [GitHub](https://github.com/All-Hands-AI/OpenHands), SWE-bench leaderboard, docs |
-| OpenClaw | [GitHub](https://github.com/openclaw), project documentation |
+| Framework B | [GitHub](https://github.com/framework_b), project documentation |
 | FERAL | Live benchmark against local brain instance |
 """
 
@@ -534,7 +534,7 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
     )
 
     print("\n" + "=" * 60)
-    print("  FERAL vs OpenHands vs OpenClaw — Benchmark Suite")
+    print("  FERAL vs OpenHands vs Framework B — Benchmark Suite")
     print("  Mode:", "QUICK" if quick else "FULL")
     print("=" * 60)
 
@@ -553,7 +553,7 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
             r = await run_feral_task_completion(client, quick)
         else:
             comp = get_task_completion_comparison()
-            r = BenchmarkResult("Task Completion Rate", 78.0, comp["openhands"], comp["openclaw"], "%", "task_completion",
+            r = BenchmarkResult("Task Completion Rate", 78.0, comp["openhands"], comp["framework_b"], "%", "task_completion",
                                 "Estimated (brain offline)")
         suite.results.append(r)
 
@@ -564,9 +564,9 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
         else:
             comp = get_memory_comparison()
             mem_results = [
-                BenchmarkResult("Memory Precision@5", 88.0, comp["openhands_p5"], comp["openclaw_p5"], "%", "memory",
+                BenchmarkResult("Memory Precision@5", 88.0, comp["openhands_p5"], comp["framework_b_p5"], "%", "memory",
                                 "Estimated (brain offline)"),
-                BenchmarkResult("Memory Recall@10", 94.0, comp["openhands_r10"], comp["openclaw_r10"], "%", "memory",
+                BenchmarkResult("Memory Recall@10", 94.0, comp["openhands_r10"], comp["framework_b_r10"], "%", "memory",
                                 "Estimated (brain offline)"),
             ]
         suite.results.extend(mem_results)
@@ -577,7 +577,7 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
             r = await run_feral_voice_latency(client, quick)
         else:
             comp = get_voice_latency_comparison()
-            r = BenchmarkResult("Voice Response Latency (p50)", 820.0, comp["openhands"], comp["openclaw"], "ms", "voice",
+            r = BenchmarkResult("Voice Response Latency (p50)", 820.0, comp["openhands"], comp["framework_b"], "ms", "voice",
                                 "Estimated (brain offline). Lower is better.")
         suite.results.append(r)
 
@@ -622,7 +622,7 @@ async def run_all(quick: bool = False, output: Optional[str] = None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="FERAL vs OpenHands vs OpenClaw benchmark suite",
+        description="FERAL vs OpenHands vs Framework B benchmark suite",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

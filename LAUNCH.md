@@ -147,7 +147,7 @@ Or see the demos:
 
 GitHub: https://github.com/FERAL-AI/FERAL-AI
 
-We're not competing with OpenHands or OpenClaw — those are great terminal task runners. FERAL is an ambient personal AI that spans your entire device ecosystem.
+We're not a terminal task runner. FERAL is an ambient personal AI that spans your entire device ecosystem — phone, laptop, wristband, glasses, home hub — with one memory and one voice.
 
 Happy to answer questions about the architecture, the hardware mesh protocol, or why we think personal AI should never leave your devices.
 ```

@@ -2,7 +2,7 @@
 FERAL Execution Approval System
 Requires explicit user approval before running dangerous tools.
 
-Pattern: OpenClaw-style exec approvals store (see exec-approvals.ts).
+Pattern: per-command exec approvals store with TTL.
 """
 
 from __future__ import annotations

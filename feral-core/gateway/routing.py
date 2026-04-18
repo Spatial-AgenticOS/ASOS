@@ -2,7 +2,7 @@
 FERAL Gateway Routing — Resolve Incoming Messages to Agent Sessions
 ====================================================================
 Maps (channel, sender, session, group) tuples to the correct agent
-and session key.  Inspired by OpenClaw's resolve-route pattern.
+and session key.  Generic resolve-route pattern used by any multi-channel agent.
 
 Default mode: single-agent — every message routes to the main
 orchestrator.  Multi-agent mode assigns per-channel or per-sender

@@ -4,8 +4,7 @@ FERAL Hardware Use Protocol (HUP)
 Like "computer use" made screens controllable by AI agents,
 HUP makes ANY hardware controllable through a universal abstraction.
 
-OpenClaw has browser use (Playwright/CDP).
-NemoClaw has sandboxed computer use.
+Other agent frameworks offer browser-use or sandboxed computer-use.
 FERAL has EVERYTHING use.
 
 Every device — glasses, robot arm, drone, 3D printer, CNC, HVAC,

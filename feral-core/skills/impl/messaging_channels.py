@@ -2,7 +2,7 @@
 Unified messaging channels skill.
 
 Routes the LLM's `messaging_channels__send` tool call through the live
-ChannelManager on BrainState. Follows the OpenClaw `message` tool pattern:
+ChannelManager on BrainState. Follows the unified message-tool pattern:
 one tool, dynamic routing, never say "I can't" when a channel exists.
 
 The channel instances (TelegramChannel, SlackChannel, DiscordChannel,

@@ -1,8 +1,8 @@
 # FERAL Extension Boundary Rules
 
 > Codifies the contract between **feral-core** (the kernel) and **skill
-> extensions** (plugins).  Inspired by OpenClaw's AGENTS.md discipline — every
-> contributor and CI check should enforce these invariants.
+> extensions** (plugins). Every contributor and CI check must enforce these
+> invariants — the kernel stays extension-agnostic by construction.
 
 ---
 

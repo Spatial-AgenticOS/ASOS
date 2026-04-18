@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2026.4.11-06b6d4?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/version-2026.4.12-06b6d4?style=flat-square" alt="Version" />
   <a href="https://github.com/FERAL-AI/FERAL-AI/stargazers"><img src="https://img.shields.io/github/stars/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Stars" /></a>
   <a href="https://github.com/FERAL-AI/FERAL-AI/commits/main"><img src="https://img.shields.io/github/last-commit/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Last Commit" /></a>
   <img src="https://img.shields.io/badge/license-Apache%202.0-06b6d4?style=flat-square" alt="License" />
@@ -209,33 +209,31 @@ Docker-first sandboxed execution: --network=none, --memory=512m, --cpus=1, --rea
 Every claim below links to the file that implements it, so you can read the
 code instead of our marketing copy.
 
-| Dimension | Big AI (OpenAI, Apple, Google) | OpenClaw | **FERAL — shipped file paths** |
+| Dimension | Big AI (OpenAI, Apple, Google) | Other agent frameworks | **FERAL — shipped file paths** |
 |---|---|---|---|
-| Dynamic skill creation at runtime | No | No | **[`feral-core/agents/tool_genesis.py`](feral-core/agents/tool_genesis.py) drafts + sandboxes + promotes new tools; wired into [`agents/orchestrator.py::_on_capability_gap`](feral-core/agents/orchestrator.py); [`feral-core/skills/impl/workspace_scripts.py`](feral-core/skills/impl/workspace_scripts.py) is the never-say-no fallback.** |
-| Community marketplace (software + hardware) | No | No | **[`feral-registry/`](feral-registry/) — FastAPI service with Ed25519-signed bundles, GitHub OAuth, `POST /items` publish and `feral install` round-trip. Hardware side: [`feral-nodes/HUP_SPEC.md`](feral-nodes/HUP_SPEC.md) defines the node wire protocol; daemons listed in the registry under `type=node`.** |
+| Dynamic skill creation at runtime | No | Rare | **[`feral-core/agents/tool_genesis.py`](feral-core/agents/tool_genesis.py) drafts + sandboxes + promotes new tools; wired into [`agents/orchestrator.py::_on_capability_gap`](feral-core/agents/orchestrator.py); [`feral-core/skills/impl/workspace_scripts.py`](feral-core/skills/impl/workspace_scripts.py) is the never-say-no fallback.** |
+| Community marketplace (software + hardware) | No | Plugin lists, code-only | **[`feral-registry/`](feral-registry/) — FastAPI service with Ed25519-signed bundles, GitHub OAuth, `POST /items` publish and `feral install` round-trip. 8 categories: skills, daemons, MCP servers, channels, providers, memory backends, workflow packs, agent personas. Hardware side: [`feral-nodes/HUP_SPEC.md`](feral-nodes/HUP_SPEC.md) defines the node wire protocol.** |
 | Never-stall retry mechanics | No | No | **[`feral-core/agents/refusal_handler.py`](feral-core/agents/refusal_handler.py) handles reasoning-only, empty-response, and ack-execution patterns; retry hooks live in [`feral-core/agents/orchestrator.py`](feral-core/agents/orchestrator.py) and inject prompt additions without mutating persisted history.** |
 | Self-introspection | No | No | **[`feral-core/skills/impl/self_introspection.py`](feral-core/skills/impl/self_introspection.py) exposes the live tool catalog at tool-call time; [`feral-core/agents/self_model.py`](feral-core/agents/self_model.py) builds the unified chat+voice `Runtime:` line and prose `## Tooling` section inserted into every system prompt.** |
 | Autonomy tiers (strict / hybrid / loose) | No | No | **Behavior per tier documented in [`docs/AGENT_CAPABILITIES.md`](docs/AGENT_CAPABILITIES.md); enforced in [`feral-core/agents/orchestrator.py`](feral-core/agents/orchestrator.py) and gated by [`feral-core/security/`](feral-core/security/) (approval manager + safety classifier).** |
-| Local-first / privacy | Cloud roundtrip | Local-first for CLI | **Config + vault on disk only: [`feral-core/config/loader.py`](feral-core/config/loader.py), [`feral-core/config/runtime.py`](feral-core/config/runtime.py), [`feral-core/security/vault.py`](feral-core/security/vault.py). No telemetry by default; default bind is `127.0.0.1`.** |
+| Local-first / privacy | Cloud roundtrip | Mostly local | **Config + vault on disk only: [`feral-core/config/loader.py`](feral-core/config/loader.py), [`feral-core/config/runtime.py`](feral-core/config/runtime.py), [`feral-core/security/vault.py`](feral-core/security/vault.py). No telemetry by default; default bind is `127.0.0.1`.** |
 | Hardware-aware perception | No | Generic nodes | **[`feral-core/perception/fusion.py`](feral-core/perception/fusion.py) merges somatic, screen, audio, and location streams into a single `PerceptionFrame`; BLE wristband adapter at [`feral-core/hardware/adapters/wristband.py`](feral-core/hardware/adapters/wristband.py) feeds biometrics straight in.** |
 | Messaging channels | API-only | `message` tool | **Unified `messaging_channels` skill with `@username`→chat_id resolve, live status in UI, and never-refuse execution bias (see [`feral-core/channels/`](feral-core/channels/) + [`feral-core/skills/impl/messaging_channels.py`](feral-core/skills/impl/messaging_channels.py)).** |
 | Memory | Forgets between sessions | Plugin-based | **4-tier + knowledge graph + CRDT P2P sync under [`feral-core/memory/`](feral-core/memory/).** |
 | Voice | 2s latency, cloud-only | Extension-based | **Sub-200ms, wake word, 3 providers in [`feral-core/voice/`](feral-core/voice/) (OpenAI Realtime, Gemini Live, local Whisper+Piper).** |
 | GenUI | No | Canvas / A2UI | **Full SDUI generation engine ([`feral-core/genui/`](feral-core/genui/)) that renders on iOS, Android and web.** |
 | Glass-brain visualization | No | No | **Live WebGL visualization of active sessions, skills, memory writes — client in [`feral-client/`](feral-client/), brain events in [`feral-core/observability/`](feral-core/observability/).** |
-| Setup | Each app separately | `claude init` | **One `feral start` → wizard in [`feral-core/cli/setup_wizard.py`](feral-core/cli/setup_wizard.py) provisions LLM, channels, voice, memory, mDNS, apps — streams a live boot report.** |
-| Open source | Weights only | Yes | **Yes — brain, client, mobile, SDK, desktop, nodes (everything under [`ASOS/`](./)).** |
+| Setup | Each app separately | CLI init | **One `feral start` → wizard in [`feral-core/cli/setup_wizard.py`](feral-core/cli/setup_wizard.py) provisions LLM, channels, voice, memory, mDNS, apps — streams a live boot report.** |
+| Open source | Weights only | Varies | **Yes — brain, client, mobile, SDK, desktop, nodes (everything under [`ASOS/`](./)).** |
 
-**What FERAL copied from OpenClaw (and improved):**
-- OpenClaw's unified `message` tool and "never refuse, call the tool" system-prompt pattern → FERAL's `messaging_channels__send` with planning-only retry, live channel roster in the prompt, and post-send confirmation suppression so the agent doesn't narrate twice.
-- OpenClaw's `@username` → chat_id auto-resolution → FERAL's `resolve_username` with per-channel caching, implemented for Telegram and extensible to Slack/Discord.
-
-**What FERAL adds that OpenClaw doesn't:**
+**What makes FERAL different:**
 - A ring of physical perception (wristband biometrics, glasses, phone GPS/camera/mic) feeding a single `PerceptionFrame`.
 - 4-tier memory with P2P sync across your own devices (no central server).
 - A Glass Brain — a live 3D visualization of active sessions, skills firing, and memory writes.
 - Multi-modal voice providers with sub-200ms wake-word path.
 - A generative UI engine (SDUI) the agent can emit to any client.
+- Dynamic skill creation: when no existing skill fits, FERAL drafts a sandboxed script, tests it, and promotes it to a persistent skill in the same turn.
+- A signed community marketplace — [registry.feral.sh](https://registry.feral.sh) — hosting skills, hardware daemons, MCP servers, channel plugins, LLM providers, memory backends, workflow packs, and agent personas.
 
 ---
 

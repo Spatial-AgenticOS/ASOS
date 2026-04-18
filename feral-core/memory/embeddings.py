@@ -3,7 +3,7 @@ FERAL Embedding Engine
 ========================
 Provides vector embeddings for semantic memory search.
 
-Vector Index Strategy (matches OpenClaw's approach):
+Vector Index Strategy:
   1. Try sqlite-vec extension → vec0 virtual table with vec_distance_cosine
   2. Fall back to numpy brute-force scan (degraded, still works)
 

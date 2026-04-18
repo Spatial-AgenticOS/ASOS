@@ -2,7 +2,7 @@
 FERAL Dangerous Tool Registry
 Centralized policy for which tools are restricted on which surfaces.
 
-Pattern: OpenClaw-style central deny lists per execution surface (see dangerous-tools.ts).
+Pattern: central deny lists per execution surface.
 
 Usage
 -----

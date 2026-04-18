@@ -6,8 +6,7 @@ This makes FERAL an MCP server. That means:
 - Cursor can read your glasses' heart rate
 - Any MCP client gets access to FERAL's hardware capabilities
 
-OpenClaw uses MCP as a client (consuming external tools).
-NemoClaw doesn't have MCP.
+FERAL speaks MCP both ways: it can host MCP servers and consume remote ones.
 FERAL IS an MCP server — any AI can use your hardware.
 
 This is the bridge between the AI agent world and the physical world.

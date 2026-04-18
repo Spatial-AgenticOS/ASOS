@@ -105,7 +105,15 @@ async def test_telegram_poll_loop_one_update_then_stops():
     ch_box: list[TelegramChannel | None] = [None]
     poll_n = [0]
 
-    async def get_side_effect(*args, **kwargs):
+    async def get_side_effect(url, *args, **kwargs):
+        # start() calls /getMe first; route it through a generic 200/ok
+        # response so the poll loop actually starts.
+        if "getMe" in url:
+            resp = MagicMock(status_code=200)
+            resp.json = lambda: {"ok": True, "result": {"username": "feral_test_bot"}}
+            return resp
+        # Subsequent calls are /getUpdates — feed the single update, then
+        # flip _running=False to exit the loop cleanly on the next poll.
         poll_n[0] += 1
         if poll_n[0] == 1:
             return MagicMock(json=lambda: {"result": [update]})
@@ -121,7 +129,11 @@ async def test_telegram_poll_loop_one_update_then_stops():
         ch_box[0] = ch
         ch.set_handler(handler)
         await ch.start()
-        await asyncio.sleep(0.08)
+        # Give the poll loop time to fire at least once on slow CI runners.
+        for _ in range(20):
+            if handler.call_count:
+                break
+            await asyncio.sleep(0.05)
         await ch.stop()
 
     handler.assert_called()

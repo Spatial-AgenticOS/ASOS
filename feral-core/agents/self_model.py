@@ -3,7 +3,7 @@ Unified self-model shared by the chat identity loader and the voice identity
 workspace. Centralizes:
 
 - Live runtime line (version, host, os, model, channels, devices, autonomy,
-  capabilities) — what OpenClaw calls its "environment preamble".
+  capabilities) — the environment preamble every turn gets.
 - Prose `## Tooling` catalog — enumerates every registered skill and endpoint
   so the LLM can see both the full catalog AND which skills are active for
   this turn. Removes the "I don't have a skill for that" failure mode.
@@ -122,7 +122,7 @@ def build_runtime_line(frame=None) -> str:
     """One-line environment summary appended near the bottom of the system prompt.
 
     Example:
-        Runtime: agent=feral version=2026.4.11 host=mbp os=Darwin model=openai/gpt-4o channels=telegram(@feral_bot) devices=wristband autonomy=hybrid capabilities=voice,vision,somatic,mdns,sdui,tool_genesis,mitosis
+        Runtime: agent=feral version=2026.4.12 host=mbp os=Darwin model=openai/gpt-4o channels=telegram(@feral_bot) devices=wristband autonomy=hybrid capabilities=voice,vision,somatic,mdns,sdui,tool_genesis,mitosis
     """
     version = _feral_version()
     host = socket.gethostname() or "localhost"
@@ -171,7 +171,7 @@ def build_tooling_catalog(
     full: Iterable,
     max_full: int = 80,
 ) -> str:
-    """Build the OpenClaw-style prose `## Tooling` block.
+    """Build the prose `## Tooling` block.
 
     The section has two sub-lists:
 

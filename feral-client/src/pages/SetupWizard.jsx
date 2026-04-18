@@ -191,7 +191,7 @@ export default function SetupWizard({ onComplete }) {
             );
           })}
         </div>
-        <div className="mt-auto pt-8 text-xs opacity-30">FERAL v2026.4.11</div>
+        <div className="mt-auto pt-8 text-xs opacity-30">FERAL v2026.4.12</div>
       </div>
 
       {/* Right Panel */}
@@ -212,7 +212,7 @@ export default function SetupWizard({ onComplete }) {
                 <h1 className="text-3xl font-bold">Welcome to FERAL</h1>
                 <p className="text-lg font-medium text-feral-accent">The Open AI Operating System</p>
                 <p className="text-feral-text-secondary text-sm leading-relaxed max-w-md mx-auto">
-                  FERAL is not just another computer-use agent. Unlike tools like OpenClaw that only control your screen,
+                  FERAL is not just another computer-use agent. Unlike tools that only control your screen,
                   FERAL is a full platform that learns, controls hardware, generates dynamic UI, and keeps your data private.
                 </p>
                 <div className="grid grid-cols-2 gap-3 pt-2 text-sm">

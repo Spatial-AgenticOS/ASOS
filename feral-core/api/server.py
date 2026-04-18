@@ -637,7 +637,7 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
 
 
 # ─────────────────────────────────────────────
-# Daemon WebSocket (for OpenClaw-style nodes)
+# Daemon WebSocket (HUP nodes)
 # ─────────────────────────────────────────────
 
 NODE_API_KEY = os.environ.get("NODE_API_KEY", "")

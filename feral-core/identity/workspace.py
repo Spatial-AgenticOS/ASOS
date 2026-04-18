@@ -1,7 +1,7 @@
 """
 FERAL Agent Identity — Self-Evolving Workspace Files
 =======================================================
-Workspace files pattern (learned from OpenClaw):
+Workspace files pattern — editable identity + soul files:
   ~/.feral/IDENTITY.yaml  — structured identity config
   ~/.feral/SOUL.md        — personality, free-form, agent-modifiable
   ~/.feral/MEMORY.md      — curated long-term memory, agent-modifiable

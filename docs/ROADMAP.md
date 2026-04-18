@@ -86,8 +86,8 @@
   - Declarative config, systemd hardening, immutable builds
   - Device provisioning via SD card images
 
-- **OpenClaw operational patterns** — ref `feral-core/skills/EXTENSION_RULES.md`
-  - Continued adoption of plugin boundary discipline
+- **Plugin-boundary discipline** — ref `feral-core/skills/EXTENSION_RULES.md`
+  - Kernel stays extension-agnostic
   - Gateway routing abstraction
   - Supervisor-aware restart
 

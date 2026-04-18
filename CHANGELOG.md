@@ -1,8 +1,32 @@
 # Changelog
 
-<!-- feral-version: 2026.4.11 -->
+<!-- feral-version: 2026.4.12 -->
 
 All notable changes to FERAL are documented here.
+
+## [2026.4.12] - 2026-04-09
+
+### Changed
+- **Brand-leak sweep**: removed every `OpenClaw` reference from shipped
+  product surfaces. Agent comments, system-prompt builders, skill
+  manifests, CLI wizard copy, setup-wizard React page, README
+  comparison table, Mintlify FAQ, ROADMAP, LAUNCH.md, and the
+  demo/seed memory all rewritten to describe concepts
+  (never-stall, workspace-scoped exec, domain-limb specialists, etc.)
+  instead of referencing a competitor. Internal strategy docs
+  (`HANDOFF.md`, which is gitignored) are untouched.
+- `feral-client` webui assets rebuilt so the PyPI wheel no longer ships
+  the word anywhere.
+
+### Fixed
+- `[llm]` extra no longer pulls `pyautogui` or `playwright`. Those stay
+  opt-in via `[desktop]` and `[browser]` respectively. Unblocks Alpine
+  builds — the HA Add-on image now installs cleanly because it only
+  asks for `feral-ai[llm]==${FERAL_VERSION}`.
+- `tests/test_channels_deep.py::test_telegram_poll_loop_one_update_then_stops`:
+  distinguishes the `/getMe` call from subsequent `/getUpdates` calls,
+  giving the poll loop a chance to actually call the handler on slow CI
+  runners (was flaky on macos-latest 3.11).
 
 ## [2026.4.11] - 2026-04-09
 
@@ -86,7 +110,7 @@ All notable changes to FERAL are documented here.
 - Hardware daemon cookiecutter template for third-party device builders
   (`feral-nodes/templates/hardware-daemon/`).
 
-### Pillar 5 — OpenClaw-parity retry mechanics
+### Pillar 5 — Never-stall retry mechanics
 - Reasoning-only, empty-response, and ack-execution fast-path retries — the
   brain no longer stalls on "I'll do that now" responses with zero tool calls
   (`feral-core/agents/refusal_handler.py`, retry hooks in

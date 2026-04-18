@@ -9,7 +9,7 @@
         "logo_url": "",
         "icon_set": "sf_symbols"
     },
-    "description": "FERAL's never-say-no escape hatch. Writes ad-hoc Python/Node/bash scripts to the user's ~/.feral/workspace/scripts/ folder, executes them in the Docker sandbox (or host with explicit consent), and keeps a reusable catalog. Use this whenever no existing skill fits the user's request — you can still deliver the result by generating a tiny script on the fly. The OpenClaw `exec` equivalent, but with persistence + reuse.",
+    "description": "FERAL's never-say-no escape hatch. Writes ad-hoc Python/Node/bash scripts to the user's ~/.feral/workspace/scripts/ folder, executes them in the Docker sandbox (or host with explicit consent), and keeps a reusable catalog. Use this whenever no existing skill fits the user's request — you can still deliver the result by generating a tiny script on the fly. A persistent workspace-scoped exec with reuse.",
     "trigger_phrases": [
         "write a script",
         "quick script",

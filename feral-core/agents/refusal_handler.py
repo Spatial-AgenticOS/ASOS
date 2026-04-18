@@ -37,7 +37,7 @@ class RefusalHandler:
         "can't do that",
         "can't create",
         "cannot create",
-        # Broader paraphrases that OpenClaw-class agents never emit
+        # Broader paraphrases that Production agents never emit
         "not supported",
         "no access to",
         "unable to",
@@ -51,7 +51,7 @@ class RefusalHandler:
         "i'm not able",
     )
 
-    # OpenClaw-parity retry instruction strings. These are NOT appended to
+    # Never-stall retry instruction strings. These are NOT appended to
     # history as new user messages — they are injected directly into the next
     # model prompt (prompt-addition style, see Orchestrator._retry_steer).
     REASONING_ONLY_RETRY_INSTRUCTION = (
@@ -150,7 +150,7 @@ class RefusalHandler:
         return any(token in lowered for token in self.MESSAGING_INTENT_WORDS)
 
     # ─────────────────────────────────────────────────────────
-    # OpenClaw-parity: reasoning-only / empty-response / ack detection
+    # Never-stall: reasoning-only / empty-response / ack detection
     # ─────────────────────────────────────────────────────────
 
     @staticmethod
@@ -239,7 +239,7 @@ class RefusalHandler:
             return ""
 
     def planning_only_retry_instruction(self, user_text: str) -> str:
-        """OpenClaw-style act-now retry: specific, tool-pointing, one-chance."""
+        """Act-now retry: specific, tool-pointing, one-chance."""
         if self.is_messaging_intent(user_text):
             channels = self._live_channel_list() or "the configured channel"
             return (

@@ -275,7 +275,7 @@ class Orchestrator:
         """Autonomy-tiered handling when no existing tool fits the user's intent.
 
         - strict   → write a throwaway script via ``workspace_scripts__run`` and
-          return stdout. Mirrors OpenClaw's ``exec`` escape hatch.
+          return stdout. Our workspace-scoped exec escape hatch.
         - hybrid   → ask Tool Genesis to draft a proposal, surface it in Settings
           → Proposed Skills. Reply to the user that a draft is pending approval.
         - loose    → draft + auto-promote silently. Next turn the new skill is
@@ -514,8 +514,7 @@ class Orchestrator:
         relevant_skills = self._ensure_core_skills(relevant_skills)
 
         # Agent Mitosis routing — if a specialist claims this domain, swap in
-        # its prompt + narrow tool permissions for this turn (OpenClaw's
-        # ``allowAgents`` equivalent).
+        # its prompt + narrow tool permissions for this turn.
         specialist = None
         try:
             if self._mitosis_engine and hasattr(self._mitosis_engine, "route_to_specialist"):
@@ -556,7 +555,7 @@ class Orchestrator:
         reasoning_retry_count = 0
         empty_retry_used = False
         pending_retry_addition: Optional[str] = None
-        # OpenClaw-parity: if the user turn is a short ack, inject the fast-path
+        # Never-stall: if the user turn is a short ack, inject the fast-path
         # instruction into the very first call (before the model replies).
         if self.refusal_handler.is_ack_execution(text):
             pending_retry_addition = self.refusal_handler.ACK_EXECUTION_FAST_PATH_INSTRUCTION
@@ -579,7 +578,7 @@ class Orchestrator:
                 response = await self.llm.chat_with_failover(messages=messages, tools=tools if tools else None)
                 text_content, tool_calls = self.llm.extract_response(response)
 
-                # OpenClaw-parity: empty response — no text, no tool calls.
+                # Never-stall: empty response — no text, no tool calls.
                 if not text_content and not tool_calls and not empty_retry_used:
                     empty_retry_used = True
                     logger.warning("[%s] Empty response; prompt-addition retry", session_id[:8])
@@ -834,7 +833,7 @@ class Orchestrator:
                 if isinstance(tc, dict) and tc.get("name")
             ]
 
-            # OpenClaw-parity: empty response — no visible text, no tool calls.
+            # Never-stall: empty response — no visible text, no tool calls.
             if not accumulated_text and not normalized_tool_calls and not empty_retry_used:
                 empty_retry_used = True
                 logger.warning("[%s] Streaming empty response; prompt-addition retry", session_id[:8])

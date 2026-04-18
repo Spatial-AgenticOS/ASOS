@@ -190,9 +190,8 @@ class AgentMitosisEngine:
         """Classify the query and return the matching specialist (or None).
 
         Used by the orchestrator at the top of ``handle_command`` to swap in a
-        specialist's system prompt + narrow tool set for this turn. Mirrors
-        OpenClaw's ``sessions_spawn`` + ``allowAgents`` pattern: instead of
-        always running the generalist, we pick the domain-limb that has
+        specialist's system prompt + narrow tool set for this turn.
+        Instead of always running the generalist, we pick the domain-limb that has
         better context for this kind of work.
         """
         agent_id = self.match_specialist(query)
