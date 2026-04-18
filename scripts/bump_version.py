@@ -154,9 +154,27 @@ VERSION_LOCATIONS: tuple[VersionLocation, ...] = (
     ),
     VersionLocation(
         path=".github/workflows/ha-addon.yml",
-        pattern=_p(rf"--build-arg FERAL_VERSION={VERSION_PATTERN}"),
-        replacement="--build-arg FERAL_VERSION={version}",
-        description="CI workflow FERAL_VERSION build-arg",
+        pattern=_p(rf'(?m)^\s*default:\s*"{VERSION_PATTERN}"'),
+        replacement='default: "{version}"',
+        description="HA Add-on workflow_dispatch feral_version input default",
+    ),
+    VersionLocation(
+        path=".github/workflows/ha-addon.yml",
+        pattern=_p(rf'(?m)^\s*FERAL_VERSION:\s*"{VERSION_PATTERN}"'),
+        replacement='FERAL_VERSION: "{version}"',
+        description="HA Add-on workflow env default feral-ai PyPI version",
+    ),
+    VersionLocation(
+        path="desktop/package.json",
+        pattern=_p(rf'(?m)^\s*"version":\s*"{VERSION_PATTERN}"'),
+        replacement='"version": "{version}"',
+        description="FERAL desktop npm package version",
+    ),
+    VersionLocation(
+        path="desktop/src-tauri/tauri.conf.json",
+        pattern=_p(rf'(?m)^\s*"version":\s*"{VERSION_PATTERN}"'),
+        replacement='"version": "{version}"',
+        description="FERAL desktop Tauri app version",
     ),
     VersionLocation(
         path="feral-nodes/android-app/build.gradle.kts",
