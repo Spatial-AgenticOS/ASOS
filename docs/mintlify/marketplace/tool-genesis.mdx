@@ -1,0 +1,85 @@
+---
+title: "Tool Genesis"
+description: "When FERAL doesn't have a tool for what you need, it builds one on the fly — in the same turn."
+---
+
+## The one-sentence pitch
+
+Every other agent hits a wall. FERAL drafts a script, sandboxes it, runs it,
+and — if you let it — promotes it to a permanent skill. In one turn.
+
+## What it actually does
+
+When a user asks FERAL to do something no existing skill covers, the orchestrator
+catches the capability gap and calls `_on_capability_gap()`. What happens next
+depends on your **autonomy tier**:
+
+| Tier | Behavior |
+|---|---|
+| `strict` | Write a throwaway Python/Bash/Node script via `workspace_scripts__run`, execute in Docker sandbox, return stdout. Nothing persists. |
+| `hybrid` | Draft a skill proposal (code + tests + manifest). Surface it in **Settings → Proposed Skills**. You approve or reject. |
+| `loose` | Draft, sandbox-verify, auto-promote to a permanent skill, and use it in the same turn. No approval needed. |
+
+## Worked example: CSV → JSON
+
+```
+You:    "Convert this CSV into JSON grouped by department."
+FERAL:  [no 'csv_to_json' skill exists → _on_capability_gap fires]
+         Drafts:   ~/.feral/workspace/scripts/csv_to_json_0a7f.py
+         Tests:    reads a sample, validates shape, no imports from your FS
+         Promotes: writes feral-core/skills/generated/csv_to_json/
+                   manifest.json + impl.py
+         Hot-reloads SkillRegistry, calls the new csv_to_json skill
+         Returns:  the JSON
+```
+
+Next time you ask anything about CSV grouping, the skill is already there.
+
+## How the draft is trusted
+
+Generated code passes through three gates before it's ever executed:
+
+1. **AST safety check** — no `os.system`, no arbitrary `exec`, no network to
+   unknown hosts. Implemented in [`feral-core/agents/tool_genesis.py`](https://github.com/FERAL-AI/FERAL-AI/blob/main/feral-core/agents/tool_genesis.py).
+2. **Docker sandbox** — scripts run in an isolated container with a
+   read-only snapshot of the workspace and no network unless the manifest
+   declares it.
+3. **User autonomy tier** — `strict` never promotes; `hybrid` requires an
+   explicit approval click; `loose` is for users who want maximum velocity.
+
+## Publishing a promoted skill back to the registry
+
+Once auto-promoted, a skill lives under `~/.feral/skills/generated/<id>/`.
+Publish it to [registry.feral.sh](https://registry.feral.sh) with one
+command so others can install it:
+
+```bash
+feral publish --skill ~/.feral/skills/generated/<id>/
+```
+
+That's the loop: idea → draft → verified → installed → shared.
+
+## File map
+
+| Concept | File |
+|---|---|
+| Gap detection + dispatch | `feral-core/agents/orchestrator.py::_on_capability_gap` |
+| Script drafting + AST gate | `feral-core/agents/tool_genesis.py` |
+| Workspace-scoped exec | `feral-core/skills/impl/workspace_scripts.py` |
+| Skill promotion + hot reload | `feral-core/skills/registry.py::reload_skill` |
+| Proposed Skills UI | `feral-client/src/pages/Settings.jsx` |
+
+## Why no other agent has this
+
+The closest thing other frameworks offer is "write a shell command and run it."
+That's a one-shot. FERAL's Tool Genesis is:
+
+- **Persistent** — the new skill lives across sessions.
+- **Typed** — it shows up in the LLM's tool catalog with a real schema the
+  model can call by name next turn.
+- **Publishable** — one command ships it to the public registry for
+  others to install.
+- **Tiered** — autonomy levels let you dial the risk/velocity tradeoff.
+
+It's the difference between an agent that runs code and an agent that
+**evolves** its own capability surface.

@@ -1,0 +1,145 @@
+---
+title: "HUP — Hardware Unification Protocol"
+description: "FERAL's public wire contract for hardware. If you can terminate TLS and speak JSON over WebSocket, you can build a FERAL-compatible device."
+---
+
+## What HUP is
+
+HUP is FERAL's equivalent — for heterogeneous hardware — of what the USB HID
+class spec was for input devices: a **stable, versioned, vendor-neutral
+protocol** that lets any vendor plug hardware into any FERAL brain
+without proprietary glue.
+
+**Current version:** `HUP v1.0.0` (stable, Apache-2.0 licensed)
+**Full normative spec:** [feral-nodes/HUP_SPEC.md](https://github.com/FERAL-AI/FERAL-AI/blob/main/feral-nodes/HUP_SPEC.md)
+
+## How a daemon connects
+
+```
+                  wss://brain.local:9090/v1/node
+                 ┌──────────────────────────────┐
+ Device          │                              │         FERAL Brain
+ Daemon ────────▶│     Persistent WebSocket     │────────▶ Hardware Mesh
+   (HUP)         │                              │            Registry
+                 └──────────────────────────────┘
+```
+
+1. Daemon opens a WebSocket to `wss://<brain>:<port>/v1/node`.
+2. Sends a `node_register` frame with its `node_id`, capabilities,
+   sensors, actuators, firmware version.
+3. Brain replies with `node_ack` — session token, expected heartbeat
+   interval, granted capabilities, denied capabilities.
+4. From that point the daemon can send `device_event` frames
+   (sensor readings, button presses, camera frames) and respond to
+   `hup_action_request` frames the Brain sends to trigger actuators
+   (buzz, LED, motor, etc.).
+
+## Message types (abbreviated)
+
+| Frame | Direction | Purpose |
+|---|---|---|
+| `node_register` | daemon → brain | First message: identity + capabilities. |
+| `node_ack` | brain → daemon | Acknowledges registration, grants capabilities. |
+| `node_heartbeat` | daemon → brain | Every 10s; carries battery, RSSI. |
+| `device_event` | daemon → brain | A sensor reading or observable event. |
+| `hup_action_request` | brain → daemon | Trigger an actuator. |
+| `hup_action_response` | daemon → brain | Result of an action. |
+| `node_bye` | either side | Graceful disconnect. |
+
+Every frame is a JSON object with a `type` key. Schemas are Pydantic (Python SDK)
+and Zod (TypeScript SDK) — both enforce the same contract.
+
+## Writing a daemon
+
+Two SDKs are published and maintained by FERAL:
+
+<CardGroup cols={2}>
+  <Card title="Python SDK" icon="python" href="https://github.com/FERAL-AI/FERAL-AI/tree/main/feral-nodes/python-node-sdk">
+    `pip install feral-node-sdk`. Async `FeralNode` class with auto-reconnect, mDNS discovery, and 6-digit pairing.
+  </Card>
+  <Card title="TypeScript SDK" icon="square-js" href="https://github.com/FERAL-AI/FERAL-AI/tree/main/feral-nodes/ts-node-sdk">
+    `npm install @feral-ai/node-sdk`. Same surface as the Python SDK for Node.js 20+.
+  </Card>
+</CardGroup>
+
+Minimal Python example:
+
+```python
+from feral_node_sdk import FeralNode, capability
+
+node = FeralNode(
+    node_id="my-wristband",
+    name="Acme Wristband",
+    firmware_version="1.2.3",
+    brain_url="wss://feral.local:9090/v1/node",
+    api_key="...",  # from `feral pair`
+    capabilities=[capability.HEART_RATE, capability.BUZZER, capability.BATTERY],
+)
+
+@node.on_action("buzz")
+async def buzz(params):
+    duration_ms = params.get("duration_ms", 200)
+    # ... call your real hardware here ...
+    return {"ok": True}
+
+async def loop():
+    async for reading in hr_sensor:
+        await node.emit_event("heart_rate", {"bpm": reading})
+
+node.run(loop())
+```
+
+## Cookiecutter template
+
+Ship a new daemon in under an hour:
+
+```bash
+pip install cookiecutter
+cookiecutter https://github.com/FERAL-AI/FERAL-AI.git \
+    --directory feral-nodes/templates/hardware-daemon
+```
+
+You get a runnable skeleton with `manifest.json`, mock hardware, two
+placeholder `@on_action` handlers, and one placeholder event stream.
+Replace the mocks with your real integration and `feral publish --daemon .`
+when ready.
+
+## Publishing to the registry
+
+Once your daemon is stable:
+
+```bash
+feral publish --daemon ./my-daemon/
+```
+
+The bundle lands in [registry.feral.sh](https://registry.feral.sh) under
+`kind=daemon`. Any FERAL user can install it with:
+
+```bash
+feral install <item_id>
+```
+
+## Pairing + security
+
+- First-time pairing uses a 6-digit code the daemon prints to its own log.
+  The user types that code into **Settings → Devices → Pair**. The Brain
+  returns an API key the daemon saves locally.
+- Steady-state: daemon sends `Authorization: Bearer <key>` in the WebSocket
+  upgrade.
+- Per-capability gating: the user approves each capability (camera, audio,
+  actuator) in Settings. The Brain only sends `hup_action_request` frames
+  for capabilities the user has granted.
+
+## Compliance
+
+- Licensed Apache-2.0 — any vendor may implement, fork, or extend.
+- No certification program — vendors self-declare conformance by passing
+  the schemas in `feral-node-sdk` / `@feral-ai/node-sdk`.
+- Bug reports + protocol additions go through
+  [github.com/FERAL-AI/FERAL-AI/issues](https://github.com/FERAL-AI/FERAL-AI/issues).
+
+## Full spec
+
+For the complete normative specification — all frame schemas, error
+codes, example wire traces, pairing flow details, and reserved fields —
+read the canonical document: [feral-nodes/HUP_SPEC.md](https://github.com/FERAL-AI/FERAL-AI/blob/main/feral-nodes/HUP_SPEC.md).

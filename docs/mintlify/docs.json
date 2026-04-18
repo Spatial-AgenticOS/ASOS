@@ -68,10 +68,18 @@
         ]
       },
       {
+        "group": "Marketplace",
+        "pages": [
+          "marketplace/overview",
+          "marketplace/tool-genesis"
+        ]
+      },
+      {
         "group": "Hardware",
         "pages": [
           "guides/hardware",
           "guides/devices",
+          "hardware/hup-spec",
           "hardware/wristband",
           "hardware/smart-home",
           "guides/smart-home",

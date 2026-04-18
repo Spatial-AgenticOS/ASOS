@@ -1,0 +1,89 @@
+---
+title: "Marketplace (registry.feral.sh)"
+description: "Install and publish skills, hardware daemons, MCP servers, channels, LLM providers, memory backends, workflow packs, and agent personas — all Ed25519-signed, GitHub-verified."
+---
+
+## What's in the marketplace
+
+[registry.feral.sh](https://registry.feral.sh) hosts **eight categories**
+of content that plug into any FERAL brain. Install any of them with
+`feral install <id>`.
+
+| Category | What it is | Install location |
+|---|---|---|
+| **Skill** | Python skill (manifest + impl.py) callable by the agent as a tool. | `~/.feral/skills/<id>/` |
+| **Daemon** | HUP-speaking hardware daemon (one per device class: wristband, glasses, thermostat, …). | `~/.feral/daemons/<id>/` |
+| **MCP server** | MCP spec (command + env). FERAL spawns + talks to it over stdio or SSE. | `~/.feral/mcp_servers.json` |
+| **Channel** | Messaging-channel plugin (WhatsApp, Signal, Matrix, custom Telegram/Discord bots). | `~/.feral/channels/<id>/` |
+| **Provider** | Alternative LLM provider (Groq, Bedrock, Ollama, Together, etc.). | `~/.feral/providers/<id>/` |
+| **Memory backend** | Replacement for the default numpy/sqlite-vec memory (Chroma, Qdrant, Honcho…). Exactly one active at a time. | `~/.feral/memory-backends/<id>/` |
+| **Workflow pack** | Named multi-step TaskFlow template (PR triage, standup composer, research assistant). | `~/.feral/workflows/<id>/` |
+| **Agent persona** | Specialist system prompt + narrow tool permission list the AgentMitosisEngine spawns on demand. | `~/.feral/agents/<id>/` |
+
+## Install flow
+
+```bash
+feral install <item_id>
+```
+
+Under the hood:
+
+1. `GET https://registry.feral.sh/api/v1/item/<id>` returns the manifest,
+   signed-tarball URL, SHA-256, Ed25519 signature, and the publisher's
+   public key.
+2. The client recomputes SHA-256 locally and verifies the detached
+   signature against the publisher's public key.
+3. On success, the tarball extracts to the right `~/.feral/<kind>/<id>/`
+   directory and pings the running Brain's hot-reload endpoint
+   (`/api/skills/reload`, `/api/channels/reload`, `/api/providers/reload`, …).
+4. The new capability is live before your next turn.
+
+## Publish flow
+
+```bash
+# First time only: register your publisher identity
+feral publisher login      # browser OAuth with GitHub
+feral publisher register   # uploads your Ed25519 public key
+
+# Every release
+feral publish --kind <kind> <path/to/your/bundle/>
+```
+
+Bundles are tarballs with a `manifest.json` at the root. The required
+fields for each kind are listed in
+[feral-registry/feral_registry/schemas.py](https://github.com/FERAL-AI/FERAL-AI/blob/main/feral-registry/feral_registry/schemas.py)
+— the registry rejects a publish that's missing required keys with a
+clear error.
+
+## Trust model
+
+- **Every bundle is Ed25519-signed** with the publisher's private key.
+  The signature is stored alongside the blob so clients can re-verify
+  on every install.
+- **Publishers verify with GitHub OAuth.** Your registry handle is your
+  GitHub login. Your public key is registered once and reused for all
+  future publishes.
+- **`verified` badge** is earned by being in the `FEATURED_PUBLISHERS`
+  allowlist maintained by the FERAL team. Everything else is community.
+- **`flag` endpoint** lets anyone report a malicious package. Flags
+  surface in moderation; repeat offenders lose publisher status.
+
+## Self-hosting the registry
+
+The whole service is open source at
+[feral-registry/](https://github.com/FERAL-AI/FERAL-AI/tree/main/feral-registry).
+To run your own:
+
+```bash
+cd feral-registry
+fly launch --no-deploy --copy-config --name my-feral-registry
+fly volumes create feral_registry_data --size 10
+fly secrets set \
+  JWT_SECRET="$(openssl rand -hex 32)" \
+  GITHUB_CLIENT_ID="..." \
+  GITHUB_CLIENT_SECRET="..." \
+  FEATURED_PUBLISHERS="my-org"
+fly deploy
+```
+
+Point your clients at it with `FERAL_REGISTRY_URL=https://my-registry.example.com`.
