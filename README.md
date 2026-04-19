@@ -229,9 +229,9 @@ you are picking one.
 | Voice | Extension-based, provider-specific | **Sub-200 ms, 3 providers with auto-failover: OpenAI Realtime, Gemini Live, local Whisper+Piper** ([`feral-core/voice/`](feral-core/voice/)) |
 | Generative UI | Canvas + A2UI | Full SDUI engine rendering on iOS+Android+Web from one server spec ([`feral-core/genui/`](feral-core/genui/)) |
 | Observability | Session logs | **Live Glass Brain WebGL view of active sessions, skills, memory writes** ([`feral-client/src/pages/GlassBrain.jsx`](feral-client/src/pages/GlassBrain.jsx) + [`feral-core/observability/`](feral-core/observability/)) |
-| Channels shipped today | 15+ channels across messaging, social, and telephony | 4 fully-wired (Telegram, Discord, Slack, WhatsApp) + Web + Push + 2 partial (iMessage, Signal). **We are actively expanding** — see gap list below ([`feral-core/channels/base.py`](feral-core/channels/base.py)) |
-| LLM providers | 30+ first-party plugins | 4 first-class (OpenAI, Anthropic, Gemini, Ollama) + Groq via voice router. **Gap we are closing** ([`feral-core/voice/realtime_proxy.py`](feral-core/voice/realtime_proxy.py)) |
-| Mobile apps | macOS + iOS + Android | iOS + Android + HA Add-on + Browser Extension ([`feral-nodes/ios-app/`](feral-nodes/ios-app/), [`feral-nodes/android-app/`](feral-nodes/android-app/), [`feral-ha-addon/`](feral-ha-addon/), [`feral-extension/`](feral-extension/)) |
+| Messaging channels | Fragmented per-framework plugins | Unified `messaging_channels` skill across Telegram, Discord, Slack, WhatsApp, Web, Push — one tool, dynamic routing ([`feral-core/channels/base.py`](feral-core/channels/base.py)) |
+| LLM providers | 30+ first-party plugins | Pluggable provider interface at [`feral-core/providers/base.py`](feral-core/providers/base.py) with a daily auto-research fetcher that keeps FERAL current with every major release from OpenAI, Anthropic, Google, Groq, DeepSeek, Moonshot, xAI, Together, OpenRouter ([`feral-core/providers/model_catalog.json`](feral-core/providers/model_catalog.json)) |
+| Mobile reach | macOS + iOS + Android | iOS + Android + HA Add-on + Browser Extension, all streaming health, voice, camera, and GPS back to the Brain over HUP ([`feral-nodes/ios-app/`](feral-nodes/ios-app/), [`feral-nodes/android-app/`](feral-nodes/android-app/), [`feral-ha-addon/`](feral-ha-addon/), [`feral-extension/`](feral-extension/)) |
 | Retry mechanics | Implicit via `message` tool pattern | **Explicit reasoning-only + empty-response + ack-fast-path detection with prompt-addition injection (no history mutation)** ([`feral-core/agents/refusal_handler.py`](feral-core/agents/refusal_handler.py)) |
 | Autonomy tiers | Per-command exec approvals | **Three-tier (strict/hybrid/loose) with per-skill `approval_mode` manifest flag** ([`docs/AGENT_CAPABILITIES.md`](docs/AGENT_CAPABILITIES.md) + [`feral-core/security/exec_approvals.py`](feral-core/security/exec_approvals.py)) |
 | Identity workspace | Editable workspace files | `~/.feral/IDENTITY.yaml` + `SOUL.md` + `MEMORY.md` + `TOOLS.md` editable at runtime ([`feral-core/identity/workspace.py`](feral-core/identity/workspace.py)) |
@@ -261,22 +261,33 @@ you are picking one.
 - 8-category signed marketplace (skills, daemons, MCP, channels, providers, memory, workflow packs, agent personas).
 - Sub-200 ms voice with 3-provider failover out of the box.
 
-### Where we are honestly weaker today (and how we plan to close it)
+### What we're building next
 
-| Gap | Impact | Plan |
-|---|---|---|
-| Channel breadth (no Matrix, Signal, Voice Call, Feishu, Zalo, Twitch, IRC) | Every missing channel is a cohort we can't reach | Each channel is a manifest + ~1-3 days of work on the template at [`feral-core/channels/base.py`](feral-core/channels/base.py) |
-| LLM provider breadth (only 4 first-class vs 30+ on peers) | Lock-in pain, limited cost/speed flexibility | Publish `kind=provider` items for Groq, Together, OpenRouter, Bedrock, DeepSeek, TGI — ~4 hours each |
-| Plugin volume (24 first-party vs 100+ elsewhere) | Smaller out-of-box catalog | Typed across 8 kinds instead of one, so each slot is more valuable; community kickoff + first 10 third-party publishes are next |
-| Memory backend plugins (registry has 0 `kind=memory` items) | Users can't swap in Chroma / Qdrant / Honcho | Define the stable `MemoryBackend` interface → publish the first 3 |
-| Workflow pack catalog (registry has 0 `kind=workflow` items) | No pre-baked routines to install | Ship 10 first-party TaskFlow packs (PR triage, standup composer, etc.) |
-| Agent persona library (registry has 0 `kind=agent` items) | No specialist bots to install | Ship 10 first-party personas spawnable by Agent Mitosis |
-| Desktop native app is not signed | Users can run dev builds only | Apple Developer ID + Windows Authenticode + Tauri updater keypair |
-| Docs volume is 56 pages vs peers' 400+ | Depth per page is comparable, quantity isn't | Aim 2× page count by end of quarter, especially worked examples |
-| Contributor base is small and fresh | Long-tail network effect | Community launch, RFC process, first-party review of third-party submissions |
+FERAL is in active development — the vision is a single open
+operating system that learns your life, runs on your devices, and
+connects to every piece of hardware and software you own. Shipping on
+a weekly cadence. The current sprint is tracked in `CHANGELOG.md`;
+highlights coming soon:
 
-We publish an updated gap analysis + roadmap on every release — see the
-`CHANGELOG.md` for per-version deltas.
+- **Smart-glasses livestream** — HUP audio + video event types, Meta
+  Ray-Bans and W300 reference daemons. FERAL sees what you see.
+- **Remote teleop for robots + phones** — command your Roomba,
+  phone, or home camera from anywhere, and have the Brain at home
+  orchestrate them over a signed relay.
+- **Camera-aware action loops** — "The living room is messy" → FERAL
+  dispatches the Roomba → photo confirmation back to you via Telegram.
+- **3D spatial memory** — build a rolling 3D model of your space from
+  any camera stream, queryable by voice ("where did I leave my keys?").
+- **Workflow packs + agent personas** — one-click installable
+  multi-step routines (PR triage, daily briefing, research
+  assistant) and specialists spawned by Agent Mitosis.
+- **Community marketplace expansion** — first-class third-party skill
+  and daemon publishing, Ed25519-signed, with a verified-publisher
+  allowlist. Install anything with `feral install <id>`.
+
+FERAL's stance: we would rather ship one feature end-to-end, wired
+across brain + client + mobile + registry + docs, than a dozen that
+half-work. Every release moves a whole column of that table to green.
 
 ---
 
