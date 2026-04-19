@@ -11,6 +11,7 @@
   <a href="#get-started">Get Started</a> &nbsp;·&nbsp;
   <a href="#demos">Demos</a> &nbsp;·&nbsp;
   <a href="#architecture">Architecture</a> &nbsp;·&nbsp;
+  <a href="#meet-the-mascot">Mascot</a> &nbsp;·&nbsp;
   <a href="#contributing">Contributing</a>
 </p>
 
@@ -425,6 +426,22 @@ FERAL is what happens when you break AI out of captivity and let it run wild on 
 Not because we're idealists. Because that's how it should have worked from the start.
 
 **AI off the leash.**
+
+---
+
+## Meet the mascot
+
+FERAL's mascot is a raccoon. Cunning, resourceful, takes what it wants,
+works at night, and has opposable thumbs — an apt mascot for an agent
+that runs on your own hardware and actually gets things done.
+
+The founding myth is eight seconds of a real raccoon stealing a lobster
+**claw** from a fishmonger's display. You can watch the origin on
+[feral.sh](https://feral.sh/) — it's the looping background of the
+landing page. Direct link:
+[`feral.sh/mascot/raccoon-steals-the-claw.mp4`](https://feral.sh/mascot/raccoon-steals-the-claw.mp4).
+
+The raccoon always wins. Especially when the claw is open.
 
 ---
 
