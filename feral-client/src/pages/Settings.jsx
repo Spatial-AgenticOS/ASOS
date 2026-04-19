@@ -1667,9 +1667,37 @@ export default function Settings() {
 
             <Section title="Memory" icon={Database}>
               <p className="text-sm text-feral-text-secondary">
-                Memory data stored at <code className="text-xs bg-feral-bg px-2 py-1 rounded font-mono">~/.feral/memory.db</code>
+                Vector store backend is pluggable. Default <code className="text-xs bg-feral-bg px-2 py-1 rounded font-mono">sqlite_vec</code> lives at <code className="text-xs bg-feral-bg px-2 py-1 rounded font-mono">~/.feral/memory.db</code>.
               </p>
-              <div className="flex gap-3 mt-3">
+              <div className="mt-4 flex flex-col gap-2">
+                <label className="text-xs text-feral-text-muted uppercase tracking-wider">Backend</label>
+                <select
+                  defaultValue={config?.memory?.backend || 'sqlite_vec'}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    fetch(`${API}/api/memory/backend`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ backend: next }),
+                    })
+                      .then((r) => r.json())
+                      .then((j) => {
+                        if (j?.ok) {
+                          addToast(`Memory backend set to ${next}. Restart the Brain for it to take effect.`);
+                        } else {
+                          addToast(j?.error || 'Could not switch backend');
+                        }
+                      })
+                      .catch((err) => addToast(err.message || 'Could not switch backend'));
+                  }}
+                  className="bg-feral-card border border-feral-border rounded-lg px-3 py-2 text-sm max-w-xs"
+                >
+                  <option value="sqlite_vec">sqlite_vec (default, bundled)</option>
+                  <option value="chroma">chroma (requires feral-ai[memory-chroma])</option>
+                  <option value="qdrant">qdrant (requires feral-ai[memory-qdrant])</option>
+                </select>
+              </div>
+              <div className="flex gap-3 mt-4">
                 <button
                   onClick={() => {
                     fetch(`${API}/api/memory/export`)

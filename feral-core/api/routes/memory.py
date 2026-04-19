@@ -1,11 +1,84 @@
 """Memory, knowledge graph, wiki, and episode endpoints."""
 
+import importlib
+import json
+
 from fastapi import APIRouter
 
 from api.state import state
+from config.loader import feral_home
 from memory.ingest import MemoryIngestor
 
 router = APIRouter()
+
+
+_KNOWN_MEMORY_BACKENDS = {
+    "sqlite_vec": "memory.backends.sqlite_vec",
+    "chroma": "memory.backends.chroma",
+    "qdrant": "memory.backends.qdrant",
+}
+
+
+def _memory_backend_installed(module_path: str) -> bool:
+    try:
+        importlib.import_module(module_path)
+        return True
+    except ImportError:
+        return False
+
+
+@router.get("/api/memory/backend")
+async def get_memory_backend():
+    settings_path = feral_home() / "settings.json"
+    current = "sqlite_vec"
+    if settings_path.exists():
+        try:
+            current = (json.loads(settings_path.read_text()).get("memory") or {}).get(
+                "backend", "sqlite_vec"
+            )
+        except Exception:
+            pass
+    return {
+        "backend": current,
+        "available": {
+            name: _memory_backend_installed(path)
+            for name, path in _KNOWN_MEMORY_BACKENDS.items()
+        },
+    }
+
+
+@router.post("/api/memory/backend")
+async def set_memory_backend(body: dict):
+    backend = (body or {}).get("backend", "")
+    if backend not in _KNOWN_MEMORY_BACKENDS:
+        return {
+            "ok": False,
+            "error": f"unknown backend '{backend}'. Known: {list(_KNOWN_MEMORY_BACKENDS)}",
+        }
+    module_path = _KNOWN_MEMORY_BACKENDS[backend]
+    if not _memory_backend_installed(module_path):
+        return {
+            "ok": False,
+            "error": (
+                f"backend '{backend}' is not installed. Run "
+                f"`pip install feral-ai[memory-{backend}]` or install the "
+                "matching item from registry.feral.sh."
+            ),
+        }
+
+    settings_path = feral_home() / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    except Exception:
+        existing = {}
+    existing.setdefault("memory", {})["backend"] = backend
+    settings_path.write_text(json.dumps(existing, indent=2))
+    return {
+        "ok": True,
+        "backend": backend,
+        "note": "Restart the Brain for the change to take effect.",
+    }
 
 
 # ── Knowledge Graph ──

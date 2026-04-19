@@ -1125,6 +1125,20 @@ def main():
     sp.add_argument("action", nargs="?", default="status", choices=["status", "peers", "export", "import"], help="Action")
     sp.add_argument("file", nargs="?", default="", help="File path for export/import")
 
+    # feral memory — backend selector
+    mem_p = sub.add_parser("memory", help="Memory backend management")
+    mem_p.add_argument(
+        "action",
+        choices=["status", "switch", "list"],
+        help="status: show current backend | list: installed backends | switch <id>: select backend",
+    )
+    mem_p.add_argument(
+        "backend_id",
+        nargs="?",
+        default=None,
+        help="Backend id for `switch` (e.g. sqlite_vec, chroma, qdrant)",
+    )
+
     # feral install-service / uninstall-service
     sub.add_parser("install-service", help="Install FERAL Brain as a system daemon (launchd/systemd)")
     sub.add_parser("uninstall-service", help="Remove the FERAL Brain system daemon")
@@ -1184,6 +1198,9 @@ def main():
             cmd_publisher_register(registry=getattr(args, "registry", None))
     elif args.subcommand == "sync":
         cmd_sync(args.action, getattr(args, "file", ""))
+    elif args.subcommand == "memory":
+        from cli.memory_cmd import cmd_memory
+        cmd_memory(args.action, getattr(args, "backend_id", None))
     elif args.subcommand == "install-service":
         from cli.daemon import install_service
         install_service()

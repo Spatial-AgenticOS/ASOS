@@ -55,6 +55,12 @@ DEFAULT_SETTINGS = {
         "self_learning": True,
         "multi_agent": True,
     },
+    "memory": {
+        # Pluggable vector-store backend. One of sqlite_vec (default),
+        # chroma, qdrant, or any registered community backend.
+        "backend": "sqlite_vec",
+        "backend_config": {},
+    },
     "security": {
         "node_api_key": "",
     },

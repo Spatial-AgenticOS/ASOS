@@ -46,9 +46,11 @@ memory_store.json
 client-tmp/
 poetry.lock
 
-# Internal handoff / snapshot docs — kept locally, never pushed.
+# Internal handoff / snapshot / planning docs — kept locally, never pushed.
 # Team members regenerate or maintain these on their own machine.
 HANDOFF.md
 HANDOVER.md
 ONBOARDING.md
 STATE_OF_FERAL.md
+AGENT_PROMPT.md
+ROADMAP_NEXT.md

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "feral-ai"
-version = "2026.4.13"
+version = "2026.4.14"
 description = "FERAL — Open-source AI agent with computer use, GenUI, voice, hardware control, and persistent memory."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -51,6 +51,12 @@ llm = [
 ]
 vec = [
     "sqlite-vec>=0.1.1",
+]
+memory-chroma = [
+    "chromadb>=0.5.0",
+]
+memory-qdrant = [
+    "qdrant-client>=1.11.0",
 ]
 groq = [
     "openai>=1.50.0",
@@ -132,7 +138,8 @@ include = [
     "agents*", "api*", "channels*", "cli*", "config*", "gateway*",
     "genui*", "hardware*", "identity*", "infra*", "integrations*",
     "mcp*", "memory*", "models*", "observability*", "perception*",
-    "security*", "services*", "skills*", "voice*", "webui*", "tests*",
+    "providers*", "security*", "services*", "skills*", "voice*",
+    "webui*", "tests*",
 ]
 
 [tool.setuptools.package-data]

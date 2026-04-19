@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "last_fetched": null,
+  "providers": {
+    "openai": {
+      "endpoint": "https://api.openai.com/v1/models",
+      "models": [
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-4o",
+        "gpt-4o-mini",
+        "o1",
+        "o1-mini",
+        "text-embedding-3-small",
+        "text-embedding-3-large"
+      ],
+      "pricing": {
+        "gpt-5": {"input": 0.005, "output": 0.015},
+        "gpt-5-mini": {"input": 0.0003, "output": 0.0012},
+        "gpt-4o": {"input": 0.0025, "output": 0.01},
+        "gpt-4o-mini": {"input": 0.00015, "output": 0.0006}
+      }
+    },
+    "anthropic": {
+      "endpoint": null,
+      "models": [
+        "claude-sonnet-4-5",
+        "claude-opus-4-5",
+        "claude-haiku-4-5",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022"
+      ],
+      "pricing": {
+        "claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-5": {"input": 0.015, "output": 0.075},
+        "claude-haiku-4-5": {"input": 0.0008, "output": 0.004}
+      }
+    },
+    "gemini": {
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
+      "models": [
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.0-flash"
+      ],
+      "pricing": {
+        "gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
+        "gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
+        "gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004}
+      }
+    },
+    "ollama": {
+      "endpoint": null,
+      "models": [],
+      "pricing": {},
+      "note": "Ollama model list is fetched per-host at runtime via /api/tags."
+    },
+    "groq": {
+      "endpoint": "https://api.groq.com/openai/v1/models",
+      "models": [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
+      ],
+      "pricing": {
+        "llama-3.3-70b-versatile": {"input": 0.00059, "output": 0.00079},
+        "llama-3.1-8b-instant": {"input": 0.00005, "output": 0.00008},
+        "mixtral-8x7b-32768": {"input": 0.00024, "output": 0.00024}
+      }
+    },
+    "deepseek": {
+      "endpoint": "https://api.deepseek.com/v1/models",
+      "models": [
+        "deepseek-chat",
+        "deepseek-reasoner"
+      ],
+      "pricing": {
+        "deepseek-chat": {"input": 0.00027, "output": 0.0011},
+        "deepseek-reasoner": {"input": 0.00055, "output": 0.00219}
+      }
+    },
+    "moonshot": {
+      "endpoint": "https://api.moonshot.ai/v1/models",
+      "models": [
+        "moonshot-v1-8k",
+        "moonshot-v1-32k",
+        "moonshot-v1-128k",
+        "kimi-k2-0711-preview"
+      ],
+      "pricing": {
+        "moonshot-v1-8k": {"input": 0.0017, "output": 0.0017},
+        "moonshot-v1-32k": {"input": 0.0033, "output": 0.0033},
+        "moonshot-v1-128k": {"input": 0.008, "output": 0.008}
+      }
+    },
+    "xai": {
+      "endpoint": "https://api.x.ai/v1/models",
+      "models": ["grok-4", "grok-3", "grok-3-mini"],
+      "pricing": {
+        "grok-4": {"input": 0.005, "output": 0.015},
+        "grok-3-mini": {"input": 0.0003, "output": 0.0005}
+      }
+    },
+    "together": {
+      "endpoint": "https://api.together.xyz/v1/models",
+      "models": [],
+      "pricing": {}
+    },
+    "openrouter": {
+      "endpoint": "https://openrouter.ai/api/v1/models",
+      "models": [],
+      "pricing": {}
+    }
+  }
+}

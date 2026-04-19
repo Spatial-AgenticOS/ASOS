@@ -1,8 +1,60 @@
 # Changelog
 
-<!-- feral-version: 2026.4.13 -->
+<!-- feral-version: 2026.4.14 -->
 
 All notable changes to FERAL are documented here.
+
+## [2026.4.14] - 2026-04-18
+
+### Added
+- **Pluggable memory backends.** `feral-core/memory/backends/` ships a
+  `MemoryBackend` Protocol (`upsert` / `search` / `delete` / `stats` /
+  `close`) with three first-party adapters:
+  - `sqlite_vec` (default, bundled — wraps the existing sqlite-vec
+    vec0 table with a numpy fallback)
+  - `chroma` behind `pip install feral-ai[memory-chroma]`
+  - `qdrant` behind `pip install feral-ai[memory-qdrant]`
+  Switch with `feral memory switch <backend>` or the Settings UI
+  dropdown (Settings → Memory). New route `POST /api/memory/backend`
+  persists the choice to `~/.feral/settings.json`. Contract test at
+  `feral-core/tests/test_memory_backends.py` runs the same round-trip
+  against every available backend and skips gracefully if the optional
+  dependency isn't installed.
+- **LLM provider plugin system.** `feral-core/providers/` introduces a
+  `Provider` Protocol (`chat` / `list_models` / `pricing_per_1k` /
+  `supports` / `refresh_models`) plus six adapters: OpenAI, Anthropic,
+  Gemini, Ollama, Groq, DeepSeek. The orchestrator's inference surface
+  is now pluggable — community providers can ship as `kind=provider`
+  items on registry.feral.sh.
+- **Auto-research fetcher.** `scripts/research_providers.py` pulls
+  `/v1/models` from every provider with a public API (OpenAI, Groq,
+  DeepSeek, xAI, Moonshot/Kimi, Together, OpenRouter, Gemini) and
+  rewrites `feral-core/providers/model_catalog.json` in place. New
+  workflow `.github/workflows/provider-research.yml` runs it daily at
+  09:00 UTC and opens a PR when the catalog changes. FERAL now learns
+  about new models from Anthropic / OpenAI / Kimi / etc. within 24
+  hours without a human tracking release blogs.
+- **`AGENT_PROMPT.md`** — short, pastable system prompt for spinning up
+  a new AI contributor: read-first order, non-negotiables, the
+  systematic-sync rule, red flags. Keeps onboarding consistent across
+  agents.
+- **`ROADMAP_NEXT.md`** — six technical pillars (smart-glasses
+  livestream, memory plugins, provider registry, remote teleop,
+  camera-driven actions, 3D reconstruction from streaming data) with
+  phases + file pointers + success criteria. Lives in the repo so
+  every PR can cite it.
+
+### Changed
+- `feral-core/pyproject.toml`: new `[memory-chroma]` (`chromadb>=0.5.0`)
+  and `[memory-qdrant]` (`qdrant-client>=1.11.0`) extras; `providers*`
+  added to `setuptools.packages.find.include`.
+- `feral-core/config/loader.py`: new top-level `memory.backend` config
+  key (defaults to `sqlite_vec`).
+- `feral-core/cli/main.py`: new `feral memory {status|list|switch}`
+  subcommand (dispatch via `feral-core/cli/memory_cmd.py`).
+- `feral-client/src/pages/Settings.jsx`: Memory section gains a backend
+  dropdown. Choosing one hits `POST /api/memory/backend` and prompts
+  the user to restart.
 
 ## [2026.4.13] - 2026-04-18
 

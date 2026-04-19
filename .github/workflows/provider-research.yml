@@ -1,0 +1,59 @@
+name: Provider Research
+
+# Refreshes feral-core/providers/model_catalog.json daily by polling
+# every provider's /v1/models endpoint. If the catalog changed, opens a
+# PR for review. Keeps FERAL aware of new LLM releases (Claude, Kimi,
+# GPT, Gemini, Groq, DeepSeek, xAI, Together, OpenRouter) without a
+# human having to track release blogs.
+
+on:
+  schedule:
+    - cron: "0 9 * * *"  # 09:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run research script
+        env:
+          OPENAI_API_KEY: ${{ secrets.PROVIDER_RESEARCH_OPENAI_KEY }}
+          GROQ_API_KEY: ${{ secrets.PROVIDER_RESEARCH_GROQ_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.PROVIDER_RESEARCH_DEEPSEEK_KEY }}
+          XAI_API_KEY: ${{ secrets.PROVIDER_RESEARCH_XAI_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.PROVIDER_RESEARCH_MOONSHOT_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.PROVIDER_RESEARCH_TOGETHER_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.PROVIDER_RESEARCH_OPENROUTER_KEY }}
+          GEMINI_API_KEY: ${{ secrets.PROVIDER_RESEARCH_GEMINI_KEY }}
+        run: python scripts/research_providers.py
+
+      - name: Create PR on change
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(providers): daily model catalog refresh"
+          title: "chore(providers): daily model catalog refresh"
+          body: |
+            Automated update of `feral-core/providers/model_catalog.json`.
+
+            This PR is opened by `.github/workflows/provider-research.yml`
+            after the daily scheduled run finds a delta between what each
+            provider's `/v1/models` returns and what's checked in.
+
+            Merge after a quick sanity check.
+          branch: provider-research/daily
+          delete-branch: true
+          add-paths: |
+            feral-core/providers/model_catalog.json
