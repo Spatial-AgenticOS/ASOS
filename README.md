@@ -206,34 +206,76 @@ Docker-first sandboxed execution: --network=none, --memory=512m, --cpus=1, --rea
 
 ## Comparison
 
-Every claim below links to the file that implements it, so you can read the
-code instead of our marketing copy.
+Every claim below links to the file that implements it, so you can read
+the code instead of our marketing copy.
 
-| Dimension | Big AI (OpenAI, Apple, Google) | Other agent frameworks | **FERAL — shipped file paths** |
-|---|---|---|---|
-| Dynamic skill creation at runtime | No | Rare | **[`feral-core/agents/tool_genesis.py`](feral-core/agents/tool_genesis.py) drafts + sandboxes + promotes new tools; wired into [`agents/orchestrator.py::_on_capability_gap`](feral-core/agents/orchestrator.py); [`feral-core/skills/impl/workspace_scripts.py`](feral-core/skills/impl/workspace_scripts.py) is the never-say-no fallback.** |
-| Community marketplace (software + hardware) | No | Plugin lists, code-only | **[`feral-registry/`](feral-registry/) — FastAPI service with Ed25519-signed bundles, GitHub OAuth, `POST /items` publish and `feral install` round-trip. 8 categories: skills, daemons, MCP servers, channels, providers, memory backends, workflow packs, agent personas. Hardware side: [`feral-nodes/HUP_SPEC.md`](feral-nodes/HUP_SPEC.md) defines the node wire protocol.** |
-| Never-stall retry mechanics | No | No | **[`feral-core/agents/refusal_handler.py`](feral-core/agents/refusal_handler.py) handles reasoning-only, empty-response, and ack-execution patterns; retry hooks live in [`feral-core/agents/orchestrator.py`](feral-core/agents/orchestrator.py) and inject prompt additions without mutating persisted history.** |
-| Self-introspection | No | No | **[`feral-core/skills/impl/self_introspection.py`](feral-core/skills/impl/self_introspection.py) exposes the live tool catalog at tool-call time; [`feral-core/agents/self_model.py`](feral-core/agents/self_model.py) builds the unified chat+voice `Runtime:` line and prose `## Tooling` section inserted into every system prompt.** |
-| Autonomy tiers (strict / hybrid / loose) | No | No | **Behavior per tier documented in [`docs/AGENT_CAPABILITIES.md`](docs/AGENT_CAPABILITIES.md); enforced in [`feral-core/agents/orchestrator.py`](feral-core/agents/orchestrator.py) and gated by [`feral-core/security/`](feral-core/security/) (approval manager + safety classifier).** |
-| Local-first / privacy | Cloud roundtrip | Mostly local | **Config + vault on disk only: [`feral-core/config/loader.py`](feral-core/config/loader.py), [`feral-core/config/runtime.py`](feral-core/config/runtime.py), [`feral-core/security/vault.py`](feral-core/security/vault.py). No telemetry by default; default bind is `127.0.0.1`.** |
-| Hardware-aware perception | No | Generic nodes | **[`feral-core/perception/fusion.py`](feral-core/perception/fusion.py) merges somatic, screen, audio, and location streams into a single `PerceptionFrame`; BLE wristband adapter at [`feral-core/hardware/adapters/wristband.py`](feral-core/hardware/adapters/wristband.py) feeds biometrics straight in.** |
-| Messaging channels | API-only | `message` tool | **Unified `messaging_channels` skill with `@username`→chat_id resolve, live status in UI, and never-refuse execution bias (see [`feral-core/channels/`](feral-core/channels/) + [`feral-core/skills/impl/messaging_channels.py`](feral-core/skills/impl/messaging_channels.py)).** |
-| Memory | Forgets between sessions | Plugin-based | **4-tier + knowledge graph + CRDT P2P sync under [`feral-core/memory/`](feral-core/memory/).** |
-| Voice | 2s latency, cloud-only | Extension-based | **Sub-200ms, wake word, 3 providers in [`feral-core/voice/`](feral-core/voice/) (OpenAI Realtime, Gemini Live, local Whisper+Piper).** |
-| GenUI | No | Canvas / A2UI | **Full SDUI generation engine ([`feral-core/genui/`](feral-core/genui/)) that renders on iOS, Android and web.** |
-| Glass-brain visualization | No | No | **Live WebGL visualization of active sessions, skills, memory writes — client in [`feral-client/`](feral-client/), brain events in [`feral-core/observability/`](feral-core/observability/).** |
-| Setup | Each app separately | CLI init | **One `feral start` → wizard in [`feral-core/cli/setup_wizard.py`](feral-core/cli/setup_wizard.py) provisions LLM, channels, voice, memory, mDNS, apps — streams a live boot report.** |
-| Open source | Weights only | Varies | **Yes — brain, client, mobile, SDK, desktop, nodes (everything under [`ASOS/`](./)).** |
+### FERAL vs peer agent frameworks
 
-**What makes FERAL different:**
-- A ring of physical perception (wristband biometrics, glasses, phone GPS/camera/mic) feeding a single `PerceptionFrame`.
-- 4-tier memory with P2P sync across your own devices (no central server).
-- A Glass Brain — a live 3D visualization of active sessions, skills firing, and memory writes.
-- Multi-modal voice providers with sub-200ms wake-word path.
-- A generative UI engine (SDUI) the agent can emit to any client.
-- Dynamic skill creation: when no existing skill fits, FERAL drafts a sandboxed script, tests it, and promotes it to a persistent skill in the same turn.
-- A signed community marketplace — [registry.feral.sh](https://registry.feral.sh) — hosting skills, hardware daemons, MCP servers, channel plugins, LLM providers, memory backends, workflow packs, and agent personas.
+Both FERAL and its closest peers are local-first, plugin-driven AI
+agents. This table goes deep on the dimensions that actually matter if
+you are picking one.
+
+| Dimension | Other local-first agent frameworks | **FERAL (shipped, verifiable)** |
+|---|---|---|
+| Language + stack | Node.js + TypeScript, npm-distributed | Python 3.11 + FastAPI + React/Vite; PyPI wheel ([`feral-core/pyproject.toml`](feral-core/pyproject.toml)) |
+| Plugin catalog | 100+ bundled extensions + community npm packages | 24 first-party skills + an 8-category registry (`skill`, `daemon`, `mcp`, `channel`, `provider`, `memory`, `workflow`, `agent`) at [registry.feral.sh](https://registry.feral.sh) ([`feral-registry/feral_registry/schemas.py`](feral-registry/feral_registry/schemas.py)) |
+| Distribution trust | Package-name trust + manual review | Ed25519-signed bundles, GitHub OAuth-verified publishers, `verified` badge allowlist ([`feral-registry/feral_registry/signing.py`](feral-registry/feral_registry/signing.py)) |
+| **Dynamic skill creation at runtime** | Manual — publish a package | **Tool Genesis: draft → AST-gate → Docker sandbox → auto-promote → hot-reload, all in one turn** ([`feral-core/agents/tool_genesis.py`](feral-core/agents/tool_genesis.py) + [`orchestrator.py::_on_capability_gap`](feral-core/agents/orchestrator.py)) |
+| Never-say-no fallback | Shell `exec` tool | `workspace_scripts` skill with reusable catalog + Docker sandbox + persistence ([`feral-core/skills/impl/workspace_scripts.py`](feral-core/skills/impl/workspace_scripts.py)) |
+| Computer use | Browser (Playwright) + desktop | Browser (Playwright/CDP) + desktop (`pyautogui`) + workspace scripts ([`feral-core/skills/impl/`](feral-core/skills/impl/)) |
+| Hardware-aware perception | Generic remote machines | **HUP v1.0.0 public wire spec + Python + TS SDKs + cookiecutter daemon template** ([`feral-nodes/HUP_SPEC.md`](feral-nodes/HUP_SPEC.md)), plus BLE wristband + HomeKit + Matter bridges |
+| Memory | Plugin-slot (one active at a time) | **4-tier (working + episodic + semantic + execution) + knowledge graph + CRDT P2P sync + sqlite-vec hybrid with numpy fallback** ([`feral-core/memory/`](feral-core/memory/)) |
+| Voice | Extension-based, provider-specific | **Sub-200 ms, 3 providers with auto-failover: OpenAI Realtime, Gemini Live, local Whisper+Piper** ([`feral-core/voice/`](feral-core/voice/)) |
+| Generative UI | Canvas + A2UI | Full SDUI engine rendering on iOS+Android+Web from one server spec ([`feral-core/genui/`](feral-core/genui/)) |
+| Observability | Session logs | **Live Glass Brain WebGL view of active sessions, skills, memory writes** ([`feral-client/src/pages/GlassBrain.jsx`](feral-client/src/pages/GlassBrain.jsx) + [`feral-core/observability/`](feral-core/observability/)) |
+| Channels shipped today | 15+ channels across messaging, social, and telephony | 4 fully-wired (Telegram, Discord, Slack, WhatsApp) + Web + Push + 2 partial (iMessage, Signal). **We are actively expanding** — see gap list below ([`feral-core/channels/base.py`](feral-core/channels/base.py)) |
+| LLM providers | 30+ first-party plugins | 4 first-class (OpenAI, Anthropic, Gemini, Ollama) + Groq via voice router. **Gap we are closing** ([`feral-core/voice/realtime_proxy.py`](feral-core/voice/realtime_proxy.py)) |
+| Mobile apps | macOS + iOS + Android | iOS + Android + HA Add-on + Browser Extension ([`feral-nodes/ios-app/`](feral-nodes/ios-app/), [`feral-nodes/android-app/`](feral-nodes/android-app/), [`feral-ha-addon/`](feral-ha-addon/), [`feral-extension/`](feral-extension/)) |
+| Retry mechanics | Implicit via `message` tool pattern | **Explicit reasoning-only + empty-response + ack-fast-path detection with prompt-addition injection (no history mutation)** ([`feral-core/agents/refusal_handler.py`](feral-core/agents/refusal_handler.py)) |
+| Autonomy tiers | Per-command exec approvals | **Three-tier (strict/hybrid/loose) with per-skill `approval_mode` manifest flag** ([`docs/AGENT_CAPABILITIES.md`](docs/AGENT_CAPABILITIES.md) + [`feral-core/security/exec_approvals.py`](feral-core/security/exec_approvals.py)) |
+| Identity workspace | Editable workspace files | `~/.feral/IDENTITY.yaml` + `SOUL.md` + `MEMORY.md` + `TOOLS.md` editable at runtime ([`feral-core/identity/workspace.py`](feral-core/identity/workspace.py)) |
+| Docs | 400+ pages on Docusaurus | 56 pages on Mintlify ([`docs/mintlify/`](docs/mintlify/)) + in-repo guides |
+| Contributor base | Years of public contributors | Early — [FERAL-AI](https://github.com/FERAL-AI) org, first community items in progress |
+
+### FERAL vs broader landscape
+
+| Dimension | Big AI (OpenAI/Apple/Google) | Home Assistant Assist | Open Interpreter | AutoGen / LangChain | **FERAL** |
+|---|---|---|---|---|---|
+| Runs on your hardware | Cloud | Local | Local | Local | **Local** |
+| Connects to physical devices | No | Yes (HomeKit/Zigbee) | No | No | **Yes (HUP + HomeKit + HA + BLE)** |
+| Dynamic skill creation | No | No | Shell exec only | Manual scripted chains | **Tool Genesis auto-promote** |
+| Signed community marketplace | No | HA Add-ons + HACS | No | No | **registry.feral.sh (8 content kinds)** |
+| 4-tier memory | No | No | Session-only | Manual wiring | **Yes + P2P CRDT sync** |
+| Open source full stack | Weights only | Yes | Agent core only | Framework only | **Brain + client + mobile + nodes + registry** |
+| Voice (sub-200 ms wake) | Assistant-app only | Yes (local Whisper) | No | No | **Yes, 3 providers with failover** |
+| Generative UI | No | Lovelace | No | No | **SDUI across iOS / Android / Web** |
+| Protocol for 3rd-party hardware | No | Zigbee / Matter / HomeKit | No | No | **HUP v1.0.0 (Apache-2.0)** |
+
+### Where FERAL wins outright today
+
+- Tool Genesis runtime skill creation (no competitor has this loop end-to-end).
+- Hardware Unification Protocol — public wire spec + SDKs so any vendor can plug in.
+- 4-tier memory with P2P CRDT sync across your own devices.
+- Glass Brain live observability of the agent's internals.
+- 8-category signed marketplace (skills, daemons, MCP, channels, providers, memory, workflow packs, agent personas).
+- Sub-200 ms voice with 3-provider failover out of the box.
+
+### Where we are honestly weaker today (and how we plan to close it)
+
+| Gap | Impact | Plan |
+|---|---|---|
+| Channel breadth (no Matrix, Signal, Voice Call, Feishu, Zalo, Twitch, IRC) | Every missing channel is a cohort we can't reach | Each channel is a manifest + ~1-3 days of work on the template at [`feral-core/channels/base.py`](feral-core/channels/base.py) |
+| LLM provider breadth (only 4 first-class vs 30+ on peers) | Lock-in pain, limited cost/speed flexibility | Publish `kind=provider` items for Groq, Together, OpenRouter, Bedrock, DeepSeek, TGI — ~4 hours each |
+| Plugin volume (24 first-party vs 100+ elsewhere) | Smaller out-of-box catalog | Typed across 8 kinds instead of one, so each slot is more valuable; community kickoff + first 10 third-party publishes are next |
+| Memory backend plugins (registry has 0 `kind=memory` items) | Users can't swap in Chroma / Qdrant / Honcho | Define the stable `MemoryBackend` interface → publish the first 3 |
+| Workflow pack catalog (registry has 0 `kind=workflow` items) | No pre-baked routines to install | Ship 10 first-party TaskFlow packs (PR triage, standup composer, etc.) |
+| Agent persona library (registry has 0 `kind=agent` items) | No specialist bots to install | Ship 10 first-party personas spawnable by Agent Mitosis |
+| Desktop native app is not signed | Users can run dev builds only | Apple Developer ID + Windows Authenticode + Tauri updater keypair |
+| Docs volume is 56 pages vs peers' 400+ | Depth per page is comparable, quantity isn't | Aim 2× page count by end of quarter, especially worked examples |
+| Contributor base is small and fresh | Long-tail network effect | Community launch, RFC process, first-party review of third-party submissions |
+
+We publish an updated gap analysis + roadmap on every release — see the
+`CHANGELOG.md` for per-version deltas.
 
 ---
 
