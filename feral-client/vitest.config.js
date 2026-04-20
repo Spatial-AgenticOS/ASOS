@@ -14,10 +14,12 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],
-      // Thresholds are REAL gates, not aspirations. As of the smoke-test
-      // batch in v2026.4.14 the actual numbers are ~28/54/22/28; we leave
-      // a small safety margin so individual file changes don't regress
-      // the gate.
+      // Thresholds are REAL gates, not aspirations. As of the vitest
+      // 4.1 bump in 2026.4.17 the actual numbers are ~28/20/25/30
+      // (statements/branches/functions/lines). vitest 4 counts branches
+      // more strictly than vitest 2 did — the old 54% branch number
+      // dropped to ~20% on the same test suite purely because of the
+      // counting change, not a regression in coverage.
       //
       // Rule: when a new page, hook, or lib file is added, ship a matching
       // smoke test in the same PR. If the new file drops total statements
@@ -25,7 +27,7 @@ export default defineConfig({
       // this ceiling with justification in the commit message.
       thresholds: {
         statements: 20,
-        branches: 40,
+        branches: 18,
         functions: 18,
         lines: 20,
       },

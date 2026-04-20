@@ -44,6 +44,15 @@ class EndpointParam(BaseModel):
 class SkillEndpoint(BaseModel):
     """A single API endpoint the skill exposes."""
     id: str
+    # `method` is a routing *label*. The runtime executor
+    # (feral-core/skills/executor.py) uses it to pick a lane:
+    #   - WS_EXECUTE -> dispatch to a connected daemon over WebSocket
+    #   - GET/POST/PUT/DELETE/PATCH -> generic HTTP runner
+    #   - PYTHON / CUSTOM -> resolved by `skill_id` -> Python backing
+    #     class in feral-core/skills/impl/*.py; the backing class's
+    #     execute(endpoint_id, args, vault) routes by `endpoint_id`,
+    #     not by `method`. Do not add `endpoint.method == ...` branches
+    #     inside impl/ modules — see tests/test_skill_method_is_metadata.py.
     method: Literal[
         "GET", "POST", "PUT", "DELETE", "PATCH",
         "WS_EXECUTE", "PYTHON", "CUSTOM",
