@@ -1,0 +1,38 @@
+{
+  "name": "feral-client-v2",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "FERAL v2 — ambient-OS client. Opt-in via ?v2=1. Runs alongside feral-client/.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "dompurify": "^3.3.3",
+    "lucide-react": "^1.7.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.14.0",
+    "tailwindcss": "^4.2.2"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "@vitejs/plugin-react": "^4.7.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "jsdom": "^29.0.2",
+    "vite": "^5.4.21",
+    "vitest": "^2.1.9"
+  }
+}

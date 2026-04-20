@@ -1,0 +1,105 @@
+@import "tailwindcss";
+@import "./styles/ui.css";
+@import "./styles/pages.css";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  font-family: var(--v2-font-system);
+  background: var(--v2-bg-base);
+  color: var(--v2-text-primary);
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--v2-bg-base);
+  color: var(--v2-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: var(--v2-size-base);
+  line-height: 1.35;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+::selection {
+  background: var(--v2-accent-soft);
+  color: var(--v2-text-primary);
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--v2-hairline-strong);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--v2-hairline-focus); }
+
+/* ── Error shell (before ErrorBoundary recovers) ──────────────── */
+.v2-error-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--v2-bg-base);
+  padding: 2rem;
+}
+.v2-error-card {
+  max-width: 440px;
+  padding: 2rem;
+  border-radius: var(--v2-radius-lg);
+  background: var(--v2-surface-1);
+  border: 1px solid var(--v2-hairline);
+  text-align: center;
+}
+.v2-error-card h1 {
+  font-size: var(--v2-size-lg);
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  color: var(--v2-state-error);
+}
+.v2-error-card p {
+  font-size: var(--v2-size-sm);
+  color: var(--v2-text-secondary);
+  margin: 0 0 1.5rem;
+}
+.v2-error-card button {
+  padding: 0.5rem 1.25rem;
+  border-radius: var(--v2-radius-sm);
+  background: var(--v2-accent);
+  color: var(--v2-text-inverse);
+  border: none;
+  font-size: var(--v2-size-base);
+  cursor: pointer;
+}
+
+/* ── Orb state machine animations ─────────────────────────────── */
+@keyframes v2OrbBreathe {
+  0%, 100% { transform: scale(1); opacity: 0.95; }
+  50% { transform: scale(1.04); opacity: 1; }
+}
+@keyframes v2OrbListen {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+@keyframes v2OrbThink {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes v2OrbSpeak {
+  0%, 100% { border-radius: 50%; }
+  50% { border-radius: 44% 56% 52% 48% / 48% 52% 48% 52%; }
+}
+@keyframes v2Fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Shell transitions ────────────────────────────────────────── */
+.v2-fade-in { animation: v2Fade var(--v2-dur-base) var(--v2-ease-out) both; }

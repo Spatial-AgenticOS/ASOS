@@ -4,6 +4,102 @@
 
 All notable changes to FERAL are documented here.
 
+## [Unreleased]
+
+### Changed
+- **v2 is now the default UI at `/`.** When `feral-core/webui-v2/index.html` is on disk the Brain serves the ambient-OS client directly — no `?v2=1` flag, no redirect, no flash. The `/v2/` alias is retained so existing bookmarks still resolve. v1 (`feral-core/webui/`) stays in the tree for history but is never wired when v2 is built. Backed by [`feral-core/tests/test_webui_default.py`](feral-core/tests/test_webui_default.py).
+
+### Fixed
+- `/api/ambient/briefing` returned 500 because `BlindVault.get()` doesn't exist; rewrote to use the real `retrieve()` API with a safe fallback. New pytest at [`feral-core/tests/test_track0_fixes.py`](feral-core/tests/test_track0_fixes.py).
+- `SkillManifest` validator now accepts `method: "CUSTOM"`, which recovers `workspace_scripts`, `messaging_channels`, and `self_introspection` (3 first-party skills dropped at every Brain boot → now 25 skills loaded, up from 22).
+
+### Added (v2 surface expansion — 14 tracks)
+- **v2 Dashboard** — live stats (Brain / skills / sessions / devices / HR / cognitive load), 25-skill strip, channel list, LLM status, TaskFlow mini-widget, Digital Twin ask-me card, recent-activity WS stream, proactive alerts.
+- **v2 Ambient** — three-mode page (Briefing / Desk / Wind-Down) backed by `/api/ambient/*`. Auto-switches by time of day, wake-word toggle.
+- **v2 Flows (rewrite)** — three tabs: **TaskFlows** (create / run / cancel / detail / 9-type step builder), **Routines** (cron + step builder + pause/resume/delete), **Automations** (event/cron/webhook/geofence → skill.invoke).
+- **v2 Devices (rewrite)** — paired list + HUP mesh view + actuator invoke modal + per-device detail/forget.
+- **v2 PairDeviceModal** — 3-tab pairing: QR code, Web Bluetooth scan, HUP node-id/secret token.
+- **v2 SetupWizard** — 6-step first-run flow (Identity → LLM → Preset → Channels → Pair device → Done). Auto-redirects from bootstrap when `/api/setup/status` returns `setup_complete: false`.
+- **v2 Skills (new)** — all loaded skills with filter, hot-reload button, pending-drafts banner.
+- **v2 Forge (rewrite)** — Tool Genesis full surface: Pending / Proposals / Generated / Stats / Generate tabs backed by `/api/tool-genesis/*`.
+- **v2 Memory (new)** — Recent / Search / Episodes / Exec log / Knowledge graph.
+- **v2 Wiki (new)** — Pages browser + 3-way Ingest (text / PDF / repo) + Compile.
+- **v2 Identity (new)** — IDENTITY.yaml + SOUL.md + MEMORY.md editors with dirty state + save.
+- **v2 Agents (new)** — Agent Mitosis specialists + proposals + manual spawn + feedback + stats.
+- **v2 Intents (rewrite)** — Today's actions with Complete, all plans list, compile new plan, stats.
+- **v2 Chat** — now with Threads pane (conversations list / new / delete) + Snapshots pane (save / restore / branch).
+- **v2 Health (new)** — baseline summary / metrics / alerts / today's vitals.
+- **v2 Settings (expanded)** — 12 sections: General, Providers (with validate + switch + presets), Memory, Channels (token save + auto-start), Autonomy, Voice, Security (Vault + Permissions + Audit + Policy editor), Integrations (OAuth connect/disconnect), Sync (export/import CRDT), Handoff, Push (register + test), MCP.
+- **v2 Marketplace (rewrite)** — search, install, installed tab, update, uninstall, all 8 kinds.
+- **v2 Webhooks (new)** — create / list / delete with URL + secret.
+- **v2 Geofences (new)** — create/delete with browser geolocation push to `/api/location/update`.
+- **v2 GenUI Canvas (rewrite)** — Live panes + Provider registry + Themes + Components.
+- **v2 Glass Brain (rewrite)** — embeds v1's proven Three.js visualisation via iframe + live WS event stream.
+- **v2 primitives** — `Modal`, `Tabs`, `EmptyState`, `StatusDot`, `DeviceQRCode`, `CodeEditor` in `feral-client-v2/src/ui/`; `useBrainEvents` hook in `feral-client-v2/src/hooks/`.
+- **v2 Dock expanded** — 19 primary items + contextual "Pair" CTA chip when `device_count === 0`.
+- **v1 AppShell** — sidebar now carries a "Pair device" CTA linking to Settings (matching v2's everywhere-pair ethos).
+
+### Added (track-0 meta)
+- **feral-client-v2 — ambient-OS client (opt-in).** New parallel client at
+  [`feral-client-v2/`](feral-client-v2/) that re-imagines the UI as an
+  ambient operating system: translucent macOS-Tahoe design tokens, bottom
+  dock, persona-field background with an opt-in live-ops stream, dedicated
+  Forge (Tool Genesis), Devices (HUP node map), and GenUI Canvas surfaces,
+  distinct voice-mode state, and a one-accent neutral palette. Opt in via
+  `http://localhost:9090/?v2=1`; revert with `?v1=1`. Choice persists in
+  `localStorage.feral_ui_v2`. The Brain conditionally mounts
+  `feral-core/webui-v2/` at `/v2` — if the bundle isn't built, the mount
+  is skipped (CI-safe). v1 remains the default. Backed by 20 vitest tests
+  (scaffold + primitives + voice + 12 per-page smoke tests) plus 3 pytest
+  tests verifying the mount guard.
+- **v2 mobile design tokens.** Canonical `FeralV2Tokens.swift` +
+  `FeralV2Tokens.kt` ship in `feral-nodes/ios-app/App/` and
+  `feral-nodes/android-app/src/main/java/ai/feral/node/`. They mirror the
+  web `tokens.css` so the three persona-critical screens (Orb / Chat /
+  Voice) can be ported without drift. Follow-up work documented in
+  [`feral-nodes/V2_MOBILE_PORTING.md`](feral-nodes/V2_MOBILE_PORTING.md).
+- **v2 promotion checklist.** [`V2_PROMOTION_CHECKLIST.md`](V2_PROMOTION_CHECKLIST.md)
+  documents the exact steps to flip v2 to default after the maintainer
+  signs off — including the two-release deprecation window so users can
+  fall back via `?v1=1` for ≥ 60 days.
+- **Subagent rule consistency.** `.cursor/agents/subagent-creator.md` now
+  mirrors the always-apply workspace rule in `.cursor/rules/Subagets.mdc`
+  (`GPT 5.4 EXTRA HIGH` or `CLAUDE OPUS 4.7 MAX`) — closes the two-file
+  discrepancy that would have silently weakened model selection for
+  delegated subagents.
+- **First-party agent personas (10).** Ten `kind=agent` manifests under
+  [`feral-core/agents/personas/`](feral-core/agents/personas/):
+  `coding_assistant`, `home_ops`, `health_tracker`, `executive_assistant`,
+  `research_assistant`, `journaling`, `devops`, `parental`,
+  `accessibility`, `security_analyst`. Each declares system prompt, tool
+  permissions, memory filter, and optional cron schedule. Wired into
+  `seed_first_party.py` so `registry.feral.sh` Marketplace → Agent tab
+  populates.
+- **First-party workflow packs (10).** Ten `kind=workflow` TaskFlow
+  manifests under [`feral-core/workflows/`](feral-core/workflows/):
+  morning briefing, PR triage, weekly summary, standup composer,
+  expense sort, meeting recap, invoice OCR, code review, weekly health,
+  weekly home check. All steps use runtime-recognised step types from
+  `feral-core/agents/taskflow.py`. Loader + contract tests at
+  `feral-registry/tests/test_seed_personas_workflows.py` (22 tests).
+- **HUP v1.1 proposal.** [`feral-nodes/HUP_V1_1_PROPOSAL.md`](feral-nodes/HUP_V1_1_PROPOSAL.md)
+  specifies additive `audio_frame` + `video_frame` event types needed
+  for Pillar A smart-glasses livestream. Text-only proposal —
+  implementation lands with the W300 daemon PR per
+  [`TRACK_B_HARDWARE.md`](TRACK_B_HARDWARE.md).
+- **Channel exemplar: Matrix stub.** Honest `MatrixChannel` scaffold at
+  [`feral-core/channels/matrix.py`](feral-core/channels/matrix.py) that
+  refuses to fake a connection without credentials + `matrix-nio`
+  installed. Template for every remaining channel in Track A. 3 unit
+  tests enforce the "never fake" contract.
+- **Tracking docs for phased roadmap.**
+  [`TRACK_A_CHANNELS_PROVIDERS.md`](TRACK_A_CHANNELS_PROVIDERS.md),
+  [`TRACK_B_HARDWARE.md`](TRACK_B_HARDWARE.md),
+  [`TRACK_C` inline in this changelog],
+  [`TRACK_D_ADVANCED.md`](TRACK_D_ADVANCED.md) — each track broken into
+  day-sized shippable PRs with owners, success criteria, and the exact
+  prerequisite gate between tracks.
+
 ## [2026.4.14] - 2026-04-18
 
 ### Added

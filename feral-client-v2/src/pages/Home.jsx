@@ -1,0 +1,461 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  Sun, Moon, Briefcase, Cloud, CloudRain, Snowflake, Zap, RefreshCw, Plug,
+  Sparkles, ChevronRight, Plus,
+} from 'lucide-react';
+import Pane from '../ui/Pane';
+import Glass from '../ui/Glass';
+import Orb from '../ui/Orb';
+import StatusDot from '../ui/StatusDot';
+import EmptyState from '../ui/EmptyState';
+import SkillsLauncher, { readPinned, MAX_PINNED } from '../components/SkillsLauncher';
+import { apiJson, apiFetch } from '../lib/api';
+import { useSomatic } from '../hooks/useSomatic';
+import { useBrainEvents, EVENT_TYPES } from '../hooks/useBrainEvents';
+
+/**
+ * Home — unified Ambient + Dashboard surface. Replaces the separate
+ * Dashboard and Ambient pages.
+ */
+
+const MODES = [
+  { id: 'briefing', label: 'Briefing', Icon: Sun },
+  { id: 'desk', label: 'Desk', Icon: Briefcase },
+  { id: 'wind_down', label: 'Wind-Down', Icon: Moon },
+];
+
+const WEATHER_ICON = {
+  Clear: Sun, Clouds: Cloud, Rain: CloudRain, Drizzle: CloudRain,
+  Snow: Snowflake, Thunderstorm: Zap,
+};
+
+function autoModeFromHour(h) {
+  if (h >= 5 && h < 9) return 'briefing';
+  if (h >= 19 || h < 5) return 'wind_down';
+  return 'desk';
+}
+
+const SKILL_GLYPH = {
+  calendar_google: 'Cal',
+  github_api: 'GH',
+  spotify_music: '♪',
+  coding_tools: '</>',
+  code_interpreter: '>_',
+  web_search: '?',
+  web_actions: '@',
+  pdf_reader: 'pdf',
+  smart_home_hue: '•',
+  messaging_sms: '✉',
+  messaging_channels: '⌘',
+  notes_memory: 'N',
+  weather_current: '☀',
+  desktop_automation: '🖱',
+  computer_use: '▢',
+  gui_computer_use: '▦',
+  agentic_computer_use: '∴',
+  screen_capture: '◫',
+  robot_ext: '▲',
+  digital_twin: '⁂',
+  system_settings: '⚙',
+  subagent: '↻',
+  self_introspection: '?',
+  workspace_scripts: 'sh',
+};
+
+export default function Home() {
+  const somatic = useSomatic();
+  const [time, setTime] = useState(new Date());
+  const [mode, setMode] = useState(autoModeFromHour(new Date().getHours()));
+  const [dashboard, setDashboard] = useState(null);
+  const [skills, setSkills] = useState([]);
+  const [channels, setChannels] = useState({});
+  const [llm, setLlm] = useState(null);
+  const [flows, setFlows] = useState([]);
+  const [briefing, setBriefing] = useState(null);
+  const [nextEvent, setNextEvent] = useState(null);
+  const [windDown, setWindDown] = useState(null);
+  const [snapshot, setSnapshot] = useState(null);
+  const [pinned, setPinned] = useState(readPinned());
+  const [launcherOpen, setLauncherOpen] = useState(false);
+  const [twinQ, setTwinQ] = useState('');
+  const [twinA, setTwinA] = useState(null);
+  const [twinBusy, setTwinBusy] = useState(false);
+
+  const proactive = useBrainEvents({
+    types: [EVENT_TYPES.PROACTIVE, EVENT_TYPES.STATE_PUSH],
+    limit: 1,
+  });
+
+  const refresh = useCallback(async () => {
+    const results = await Promise.allSettled([
+      apiJson('/api/dashboard'),
+      apiJson('/skills'),
+      apiJson('/api/llm/status'),
+      apiJson('/api/taskflows?limit=3'),
+      apiJson('/api/channels'),
+      apiJson('/api/ambient/briefing'),
+      apiJson('/api/ambient/next_event'),
+      apiJson('/api/ambient/wind_down'),
+      apiJson('/api/ambient/snapshot'),
+    ]);
+    const [d, s, l, f, c, b, n, w, snap] = results;
+    if (d.status === 'fulfilled') setDashboard(d.value);
+    if (s.status === 'fulfilled') setSkills(s.value?.skills || (Array.isArray(s.value) ? s.value : []));
+    if (l.status === 'fulfilled') setLlm(l.value);
+    if (f.status === 'fulfilled') setFlows(f.value?.flows || []);
+    if (c.status === 'fulfilled') setChannels(c.value?.status_by_channel || c.value?.channels || c.value || {});
+    if (b.status === 'fulfilled') setBriefing(b.value);
+    if (n.status === 'fulfilled') setNextEvent(n.value);
+    if (w.status === 'fulfilled') setWindDown(w.value);
+    if (snap.status === 'fulfilled') {
+      setSnapshot(snap.value);
+      if (snap.value?.suggested_mode) setMode(snap.value.suggested_mode);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const t = setInterval(() => setTime(new Date()), 1000);
+    const r = setInterval(refresh, 15000);
+    return () => { clearInterval(t); clearInterval(r); };
+  }, [refresh]);
+
+  useEffect(() => {
+    const onPinChange = () => setPinned(readPinned());
+    window.addEventListener('feral_pinned_change', onPinChange);
+    window.addEventListener('storage', onPinChange);
+    return () => {
+      window.removeEventListener('feral_pinned_change', onPinChange);
+      window.removeEventListener('storage', onPinChange);
+    };
+  }, []);
+
+  const askTwin = async (e) => {
+    e.preventDefault();
+    if (!twinQ.trim()) return;
+    setTwinBusy(true);
+    setTwinA(null);
+    try {
+      const r = await apiFetch(`/api/digital-twin/ask?question=${encodeURIComponent(twinQ)}`);
+      if (r.ok) {
+        const data = await r.json();
+        setTwinA(data.answer || data.response || data.reply || JSON.stringify(data));
+      } else {
+        setTwinA(`Brain returned ${r.status}.`);
+      }
+    } catch (err) {
+      setTwinA(err.message);
+    } finally {
+      setTwinBusy(false);
+    }
+  };
+
+  const deviceCount = dashboard?.device_count ?? 0;
+  const skillCount = dashboard?.skills_count ?? skills.length;
+  const hr = Math.round(dashboard?.health?.heart_rate || somatic.heartRate || 0);
+  const cog = Math.round(((dashboard?.health?.cognitive_load ?? somatic.cognitiveLoad) || 0) * 100);
+  const sessionCount = dashboard?.session_count ?? 0;
+  const alert = proactive?.[0]?.msg?.data || proactive?.[0]?.msg?.payload;
+
+  const skillsById = new Map(skills.map((s) => [s.skill_id || s.id, s]));
+  const pinnedSkills = pinned
+    .map((id) => skillsById.get(id))
+    .filter(Boolean);
+  // Fill up to MAX_PINNED with remaining skills so users always see a row.
+  while (pinnedSkills.length < Math.min(MAX_PINNED, skills.length)) {
+    const extra = skills.find((s) => !pinnedSkills.includes(s));
+    if (!extra) break;
+    pinnedSkills.push(extra);
+  }
+  const overflow = Math.max(skills.length - pinnedSkills.length, 0);
+
+  const weather = briefing?.weather;
+  const Weather = weather && (WEATHER_ICON[weather.condition] || Sun);
+
+  return (
+    <div className="v2-page v2-page--stack v2-home" data-testid="v2-marker">
+      <Pane
+        className="v2-home-hero"
+        actions={(
+          <div className="v2-home-mode-tabs">
+            {MODES.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setMode(id)}
+                className={`v2-tab${mode === id ? ' is-active' : ''}`}
+                aria-pressed={mode === id}
+              >
+                <Icon size={12} aria-hidden="true" />
+                <span className="v2-tab-label">{label}</span>
+              </button>
+            ))}
+            <button type="button" className="v2-btn v2-btn--ghost" onClick={refresh} aria-label="Refresh">
+              <RefreshCw size={13} />
+            </button>
+          </div>
+        )}
+      >
+        <div className="v2-home-hero-body">
+          <div className="v2-home-hero-left">
+            <Orb size={120} mode={somatic.orbMode || 'idle'} />
+            <div>
+              <div className="v2-home-greeting">{briefing?.greeting || 'Welcome back'}</div>
+              <div className="v2-home-time">
+                {time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
+                {' · '}
+                {time.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+              </div>
+              {nextEvent?.event && (
+                <div className="v2-home-next">
+                  <Sparkles size={12} aria-hidden="true" />
+                  Next: <strong>{nextEvent.event.title || nextEvent.event.summary}</strong>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="v2-home-stats">
+            <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Brain</div>
+              <div className="v2-stat-value"><StatusDot tone="live" pulse /> online</div>
+            </Glass>
+            <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Skills</div>
+              <div className="v2-stat-value">{skillCount}</div>
+            </Glass>
+            <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Sessions</div>
+              <div className="v2-stat-value">{sessionCount}</div>
+            </Glass>
+            <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Devices</div>
+              <div className="v2-stat-value">{deviceCount}</div>
+            </Glass>
+            <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Heart rate</div>
+              <div className="v2-stat-value">{hr > 0 ? `${hr}` : '—'}</div>
+            </Glass>
+            <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Load</div>
+              <div className="v2-stat-value">{cog}%</div>
+            </Glass>
+          </div>
+        </div>
+      </Pane>
+
+      {alert && (alert.title || alert.message) && (
+        <Glass level={1} radius="md" padding="md" className="v2-dash-alert">
+          <Sparkles size={14} aria-hidden="true" />
+          <div>
+            <div className="v2-dash-alert-title">{alert.title || 'Heads up'}</div>
+            <div className="v2-dash-alert-msg">{alert.message || ''}</div>
+          </div>
+        </Glass>
+      )}
+
+      {deviceCount === 0 && (
+        <Glass level={1} radius="lg" padding="md" className="v2-dash-cta">
+          <div className="v2-dash-cta-body">
+            <Plug size={18} aria-hidden="true" />
+            <div>
+              <div className="v2-dash-cta-title">Connect a device</div>
+              <div className="v2-dash-cta-hint">
+                Pair your phone, wristband, smart glasses, or any HUP node.
+              </div>
+            </div>
+            <Link to="/devices" className="v2-btn v2-btn--primary">Pair</Link>
+          </div>
+        </Glass>
+      )}
+
+      <Pane title={`Skills (${skillCount})`} actions={(
+        <button type="button" className="v2-btn v2-btn--ghost" onClick={() => setLauncherOpen(true)}>
+          View all <ChevronRight size={12} />
+        </button>
+      )}>
+        <div className="v2-skill-pinstrip">
+          {pinnedSkills.map((s) => {
+            const id = s.skill_id || s.id;
+            return (
+              <button
+                key={id}
+                type="button"
+                className="v2-skill-pin"
+                onClick={() => setLauncherOpen(true)}
+                title={`${s.name || id} — ${s.description || ''}`}
+              >
+                <span className="v2-skill-pin-glyph" aria-hidden="true">{SKILL_GLYPH[id] || '•'}</span>
+                <span className="v2-skill-pin-name">{s.name || id}</span>
+              </button>
+            );
+          })}
+          {overflow > 0 && (
+            <button
+              type="button"
+              className="v2-skill-pin v2-skill-pin--more"
+              onClick={() => setLauncherOpen(true)}
+              aria-label={`Open skills launcher — ${overflow} more skills`}
+            >
+              <Plus size={14} aria-hidden="true" />
+              <span className="v2-skill-pin-name">{overflow} more</span>
+            </button>
+          )}
+          {pinnedSkills.length === 0 && overflow === 0 && (
+            <EmptyState title="No skills loaded yet" hint="Check the Brain boot log." />
+          )}
+        </div>
+      </Pane>
+
+      {mode === 'briefing' && (briefing?.sleep || weather || briefing?.agenda?.length > 0 || briefing?.goals?.length > 0) && (
+        <div className="v2-home-grid">
+          {briefing?.sleep && (
+            <Glass level={1} radius="md" padding="md">
+              <div className="v2-stat-label">Sleep</div>
+              <div className="v2-stat-value">HRV {briefing.sleep.hrv_ms}ms</div>
+              <div className="v2-p v2-p--muted">{briefing.sleep.trend}</div>
+            </Glass>
+          )}
+          {weather && Weather && (
+            <Glass level={1} radius="md" padding="md">
+              <div className="v2-stat-label">Weather</div>
+              <div className="v2-stat-value"><Weather size={14} /> {Math.round(weather.temp_c)}°C</div>
+              <div className="v2-p v2-p--muted">{weather.description}</div>
+              {weather.outfit_hint && <div className="v2-p v2-p--tiny">Wear: {weather.outfit_hint}</div>}
+            </Glass>
+          )}
+          {briefing?.agenda?.length > 0 && (
+            <Glass level={1} radius="md" padding="md">
+              <div className="v2-stat-label">Agenda</div>
+              <ul className="v2-ambient-list">
+                {briefing.agenda.slice(0, 3).map((a, i) => (
+                  <li key={i}>{a.title || a.action || JSON.stringify(a).slice(0, 120)}</li>
+                ))}
+              </ul>
+            </Glass>
+          )}
+          {briefing?.goals?.length > 0 && (
+            <Glass level={1} radius="md" padding="md">
+              <div className="v2-stat-label">Goals</div>
+              <ul className="v2-ambient-list">
+                {briefing.goals.slice(0, 3).map((g) => (
+                  <li key={g.id}>{g.title} · <span className="v2-p v2-p--muted">{Math.round((g.progress || 0) * 100)}%</span></li>
+                ))}
+              </ul>
+            </Glass>
+          )}
+        </div>
+      )}
+
+      {mode === 'wind_down' && (windDown?.day_recap?.completed_tasks?.length > 0 || windDown?.sleep_prep || windDown?.journal_prompt) && (
+        <div className="v2-home-grid">
+          {windDown?.day_recap?.completed_tasks?.length > 0 && (
+            <Glass level={1} radius="md" padding="md">
+              <div className="v2-stat-label">Completed today</div>
+              <ul className="v2-ambient-list">
+                {windDown.day_recap.completed_tasks.slice(0, 5).map((t, i) => (
+                  <li key={i}>{t.title || t}</li>
+                ))}
+              </ul>
+            </Glass>
+          )}
+          {windDown?.sleep_prep && (
+            <Glass level={1} radius="md" padding="md">
+              <div className="v2-stat-label">Sleep prep</div>
+              <div className="v2-stat-value">{Math.round((windDown.sleep_prep.time_to_bed_min || 0) / 60)}h</div>
+              {windDown.sleep_prep.hints?.length > 0 && (
+                <ul className="v2-ambient-list">
+                  {windDown.sleep_prep.hints.map((h, i) => <li key={i}>{h}</li>)}
+                </ul>
+              )}
+            </Glass>
+          )}
+          {windDown?.journal_prompt && (
+            <Glass level={1} radius="md" padding="md">
+              <div className="v2-stat-label">Journal prompt</div>
+              <div className="v2-p">{windDown.journal_prompt}</div>
+            </Glass>
+          )}
+        </div>
+      )}
+
+      <div className="v2-dash-row v2-dash-row--double">
+        <Pane title="Channels">
+          {Object.keys(channels).length === 0 && (
+            <EmptyState
+              title="No channels configured"
+              hint="Set FERAL_TELEGRAM_BOT_TOKEN etc. in your shell, or open Settings → Channels."
+            />
+          )}
+          <div className="v2-channel-list">
+            {Object.entries(channels).map(([name, info]) => (
+              <Glass key={name} level={0} radius="sm" padding="sm" className="v2-channel-row">
+                <StatusDot tone={info?.connected ? 'live' : 'off'} />
+                <span className="v2-channel-name">{name}</span>
+                <span className="v2-channel-state">
+                  {info?.connected ? 'connected' : info?.enabled ? 'starting' : 'off'}
+                </span>
+              </Glass>
+            ))}
+          </div>
+        </Pane>
+
+        <Pane title="LLM">
+          {llm ? (
+            <div className="v2-setting-stack">
+              <div className="v2-setting-row">
+                <div className="v2-setting-label"><div>Provider</div></div>
+                <div className="v2-setting-control">
+                  <StatusDot tone={llm.available ? 'live' : 'warn'} /> {llm.provider || '—'}
+                </div>
+              </div>
+              <div className="v2-setting-row">
+                <div className="v2-setting-label"><div>Model</div></div>
+                <div className="v2-setting-control">{llm.model || '—'}</div>
+              </div>
+              {llm.reason && (
+                <div className="v2-setting-row">
+                  <div className="v2-setting-label"><div>Reason</div></div>
+                  <div className="v2-setting-control v2-p v2-p--muted">{llm.reason}</div>
+                </div>
+              )}
+            </div>
+          ) : <EmptyState title="LLM status pending" />}
+        </Pane>
+      </div>
+
+      <div className="v2-dash-row v2-dash-row--double">
+        <Pane title="Active flows" actions={(
+          <Link to="/flows" className="v2-btn v2-btn--ghost">Manage <ChevronRight size={12} /></Link>
+        )}>
+          {flows.length === 0 ? (
+            <EmptyState title="No flows running" hint="Schedule or one-shot multi-step routines." />
+          ) : (
+            <div className="v2-flow-mini-list">
+              {flows.map((f) => (
+                <Glass key={f.id} level={0} radius="sm" padding="sm" className="v2-flow-row">
+                  <StatusDot tone={f.status === 'running' ? 'live' : f.status === 'failed' ? 'error' : 'neutral'} pulse={f.status === 'running'} />
+                  <div className="v2-flow-title">{f.title || f.id}</div>
+                  <div className="v2-flow-status">{f.status}</div>
+                </Glass>
+              ))}
+            </div>
+          )}
+        </Pane>
+
+        <Pane title="Ask your Digital Twin">
+          <form onSubmit={askTwin} className="v2-twin-form">
+            <input
+              className="v2-input v2-twin-input"
+              value={twinQ}
+              onChange={(e) => setTwinQ(e.target.value)}
+              placeholder="What do I usually do on Sunday evenings?"
+              disabled={twinBusy}
+            />
+            <button type="submit" className="v2-btn v2-btn--primary" disabled={twinBusy || !twinQ.trim()}>
+              {twinBusy ? 'Thinking…' : 'Ask'}
+            </button>
+          </form>
+          {twinA && <div className="v2-twin-answer">{twinA}</div>}
+        </Pane>
+      </div>
+
+      <SkillsLauncher open={launcherOpen} onClose={() => setLauncherOpen(false)} skills={skills} />
+    </div>
+  );
+}
