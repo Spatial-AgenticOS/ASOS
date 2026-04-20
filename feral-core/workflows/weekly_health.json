@@ -1,0 +1,14 @@
+{
+  "workflow_id": "weekly_health",
+  "name": "Weekly Health Report",
+  "description": "Every Sunday morning, summarise the week's HR, sleep, activity, and BP against your baseline.",
+  "schedule": "0 9 * * 0",
+  "version": "1.0.0",
+  "tags": ["health", "weekly"],
+  "steps": [
+    { "type": "skill.invoke", "skill_id": "health", "endpoint": "weekly_summary", "args": {} },
+    { "type": "memory.search", "q": "health baseline" },
+    { "type": "llm.chat", "prompt_template": "Write a 3-paragraph weekly health report: (1) averages with deltas from baseline, (2) best + worst day, (3) one small suggestion. Data: {{ step_1 }}. Baseline: {{ step_2 }}." },
+    { "type": "note.save", "content": "{{ previous_output }}", "tags": ["health", "weekly"] }
+  ]
+}

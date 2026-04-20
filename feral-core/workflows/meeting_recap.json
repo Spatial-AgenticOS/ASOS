@@ -1,0 +1,14 @@
+{
+  "workflow_id": "meeting_recap",
+  "name": "Meeting Recap",
+  "description": "On-demand: given a meeting transcript, produce action items + decisions + risks. Save to wiki.",
+  "schedule": null,
+  "version": "1.0.0",
+  "tags": ["meetings", "productivity"],
+  "steps": [
+    { "type": "memory.search", "q": "{{ context.meeting_topic }}" },
+    { "type": "llm.chat", "prompt_template": "Summarise this meeting transcript into three sections — (1) Decisions, (2) Action items with owners, (3) Open risks. Be concrete; quote attendee names. Transcript: {{ context.transcript }}. Prior context: {{ previous_output }}." },
+    { "type": "wiki.compile", "page": "meetings/{{ context.meeting_id }}", "content": "{{ previous_output }}" },
+    { "type": "note.save", "content": "{{ previous_output }}", "tags": ["meeting_recap"] }
+  ]
+}

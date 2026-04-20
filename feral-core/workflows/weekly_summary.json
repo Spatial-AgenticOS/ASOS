@@ -1,0 +1,15 @@
+{
+  "workflow_id": "weekly_summary",
+  "name": "Weekly Summary",
+  "description": "Every Sunday evening, compile a recap of the past week: meetings, commits, notes, exercise, notable events.",
+  "schedule": "0 19 * * 0",
+  "version": "1.0.0",
+  "tags": ["weekly", "reflection"],
+  "steps": [
+    { "type": "memory.search", "q": "week-in-review" },
+    { "type": "skill.invoke", "skill_id": "calendar", "endpoint": "list_past_days", "args": { "days": 7 } },
+    { "type": "skill.invoke", "skill_id": "github", "endpoint": "list_my_commits", "args": { "since_days": 7 } },
+    { "type": "llm.chat", "prompt_template": "Write a 250-word weekly recap covering meetings, commits, and notes. Be concrete; cite sources. Meetings: {{ step_2 }}. Commits: {{ step_3 }}. Recent memory: {{ step_1 }}." },
+    { "type": "wiki.compile", "page": "weekly/{{ iso_week }}", "content": "{{ previous_output }}" }
+  ]
+}

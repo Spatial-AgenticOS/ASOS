@@ -1,0 +1,14 @@
+{
+  "workflow_id": "morning_briefing",
+  "name": "Morning Briefing",
+  "description": "Every weekday at 7am, summarise today's calendar + weather + top 3 inbox items.",
+  "schedule": "0 7 * * 1-5",
+  "version": "1.0.0",
+  "tags": ["morning", "productivity"],
+  "steps": [
+    { "type": "skill.invoke", "skill_id": "calendar", "endpoint": "list_today", "args": {} },
+    { "type": "skill.invoke", "skill_id": "web_search", "endpoint": "search", "args": { "q": "weather today" } },
+    { "type": "llm.chat", "prompt_template": "Write a 4-sentence morning brief. Meetings: {{ step_1 }}. Weather: {{ step_2 }}. Lead with the most time-sensitive item." },
+    { "type": "skill.invoke", "skill_id": "messaging_channels", "endpoint": "send", "args": { "to": "primary", "text": "{{ previous_output }}" } }
+  ]
+}

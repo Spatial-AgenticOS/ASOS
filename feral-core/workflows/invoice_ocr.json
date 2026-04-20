@@ -1,0 +1,14 @@
+{
+  "workflow_id": "invoice_ocr",
+  "name": "Invoice OCR",
+  "description": "On-demand: OCR an invoice PDF, extract vendor + amount + due date, add a calendar reminder 3 days before due.",
+  "schedule": null,
+  "version": "1.0.0",
+  "tags": ["finance", "ocr"],
+  "steps": [
+    { "type": "skill.invoke", "skill_id": "pdf_reader", "endpoint": "extract_text", "args": { "path": "{{ context.invoice_path }}" } },
+    { "type": "llm.chat", "prompt_template": "Return JSON {vendor, amount_usd, due_date_iso, invoice_number} from this invoice: {{ previous_output }}" },
+    { "type": "skill.invoke", "skill_id": "calendar", "endpoint": "create_event", "args": { "title": "Pay invoice: {{ json.vendor }} — ${{ json.amount_usd }}", "start_iso": "{{ json.due_date_iso }}", "reminder_minutes": 4320 } },
+    { "type": "note.save", "content": "{{ previous_output }}", "tags": ["invoice"] }
+  ]
+}

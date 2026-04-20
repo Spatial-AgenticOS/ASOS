@@ -1,0 +1,13 @@
+{
+  "workflow_id": "pr_triage",
+  "name": "PR Triage",
+  "description": "Every hour during work hours, list open PRs assigned to you + score them by staleness and CI status.",
+  "schedule": "0 9-17 * * 1-5",
+  "version": "1.0.0",
+  "tags": ["dev", "github"],
+  "steps": [
+    { "type": "skill.invoke", "skill_id": "github", "endpoint": "list_my_prs", "args": { "state": "open" } },
+    { "type": "llm.chat", "prompt_template": "Given these PRs, output a table sorted by (CI red first, then oldest): {{ previous_output }}" },
+    { "type": "note.save", "content": "{{ previous_output }}", "tags": ["pr_triage"] }
+  ]
+}

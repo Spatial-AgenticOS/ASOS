@@ -1,0 +1,13 @@
+{
+  "workflow_id": "expense_sort",
+  "name": "Expense Sort",
+  "description": "On-demand: scan screenshot or PDF of a receipt, categorise, file in notes with a running total per month.",
+  "schedule": null,
+  "version": "1.0.0",
+  "tags": ["finance", "ocr"],
+  "steps": [
+    { "type": "skill.invoke", "skill_id": "pdf_reader", "endpoint": "extract_text", "args": { "path": "{{ context.receipt_path }}" } },
+    { "type": "llm.chat", "prompt_template": "Extract amount, vendor, date, category (food/travel/utility/other) from this receipt. Return JSON: {{ previous_output }}" },
+    { "type": "note.save", "content": "{{ previous_output }}", "tags": ["expense", "{{ json.category }}"] }
+  ]
+}

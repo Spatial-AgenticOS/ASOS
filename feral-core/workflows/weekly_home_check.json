@@ -1,0 +1,13 @@
+{
+  "workflow_id": "weekly_home_check",
+  "name": "Weekly Home Check",
+  "description": "Every Monday 8am, sweep the house: filter status, battery levels, door/window sensors, camera health.",
+  "schedule": "0 8 * * 1",
+  "version": "1.0.0",
+  "tags": ["home", "weekly"],
+  "steps": [
+    { "type": "skill.invoke", "skill_id": "smart_home", "endpoint": "list_devices", "args": {} },
+    { "type": "llm.chat", "prompt_template": "For each device, flag: low battery (<20%), offline, overdue filter (>90d), unusual pattern. Devices: {{ previous_output }}" },
+    { "type": "skill.invoke", "skill_id": "messaging_channels", "endpoint": "send", "args": { "to": "primary", "text": "Weekly home check — {{ previous_output }}" } }
+  ]
+}

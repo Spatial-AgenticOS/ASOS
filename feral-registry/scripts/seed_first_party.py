@@ -99,6 +99,74 @@ def _load_skill_seeds() -> list[SeedItem]:
     return seeds
 
 
+def _load_agent_seeds() -> list[SeedItem]:
+    """Pick up every JSON persona in ``feral-core/agents/personas/``.
+
+    Each file is the manifest itself; the file body becomes ``manifest.json``
+    in the bundle. Non-JSON files (README.md etc.) are skipped.
+    """
+    root = _repo_root() / "feral-core" / "agents" / "personas"
+    seeds: list[SeedItem] = []
+    if not root.exists():
+        return seeds
+    for path in sorted(root.glob("*.json")):
+        try:
+            manifest = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            continue
+        name = manifest.get("agent_id") or manifest.get("name") or path.stem
+        version = str(manifest.get("version", "1.0.0"))
+        seeds.append(
+            SeedItem(
+                kind="agent",
+                name=name,
+                version=version,
+                manifest={
+                    "kind": "agent",
+                    "name": name,
+                    "version": version,
+                    "description": manifest.get("description"),
+                    "author": "feral-core",
+                    "original": manifest,
+                },
+                files=[(f"personas/{path.name}", path.read_bytes())],
+            )
+        )
+    return seeds
+
+
+def _load_workflow_seeds() -> list[SeedItem]:
+    """Pick up every JSON workflow pack in ``feral-core/workflows/``."""
+    root = _repo_root() / "feral-core" / "workflows"
+    seeds: list[SeedItem] = []
+    if not root.exists():
+        return seeds
+    for path in sorted(root.glob("*.json")):
+        try:
+            manifest = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            continue
+        name = manifest.get("workflow_id") or manifest.get("name") or path.stem
+        version = str(manifest.get("version", "1.0.0"))
+        seeds.append(
+            SeedItem(
+                kind="workflow",
+                name=name,
+                version=version,
+                manifest={
+                    "kind": "workflow",
+                    "name": name,
+                    "version": version,
+                    "description": manifest.get("description"),
+                    "author": "feral-core",
+                    "original": manifest,
+                },
+                files=[(f"workflows/{path.name}", path.read_bytes())],
+            )
+        )
+    return seeds
+
+
 def _load_daemon_seeds() -> list[SeedItem]:
     nodes_root = _repo_root() / "feral-nodes"
     seeds: list[SeedItem] = []
@@ -195,7 +263,12 @@ async def seed() -> int:
     sk = _get_seed_signing_key()
     pubkey_hex = sk.verify_key.encode().hex()
 
-    seeds = _load_skill_seeds() + _load_daemon_seeds()
+    seeds = (
+        _load_skill_seeds()
+        + _load_daemon_seeds()
+        + _load_agent_seeds()
+        + _load_workflow_seeds()
+    )
     inserted = 0
 
     async with SessionLocal() as session:

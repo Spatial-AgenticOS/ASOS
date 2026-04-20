@@ -1,0 +1,14 @@
+{
+  "workflow_id": "code_review",
+  "name": "Code Review",
+  "description": "On-demand: review an open PR — fetch diff + CI status, flag risky patterns, suggest smallest-diff fix.",
+  "schedule": null,
+  "version": "1.0.0",
+  "tags": ["dev", "github"],
+  "steps": [
+    { "type": "skill.invoke", "skill_id": "github", "endpoint": "get_pr", "args": { "repo": "{{ context.repo }}", "number": "{{ context.pr_number }}" } },
+    { "type": "skill.invoke", "skill_id": "github", "endpoint": "get_pr_diff", "args": { "repo": "{{ context.repo }}", "number": "{{ context.pr_number }}" } },
+    { "type": "llm.chat", "prompt_template": "Review this PR. Flag (a) safety issues, (b) tests missing, (c) convention violations, (d) one smallest-diff suggestion. PR meta: {{ step_1 }}. Diff: {{ step_2 }}." },
+    { "type": "note.save", "content": "{{ previous_output }}", "tags": ["code_review", "{{ context.repo }}"] }
+  ]
+}

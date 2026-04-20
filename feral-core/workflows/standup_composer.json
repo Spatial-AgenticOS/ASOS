@@ -1,0 +1,15 @@
+{
+  "workflow_id": "standup_composer",
+  "name": "Standup Composer",
+  "description": "Every weekday 9:30am, draft your standup message: yesterday / today / blockers.",
+  "schedule": "30 9 * * 1-5",
+  "version": "1.0.0",
+  "tags": ["dev", "standup"],
+  "steps": [
+    { "type": "skill.invoke", "skill_id": "github", "endpoint": "list_my_commits", "args": { "since_days": 1 } },
+    { "type": "skill.invoke", "skill_id": "calendar", "endpoint": "list_today", "args": {} },
+    { "type": "memory.search", "q": "blockers" },
+    { "type": "llm.chat", "prompt_template": "Draft a standup as three bullet lines: Yesterday / Today / Blockers. Yesterday from commits: {{ step_1 }}. Today from calendar: {{ step_2 }}. Blockers from memory: {{ step_3 }}." },
+    { "type": "note.save", "content": "{{ previous_output }}", "tags": ["standup"] }
+  ]
+}
