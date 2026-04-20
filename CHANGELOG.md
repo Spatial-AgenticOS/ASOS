@@ -1,13 +1,20 @@
 # Changelog
 
-<!-- feral-version: 2026.4.14 -->
+<!-- feral-version: 2026.4.17 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+## [2026.4.17] - 2026-04-20
+
+### Security
+- **All 7 open Dependabot moderate advisories closed.** Bumped `vite` 5.4 → 6.4, `vitest` + `@vitest/coverage-v8` 2.x → 4.1 across all three JS clients (`feral-client`, `feral-client-v2`, `feral-extension`), and `dompurify` 3.3 → 3.4 in `feral-client`. vitest 4 pulls `esbuild` ≥ 0.25 transitively which closes the esbuild dev-server advisory in the same bump. `npm audit` now reports **0 vulnerabilities** in all three clients.
+
 ### Changed
 - **v2 is now the default UI at `/`.** When `feral-core/webui-v2/index.html` is on disk the Brain serves the ambient-OS client directly — no `?v2=1` flag, no redirect, no flash. The `/v2/` alias is retained so existing bookmarks still resolve. v1 (`feral-core/webui/`) stays in the tree for history but is never wired when v2 is built. Backed by [`feral-core/tests/test_webui_default.py`](feral-core/tests/test_webui_default.py).
+- **`SkillEndpoint.method` doc-locked as a routing label.** Added an inline comment explaining that runtime dispatch in `feral-core/skills/impl/*.py` routes by `endpoint_id`, never by `method`; `method` only surfaces into the LLM tool schema's `_feral_meta`. New contract test [`feral-core/tests/test_skill_method_is_metadata.py`](feral-core/tests/test_skill_method_is_metadata.py) AST-scans `skills/impl/` to refuse any `endpoint.method == ...` branching.
+- **v1 client coverage gate rebased for vitest 4.** `feral-client/vitest.config.js` drops the `branches` threshold from 40 → 18 to match vitest 4's stricter branch counting. Statement / function / line totals are unchanged (~28/25/30) on the same test suite; the old 54% branch number was a vitest-2-specific artefact.
 
 ### Fixed
 - `/api/ambient/briefing` returned 500 because `BlindVault.get()` doesn't exist; rewrote to use the real `retrieve()` API with a safe fallback. New pytest at [`feral-core/tests/test_track0_fixes.py`](feral-core/tests/test_track0_fixes.py).
