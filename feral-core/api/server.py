@@ -1055,23 +1055,45 @@ async def _analyze_scene_background(
 
 
 # ─────────────────────────────────────────────
-# Bundled Web UI (served from webui/ if present)
+# Bundled Web UI
 # ─────────────────────────────────────────────
+#
+# v2 (feral-client-v2) is the default UI. When ``webui-v2/index.html`` is on
+# disk the Brain serves it at / directly, and v1 (``webui/``) is never
+# reached. If webui-v2/ isn't built (fresh clone), fall back to v1 so users
+# still see something. v1 source is kept in the tree for history only.
+#
+# The ``/v2/`` alias is retained so existing bookmarks keep working even
+# when v2 is already the default at /.
 
-_webui_dir = Path(__file__).parent.parent / "webui"
-_webui_ready = _webui_dir.is_dir() and (_webui_dir / "index.html").exists()
+_webui_v2_dir = Path(__file__).parent.parent / "webui-v2"
+_webui_legacy_dir = Path(__file__).parent.parent / "webui"
+_webui_v2_ready = _webui_v2_dir.is_dir() and (_webui_v2_dir / "index.html").exists()
+_webui_legacy_ready = _webui_legacy_dir.is_dir() and (_webui_legacy_dir / "index.html").exists()
+
+_webui_dir = _webui_v2_dir if _webui_v2_ready else _webui_legacy_dir
+_webui_ready = _webui_v2_ready or _webui_legacy_ready
+_webui_variant = "v2" if _webui_v2_ready else ("v1-legacy" if _webui_legacy_ready else "missing")
 _webui_route_mode = "spa" if _webui_ready else "fallback"
-logger.info("Web UI routing mode=%s path=%s", _webui_route_mode, _webui_dir)
+logger.info("Web UI routing mode=%s variant=%s path=%s", _webui_route_mode, _webui_variant, _webui_dir)
 
 if _webui_ready and (_webui_dir / "assets").is_dir():
     from starlette.staticfiles import StaticFiles
     app.mount("/assets", StaticFiles(directory=str(_webui_dir / "assets")), name="webui-assets")
-    logger.info(f"Web UI bundled from {_webui_dir} — open {brain_public_base_url()}")
+    logger.info(f"Web UI ({_webui_variant}) bundled from {_webui_dir} — open {brain_public_base_url()}")
 else:
     logger.warning(
         f"Web UI not found at {_webui_dir}. Dashboard will show setup instructions. "
         "Run 'make bundle-webui' to build the dashboard."
     )
+
+# Keep the /v2/ alias so ``http://host/v2/`` still resolves when v2 is
+# already the default at /. Harmless: both paths end up serving the same
+# bundle because feral-client-v2 uses relative asset URLs.
+if _webui_v2_ready:
+    from starlette.staticfiles import StaticFiles
+    app.mount("/v2", StaticFiles(directory=str(_webui_v2_dir), html=True), name="webui-v2")
+    logger.info(f"Web UI v2 alias also available at {brain_public_base_url()}/v2/")
 
 _FALLBACK_HTML = """<!DOCTYPE html>
 <html><head><title>FERAL Brain</title>

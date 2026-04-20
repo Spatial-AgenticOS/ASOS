@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Settings, Cpu, ListChecks, Clock, Sun, Moon, BrainCircuit, Crosshair } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Settings, Cpu, ListChecks, Clock, Sun, Moon, BrainCircuit, Crosshair, Plug } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { API_BASE as API } from '../config';
 import TheOrb from './TheOrb';
@@ -88,6 +88,15 @@ export default function AppShell() {
             {somatic.heart_rate > 0 && <div style={{ marginTop: 2 }}>HR: {Math.round(somatic.heart_rate)} bpm</div>}
           </div>
         )}
+
+        <NavLink
+          to="/settings"
+          className="flex items-center gap-2 mx-3 mb-2 px-3 py-2 rounded-lg text-[12px] font-medium text-feral-accent bg-feral-accent-dim hover:bg-feral-accent-glow transition"
+          title="Pair device — opens Settings > Devices"
+        >
+          <Plug size={14} className="flex-shrink-0" />
+          <span>Pair device</span>
+        </NavLink>
 
         <div className="px-4 py-4 border-t border-feral-border flex items-center justify-between">
           <div className="flex items-center gap-2 text-[11px] text-feral-text-muted">

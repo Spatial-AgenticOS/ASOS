@@ -78,10 +78,16 @@ async def get_briefing():
     except Exception as e:
         logger.debug("vip emails unavailable: %s", e)
 
-    # Weather (optional — requires OPENWEATHER_API_KEY)
-    ow_key = os.environ.get("OPENWEATHER_API_KEY") or (
-        state.vault.get("OPENWEATHER_API_KEY", "") if hasattr(state, "vault") and state.vault else ""
-    )
+    # Weather (optional — requires OPENWEATHER_API_KEY). Vault uses
+    # ``retrieve(key_name)`` — there is no ``get`` method — so we fall through
+    # to an env lookup + vault retrieve without tripping AttributeError when
+    # the key is absent.
+    ow_key = os.environ.get("OPENWEATHER_API_KEY") or ""
+    if not ow_key and hasattr(state, "vault") and state.vault:
+        try:
+            ow_key = state.vault.retrieve("OPENWEATHER_API_KEY") or ""
+        except Exception:
+            ow_key = ""
     if ow_key:
         try:
             import httpx

@@ -15,9 +15,13 @@ import { API_BASE } from './config';
 import { ToastProvider } from './components/Toast';
 import 'highlight.js/styles/github-dark.css';
 import './index.css';
-import { bootstrapLocalApiKey } from './bootstrap';
+import { bootstrapLocalApiKey, maybeRedirectToV2 } from './bootstrap';
 
-bootstrapLocalApiKey();
+// Opt-in v2 client. Visit http://localhost:9090/?v2=1 to switch; ?v1=1 reverts.
+const redirected = maybeRedirectToV2();
+if (!redirected) {
+  bootstrapLocalApiKey();
+}
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -89,12 +93,14 @@ function Root() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <ToastProvider>
-        <Root />
-      </ToastProvider>
-    </ErrorBoundary>
-  </React.StrictMode>
-);
+if (!redirected) {
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <ToastProvider>
+          <Root />
+        </ToastProvider>
+      </ErrorBoundary>
+    </React.StrictMode>
+  );
+}
