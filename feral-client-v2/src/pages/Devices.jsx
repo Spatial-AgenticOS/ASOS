@@ -9,14 +9,17 @@ import PairDeviceModal from '../components/PairDeviceModal';
 import { apiJson, apiFetch } from '../lib/api';
 
 /**
- * Devices — paired list + HUP mesh. Click a device for detail + actuator
- * invoke. Uses Brain's real endpoints:
- *   GET /api/devices/paired, /api/hardware/mesh
+ * Devices — live + paired + HUP mesh. Click a device for detail +
+ * actuator invoke. Uses Brain's real endpoints:
+ *   GET /api/devices/connected   <- live daemon WebSockets, real types
+ *   GET /api/devices/paired      <- historical pairing tokens
+ *   GET /api/hardware/mesh       <- HUP mesh snapshot
  *   GET /api/hardware/device/{id}, /api/hardware/context
  *   POST /api/hardware/invoke (or /api/hardware/execute)
  *   DELETE /api/devices/{device_id}
  */
 export default function Devices() {
+  const [connected, setConnected] = useState([]);
   const [paired, setPaired] = useState([]);
   const [mesh, setMesh] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -26,10 +29,12 @@ export default function Devices() {
 
   const refresh = useCallback(async () => {
     try {
-      const [p, m] = await Promise.allSettled([
+      const [c, p, m] = await Promise.allSettled([
+        apiJson('/api/devices/connected'),
         apiJson('/api/devices/paired'),
         apiJson('/api/hardware/mesh'),
       ]);
+      if (c.status === 'fulfilled') setConnected(c.value?.devices || []);
       if (p.status === 'fulfilled') setPaired(p.value?.devices || []);
       if (m.status === 'fulfilled') setMesh(m.value?.nodes || []);
       setError(null);
@@ -68,7 +73,7 @@ export default function Devices() {
         {error && <div className="v2-chip v2-chip--error">{error}</div>}
         {loading && <EmptyState title="Scanning…" />}
 
-        {!loading && paired.length === 0 && mesh.length === 0 && (
+        {!loading && connected.length === 0 && paired.length === 0 && mesh.length === 0 && (
           <EmptyState
             title="No devices paired yet"
             hint="Pair an iPhone, wristband, smart glasses, or any HUP daemon. FERAL sees their sensors + fires their actuators."
@@ -77,16 +82,56 @@ export default function Devices() {
         )}
       </Pane>
 
+      {connected.length > 0 && (
+        <Pane title={`Live (${connected.length})`}>
+          <p className="v2-p v2-p--muted">
+            Devices currently holding an open HUP WebSocket. Types come from each daemon's
+            <code style={{ margin: '0 4px' }}>node_register</code> payload — never fabricated.
+          </p>
+          <div className="v2-device-grid">
+            {connected.map((d, i) => (
+              <Glass key={d.node_id || i} level={0} radius="md" padding="md" className="v2-device-card" onClick={() => setSelected({ ...d, _source: 'connected' })} role="button" tabIndex={0}>
+                <header className="v2-device-head">
+                  <StatusDot tone="live" pulse />
+                  <h3 className="v2-device-name">{d.name || d.node_id || 'Device'}</h3>
+                </header>
+                <div className="v2-device-meta">
+                  {d.type || 'unknown'}
+                  {d.manufacturer && <> · {d.manufacturer}{d.model ? ` ${d.model}` : ''}</>}
+                </div>
+                {Array.isArray(d.capabilities) && d.capabilities.length > 0 && (
+                  <div className="v2-device-caps">
+                    {d.capabilities.slice(0, 5).map((c, ci) => (
+                      <span key={ci} className="v2-chip">{String(c)}</span>
+                    ))}
+                  </div>
+                )}
+                {d.type === 'wearable' && (d.capabilities || []).includes('haptic') && (
+                  <div className="v2-device-caps" style={{ marginTop: 6 }}>
+                    <span className="v2-chip v2-chip--warn" title="The shipped wristband daemon uses a placeholder GATT UUID for the buzz actuator. Set FERAL_WRISTBAND_BUZZ_UUID to the vendor UUID before relying on it.">
+                      Buzz: placeholder UUID
+                    </span>
+                  </div>
+                )}
+              </Glass>
+            ))}
+          </div>
+        </Pane>
+      )}
+
       {paired.length > 0 && (
         <Pane title={`Paired (${paired.length})`}>
+          <p className="v2-p v2-p--muted">
+            Historical pairings — tokens issued via pair flow. A device can be paired but not currently connected.
+          </p>
           <div className="v2-device-grid">
             {paired.map((d, i) => (
               <Glass key={d.device_id || d.id || i} level={0} radius="md" padding="md" className="v2-device-card" onClick={() => setSelected({ ...d, _source: 'paired' })} role="button" tabIndex={0}>
                 <header className="v2-device-head">
-                  <StatusDot tone={d.connected === false ? 'off' : 'live'} pulse={d.connected !== false} />
+                  <StatusDot tone={d.connected === false ? 'off' : 'neutral'} pulse={false} />
                   <h3 className="v2-device-name">{d.name || d.device_id || d.id || 'Device'}</h3>
                 </header>
-                <div className="v2-device-meta">{d.type || d.kind || 'generic'}</div>
+                <div className="v2-device-meta">{d.type || d.kind || '—'}</div>
                 {d.capabilities && (
                   <div className="v2-device-caps">
                     {(Array.isArray(d.capabilities) ? d.capabilities : Object.keys(d.capabilities || {})).slice(0, 5).map((c, ci) => (

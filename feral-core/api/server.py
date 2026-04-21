@@ -676,6 +676,14 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
             if msg.type in ("node_register", "register") and isinstance(payload, NodeRegisterPayload):
                 node_id = payload.node_id
                 state.daemons[node_id] = ws
+                # Stash the HUP-declared node_type on the WebSocket so
+                # /api/devices/connected can report the real type instead
+                # of the legacy "phone"-for-everyone default.
+                setattr(ws, "_feral_node_type", (payload.node_type or "unknown").lower())
+                setattr(ws, "_feral_capabilities", list(payload.capabilities or []))
+                setattr(ws, "_feral_platform", payload.platform or "")
+                setattr(ws, "_feral_manufacturer", payload.manufacturer or "")
+                setattr(ws, "_feral_model", payload.model or "")
                 if state.skill_executor:
                     state.skill_executor.register_daemon_type(node_id, payload.node_type)
                 logger.info(f"Node registered: {node_id} ({payload.node_type}/{payload.platform}) — caps: {payload.capabilities}")

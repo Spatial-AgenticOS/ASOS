@@ -12,17 +12,80 @@ from api.state import state
 router = APIRouter()
 
 
+def _infer_node_type(node_id: str, ws) -> str:
+    """Pick the most honest node_type label for a connected daemon.
+
+    Priority:
+    1. ``ws._feral_node_type`` — set at ``node_register`` time from the
+       HUP payload. This is the authoritative source.
+    2. ``state.skill_executor._daemon_types[node_id]`` — a mirror set at
+       the same moment; used as fallback if the ws attr is missing for
+       any reason.
+    3. A node_id prefix heuristic (``feral-w300-*`` → glasses,
+       ``feral-wristband-*`` → wearable). Last-resort.
+    4. ``"unknown"`` when nothing else fits. We never silently label
+       something "phone" again.
+    """
+    declared = getattr(ws, "_feral_node_type", None)
+    if declared:
+        return declared
+    if state.skill_executor is not None:
+        mirror = getattr(state.skill_executor, "_daemon_types", {}).get(node_id)
+        if mirror:
+            return str(mirror).lower()
+    low = (node_id or "").lower()
+    if "glasses" in low or "w300" in low:
+        return "glasses"
+    if "wristband" in low or "watch" in low:
+        return "wearable"
+    if "phone" in low or "pixel" in low or "iphone" in low:
+        return "phone"
+    if "robot" in low:
+        return "robot"
+    return "unknown"
+
+
+def _describe_device(node_id: str, ws) -> dict:
+    return {
+        "node_id": node_id,
+        "type": _infer_node_type(node_id, ws),
+        "capabilities": list(getattr(ws, "_feral_capabilities", []) or []),
+        "platform": getattr(ws, "_feral_platform", "") or "",
+        "manufacturer": getattr(ws, "_feral_manufacturer", "") or "",
+        "model": getattr(ws, "_feral_model", "") or "",
+        "status": "connected",
+    }
+
+
 @router.get("/api/devices/connected")
 async def connected_devices():
-    """List all connected devices with their types and metrics."""
-    if state.session_handoff:
-        return {"devices": state.session_handoff.get_active_devices()}
+    """List all connected HUP daemons with their real node_type.
 
-    devices = []
-    devices.append({"type": "desktop", "session_id": "local", "status": "connected"})
-    for nid, ws in state.daemons.items():
-        devices.append({"type": "phone", "node_id": nid, "status": "connected"})
-    return {"devices": devices}
+    No more fake ``"desktop"`` / ``"phone"`` placeholders — every entry
+    corresponds to a live WebSocket in ``state.daemons``. Empty list is
+    a valid answer and means "nothing is paired yet", not "we made one up".
+    """
+    if state.session_handoff:
+        active = state.session_handoff.get_active_devices() or []
+        # Trust the session_handoff view when it exists but sanity-check
+        # the 'type' field isn't a hardcoded "phone" default.
+        cleaned = []
+        for d in active:
+            if isinstance(d, dict):
+                # If the upstream handoff code returned an opaque type we
+                # prefer, keep it; otherwise fall back to our inference.
+                if not d.get("type") or d.get("type") == "phone":
+                    ws = state.daemons.get(d.get("node_id", ""))
+                    if ws is not None:
+                        d = {**d, "type": _infer_node_type(d.get("node_id", ""), ws)}
+            cleaned.append(d)
+        return {"devices": cleaned}
+
+    return {
+        "devices": [
+            _describe_device(nid, ws) for nid, ws in state.daemons.items()
+        ]
+    }
 
 
 @router.post("/api/devices/handoff")
