@@ -1,15 +1,18 @@
 name: Desktop Build
 # The desktop app (Tauri + Rust + WebView2/WebKit/GTK) is an experimental
 # distribution path. It is NOT part of the install-from-PyPI story and is
-# not uploaded as a release asset yet (needs Tauri signing keys in repo
-# secrets first — TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-# for the updater). Until that's set up, we only build on demand and on PRs
-# that specifically touch the desktop/ directory, so broken desktop code
-# cannot block a PyPI release or an HA add-on push.
+# not uploaded as a release asset yet (needs Apple Developer ID + Windows
+# Authenticode + Tauri updater keypair first — TAURI_SIGNING_PRIVATE_KEY,
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD, APPLE_CERT_P12, APPLE_CERT_PW,
+# WINDOWS_CERT_P12, WINDOWS_CERT_PW).
+#
+# Previously this workflow also ran on every PR touching desktop/**. That
+# burned ~30 runner-min per desktop-adjacent PR for a build whose artifacts
+# we never ship, so the pull_request trigger was removed in 2026.4.18-dev.
+# Re-add the `pull_request: paths: ['desktop/**']` trigger the day Apple
+# Developer ID + Windows Authenticode certs land in repo secrets.
 on:
   workflow_dispatch:
-  pull_request:
-    paths: ['desktop/**']
 jobs:
   build:
     strategy:

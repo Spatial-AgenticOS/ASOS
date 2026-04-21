@@ -1,14 +1,17 @@
 name: Provider Research
 
-# Refreshes feral-core/providers/model_catalog.json daily by polling
-# every provider's /v1/models endpoint. If the catalog changed, opens a
-# PR for review. Keeps FERAL aware of new LLM releases (Claude, Kimi,
-# GPT, Gemini, Groq, DeepSeek, xAI, Together, OpenRouter) without a
-# human having to track release blogs.
-
+# Refreshes feral-core/providers/model_catalog.json by polling every
+# provider's /v1/models endpoint. If the catalog changed, opens a PR
+# for review. Keeps FERAL aware of new LLM releases (Claude, Kimi, GPT,
+# Gemini, Groq, DeepSeek, xAI, Together, OpenRouter) without a human
+# having to track release blogs.
+#
+# The daily schedule trigger (0 9 * * *) was removed in 2026.4.18-dev
+# until the Track A live-credential PRs start shipping — with most
+# providers still at stub level, a daily poll is ~30 runner-min/month
+# that adds nothing. Reactivate the cron by uncommenting the schedule
+# block the day the first live-credentialed provider lands.
 on:
-  schedule:
-    - cron: "0 9 * * *"  # 09:00 UTC daily
   workflow_dispatch:
 
 permissions:

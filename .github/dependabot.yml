@@ -1,0 +1,81 @@
+# Dependabot configuration for FERAL-AI/FERAL-AI.
+#
+# Why weekly (not daily): with four npm packages (feral-client,
+# feral-client-v2, feral-extension, ts-node-sdk) + pip + github-actions,
+# a daily schedule fires CI seven times a week on small version bumps.
+# Weekly batches reduce runner-minute burn to roughly 1/7 without losing
+# security-critical alerts — GitHub still opens a SEPARATE PR for any
+# advisory flagged as Critical or High regardless of this schedule.
+#
+# Grouping: each ecosystem batches its minor/patch bumps into one PR per
+# week so reviewers see a single "bump all the things" PR instead of
+# one-per-package. Major bumps stay ungrouped so breaking changes get a
+# dedicated PR (per Dependabot's default group behaviour).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /feral-client
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      feral-client-minor:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: /feral-client-v2
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      feral-client-v2-minor:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: /feral-extension
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      feral-extension-minor:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: /feral-nodes/ts-node-sdk
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      ts-node-sdk-minor:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: /desktop
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      desktop-minor:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: pip
+    directory: /feral-core
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      feral-core-minor:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
