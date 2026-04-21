@@ -680,12 +680,16 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 state.daemons[node_id] = ws
                 # Stash the HUP-declared node_type on the WebSocket so
                 # /api/devices/connected can report the real type instead
-                # of the legacy "phone"-for-everyone default.
-                setattr(ws, "_feral_node_type", (payload.node_type or "unknown").lower())
-                setattr(ws, "_feral_capabilities", list(payload.capabilities or []))
-                setattr(ws, "_feral_platform", payload.platform or "")
-                setattr(ws, "_feral_manufacturer", payload.manufacturer or "")
-                setattr(ws, "_feral_model", payload.model or "")
+                # of the legacy "phone"-for-everyone default. `manufacturer`
+                # and `model` are HUP v1 fields that the narrower
+                # models.protocol.NodeRegisterPayload doesn't yet mirror —
+                # getattr falls back to "" when absent, so we pick them up
+                # from v1.1+ daemons without tripping on v1.0 payloads.
+                setattr(ws, "_feral_node_type", (getattr(payload, "node_type", None) or "unknown").lower())
+                setattr(ws, "_feral_capabilities", list(getattr(payload, "capabilities", []) or []))
+                setattr(ws, "_feral_platform", getattr(payload, "platform", "") or "")
+                setattr(ws, "_feral_manufacturer", getattr(payload, "manufacturer", "") or "")
+                setattr(ws, "_feral_model", getattr(payload, "model", "") or "")
                 if state.skill_executor:
                     state.skill_executor.register_daemon_type(node_id, payload.node_type)
                 logger.info(f"Node registered: {node_id} ({payload.node_type}/{payload.platform}) — caps: {payload.capabilities}")

@@ -130,11 +130,27 @@ class ErrorPayload(BaseModel):
 # ─────────────────────────────────────────────
 
 class NodeRegisterPayload(BaseModel):
-    """Daemon announces itself to the brain."""
+    """Daemon announces itself to the brain.
+
+    Mirrors HUP v1.1's node_register envelope
+    (feral-nodes/python-node-sdk/src/feral_node_sdk/schemas.py). The
+    ``node_type`` Literal widened to cover every type the HUP spec
+    declares so a wristband daemon announcing ``node_type="wearable"``
+    isn't rejected by pydantic before the /v1/node handler even sees
+    it. `manufacturer` and `model` are optional v1.1 fields the
+    Devices UI surfaces.
+    """
     node_id: str
-    node_type: Literal["desktop", "server", "rpi", "robot", "glasses", "phone", "actuator", "sensor"]
+    node_type: Literal[
+        "desktop", "server", "rpi", "robot", "glasses", "phone",
+        "tablet", "actuator", "sensor", "wearable", "camera",
+        "vehicle", "appliance",
+    ]
     os: str = ""
     platform: str = ""  # "ios", "android", "linux", "macos"
+    manufacturer: str = ""
+    model: str = ""
+    firmware_version: str = ""
     capabilities: list[str] = []  # ["applescript", "keyboard", "filesystem", "camera", "gpio"]
 
 
