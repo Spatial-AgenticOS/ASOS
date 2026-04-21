@@ -983,20 +983,34 @@ class MemoryStore:
     # Unified Context Builder (for LLM injection)
     # ─────────────────────────────────────────────
 
-    async def build_context_for_llm_async(self, session_id: str, query: str = "", max_tokens_budget: int = 2000) -> str:
+    async def build_context_for_llm_async(
+        self,
+        session_id: str,
+        query: str = "",
+        max_tokens_budget: int = 2000,
+        memory_filter: str = "",
+    ) -> str:
         return await context_build_context_for_llm_async(
             self,
             session_id=session_id,
             query=query,
             max_tokens_budget=max_tokens_budget,
+            memory_filter=memory_filter,
         )
 
-    def build_context_for_llm(self, session_id: str, query: str = "", max_tokens_budget: int = 2000) -> str:
+    def build_context_for_llm(
+        self,
+        session_id: str,
+        query: str = "",
+        max_tokens_budget: int = 2000,
+        memory_filter: str = "",
+    ) -> str:
         return context_build_context_for_llm(
             self,
             session_id=session_id,
             query=query,
             max_tokens_budget=max_tokens_budget,
+            memory_filter=memory_filter,
         )
 
     # ─────────────────────────────────────────────

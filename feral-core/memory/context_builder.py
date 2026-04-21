@@ -10,8 +10,12 @@ async def build_context_for_llm_async(
     session_id: str,
     query: str = "",
     max_tokens_budget: int = 2000,
+    memory_filter: str = "",
 ) -> str:
-    """Async context builder using hybrid search + knowledge graph."""
+    """Async context builder using hybrid search + knowledge graph.
+
+    ``memory_filter``: see the docstring on ``build_context_for_llm``.
+    """
     sections = []
     budget_per_section = max_tokens_budget // 4
 
@@ -33,11 +37,15 @@ async def build_context_for_llm_async(
         episodes = await store.episode_search_hybrid(query, limit=3)
     else:
         episodes = store.episode_recent(limit=3, session_id=session_id)
+    if memory_filter:
+        episodes = [e for e in episodes if _topic_match(e, memory_filter)]
     if episodes:
         ep_lines = [f"- [{e['event_type']}] {e['summary']}" for e in episodes]
         sections.append("## Past Events\n" + "\n".join(ep_lines)[:budget_per_section])
 
     recent_execs = store.log_recent(limit=5)
+    if memory_filter:
+        recent_execs = [ex for ex in recent_execs if _topic_match(ex, memory_filter)]
     if recent_execs:
         ex_lines = [f"- {ex.get('skill_id', '?')}: {ex.get('result_status', '?')}" for ex in recent_execs]
         sections.append("## Recent Actions\n" + "\n".join(ex_lines)[:budget_per_section])
@@ -45,13 +53,53 @@ async def build_context_for_llm_async(
     return "\n\n".join(sections) if sections else ""
 
 
+def _topic_match(item: dict, topic: str) -> bool:
+    """Case-insensitive substring match across common fields.
+
+    Used to post-filter episodes / execution log entries by a
+    SpecialistAgent.memory_filter topic (e.g. ``"coding"``,
+    ``"journal"``). Intentionally permissive — we want "security_analyst"
+    to see rows tagged ``"security"`` or whose summary contains the word.
+    """
+    if not topic:
+        return True
+    needle = topic.lower().strip()
+    if not needle:
+        return True
+    fields = (
+        item.get("event_type"),
+        item.get("summary"),
+        item.get("skill_id"),
+        item.get("tags"),
+        item.get("topic"),
+        item.get("category"),
+    )
+    for f in fields:
+        if f is None:
+            continue
+        if isinstance(f, (list, tuple, set)):
+            if any(needle in str(x).lower() for x in f):
+                return True
+        elif needle in str(f).lower():
+            return True
+    return False
+
+
 def build_context_for_llm(
     store,
     session_id: str,
     query: str = "",
     max_tokens_budget: int = 2000,
+    memory_filter: str = "",
 ) -> str:
-    """Synchronous context builder (backward compat)."""
+    """Synchronous context builder (backward compat).
+
+    ``memory_filter``: when a SpecialistAgent is routing the turn, its
+    ``memory_filter`` topic is passed in and we drop episodes / recent
+    actions that don't mention it. Keeps the journaling specialist from
+    leaking into the coding specialist's context, etc. Empty string =
+    pre-memory-filter behaviour (no filtering).
+    """
     sections = []
     budget_per_section = max_tokens_budget // 4
 
@@ -69,11 +117,15 @@ def build_context_for_llm(
         episodes = store.episode_search(query, limit=3)
     else:
         episodes = store.episode_recent(limit=3, session_id=session_id)
+    if memory_filter:
+        episodes = [e for e in episodes if _topic_match(e, memory_filter)]
     if episodes:
         ep_lines = [f"- [{e['event_type']}] {e['summary']}" for e in episodes]
         sections.append("## Past Events\n" + "\n".join(ep_lines)[:budget_per_section])
 
     recent_execs = store.log_recent(limit=5)
+    if memory_filter:
+        recent_execs = [ex for ex in recent_execs if _topic_match(ex, memory_filter)]
     if recent_execs:
         ex_lines = [f"- {ex.get('skill_id', '?')}: {ex.get('result_status', '?')}" for ex in recent_execs]
         sections.append("## Recent Actions\n" + "\n".join(ex_lines)[:budget_per_section])

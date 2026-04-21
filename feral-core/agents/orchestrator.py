@@ -335,7 +335,13 @@ class Orchestrator:
             pass
         return {"mode": mode, "handled": True, "tool_id": tool_id, "pending_approval": True}
 
-    def _build_system_prompt(self, frame: PerceptionFrame, skills: list[SkillManifest], session_id: str = "") -> str:
+    def _build_system_prompt(
+        self,
+        frame: PerceptionFrame,
+        skills: list[SkillManifest],
+        session_id: str = "",
+        memory_filter: str = "",
+    ) -> str:
         full_catalog: list[SkillManifest] = []
         try:
             full_catalog = list(self.skills.skills.values())
@@ -347,6 +353,7 @@ class Orchestrator:
             session_id,
             identity_text=self._load_identity(),
             full_catalog=full_catalog,
+            memory_filter=memory_filter,
         )
 
     def _load_identity(self) -> str:
@@ -537,7 +544,16 @@ class Orchestrator:
                 tools = (tools or []) + mcp_tools
 
         perception_frame = self.perception.get_frame(session_id)
-        system_prompt = self._build_system_prompt(perception_frame, relevant_skills, session_id)
+        # When a specialist is routing this turn, thread its memory_filter
+        # into context retrieval so cross-domain memory leaks stop. Empty
+        # string = generalist turn (no filtering, legacy behaviour).
+        active_memory_filter = (specialist.memory_filter if specialist else "") or ""
+        system_prompt = self._build_system_prompt(
+            perception_frame,
+            relevant_skills,
+            session_id,
+            memory_filter=active_memory_filter,
+        )
         if specialist:
             system_prompt = self._build_specialist_system_prompt(specialist, system_prompt)
 
@@ -761,7 +777,16 @@ class Orchestrator:
                 tools = (tools or []) + mcp_tools
 
         perception_frame = self.perception.get_frame(session_id)
-        system_prompt = self._build_system_prompt(perception_frame, relevant_skills, session_id)
+        # When a specialist is routing this turn, thread its memory_filter
+        # into context retrieval so cross-domain memory leaks stop. Empty
+        # string = generalist turn (no filtering, legacy behaviour).
+        active_memory_filter = (specialist.memory_filter if specialist else "") or ""
+        system_prompt = self._build_system_prompt(
+            perception_frame,
+            relevant_skills,
+            session_id,
+            memory_filter=active_memory_filter,
+        )
         if specialist:
             system_prompt = self._build_specialist_system_prompt(specialist, system_prompt)
 

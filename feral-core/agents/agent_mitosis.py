@@ -168,6 +168,53 @@ class AgentMitosisEngine:
             logger.warning(f"Agent Mitosis spawn failed: {e}")
             return None
 
+    def register_specialist_from_manifest(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        name: str,
+        description: str = "",
+        system_prompt: str,
+        tool_permissions: Optional[list[str]] = None,
+        source_pattern: str = "",
+        schedule: Optional[str] = None,
+        memory_filter: Optional[str] = None,
+    ) -> SpecialistAgent:
+        """Create a SpecialistAgent directly from a persona manifest.
+
+        Distinct from ``spawn_specialist``: this path skips the Mitosis
+        topic-classifier + LLM system-prompt generation because the user
+        (or a curated persona JSON from ``feral-core/agents/personas/``)
+        already supplies the full prompt + permissions + memory filter.
+
+        The v2 Agents page "Spawn specialist from persona" button POSTs
+        a persona body here; without this entry point the button was a
+        silent no-op (`/api/agents/spawn` only read ``pattern_id``).
+
+        Keyed by ``agent_id``. If an agent with the same id exists, its
+        row is overwritten — so repeated clicks update instead of
+        accumulating duplicates.
+        """
+        agent_id = agent_id or f"persona_{name.lower().replace(' ', '_')}"
+        pattern_id = f"manifest_{agent_id}"
+        specialist = SpecialistAgent(
+            agent_id=agent_id,
+            name=name,
+            description=description,
+            system_prompt=system_prompt.strip(),
+            source_pattern=source_pattern or pattern_id,
+            tool_permissions=list(tool_permissions or []),
+            schedule=schedule,
+            memory_filter=memory_filter,
+        )
+        self._specialists[pattern_id] = specialist
+        self._persist_specialist(pattern_id)
+        logger.info(
+            "Agent Mitosis: registered %s from persona manifest (pattern=%s, tools=%s)",
+            agent_id, pattern_id, specialist.tool_permissions,
+        )
+        return specialist
+
     def match_specialist(self, query: str) -> Optional[str]:
         """Return the agent_id of the best-matched specialist, or None."""
         topic = self._classify_topic(query, [])

@@ -122,6 +122,7 @@ class IdentityLoader:
         session_id: str = "",
         identity_text: str | None = None,
         full_catalog: list["SkillManifest"] | None = None,
+        memory_filter: str = "",
     ) -> str:
         """Assemble the full system prompt for an LLM conversation turn.
 
@@ -209,9 +210,15 @@ class IdentityLoader:
         if perception_context and perception_context != "No sensor data available.":
             prompt += f"\n## Live Perception\n{perception_context}\n"
 
-        # Memory Context
+        # Memory Context — a specialist-scoped memory_filter narrows the
+        # surfaced episodes + recent actions so cross-domain leakage
+        # (journaling thoughts bleeding into a coding turn, etc.) stops.
         if self.memory and session_id:
-            memory_context = self.memory.build_context_for_llm(session_id, max_tokens_budget=800)
+            memory_context = self.memory.build_context_for_llm(
+                session_id,
+                max_tokens_budget=800,
+                memory_filter=memory_filter or "",
+            )
             if memory_context:
                 prompt += f"\n## Memory\n{memory_context}\n"
 
