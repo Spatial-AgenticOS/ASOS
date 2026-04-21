@@ -84,6 +84,7 @@ class MemoryStore:
         self._working_max = 50
         self._working_max_sessions = 500
         self._sync_engine = None
+        self._about_me_store = None
         self._embedder = EmbeddingProvider()
         self._kg = None
 
@@ -120,6 +121,15 @@ class MemoryStore:
 
     def set_sync_engine(self, engine):
         self._sync_engine = engine
+
+    def set_about_me_store(self, about_me_store):
+        """Attach an AboutMeStore so episode_save can auto-extract self-facts.
+
+        The store reference stays optional — unit tests instantiate a bare
+        MemoryStore without an about_me store attached, and both tiers work
+        independently.
+        """
+        self._about_me_store = about_me_store
 
     def _log_sync(self, table: str, op_type: str, row_id: str, data: dict):
         if self._sync_engine:
@@ -646,6 +656,16 @@ class MemoryStore:
             "id": eid, "session_id": session_id, "event_type": event_type,
             "summary": summary, "detail": detail, "importance": importance, "created_at": now,
         })
+
+        # Auto-suggest About Me facts from regex patterns in the episode text.
+        # Every hit lands at confidence 0.5 / source=inferred_from_chat so
+        # the user can confirm/reject via Settings → Self → About Me.
+        if self._about_me_store is not None and text:
+            try:
+                self._about_me_store.extract_from_text(text)
+            except Exception as exc:
+                logger.debug("AboutMe auto-extractor failed silently: %s", exc)
+
         return {"id": eid, "event_type": event_type, "summary": summary, "created_at": now}
 
     async def episode_search_hybrid(self, query: str, limit: int = 10) -> list[dict]:

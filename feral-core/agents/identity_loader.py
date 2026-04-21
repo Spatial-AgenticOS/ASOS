@@ -113,6 +113,19 @@ class IdentityLoader:
             except Exception:
                 pass
 
+        # 5. AboutMeStore — structured self-model from chat/baseline/user.
+        # Injected after IDENTITY/USER/SOUL/MEMORY so free-form prose stays
+        # dominant; structured facts act as sharp disambiguators.
+        try:
+            from api.state import state as _state
+            store = getattr(_state, "about_me", None)
+            if store is not None:
+                chunk = store.system_prompt_chunk()
+                if chunk:
+                    parts.append(f"\n{chunk}")
+        except Exception as exc:
+            logger.debug("AboutMeStore unavailable in identity_loader: %s", exc)
+
         return "\n".join(parts)
 
     def build_system_prompt(

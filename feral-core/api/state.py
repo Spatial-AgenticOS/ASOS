@@ -62,6 +62,7 @@ from skills.impl.browser_use import BrowserController
 from agents.session_handoff import SessionHandoffManager
 from agents.identity_loader import IdentityLoader
 from agents.baseline_engine import BaselineEngine
+from agents.about_me import AboutMeStore
 from security.device_pairing import DevicePairingStore
 from api.boot_report import BootReport, boot_subsystem
 
@@ -162,6 +163,9 @@ class BrainState:
         self.taskflows: Optional[TaskFlowRuntime] = None
         self.session_handoff: Optional[SessionHandoffManager] = None
         self.baseline_engine: Optional[BaselineEngine] = None
+        # AboutMe store — structured self-model of the user (see agents/about_me.py).
+        # Initialised alongside BaselineEngine during state.init().
+        self.about_me: Optional[AboutMeStore] = None
         self.somatic_engine = None
         self.tool_genesis = None
         self.agent_mitosis = None
@@ -485,6 +489,11 @@ class BrainState:
         with boot_subsystem(self._boot_report, "BaselineEngine"):
             _baseline_db = str(feral_home() / "baselines.db")
             self.baseline_engine = BaselineEngine(db_path=_baseline_db)
+
+        with boot_subsystem(self._boot_report, "AboutMeStore"):
+            _about_me_db = str(feral_home() / "about_me.db")
+            self.about_me = AboutMeStore(db_path=_about_me_db)
+            self.memory.set_about_me_store(self.about_me)
 
         with boot_subsystem(self._boot_report, "SomaticEngine"):
             from perception.somatic import SomaticEngine
