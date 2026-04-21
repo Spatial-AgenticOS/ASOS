@@ -20,11 +20,15 @@ import pytest
 from providers import Provider, register_provider, list_providers, get_provider
 from providers.anthropic_provider import AnthropicProvider
 from providers.base import ChatMessage
+from providers.bedrock_provider import BedrockProvider
 from providers.deepseek_provider import DeepSeekProvider
+from providers.fireworks_provider import FireworksProvider
 from providers.gemini_provider import GeminiProvider
 from providers.groq_provider import GroqProvider
 from providers.ollama_provider import OllamaProvider
 from providers.openai_provider import OpenAIProvider
+from providers.openrouter_provider import OpenRouterProvider
+from providers.together_provider import TogetherProvider
 
 pytestmark = pytest.mark.asyncio
 
@@ -36,6 +40,10 @@ ALL_ADAPTERS = [
     ("ollama", lambda: OllamaProvider()),
     ("groq", lambda: GroqProvider(api_key="gsk-test")),
     ("deepseek", lambda: DeepSeekProvider(api_key="ds-test")),
+    ("together", lambda: TogetherProvider(api_key="tg-test")),
+    ("openrouter", lambda: OpenRouterProvider(api_key="or-test")),
+    ("fireworks", lambda: FireworksProvider(api_key="fw-test")),
+    ("bedrock", lambda: BedrockProvider(region="us-east-1")),
 ]
 
 

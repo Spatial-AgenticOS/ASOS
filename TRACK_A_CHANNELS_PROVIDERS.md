@@ -43,8 +43,12 @@ Every provider PR includes:
   Existing `groq_provider.py` + `deepseek_provider.py` are the references.
 - `feral-core/tests/test_providers.py` — existing contract test. Add your
   provider to the parametrised fixture.
-- Add the provider's `[provider-<name>]` extra in
-  [`feral-core/pyproject.toml`](feral-core/pyproject.toml).
+- Add the provider's bare-name extra (e.g. `together`, `openrouter`,
+  `fireworks`, `bedrock`) in
+  [`feral-core/pyproject.toml`](feral-core/pyproject.toml) under
+  `[project.optional-dependencies]`. The repo convention is bare names
+  (like `groq` / `local`), **not** `[provider-*]` prefixes — that was
+  an early draft-only pattern that never landed.
 - Schedule `scripts/research_providers.py` to fetch the public model
   catalog (or hand-curate in `providers/model_catalog.json` for
   providers with no `/v1/models` endpoint).
@@ -53,12 +57,12 @@ Every provider PR includes:
 
 | # | Channel | Week | Owner | Notes | Status |
 |---|---------|------|-------|-------|--------|
-| 1 | Matrix | 5 | — | `matrix-nio` SDK; homeserver URL + access token in config | **EXEMPLAR SHIPPED (stub)** — see [`feral-core/channels/matrix.py`](feral-core/channels/matrix.py) |
-| 2 | Signal | 5 | — | `signald` or `signal-cli` daemon; unregistered state handled | todo |
-| 3 | Voice Call | 5 | — | Twilio Voice or Vonage; inbound webhook → STT → brain → TTS → twiml | todo |
-| 4 | WhatsApp Business | 7 | — | Meta Graph API v18; webhook verification required | todo |
-| 5 | Feishu | 7 | — | `open.feishu.cn` bot + approval events | todo |
-| 6 | Zalo | 7 | — | Zalo Official Account API; OA access token | todo |
+| 1 | Matrix | 5 | — | `matrix-nio` SDK; homeserver URL + access token in config | **STUB SHIPPED** — [`feral-core/channels/matrix.py`](feral-core/channels/matrix.py); deferred per user decision (no homeserver) |
+| 2 | Signal | 5 | — | `signald` or `signal-cli` daemon; unregistered state handled | **STUB SHIPPED** — [`feral-core/channels/signal.py`](feral-core/channels/signal.py); live PR pending backend choice |
+| 3 | Voice Call | 5 | — | Twilio Voice or Vonage; inbound webhook → STT → brain → TTS → twiml | **STUB SHIPPED** — [`feral-core/channels/voice_call.py`](feral-core/channels/voice_call.py); live PR pending Twilio credentials |
+| 4 | WhatsApp Business | 7 | — | Meta Graph API v18; webhook verification required | already shipped inline in [`feral-core/channels/base.py`](feral-core/channels/base.py) |
+| 5 | Feishu | 7 | — | `open.feishu.cn` bot + approval events | **STUB SHIPPED** — [`feral-core/channels/feishu.py`](feral-core/channels/feishu.py); live PR pending app_id/secret |
+| 6 | Zalo | 7 | — | Zalo Official Account API; OA access token | **STUB SHIPPED** — [`feral-core/channels/zalo.py`](feral-core/channels/zalo.py); live PR pending OA token |
 
 ## Provider PR list (week 6)
 
@@ -66,10 +70,10 @@ Every provider PR includes:
 |---|----------|-------|---------------|--------|
 | 1 | Groq | `[provider-groq]` | `/v1/models` live | **ALREADY SHIPPED** per `CHANGELOG.md` 2026.4.14 |
 | 2 | DeepSeek | `[provider-deepseek]` | `/v1/models` live | **ALREADY SHIPPED** per `CHANGELOG.md` 2026.4.14 |
-| 3 | Together | `[provider-together]` | `/v1/models` live | todo |
-| 4 | OpenRouter | `[provider-openrouter]` | `/api/v1/models` live | todo |
-| 5 | Bedrock | `[provider-bedrock]` | Hand-curated (AWS no public API) | todo |
-| 6 | Fireworks | `[provider-fireworks]` | `/v1/models` live | todo |
+| 3 | Together | `together` | `/v1/models` live | **STUB SHIPPED** — [`feral-core/providers/together_provider.py`](feral-core/providers/together_provider.py); live when API key is configured |
+| 4 | OpenRouter | `openrouter` | `/api/v1/models` live (keyless refresh supported) | **STUB SHIPPED** — [`feral-core/providers/openrouter_provider.py`](feral-core/providers/openrouter_provider.py); live when API key is configured |
+| 5 | Bedrock | `bedrock` | Hand-curated JSON + `boto3.list_foundation_models` refresh | **STUB SHIPPED** — [`feral-core/providers/bedrock_provider.py`](feral-core/providers/bedrock_provider.py); chat() is a stub until AWS account wired |
+| 6 | Fireworks | `fireworks` | `/v1/models` live | **STUB SHIPPED** — [`feral-core/providers/fireworks_provider.py`](feral-core/providers/fireworks_provider.py); live when API key is configured |
 
 ## Success criteria
 

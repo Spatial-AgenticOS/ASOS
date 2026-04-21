@@ -1,0 +1,21 @@
+{
+  "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
+  "last_verified": "2026-04-20",
+  "note": "Hand-curated; Bedrock has no public /v1/models endpoint. Refresh via boto3 list_foundation_models when an AWS account is wired.",
+  "models": [
+    "anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "anthropic.claude-3-5-haiku-20241022-v1:0",
+    "anthropic.claude-3-opus-20240229-v1:0",
+    "meta.llama3-1-70b-instruct-v1:0",
+    "meta.llama3-1-8b-instruct-v1:0",
+    "meta.llama3-2-90b-instruct-v1:0",
+    "mistral.mistral-large-2407-v1:0",
+    "mistral.mixtral-8x7b-instruct-v0:1",
+    "cohere.command-r-plus-v1:0",
+    "cohere.command-r-v1:0",
+    "amazon.titan-text-premier-v1:0",
+    "amazon.nova-pro-v1:0",
+    "amazon.nova-lite-v1:0"
+  ]
+}
