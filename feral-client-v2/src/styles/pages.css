@@ -406,6 +406,42 @@
   display: flex; gap: 6px; align-items: center;
 }
 
+/* Consciousness mind map on GlassBrain: force-directed graph of
+   in-flight entities. */
+.v2-mindmap {
+  position: relative; width: 100%; min-height: 280px;
+  padding: 8px;
+}
+.v2-mindmap-svg {
+  width: 100%; height: auto; display: block;
+  background: radial-gradient(
+    ellipse at center,
+    var(--v2-surface-1) 0%,
+    transparent 70%
+  );
+  border-radius: var(--v2-radius-md);
+}
+.v2-mindmap-label {
+  fill: var(--v2-text-secondary);
+  font-family: var(--v2-font-sans);
+  font-size: 10px;
+  pointer-events: none;
+}
+.v2-mindmap-tooltip {
+  position: absolute; top: 12px; right: 12px;
+  background: var(--v2-surface-2);
+  border: 1px solid var(--v2-border-subtle);
+  border-radius: var(--v2-radius-sm);
+  padding: 10px 12px;
+  max-width: 280px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+}
+.v2-mindmap-empty {
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
 /* Resume cockpit: in-flight consciousness entities, grouped by kind. */
 .v2-cockpit-group { margin-top: 14px; }
 .v2-cockpit-group-head {

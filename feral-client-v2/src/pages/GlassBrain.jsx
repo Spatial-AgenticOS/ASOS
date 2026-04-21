@@ -3,17 +3,16 @@ import { ExternalLink, Maximize2 } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import EmptyState from '../ui/EmptyState';
+import ConsciousnessMindMap from '../components/ConsciousnessMindMap';
 import { useFeralSocket } from '../hooks/useFeralSocket';
 import { apiJson } from '../lib/api';
 
 /**
- * Glass Brain v2 — for Brain deployments that ship v1 too, we embed v1's
- * proven Three.js 3D visualiser in an iframe. Until a full v2 port lands,
- * this surface is honest about what it is: real data, real visualisation,
- * just via the sibling client.
- *
- * When v1 isn't available on the same Brain, a text-stream fallback
- * renders via useFeralSocket so the page still works.
+ * Glass Brain v2 — live topology + the native Consciousness mind-map
+ * that visualises every in-flight ConsciousnessEntity as a node with
+ * edges to its owner session / device / skill. The legacy v1
+ * three.js 3D scene is embedded in the iframe below as a secondary
+ * surface until the native port replaces it.
  */
 const V1_GLASS_PATH = '/?v1=1#/glass-brain';
 const V1_GLASS_ROUTE = '/glass-brain';
@@ -51,16 +50,22 @@ export default function GlassBrain() {
             target="_blank"
             rel="noreferrer"
             className="v2-btn"
-            title="Open 3D view in new tab"
+            title="Open v1 three.js 3D view in new tab"
           >
             <ExternalLink size={13} /> Open 3D
           </a>
         )}
       >
         <p className="v2-p v2-p--muted">
-          Live Brain topology — session nodes, skill fires, memory writes, HUP heartbeats.
-          The full 3D visualisation runs inside the sibling v1 client (same Brain, same data).
+          Two views of what's alive inside FERAL right now. The mind-map below is the native
+          v2 consciousness graph — each node is a ConsciousnessEntity, edges link intents,
+          flows, paused thoughts, and device streams to the session / device that owns them.
+          The iframe underneath holds v1's Three.js 3D scene for live brain topology.
         </p>
+      </Pane>
+
+      <Pane title="Consciousness mind-map">
+        <ConsciousnessMindMap />
       </Pane>
 
       {v1Available !== false && (
