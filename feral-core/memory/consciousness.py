@@ -110,6 +110,30 @@ class ConsciousnessStore:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
+        # Optional broadcast hook wired by BrainState.init() so
+        # consciousness state changes push to every connected v2
+        # client instantly. Signature: callback(event_name, payload).
+        # Not a coroutine — the store is used from sync code paths
+        # too, and the callback is expected to be a cheap fire-and-
+        # forget (e.g. schedule_task(broadcast_event(...))).
+        self._on_change = None  # type: ignore[assignment]
+
+    def set_on_change(self, callback):
+        """Install an on-change hook. Called after any state mutation
+        (record, set_status, heartbeat, restore) with the signature
+        (event_name: str, payload: dict). Safe to call from sync or
+        async contexts; the callback is responsible for its own
+        threading / scheduling."""
+        self._on_change = callback
+
+    def _emit(self, event_name: str, payload: dict) -> None:
+        cb = self._on_change
+        if cb is None:
+            return
+        try:
+            cb(event_name, payload)
+        except Exception as exc:  # the store must never die because of the UI
+            logger.debug("consciousness on_change hook raised: %s", exc)
 
     # ------------------------------------------------------------------
     # Schema
@@ -193,9 +217,10 @@ class ConsciousnessStore:
                 ),
             )
             con.commit()
-            return entity
         finally:
             con.close()
+        self._emit("consciousness_record", entity.to_dict())
+        return entity
 
     def get(self, entity_id: str) -> Optional[ConsciousnessEntity]:
         con = self._conn()
@@ -234,9 +259,12 @@ class ConsciousnessStore:
                 (status, now, entity_id),
             )
             con.commit()
-            return cur.rowcount > 0
+            changed = cur.rowcount > 0
         finally:
             con.close()
+        if changed:
+            self._emit("consciousness_status", {"id": entity_id, "status": status, "at": now})
+        return changed
 
     def abandon(self, entity_id: str) -> bool:
         return self.set_status(entity_id, "abandoned")
@@ -270,11 +298,12 @@ class ConsciousnessStore:
             )
             con.commit()
             n = cur.rowcount
-            if n:
-                logger.info("Consciousness TTL sweep: auto-abandoned %d entities", n)
-            return n
         finally:
             con.close()
+        if n:
+            logger.info("Consciousness TTL sweep: auto-abandoned %d entities", n)
+            self._emit("consciousness_sweep", {"abandoned": n, "at": now})
+        return n
 
     def list_active(
         self,

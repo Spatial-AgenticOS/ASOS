@@ -392,6 +392,20 @@
 .v2-flow-title { flex: 1; font-size: var(--v2-size-sm); font-weight: 500; }
 .v2-flow-status { font-size: var(--v2-size-xs); color: var(--v2-text-tertiary); text-transform: capitalize; }
 
+/* Resume cockpit: in-flight consciousness entities, grouped by kind. */
+.v2-cockpit-group { margin-top: 14px; }
+.v2-cockpit-group-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 2px 6px; font-size: var(--v2-size-xs);
+  color: var(--v2-text-tertiary); text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.v2-cockpit-group-label { font-weight: 600; }
+.v2-cockpit-rows { display: flex; flex-direction: column; gap: 6px; }
+.v2-cockpit-row { display: flex; flex-direction: column; gap: 4px; }
+.v2-cockpit-row-head { display: flex; align-items: center; gap: 10px; }
+.v2-cockpit-row-title { flex: 1; font-size: var(--v2-size-sm); }
+
 .v2-twin-form { display: flex; gap: 8px; }
 .v2-twin-input { flex: 1; min-width: 0; }
 .v2-twin-answer {

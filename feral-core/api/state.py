@@ -217,6 +217,21 @@ class BrainState:
                 default_snapshot_path,
             )
             self.consciousness = ConsciousnessStore(default_consciousness_db_path())
+
+            # Broadcast any state mutation to every connected v2 client
+            # via the existing /v1/session WebSocket. Fire-and-forget:
+            # we schedule the coroutine onto the running loop so the
+            # store's sync code path never blocks waiting for sends.
+            def _on_consciousness_change(event_name: str, payload: dict) -> None:
+                try:
+                    import asyncio as _aio
+                    loop = _aio.get_running_loop()
+                except RuntimeError:
+                    return  # no loop (e.g. during boot) — broadcast is optional
+                loop.create_task(self.broadcast_event(event_name, payload))
+
+            self.consciousness.set_on_change(_on_consciousness_change)
+
             snap = default_snapshot_path()
             if snap.exists():
                 try:

@@ -10,6 +10,7 @@ import Orb from '../ui/Orb';
 import StatusDot from '../ui/StatusDot';
 import EmptyState from '../ui/EmptyState';
 import SkillsLauncher, { readPinned, MAX_PINNED } from '../components/SkillsLauncher';
+import ResumeCockpit from '../components/ResumeCockpit';
 import { apiJson, apiFetch } from '../lib/api';
 import { useSomatic } from '../hooks/useSomatic';
 import { useBrainEvents, EVENT_TYPES } from '../hooks/useBrainEvents';
@@ -383,6 +384,8 @@ export default function Home() {
           )}
         </div>
       )}
+
+      <ResumeCockpit />
 
       <div className="v2-dash-row v2-dash-row--double">
         <Pane title="Channels">
