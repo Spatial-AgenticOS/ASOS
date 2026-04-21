@@ -1,12 +1,16 @@
 # Changelog
 
-<!-- feral-version: 2026.4.17 -->
+<!-- feral-version: 2026.4.20 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+## [2026.4.20] - 2026-04-20
+
 ### Fixed
+- **`pip install -U feral-ai` users kept seeing v1 because the 2026.4.17 wheel shipped zero v2 files.** Root cause was three compounding setuptools bugs, all in [`feral-core/pyproject.toml`](feral-core/pyproject.toml): (a) `find_packages(include=["webui*"])` only picks up directories with an `__init__.py`, which `webui-v2/` didn't have; (b) `webui-v2` has a hyphen and is therefore not a valid Python package identifier even with an `__init__.py`; (c) the `[tool.setuptools.package-data]` block covered `"webui"` and `"webui.assets"` only — nothing for v2 static assets. Net effect: every PyPI-installed Brain's `_webui_v2_ready` check evaluated False and fell back to the v1 UI. Fix renames the on-disk dir `webui-v2/` → [`webui_v2/`](feral-core/webui_v2/) (underscore = valid package name), adds `__init__.py` to both `webui_v2/` and `webui_v2/assets/`, extends `find_packages` `include` with `"webui_v2*"`, and adds `"webui_v2"` + `"webui_v2.assets"` blocks to `[package-data]` covering `*.html/*.css/*.js/*.svg/*.png/*.ico/*.json/*.map`. `feral-core/api/server.py::_webui_v2_dir` path literal flipped to the underscored name; HTTP mount route stays `/v2/`. Verified locally against a fresh wheel + a clean `python -m venv` install: `curl /` returns `<title>FERAL · v2</title>` with zero v1 leaflet references.
+- **Install-smoke-test now catches this class of bug.** [`.github/workflows/install-smoke.yml`](.github/workflows/install-smoke.yml) gained two new steps: (1) imports `api` from the PyPI-installed wheel, walks up to site-packages, asserts `webui_v2/index.html` + `webui_v2/assets/*.js` + `*.css` exist and contain the FERAL + v2 markers; (2) boots the Brain via `uvicorn api.server:app --port 9100`, `curl`s `/`, and fails the release if the response lacks `FERAL` / `v2` markers or contains the v1 `leaflet` asset reference. Had these gates existed yesterday, the broken `2026.4.17` wheel would have failed the release rather than landing on users.
 - **HUP v1.1 transport contract was broken in every daemon shipped in commit `c13460b` — nothing worked end-to-end against the real SDK until this commit.** Three bugs were silently papered over by the fakes used in yesterday's daemon tests:
   1. **Async/sync mismatch.** `FeralNode.run` was synchronous (wrapped `asyncio.run` internally) while both `wristband_daemon` and `w300_daemon` did `await self.node.run()` — that is a `TypeError` at runtime against the real SDK. Fixed by adding `async def FeralNode.run_async(...)` for use from inside an existing event loop; the sync `run()` stays as a CLI entry-point. Both daemons now call `await self.node.run_async()`.
   2. **Nested-vs-flat payload drop.** The Python SDK's `emit_video_frame` / `emit_audio_frame` serialise frame fields inside `DeviceEventPayload.data` (so the wire carries `payload.data.data_b64`), but the Brain's `_handle_video_frame` / `_handle_audio_frame` read `data_b64` at the top level — every SDK-sent frame was silently dropped as "empty". Fixed with a new [`api.server._unwrap_hup_frame`](feral-core/api/server.py) helper that accepts both shapes and is called at the top of both handlers.
