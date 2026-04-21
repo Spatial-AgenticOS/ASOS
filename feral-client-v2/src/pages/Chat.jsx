@@ -23,10 +23,65 @@ export default function Chat() {
   const [streamingText, setStreamingText] = useState('');
   const [toolChip, setToolChip] = useState(null);
   const [paneOpen, setPaneOpen] = useState(null); // 'threads' | 'snapshots' | null
+  const [pausedThoughts, setPausedThoughts] = useState([]);
 
   const bottomRef = useRef(null);
   const streamBufferRef = useRef('');
   const greetingSeenRef = useRef(false);
+
+  // On mount, pull paused thoughts from the consciousness store so the
+  // user can re-thread any half-formed sentence the agent was in the
+  // middle of before the last restart. These are real paused
+  // ConsciousnessEntity rows — not a local state guess. Resume
+  // routes through the brain which registers the thought with the
+  // orchestrator so the LLM sees [RESUMED THOUGHT] X before the next
+  // user message.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiJson('/api/consciousness/state?kind=thought');
+        if (cancelled) return;
+        const paused = (data?.entities || []).filter(
+          (e) => e.status === 'paused' || e.status === 'waiting_user',
+        );
+        setPausedThoughts(paused);
+      } catch {
+        /* consciousness endpoint not available -> skip silently */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const resumeThought = async (thoughtId) => {
+    try {
+      await apiFetch('/api/consciousness/resume', {
+        method: 'POST',
+        body: JSON.stringify({ id: thoughtId }),
+      });
+      setPausedThoughts((prev) => prev.filter((t) => t.id !== thoughtId));
+      // Surface the resumed text as an assistant row so the user sees
+      // what's about to be re-threaded into the next LLM call.
+      const t = pausedThoughts.find((p) => p.id === thoughtId);
+      const text = t?.context_json?.text || t?.summary || '';
+      if (text) {
+        setMessages((prev) => [
+          ...prev,
+          { id: newId(), role: 'assistant', text: `[continuing from earlier] ${text}` },
+        ]);
+      }
+    } catch { /* keep the thought in the list so user can retry */ }
+  };
+
+  const abandonThought = async (thoughtId) => {
+    try {
+      await apiFetch('/api/consciousness/abandon', {
+        method: 'POST',
+        body: JSON.stringify({ id: thoughtId }),
+      });
+    } catch { /* fall through */ }
+    setPausedThoughts((prev) => prev.filter((t) => t.id !== thoughtId));
+  };
 
   useEffect(() => {
     const commit = (text) => {
@@ -123,6 +178,31 @@ export default function Chat() {
           </>
         )}
       >
+        {pausedThoughts.length > 0 && (
+          <div className="v2-chat-rehydrate" role="status" aria-live="polite">
+            {pausedThoughts.map((t) => {
+              const text = t.context_json?.text || t.summary || '';
+              return (
+                <Glass key={t.id} level={0} radius="md" padding="sm" className="v2-chat-rehydrate-row">
+                  <div className="v2-chat-rehydrate-body">
+                    <strong>Continuing from earlier:</strong>
+                    <div className="v2-p v2-p--muted" style={{ marginTop: 4 }}>
+                      {text.slice(0, 200)}{text.length > 200 ? '…' : ''}
+                    </div>
+                  </div>
+                  <div className="v2-chat-rehydrate-actions">
+                    <button type="button" className="v2-btn v2-btn--primary" onClick={() => resumeThought(t.id)}>
+                      Resume
+                    </button>
+                    <button type="button" className="v2-btn" onClick={() => abandonThought(t.id)}>
+                      Abandon
+                    </button>
+                  </div>
+                </Glass>
+              );
+            })}
+          </div>
+        )}
         <div className="v2-chat-log">
           {messages.map((m) => (
             <div key={m.id} className={`v2-chat-row v2-chat-row--${m.role}`}>

@@ -392,6 +392,20 @@
 .v2-flow-title { flex: 1; font-size: var(--v2-size-sm); font-weight: 500; }
 .v2-flow-status { font-size: var(--v2-size-xs); color: var(--v2-text-tertiary); text-transform: capitalize; }
 
+/* Chat paused-thought rehydrate banner */
+.v2-chat-rehydrate {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-bottom: 10px;
+}
+.v2-chat-rehydrate-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  flex-wrap: wrap;
+}
+.v2-chat-rehydrate-body { flex: 1; min-width: 220px; }
+.v2-chat-rehydrate-actions {
+  display: flex; gap: 6px; align-items: center;
+}
+
 /* Resume cockpit: in-flight consciousness entities, grouped by kind. */
 .v2-cockpit-group { margin-top: 14px; }
 .v2-cockpit-group-head {
