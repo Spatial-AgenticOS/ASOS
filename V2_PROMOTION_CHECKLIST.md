@@ -12,7 +12,7 @@
 - [ ] `cd feral-client && npx vitest run` → green (51 tests).
 - [ ] `cd feral-core && python -m pytest tests/test_webui_v2_mount.py -x` → 3 passed.
 - [ ] `cd feral-client-v2 && npx vite build` → clean, no CSS warnings.
-- [ ] `feral-core/webui-v2/index.html` + `feral-core/webui-v2/assets/` present and match the most recent `feral-client-v2/dist/`.
+- [ ] `feral-core/webui_v2/index.html` + `feral-core/webui_v2/assets/` present and match the most recent `feral-client-v2/dist/`.
 - [ ] Voice mode round-trip verified end-to-end against a real Brain (start → transcribe → reply → end, provider labels honest).
 
 ## The flip (one commit)
@@ -45,12 +45,13 @@
    }
    ```
 
-2. Rebuild v2 and copy to `feral-core/webui-v2/`:
+2. Rebuild v2 and copy to `feral-core/webui_v2/`:
 
    ```bash
    cd feral-client-v2 && npx vite build
-   rm -rf ../feral-core/webui-v2 && mkdir -p ../feral-core/webui-v2
-   cp -R dist/. ../feral-core/webui-v2/
+   rm -rf ../feral-core/webui_v2/assets ../feral-core/webui_v2/index.html
+   mkdir -p ../feral-core/webui_v2
+   cp -R dist/. ../feral-core/webui_v2/
    ```
 
 3. Update [`CHANGELOG.md`](CHANGELOG.md) with a release section:

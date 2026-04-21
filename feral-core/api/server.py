@@ -1264,15 +1264,20 @@ async def _analyze_scene_background(
 # Bundled Web UI
 # ─────────────────────────────────────────────
 #
-# v2 (feral-client-v2) is the default UI. When ``webui-v2/index.html`` is on
+# v2 (feral-client-v2) is the default UI. When ``webui_v2/index.html`` is on
 # disk the Brain serves it at / directly, and v1 (``webui/``) is never
-# reached. If webui-v2/ isn't built (fresh clone), fall back to v1 so users
+# reached. If webui_v2/ isn't built (fresh clone), fall back to v1 so users
 # still see something. v1 source is kept in the tree for history only.
+#
+# The directory is named ``webui_v2`` (underscore) so setuptools treats it
+# as a real Python package — without that, ``pip install feral-ai`` ships a
+# wheel missing the v2 bundle and the fallback kicks in on end-user machines.
+# See feral-core/pyproject.toml [tool.setuptools.package-data] for the mirror.
 #
 # The ``/v2/`` alias is retained so existing bookmarks keep working even
 # when v2 is already the default at /.
 
-_webui_v2_dir = Path(__file__).parent.parent / "webui-v2"
+_webui_v2_dir = Path(__file__).parent.parent / "webui_v2"
 _webui_legacy_dir = Path(__file__).parent.parent / "webui"
 _webui_v2_ready = _webui_v2_dir.is_dir() and (_webui_v2_dir / "index.html").exists()
 _webui_legacy_ready = _webui_legacy_dir.is_dir() and (_webui_legacy_dir / "index.html").exists()

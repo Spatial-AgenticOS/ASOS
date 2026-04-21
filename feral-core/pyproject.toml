@@ -173,7 +173,7 @@ include = [
     "genui*", "hardware*", "identity*", "infra*", "integrations*",
     "mcp*", "memory*", "models*", "observability*", "perception*",
     "providers*", "security*", "services*", "skills*", "voice*",
-    "webui*", "tests*",
+    "webui*", "webui_v2*", "tests*",
 ]
 
 [tool.setuptools.package-data]
@@ -181,6 +181,10 @@ include = [
 "config" = ["*.yaml", "*.yml"]
 "webui" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json"]
 "webui.assets" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json", "*.map"]
+# v2 ambient-OS bundle — the wheel MUST carry these or pip-installed
+# users fall back to the v1 UI. See feral-core/api/server.py::_webui_v2_dir.
+"webui_v2" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json"]
+"webui_v2.assets" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json", "*.map"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -35,14 +35,14 @@ def test_v2_mount_guard_types():
 
 
 def test_v2_index_served_when_bundle_is_present():
-    """When ``feral-core/webui-v2/index.html`` exists on disk, hitting
+    """When ``feral-core/webui_v2/index.html`` exists on disk, hitting
     ``/v2/`` must return the v2 index (HTML containing ``FERAL`` + ``v2``).
     Skipped when the bundle hasn't been built yet — that path is exercised
     by ``test_brain_still_starts_without_v2_bundle``.
     """
-    v2_dir = Path(__file__).parent.parent / "webui-v2"
+    v2_dir = Path(__file__).parent.parent / "webui_v2"
     if not (v2_dir / "index.html").exists():
-        pytest.skip("feral-core/webui-v2 has not been built in this tree")
+        pytest.skip("feral-core/webui_v2 has not been built in this tree")
 
     module = _reload_server_module()
     assert module._webui_v2_ready is True, "v2 bundle exists but guard is False"
@@ -56,7 +56,7 @@ def test_v2_index_served_when_bundle_is_present():
 
 
 def test_brain_still_starts_without_v2_bundle(monkeypatch, tmp_path):
-    """If webui-v2 is absent, the Brain imports and /health still works.
+    """If webui_v2 is absent, the Brain imports and /health still works.
     Simulates a fresh clone where the v2 client hasn't been built yet."""
     module = _reload_server_module()
     monkeypatch.setattr(module, "_webui_v2_dir", tmp_path / "missing")

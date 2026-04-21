@@ -136,7 +136,7 @@ python -m pytest tests/test_persona_loader.py tests/test_api_personas.py -q
 
 cd ../feral-client-v2
 npx vitest run src/__tests__/pages/Agents.test.jsx src/__tests__/pages/Flows.test.jsx
-npx vite build && cp -R dist/. ../feral-core/webui-v2/
+npx vite build && cp -R dist/. ../feral-core/webui_v2/
 
 # Then boot the Brain and open http://127.0.0.1:9090/agents — the
 # Personas tab is the default. /flows exposes the Packs tab.

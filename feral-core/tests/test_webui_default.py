@@ -1,9 +1,9 @@
 """v2 (feral-client-v2) is the default UI.
 
-When ``feral-core/webui-v2/index.html`` is present on disk the Brain must
+When ``feral-core/webui_v2/index.html`` is present on disk the Brain must
 serve that bundle at ``/`` and keep a ``/v2/`` alias working. Legacy
 ``feral-core/webui/`` stays in the tree for history but is never reached
-as long as webui-v2/ is built.
+as long as webui_v2/ is built.
 
 These tests lock in the expected defaults so nobody accidentally
 regresses to serving v1 at /.
@@ -29,12 +29,12 @@ def _reload_server_module():
 
 
 def test_default_webui_variant_prefers_v2_when_built():
-    """_webui_dir must point at webui-v2/ when its index.html exists."""
+    """_webui_dir must point at webui_v2/ when its index.html exists."""
     module = _reload_server_module()
 
-    webui_v2_dir = Path(__file__).parent.parent / "webui-v2"
+    webui_v2_dir = Path(__file__).parent.parent / "webui_v2"
     if not (webui_v2_dir / "index.html").exists():
-        pytest.skip("feral-core/webui-v2 has not been built in this tree")
+        pytest.skip("feral-core/webui_v2 has not been built in this tree")
 
     assert module._webui_v2_ready is True
     assert module._webui_dir == module._webui_v2_dir
@@ -43,9 +43,9 @@ def test_default_webui_variant_prefers_v2_when_built():
 
 def test_root_serves_v2_index_when_built():
     """GET / returns v2's index.html — content includes the v2 title + relative assets."""
-    webui_v2_dir = Path(__file__).parent.parent / "webui-v2"
+    webui_v2_dir = Path(__file__).parent.parent / "webui_v2"
     if not (webui_v2_dir / "index.html").exists():
-        pytest.skip("feral-core/webui-v2 has not been built in this tree")
+        pytest.skip("feral-core/webui_v2 has not been built in this tree")
 
     module = _reload_server_module()
     client = TestClient(module.app, raise_server_exceptions=False)
@@ -61,9 +61,9 @@ def test_root_serves_v2_index_when_built():
 
 def test_v2_alias_still_works_when_default():
     """/v2/ stays reachable even though / already serves v2."""
-    webui_v2_dir = Path(__file__).parent.parent / "webui-v2"
+    webui_v2_dir = Path(__file__).parent.parent / "webui_v2"
     if not (webui_v2_dir / "index.html").exists():
-        pytest.skip("feral-core/webui-v2 has not been built in this tree")
+        pytest.skip("feral-core/webui_v2 has not been built in this tree")
 
     module = _reload_server_module()
     client = TestClient(module.app, raise_server_exceptions=False)
@@ -74,7 +74,7 @@ def test_v2_alias_still_works_when_default():
 
 
 def test_brain_still_imports_without_webui_v2(monkeypatch, tmp_path):
-    """If webui-v2/ is absent, the Brain still imports + falls back."""
+    """If webui_v2/ is absent, the Brain still imports + falls back."""
     module = _reload_server_module()
     monkeypatch.setattr(module, "_webui_v2_dir", tmp_path / "missing-v2")
     monkeypatch.setattr(module, "_webui_v2_ready", False)
