@@ -7,4 +7,9 @@ describe('Flows', () => {
     const { getByRole } = renderV2(<Flows />);
     expect(getByRole('heading', { name: /TaskFlows/i })).toBeInTheDocument();
   });
+
+  it('exposes the Packs tab (Track C)', () => {
+    const { getByRole } = renderV2(<Flows />);
+    expect(getByRole('tab', { name: /Packs/i })).toBeInTheDocument();
+  });
 });

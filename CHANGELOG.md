@@ -6,6 +6,9 @@ All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+### Added
+- **Track C — first-party personas + workflow packs are live at runtime.** The 10 persona JSONs under [`feral-core/agents/personas/`](feral-core/agents/personas/) and the 10 workflow packs under [`feral-core/workflows/`](feral-core/workflows/) now load at Brain boot into `state.personas` + `state.workflow_packs` via [`feral-core/agents/persona_loader.py`](feral-core/agents/persona_loader.py). New REST routes `GET /api/agents/personas`, `GET /api/agents/personas/{id}`, `GET /api/workflows/packs`, `GET /api/workflows/packs/{id}`, and `POST /api/workflows/packs/{id}/instantiate` (which creates a live TaskFlow via the existing `TaskFlowRuntime.create_flow` API). v2 UI exposes both catalogs: Agents page now has a `Personas` tab as its default, each card with a `Spawn specialist` button that POSTs to `/api/agents/spawn` with the persona's system prompt + tools; Flows page has a new `Packs` tab with an `Install as TaskFlow` button that calls the new instantiate route. Pydantic models use `extra="allow"` so future manifest fields don't force a code change here. Backed by 11 new pytest assertions ([`feral-core/tests/test_persona_loader.py`](feral-core/tests/test_persona_loader.py) + [`feral-core/tests/test_api_personas.py`](feral-core/tests/test_api_personas.py)) and v2 vitest smoke tests for both tabs. Doc: [`TRACK_C_PERSONAS_WORKFLOWS.md`](TRACK_C_PERSONAS_WORKFLOWS.md).
+
 ## [2026.4.17] - 2026-04-20
 
 ### Security

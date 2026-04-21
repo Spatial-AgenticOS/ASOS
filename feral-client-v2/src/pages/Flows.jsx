@@ -37,20 +37,113 @@ export default function Flows() {
           onChange={setTab}
           items={[
             { id: 'taskflows', label: 'TaskFlows' },
+            { id: 'packs', label: 'Packs' },
             { id: 'routines', label: 'Routines' },
             { id: 'automations', label: 'Automations' },
           ]}
         />
       )}>
         <p className="v2-p v2-p--muted">
-          TaskFlows are one-shot multi-step routines · Routines run on cron schedules · Automations are event triggers that fire a skill.
+          TaskFlows are one-shot multi-step routines · Packs are curated templates you can instantiate as a TaskFlow · Routines run on cron schedules · Automations are event triggers that fire a skill.
         </p>
       </Pane>
 
       {tab === 'taskflows' && <TaskFlowsTab skills={skills} />}
+      {tab === 'packs' && <PacksTab />}
       {tab === 'routines' && <RoutinesTab skills={skills} />}
       {tab === 'automations' && <AutomationsTab skills={skills} />}
     </div>
+  );
+}
+
+function PacksTab() {
+  const [packs, setPacks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+  const [error, setError] = useState(null);
+  const [lastCreated, setLastCreated] = useState(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const d = await apiJson('/api/workflows/packs');
+      setPacks(d.packs || []);
+    } catch (err) {
+      setError(err?.message || 'Failed to load workflow packs');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const instantiate = async (pack) => {
+    setBusyId(pack.workflow_id);
+    setError(null);
+    try {
+      const r = await apiFetch(`/api/workflows/packs/${pack.workflow_id}/instantiate`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      if (!r.ok) {
+        setError(`${r.status} ${await r.text()}`);
+      } else {
+        const body = await r.json();
+        setLastCreated({ workflow_id: pack.workflow_id, flow: body?.flow });
+      }
+    } catch (err) {
+      setError(err?.message || 'Instantiate failed');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <Pane
+      title={`Workflow packs (${packs.length})`}
+      actions={<button type="button" className="v2-btn v2-btn--ghost" onClick={refresh}><RefreshCw size={13} /></button>}
+    >
+      {loading && <EmptyState title="Loading…" />}
+      {!loading && packs.length === 0 && (
+        <EmptyState
+          title="No first-party workflow packs loaded"
+          hint="The Brain reads feral-core/workflows/*.json at boot. Check the Brain log for 'Loaded N first-party workflow packs'."
+        />
+      )}
+      {error && <div className="v2-chip v2-chip--error" style={{ marginBottom: 12 }}>{error}</div>}
+      {lastCreated && (
+        <div className="v2-chip v2-chip--live" style={{ marginBottom: 12 }}>
+          Instantiated {lastCreated.workflow_id} as flow {lastCreated.flow?.id || 'unknown'}
+        </div>
+      )}
+      <div className="v2-skills-grid">
+        {packs.map((p) => (
+          <Glass key={p.workflow_id} level={0} radius="md" padding="md" className="v2-skill-card">
+            <header className="v2-skill-card-head">
+              <h3 className="v2-skill-card-name">{p.name}</h3>
+              <code className="v2-skill-card-id">{p.workflow_id}</code>
+            </header>
+            {p.description && <p className="v2-p v2-p--muted">{p.description}</p>}
+            <div className="v2-skill-card-meta">
+              {p.schedule && <span className="v2-chip v2-chip--muted">cron: {p.schedule}</span>}
+              <span className="v2-chip v2-chip--muted">{Array.isArray(p.steps) ? p.steps.length : 0} step{p.steps?.length === 1 ? '' : 's'}</span>
+              {Array.isArray(p.tags) && p.tags.slice(0, 3).map((t) => (
+                <span key={t} className="v2-chip v2-chip--muted">{t}</span>
+              ))}
+            </div>
+            <div className="v2-forge-actions">
+              <button
+                type="button"
+                className="v2-btn v2-btn--primary"
+                disabled={busyId === p.workflow_id}
+                onClick={() => instantiate(p)}
+              >
+                <Plus size={12} /> {busyId === p.workflow_id ? 'Instantiating…' : 'Install as TaskFlow'}
+              </button>
+            </div>
+          </Glass>
+        ))}
+      </div>
+    </Pane>
   );
 }
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Users, Plus, ThumbsUp, ThumbsDown, RefreshCw } from 'lucide-react';
+import { Users, Plus, ThumbsUp, ThumbsDown, RefreshCw, Sparkles } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import Modal from '../ui/Modal';
@@ -8,24 +8,24 @@ import EmptyState from '../ui/EmptyState';
 import { apiJson, apiFetch } from '../lib/api';
 
 /**
- * Agents — Agent Mitosis specialists. Brain routes:
- *   GET  /api/agents/list
- *   GET  /api/agents/proposals
- *   POST /api/agents/spawn
- *   POST /api/agents/feedback
- *   GET  /api/agents/stats
+ * Agents page. Two catalogs + one timeline:
+ *  - Personas   → first-party curated archetypes (GET /api/agents/personas)
+ *  - Specialists → user/Mitosis-spawned live agents (GET /api/agents/list)
+ *  - Proposals  → Mitosis-detected recurring patterns
+ *  - Stats      → Mitosis runtime stats
  */
 export default function Agents() {
-  const [tab, setTab] = useState('specialists');
+  const [tab, setTab] = useState('personas');
   return (
     <div className="v2-page v2-page--stack" data-testid="v2-marker">
       <Pane
-        title="Agent Mitosis"
+        title="Agents"
         actions={(
           <Tabs
             value={tab}
             onChange={setTab}
             items={[
+              { id: 'personas', label: 'Personas' },
               { id: 'specialists', label: 'Specialists' },
               { id: 'proposals', label: 'Proposals' },
               { id: 'stats', label: 'Stats' },
@@ -34,15 +34,112 @@ export default function Agents() {
         )}
       >
         <p className="v2-p v2-p--muted">
-          Permanent specialist sub-agents with their own system prompt + narrow tool permissions.
+          Personas are the curated first-party agent archetypes shipped with FERAL.
+          Specialists are Mitosis-spawned permanent sub-agents with their own tool permissions.
           Proposals surface when FERAL sees a recurring task pattern.
         </p>
       </Pane>
 
+      {tab === 'personas' && <PersonasTab />}
       {tab === 'specialists' && <SpecialistsTab />}
       {tab === 'proposals' && <ProposalsTab />}
       {tab === 'stats' && <StatsTab />}
     </div>
+  );
+}
+
+function PersonasTab() {
+  const [personas, setPersonas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+  const [error, setError] = useState(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const d = await apiJson('/api/agents/personas');
+      setPersonas(d.personas || []);
+    } catch (err) {
+      setError(err?.message || 'Failed to load personas');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const spawnFromPersona = async (p) => {
+    setBusyId(p.agent_id);
+    setError(null);
+    try {
+      const r = await apiFetch('/api/agents/spawn', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: p.name,
+          description: p.description,
+          system_prompt: p.system_prompt,
+          tool_permissions: p.tool_permissions || [],
+          source_pattern: p.source_pattern,
+        }),
+      });
+      if (!r.ok) {
+        setError(`${r.status} ${await r.text()}`);
+      }
+    } catch (err) {
+      setError(err?.message || 'Spawn failed');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <Pane
+      title={`Personas (${personas.length})`}
+      actions={<button type="button" className="v2-btn v2-btn--ghost" onClick={refresh}><RefreshCw size={13} /></button>}
+    >
+      {loading && <EmptyState title="Loading…" />}
+      {!loading && personas.length === 0 && (
+        <EmptyState
+          title="No first-party personas loaded"
+          hint="The Brain looks for feral-core/agents/personas/*.json at boot. Check the Brain log for 'Loaded N first-party personas'."
+        />
+      )}
+      {error && <div className="v2-chip v2-chip--error" style={{ marginBottom: 12 }}>{error}</div>}
+      <div className="v2-skills-grid">
+        {personas.map((p) => (
+          <Glass key={p.agent_id} level={0} radius="md" padding="md" className="v2-skill-card">
+            <header className="v2-skill-card-head">
+              <h3 className="v2-skill-card-name">{p.name}</h3>
+              <code className="v2-skill-card-id">{p.agent_id}</code>
+            </header>
+            {p.description && <p className="v2-p v2-p--muted">{p.description}</p>}
+            <div className="v2-skill-card-meta">
+              {p.schedule && <span className="v2-chip v2-chip--muted">{p.schedule}</span>}
+              {p.memory_filter && <span className="v2-chip v2-chip--muted">memory: {p.memory_filter}</span>}
+              {Array.isArray(p.tags) && p.tags.slice(0, 3).map((t) => (
+                <span key={t} className="v2-chip v2-chip--muted">{t}</span>
+              ))}
+            </div>
+            {Array.isArray(p.tool_permissions) && p.tool_permissions.length > 0 && (
+              <div className="v2-skill-card-phrases">
+                {p.tool_permissions.slice(0, 6).map((perm) => (
+                  <span key={perm} className="v2-chip v2-chip--muted">{perm}</span>
+                ))}
+              </div>
+            )}
+            <div className="v2-forge-actions">
+              <button
+                type="button"
+                className="v2-btn v2-btn--primary"
+                disabled={busyId === p.agent_id}
+                onClick={() => spawnFromPersona(p)}
+              >
+                <Sparkles size={12} /> {busyId === p.agent_id ? 'Spawning…' : 'Spawn specialist'}
+              </button>
+            </div>
+          </Glass>
+        ))}
+      </div>
+    </Pane>
   );
 }
 

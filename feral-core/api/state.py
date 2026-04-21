@@ -170,6 +170,12 @@ class BrainState:
         self.email_watcher: Optional[EmailWatcher] = None
         self.device_pairing_store: DevicePairingStore = DevicePairingStore()
         self._boot_report: BootReport = BootReport()
+        # First-party agent personas and workflow packs loaded from
+        # feral-core/agents/personas/ and feral-core/workflows/ at boot.
+        # See feral-core/agents/persona_loader.py + Track C in
+        # TRACK_C_PERSONAS_WORKFLOWS.md.
+        self.personas: dict = {}
+        self.workflow_packs: dict = {}
 
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
@@ -185,6 +191,16 @@ class BrainState:
         _boot_start = time.time()
         with boot_subsystem(self._boot_report, "SkillRegistry", optional=False):
             self.skill_registry.load_builtin_skills()
+
+        with boot_subsystem(self._boot_report, "Personas", optional=True):
+            from agents.persona_loader import (
+                load_personas,
+                load_workflow_packs,
+                default_personas_dir,
+                default_workflow_packs_dir,
+            )
+            self.personas = load_personas(default_personas_dir())
+            self.workflow_packs = load_workflow_packs(default_workflow_packs_dir())
 
         from agents.llm_provider import LLMProvider
         with boot_subsystem(self._boot_report, "LLMProvider", optional=False):
