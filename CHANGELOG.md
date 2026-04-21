@@ -1,10 +1,30 @@
 # Changelog
 
-<!-- feral-version: 2026.4.21 -->
+<!-- feral-version: 2026.4.22 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.4.22] - 2026-04-21
+
+### Added
+
+- **Consciousness Layer — the 5th memory tier.** Tiers 1-4 (working / episodic / semantic / execution log) record what *happened*. Consciousness records what is *in-flight* — intents, flows, paused thoughts, device streams, turns — so `pip install -U feral-ai` users know where they left off across restarts, upgrades, and device handoffs. Shipped as a SQLite-backed [`ConsciousnessStore`](feral-core/memory/consciousness.py) with auto-abandon TTL sweeps, idempotent snapshot/restore, and a broadcast hook that pushes every state mutation to connected v2 clients over the existing `/v1/session` WebSocket. Five REST endpoints: `GET /api/consciousness/state`, `GET /api/consciousness/summary`, `POST /api/consciousness/{snapshot,restore,heartbeat,resume,pause,abandon}`. The brain auto-restores `~/.feral/consciousness.json` at boot and snapshots back on graceful shutdown. Backed by 13 pytest assertions + 5 re-entry assertions.
+
+- **Real orchestrator-level re-entry on resume.** `/api/consciousness/resume` used to just flip a status flag. Now it actually re-enters execution per-kind: `flow` calls `state.taskflows.resume_flow(id)` which flips the TaskFlow row back to QUEUED and resets waiting/failed steps for the scheduler; `thought` calls `orchestrator.register_paused_thought(session_id, thought_id, text)` which queues the mid-sentence fragment for re-thread on the next `handle_command` turn. The LLM sees `[RESUMED THOUGHT] X` in conversation history before the user's next message. That's the "I left off mid-sentence, brain restarted, continue the same thread" contract, wired.
+
+- **ResumeCockpit v2 Home pane.** A first-class pane (not a dismissible banner) that lists every in-flight ConsciousnessEntity grouped by kind. Per-row: StatusDot (live/warn/off) with animated pulse for active entities, age ("2m ago"), human summary, per-kind context preview (flow step X/Y, thought first 120 chars), and Resume / Pause / Abandon buttons that hit the new REST routes. Real-time updates via `useBrainEvents` subscribed to `consciousness_record`, `consciousness_status`, `consciousness_sweep` events.
+
+- **Native Consciousness mind-map on GlassBrain.** A live SVG force-directed graph where every ConsciousnessEntity is a node coloured by kind, sized by status, pulsing if active, with edges to its owner session / device / skill. Hover shows the full summary + session prefix; click navigates to the kind's canonical page (flow → /flows, intent → /intents, thought → /chat, device_stream → /devices). Deterministic radial layout so heartbeats don't cause jitter. This is the visual no other agent OS has — FERAL's operational self-model as a living graph.
+
+- **Chat auto-rehydrates paused thoughts.** On mount, the Chat page fetches `/api/consciousness/state?kind=thought` and renders the paused fragments above the message log as Glass cards with Resume / Abandon buttons. Clicking Resume POSTs `/api/consciousness/resume`, the brain registers the thought with the orchestrator, and the LLM sees the continuation on the user's next turn.
+
+- **iOS FeralNode SDK scaffold.** New [`feral-nodes/ios-node-sdk/`](feral-nodes/ios-node-sdk) Swift package that turns an iPhone into a HUP daemon, hosting multiple vendor-SDK adapters concurrently (Theora wristband via VeepooSDK, Theora health glasses via JWBle, W610 open-source glasses via QCSDK). Public API: `FeralNode(brainURL, apiKey, nodeID).register(adapter:)` then `connect()`. Ergonomic `emitVideoFrame` / `emitAudioFrame` helpers matching the Python SDK's API. Three adapters are compiled in with their vendor frameworks' wire-up checklists documented — `attach()` throws `FeralNodeError.adapterNotWired` until the vendor frameworks are linked into the host app, so builds cannot silently ship with fake data. `swift build` + `swift test` green: 6/6 tests pass.
+
+### Fixed
+
+- **Placeholder buzz UUID removed, honest "haptic unwired" state in its place.** The previous commit (`296c11b`) added a fake GATT UUID for the wristband buzz actuator + log warnings + a yellow v2 chip. Wrong abstraction — Theora wristbands use Veepoo's iOS SDK, not raw GATT writes from a desktop daemon. Now: the desktop daemon refuses to write to a made-up UUID (`buzz()` returns `False`), `haptic` is omitted from the daemon's capabilities list unless `FERAL_WRISTBAND_BUZZ_UUID` is set, and v2 Devices shows a "Haptic: unwired" muted chip pointing at the iOS FeralNode bridge as the production path.
 
 ## [2026.4.21] - 2026-04-21
 

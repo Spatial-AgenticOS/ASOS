@@ -18,13 +18,13 @@ on:
       feral_version:
         description: "feral-ai PyPI version (calver, no v prefix)"
         required: false
-        default: "2026.4.21"
+        default: "2026.4.22"
 
 permissions:
   contents: read
 
 env:
-  FERAL_VERSION: "2026.4.21"
+  FERAL_VERSION: "2026.4.22"
 
 jobs:
   build:
