@@ -219,8 +219,24 @@ class FeralNode:
             verify_tls=verify_tls,
         )
 
+    async def run_async(self, main_coro: Optional[Awaitable[Any]] = None) -> None:
+        """Async entry-point. Use from inside an existing event loop.
+
+        Daemons that orchestrate their own asyncio.run(...) — for example
+        the theora_glasses_daemon and wristband_daemon packages — await
+        this directly instead of calling the sync ``run()`` wrapper
+        (which would nest ``asyncio.run`` inside an already-running
+        event loop and raise ``RuntimeError``).
+        """
+        await self._run_async(main_coro)
+
     def run(self, main_coro: Optional[Awaitable[Any]] = None) -> None:
-        """Block: connect, run `main_coro` (if given), keep reconnecting forever."""
+        """Sync CLI entry-point. Blocks until the node shuts down.
+
+        Calls ``asyncio.run(run_async(main_coro))`` internally, so this
+        MUST NOT be called from inside an already-running event loop.
+        From async code, call ``await node.run_async(...)`` instead.
+        """
         try:
             asyncio.run(self._run_async(main_coro))
         except KeyboardInterrupt:

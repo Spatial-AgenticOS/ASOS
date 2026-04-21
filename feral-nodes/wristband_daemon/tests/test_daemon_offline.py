@@ -56,10 +56,14 @@ class FakeBleClient:
 
 
 class FakeFeralNode:
-    """Fake FeralNode that blocks in run() until stop() is called.
+    """Fake FeralNode that blocks in run_async() until stop() is called.
 
-    Matching the real node's behaviour (run never returns on its own)
-    lets the daemon's start()/stop() pair work naturally in tests.
+    Matches the real SDK contract (run_async is an async coroutine;
+    the sync `run` wrapper exists only for CLI entry-points). Daemons
+    call `await node.run_async()`, so that is what the fake must
+    expose — if the fake exposed `async def run` instead, the tests
+    would pass against it but fail against the real SDK, which is
+    exactly the bug we shipped in commit c13460b and are fixing here.
     """
 
     def __init__(self) -> None:
@@ -77,7 +81,7 @@ class FakeFeralNode:
     async def emit_event(self, event_type: str, data: dict) -> None:
         self.events.append((event_type, data))
 
-    async def run(self) -> None:
+    async def run_async(self) -> None:
         self.ran = True
         await self._stop.wait()
 

@@ -187,7 +187,7 @@ class W300Daemon:
 
         loop = asyncio.create_task(self.vision_loop())
         try:
-            await self.node.run()
+            await self.node.run_async()
         finally:
             self._stop.set()
             await loop

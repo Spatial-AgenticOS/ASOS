@@ -44,6 +44,13 @@ class FakeCamera(CameraCapture):
 
 
 class FakeFeralNode:
+    """Fake FeralNode that mirrors the real SDK's run_async contract.
+
+    Daemons call `await node.run_async()`; the fake MUST expose the
+    same method name so the test can't pass against a mock and then
+    fail against the real SDK (the bug fixed by this commit).
+    """
+
     def __init__(self) -> None:
         self.events: list[tuple[str, dict]] = []
         self.video_frames: list[dict] = []
@@ -68,7 +75,7 @@ class FakeFeralNode:
             "data_b64": data_b64,
         })
 
-    async def run(self) -> None:
+    async def run_async(self) -> None:
         self.ran = True
         await self._stop.wait()
 

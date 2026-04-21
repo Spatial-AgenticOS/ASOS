@@ -1,11 +1,21 @@
-"""Brain-side HUP v1.1 dispatch — audio_frame + video_frame routing.
+"""Brain-side HUP v1.1 dispatch — audio_frame, video_frame, and
+biometric device_event routing.
 
-Asserts the new branches in the /v1/node WebSocket handler exist and
+Asserts the branches in the ``/v1/node`` WebSocket handler exist and
 route correctly:
-  - video_frame and device_event(event_type=video_frame) go into
-    state.vision_buffer.
-  - audio_frame and device_event(event_type=audio_frame) call
-    state.audio.ingest_frame when present.
+
+* ``video_frame`` (flat + nested-``data``) → ``state.vision_buffer``.
+* ``audio_frame`` (flat + nested-``data``) → ``state.audio.ingest_frame``.
+* ``device_event(event_type=heart_rate|spo2|skin_temperature|steps|
+  accelerometer|gesture)`` → ``state.perception.update_sensors`` +
+  baseline recording.
+
+The nested-``data`` shape matters: the Python SDK's
+``emit_video_frame`` / ``emit_audio_frame`` serialise frame fields
+inside ``DeviceEventPayload.data`` (so the wire carries
+``payload.data.data_b64``), not flat. A handler that only reads the
+top level silently drops every frame — exactly the bug the
+``_unwrap_hup_frame`` helper fixes.
 
 Per HUP_SPEC.md §1's forward-compat rule, unknown device_event
 event_types must NOT raise.
@@ -37,7 +47,9 @@ def server_module(monkeypatch):
 
     pushed = []
     ingested = []
-    sessions: list[str] = []
+    sensor_updates: list[tuple[str, dict]] = []
+    baseline_records: list[tuple[str, float, str]] = []
+    sessions: list[str] = ["sid-1"]
 
     class FakeVisionBuffer:
         def push(self, node_id, payload):
@@ -47,6 +59,12 @@ def server_module(monkeypatch):
         def update_vision(self, *_a, **_k):
             pass
 
+        def update_sensors(self, sid, sensors):
+            sensor_updates.append((sid, sensors))
+
+        def update_gesture(self, sid, gesture):
+            sensor_updates.append((sid, {"gesture": gesture}))
+
     class FakeChangeDetector:
         def should_analyze(self, *_a, **_k):
             return None
@@ -55,6 +73,10 @@ def server_module(monkeypatch):
         def ingest_frame(self, node_id, payload):
             ingested.append((node_id, payload))
 
+    class FakeBaseline:
+        def record(self, metric_id, value, category=None):
+            baseline_records.append((metric_id, value, category))
+
     class FakeState:
         vision_buffer = FakeVisionBuffer()
         perception = FakePerception()
@@ -62,16 +84,18 @@ def server_module(monkeypatch):
         audio = FakeAudio()
         scene = None
         orchestrator = None
+        somatic_engine = None
+        baseline_engine = FakeBaseline()
 
         def get_sessions_for_daemon(self, _node):
             return sessions
 
     monkeypatch.setattr(server, "state", FakeState())
-    return server, pushed, ingested
+    return server, pushed, ingested, sensor_updates, baseline_records
 
 
 def test_video_frame_lands_in_vision_buffer(server_module):
-    server, pushed, _ingested = server_module
+    server, pushed, *_ = server_module
     payload = {
         "event_type": "video_frame",
         "codec": "jpeg",
@@ -80,15 +104,42 @@ def test_video_frame_lands_in_vision_buffer(server_module):
         "sequence": 1,
         "data_b64": _b64(2048),
     }
-    server._handle_video_frame("feral-w300-test", payload, msg_id="m1")
+    server._handle_video_frame("feral-glasses-test", payload, msg_id="m1")
     assert len(pushed) == 1
     node_id, frame = pushed[0]
-    assert node_id == "feral-w300-test"
+    assert node_id == "feral-glasses-test"
     assert frame["codec"] == "jpeg"
 
 
+def test_video_frame_nested_payload_unwraps(server_module):
+    """HUP v1.1 Python SDK wraps frame fields inside `payload.data`.
+
+    A handler that only reads top-level would silently drop every
+    SDK-shipped frame. This test exercises the nested shape to keep
+    the unwrap helper honest.
+    """
+    server, pushed, *_ = server_module
+    payload = {
+        "node_id": "feral-glasses-test",
+        "event_type": "video_frame",
+        "data": {
+            "codec": "jpeg",
+            "width": 640,
+            "height": 480,
+            "sequence": 1,
+            "data_b64": _b64(2048),
+        },
+    }
+    server._handle_video_frame(None, payload, msg_id="m-nested")
+    assert len(pushed) == 1
+    node_id, frame = pushed[0]
+    assert node_id == "feral-glasses-test"
+    assert frame["codec"] == "jpeg"
+    assert frame["data_b64"]
+
+
 def test_video_frame_over_cap_is_dropped(server_module):
-    server, pushed, _ = server_module
+    server, pushed, *_ = server_module
     payload = {
         "event_type": "video_frame",
         "codec": "jpeg",
@@ -97,12 +148,12 @@ def test_video_frame_over_cap_is_dropped(server_module):
         "sequence": 2,
         "data_b64": "x" * (server.VIDEO_FRAME_MAX_BYTES + 8),
     }
-    server._handle_video_frame("feral-w300-test", payload, msg_id="m2")
+    server._handle_video_frame("feral-glasses-test", payload, msg_id="m2")
     assert pushed == []
 
 
 def test_audio_frame_lands_in_audio_pipeline(server_module):
-    server, _pushed, ingested = server_module
+    server, _pushed, ingested, *_ = server_module
     payload = {
         "event_type": "audio_frame",
         "codec": "opus",
@@ -118,8 +169,28 @@ def test_audio_frame_lands_in_audio_pipeline(server_module):
     assert frame["codec"] == "opus"
 
 
+def test_audio_frame_nested_payload_unwraps(server_module):
+    server, _pushed, ingested, *_ = server_module
+    payload = {
+        "node_id": "feral-band-test",
+        "event_type": "audio_frame",
+        "data": {
+            "codec": "opus",
+            "sample_rate": 24000,
+            "channels": 1,
+            "sequence": 9,
+            "data_b64": _b64(512),
+        },
+    }
+    server._handle_audio_frame(None, payload)
+    assert len(ingested) == 1
+    node_id, frame = ingested[0]
+    assert node_id == "feral-band-test"
+    assert frame["codec"] == "opus"
+
+
 def test_audio_frame_over_cap_is_dropped(server_module):
-    server, _pushed, ingested = server_module
+    server, _pushed, ingested, *_ = server_module
     payload = {
         "event_type": "audio_frame",
         "codec": "opus",
@@ -133,7 +204,7 @@ def test_audio_frame_over_cap_is_dropped(server_module):
 
 
 def test_audio_frame_no_pipeline_does_not_raise(server_module, monkeypatch):
-    server, _pushed, _ingested = server_module
+    server, _pushed, _ingested, *_ = server_module
     # Strip the audio.ingest_frame method to mimic an early-boot brain.
     server.state.audio = object()
     payload = {
@@ -147,3 +218,56 @@ def test_audio_frame_no_pipeline_does_not_raise(server_module, monkeypatch):
     # Must NOT raise — daemon should not be punished for the brain
     # not being ready.
     server._handle_audio_frame("any", payload)
+
+
+# ---------------------------------------------------------------------------
+# Biometric device_event dispatch — the wristband_daemon ships heart_rate
+# and spo2 as device_event envelopes. Before the fix, the brain dropped
+# them with a debug log. Now they land in the same sinks as the legacy
+# `telemetry` branch.
+# ---------------------------------------------------------------------------
+
+
+def test_heart_rate_device_event_hits_perception_and_baseline(server_module):
+    server, _pushed, _ingested, sensor_updates, baseline_records = server_module
+    payload = {
+        "node_id": "feral-band-test",
+        "event_type": "heart_rate",
+        "data": {"bpm": 82, "confidence": 0.9},
+    }
+    server._handle_biometric_device_event("feral-band-test", "heart_rate", payload)
+    assert any(s[1].get("ppg_heart_rate") == 82 for s in sensor_updates)
+    # server._BIOMETRIC_KEY_MAP routes "ppg_heart_rate" → "hr_resting".
+    assert any(mid == "hr_resting" for mid, *_ in baseline_records)
+
+
+def test_spo2_device_event_records_to_sensors(server_module):
+    server, _pushed, _ingested, sensor_updates, _baseline = server_module
+    payload = {
+        "node_id": "feral-band-test",
+        "event_type": "spo2",
+        "data": {"current": 97},
+    }
+    server._handle_biometric_device_event("feral-band-test", "spo2", payload)
+    assert any(s[1].get("spo2_pct") == 97 for s in sensor_updates)
+
+
+def test_gesture_device_event_hits_gesture_pipeline(server_module):
+    server, _pushed, _ingested, sensor_updates, _baseline = server_module
+    payload = {
+        "node_id": "feral-glasses-test",
+        "event_type": "gesture",
+        "data": {"gesture": "nod", "confidence": 0.85},
+    }
+    server._handle_biometric_device_event("feral-glasses-test", "gesture", payload)
+    assert any(s[1].get("gesture") == "nod" for s in sensor_updates)
+
+
+def test_unknown_event_type_does_not_raise(server_module):
+    """HUP §1 forward-compat rule — unknown event_types are ignored."""
+    server, *_ = server_module
+    # Never reaches the biometric dispatcher, but the handler must
+    # tolerate being called with an unrecognised key anyway.
+    server._handle_biometric_device_event(
+        "feral-band-test", "something_invented_tomorrow", {"data": {"x": 1}}
+    )

@@ -246,8 +246,11 @@ class WristbandDaemon:
 
         self._running = True
         logger.info("wristband_daemon online; emitting HUP v1.1 device_events.")
-        # FeralNode.run opens the WebSocket + services inbound actions.
-        await self.node.run()  # type: ignore[union-attr]
+        # FeralNode.run_async opens the WebSocket + services inbound
+        # actions. The sync FeralNode.run wraps asyncio.run; calling
+        # that from inside an already-running loop would raise
+        # RuntimeError, so we await the async variant.
+        await self.node.run_async()  # type: ignore[union-attr]
 
     async def stop(self) -> None:
         self._running = False

@@ -922,14 +922,21 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
 
             elif msg.type == "device_event":
                 # HUP v1.1 `device_event` envelope. Unwrap to the concrete
-                # event_type and dispatch. Unknown event_types are ignored
-                # per the forward-compat rule in HUP_SPEC.md §1.
+                # event_type and dispatch. Biometric / sensor / gesture
+                # types land in the same sinks as the legacy `telemetry`
+                # and `gesture` branches above. Unknown event_types are
+                # ignored per the forward-compat rule in HUP_SPEC.md §1.
                 de_payload = raw.get("payload", {}) or {}
                 ev_type = de_payload.get("event_type", "")
                 if ev_type == "audio_frame":
                     _handle_audio_frame(node_id, de_payload)
                 elif ev_type == "video_frame":
                     _handle_video_frame(node_id, de_payload, msg.msg_id)
+                elif ev_type in {
+                    "heart_rate", "spo2", "skin_temperature", "steps",
+                    "temperature", "accelerometer", "gesture",
+                }:
+                    _handle_biometric_device_event(node_id, ev_type, de_payload)
                 else:
                     logger.debug(
                         "Ignoring unknown device_event event_type=%r from %s",
@@ -1026,13 +1033,45 @@ AUDIO_FRAME_MAX_BYTES = 64 * 1024  # HUP_SPEC.md §5.4.1 cap
 VIDEO_FRAME_MAX_BYTES = 512 * 1024  # HUP_SPEC.md §5.4.2 cap (matches existing VISION_MAX_FRAME_KB)
 
 
+def _unwrap_hup_frame(raw_payload: dict) -> dict:
+    """Accept both ``device_event`` shapes.
+
+    The HUP v1.1 Python SDK wraps media fields inside
+    ``DeviceEventPayload.data`` (so the wire carries
+    ``payload.data.data_b64``), while legacy direct-send daemons emit
+    the fields flat at the top of the payload (``payload.data_b64``).
+    Normalise to a single flat dict here so the downstream vision /
+    audio sinks keep working regardless of which client shipped the
+    frame. Top-level fields always win, so partially-migrated daemons
+    that send both shapes are tolerated.
+    """
+    if not isinstance(raw_payload, dict):
+        return {}
+    nested = raw_payload.get("data") if isinstance(raw_payload.get("data"), dict) else {}
+    if not nested:
+        return raw_payload
+    merged: dict = {}
+    merged.update(nested)
+    for k, v in raw_payload.items():
+        if k == "data":
+            continue
+        merged[k] = v
+    return merged
+
+
 def _handle_video_frame(node_id, frame_payload: dict, msg_id=None) -> None:
     """Dispatch a HUP v1.1 ``video_frame`` payload into the vision buffer.
 
     Shares the existing vision-buffer sink with the legacy ``vision_frame``
     branch so downstream perception code stays unchanged. Over-cap frames
     are dropped with a warning per HUP_SPEC.md error code 4020.
+
+    Accepts both the flat and nested ``device_event`` payload shapes
+    via :func:`_unwrap_hup_frame` — the HUP v1.1 Python SDK serialises
+    its frames nested under ``payload.data`` while the legacy direct
+    ``vision_frame`` path carries them flat.
     """
+    frame_payload = _unwrap_hup_frame(frame_payload)
     data_b64 = frame_payload.get("data_b64", "") or ""
     if len(data_b64) > VIDEO_FRAME_MAX_BYTES:
         logger.warning(
@@ -1063,10 +1102,12 @@ def _handle_video_frame(node_id, frame_payload: dict, msg_id=None) -> None:
 def _handle_audio_frame(node_id, frame_payload: dict) -> None:
     """Dispatch a HUP v1.1 ``audio_frame`` payload into the audio pipeline.
 
-    Falls back to a debug log when ``state.audio`` does not expose an
-    ``ingest_frame`` hook — the Brain boot tolerates the pipeline being
-    absent, so we must too.
+    Accepts both SDK-nested and flat payload shapes via
+    :func:`_unwrap_hup_frame`. Falls back to a debug log when
+    ``state.audio`` does not expose an ``ingest_frame`` hook — the
+    Brain boot tolerates the pipeline being absent, so we must too.
     """
+    frame_payload = _unwrap_hup_frame(frame_payload)
     data_b64 = frame_payload.get("data_b64", "") or ""
     if len(data_b64) > AUDIO_FRAME_MAX_BYTES:
         logger.warning(
@@ -1088,6 +1129,75 @@ def _handle_audio_frame(node_id, frame_payload: dict) -> None:
             "Received audio_frame from %s but state.audio has no ingest_frame hook; dropping.",
             effective_node,
         )
+
+
+def _handle_biometric_device_event(node_id, event_type: str, frame_payload: dict) -> None:
+    """Dispatch ``device_event`` payloads with biometric / sensor event types.
+
+    Accepts both SDK-nested and flat shapes. Lands in the same sinks
+    as the legacy ``telemetry`` branch: ``state.perception.update_sensors``
+    per session and ``_record_biometrics_to_baseline`` for rolling stats.
+    Handles ``heart_rate``, ``spo2``, ``skin_temperature``, ``steps``,
+    ``temperature``, ``accelerometer``, ``button_press``.
+    """
+    frame_payload = _unwrap_hup_frame(frame_payload)
+    effective_node = node_id or frame_payload.get("node_id", "unknown")
+    # Reshape into the same ``sensors`` dict the legacy ``telemetry``
+    # branch already expects: numeric keys land at the top level.
+    sensors: dict = {}
+    # HR carried either as {"bpm": int} (per HUP_SPEC examples) or as a
+    # flat number under the event_type key — accept both.
+    if event_type == "heart_rate":
+        bpm = frame_payload.get("bpm")
+        if bpm is None and isinstance(frame_payload.get("value"), (int, float)):
+            bpm = frame_payload.get("value")
+        if bpm is not None:
+            sensors["ppg_heart_rate"] = bpm
+    elif event_type == "spo2":
+        val = frame_payload.get("current") or frame_payload.get("spo2") or frame_payload.get("value")
+        if val is not None:
+            sensors["spo2_pct"] = val
+    elif event_type == "skin_temperature":
+        val = frame_payload.get("celsius") or frame_payload.get("value")
+        if val is not None:
+            sensors["skin_temperature_c"] = val
+    elif event_type == "steps":
+        val = frame_payload.get("count") or frame_payload.get("value")
+        if val is not None:
+            sensors["steps"] = val
+    elif event_type == "temperature":
+        val = frame_payload.get("celsius") or frame_payload.get("value")
+        if val is not None:
+            sensors["temperature"] = val
+    elif event_type == "accelerometer":
+        accel = [
+            frame_payload.get("x", 0.0),
+            frame_payload.get("y", 0.0),
+            frame_payload.get("z", 0.0),
+        ]
+        sensors["accel_xyz"] = accel
+    elif event_type == "gesture":
+        # Route straight to the gesture pipeline. No baseline recording.
+        gesture = frame_payload.get("gesture") or frame_payload.get("name") or ""
+        if gesture and effective_node:
+            for sid in state.get_sessions_for_daemon(effective_node):
+                state.perception.update_gesture(sid, gesture)
+        return
+
+    if not sensors:
+        logger.debug(
+            "Dropping device_event %r from %s — could not extract a value from %r",
+            event_type, effective_node, frame_payload,
+        )
+        return
+
+    if effective_node:
+        for sid in state.get_sessions_for_daemon(effective_node):
+            state.perception.update_sensors(sid, sensors)
+            if state.somatic_engine:
+                state.somatic_engine.update_from_perception_frame(sid, sensors)
+
+    _record_biometrics_to_baseline(sensors)
 
 
 def _record_biometrics_to_baseline(data: dict) -> None:
