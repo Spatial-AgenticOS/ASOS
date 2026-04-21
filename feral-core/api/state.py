@@ -176,6 +176,10 @@ class BrainState:
         # TRACK_C_PERSONAS_WORKFLOWS.md.
         self.personas: dict = {}
         self.workflow_packs: dict = {}
+        # ConsciousnessStore (5th memory tier — in-flight operational state).
+        # Initialised in state.init() after the FERAL_HOME is known.
+        # See feral-core/memory/consciousness.py.
+        self.consciousness = None
 
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
@@ -201,6 +205,26 @@ class BrainState:
             )
             self.personas = load_personas(default_personas_dir())
             self.workflow_packs = load_workflow_packs(default_workflow_packs_dir())
+
+        with boot_subsystem(self._boot_report, "Consciousness", optional=True):
+            # 5th memory tier — in-flight operational state. On boot we
+            # open the SQLite store and attempt to restore the last
+            # snapshot file so "the agent knows where it left off"
+            # survives restarts / upgrades / device handoffs.
+            from memory.consciousness import (
+                ConsciousnessStore,
+                default_consciousness_db_path,
+                default_snapshot_path,
+            )
+            self.consciousness = ConsciousnessStore(default_consciousness_db_path())
+            snap = default_snapshot_path()
+            if snap.exists():
+                try:
+                    import json as _json
+                    restored = self.consciousness.restore(_json.loads(snap.read_text()))
+                    logger.info("Consciousness: restored %d entities from %s", restored, snap)
+                except Exception as exc:
+                    logger.warning("Consciousness snapshot restore skipped: %s", exc)
 
         from agents.llm_provider import LLMProvider
         with boot_subsystem(self._boot_report, "LLMProvider", optional=False):

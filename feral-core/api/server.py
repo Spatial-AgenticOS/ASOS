@@ -71,6 +71,7 @@ from api.routes.ambient import router as ambient_router
 from api.routes.auth import router as auth_router
 from api.routes.personas import router as personas_router
 from api.routes.jobs import router as jobs_router
+from api.routes.consciousness import router as consciousness_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -248,6 +249,7 @@ app.include_router(ambient_router)
 app.include_router(auth_router)
 app.include_router(personas_router)
 app.include_router(jobs_router)
+app.include_router(consciousness_router)
 
 
 # ─────────────────────────────────────────────
@@ -349,7 +351,12 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Graceful shutdown: close LLM clients, MCP connections, sync engine, mDNS."""
+    """Graceful shutdown: close LLM clients, MCP connections, sync engine, mDNS.
+
+    Also snapshots the ConsciousnessStore to disk so the agent's in-flight
+    state survives the next boot — this is the 'know where I left off'
+    contract documented in feral-core/memory/consciousness.py.
+    """
     logger.info("FERAL Brain shutting down gracefully...")
     if state.orchestrator and state.orchestrator.llm:
         await state.orchestrator.llm.close()
@@ -359,6 +366,22 @@ async def shutdown_event():
         await state.sync_engine.stop_discovery()
     if state.taskflows:
         await state.taskflows.stop()
+    # Persist consciousness before the SQLite connection pools die.
+    try:
+        store = getattr(state, "consciousness", None)
+        if store is not None:
+            from memory.consciousness import default_snapshot_path
+            import json as _json
+            blob = store.snapshot()
+            path = default_snapshot_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_json.dumps(blob, indent=2))
+            logger.info(
+                "Consciousness snapshot written: %d entities -> %s",
+                blob.get("count", 0), path,
+            )
+    except Exception as exc:
+        logger.warning("Consciousness snapshot-on-shutdown failed: %s", exc)
     try:
         from services.mdns import stop_advertisement
         stop_advertisement()

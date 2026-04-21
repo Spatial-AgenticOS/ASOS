@@ -180,7 +180,25 @@ class TaskFlowRuntime:
                     (flow_id, i, step["type"], json.dumps(payload)),
                 )
             conn.commit()
-        return self.get_flow(flow_id)
+        flow = self.get_flow(flow_id)
+        # Consciousness-layer write: record the flow as an in-flight
+        # entity so "where did I leave off" queries surface it across
+        # a Brain restart. Wrapped in try/except so a missing store
+        # never blocks flow creation.
+        try:
+            from api.state import state as _state
+            store = getattr(_state, "consciousness", None)
+            if store is not None:
+                store.record_flow(
+                    flow_id=flow_id,
+                    title=title or f"TaskFlow {flow_id}",
+                    step=0,
+                    steps=len(steps),
+                    session_id=session_id,
+                )
+        except Exception:
+            pass
+        return flow
 
     def list_flows(
         self,
