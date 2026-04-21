@@ -11,7 +11,10 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-HUP_VERSION = "1.0.0"
+HUP_VERSION = "1.1.0"
+# Per-frame decoded-size caps from HUP_SPEC.md §5.4.1 / §5.4.2.
+AUDIO_FRAME_MAX_BYTES = 64 * 1024
+VIDEO_FRAME_MAX_BYTES = 512 * 1024
 
 NodeType = Literal[
     "desktop",
@@ -81,6 +84,58 @@ class DeviceEventPayload(BaseModel):
     event_type: str
     data: dict[str, Any] = Field(default_factory=dict)
     ts: float = Field(default_factory=_time.time)
+
+
+class AudioFramePayload(BaseModel):
+    """HUP v1.1 `audio_frame` payload (per HUP_SPEC.md §5.4.1)."""
+
+    event_type: Literal["audio_frame"] = "audio_frame"
+    codec: Literal["opus", "pcm16"]
+    sample_rate: int = Field(..., ge=8000, le=96000)
+    channels: int = Field(..., ge=1, le=2)
+    frame_ms: int = Field(default=20, ge=1, le=120)
+    sequence: int = Field(..., ge=0)
+    data_b64: str
+
+    @field_validator("data_b64")
+    @classmethod
+    def _data_b64_decoded_size(cls, v: str) -> str:
+        import base64
+        try:
+            decoded = base64.b64decode(v, validate=False)
+        except Exception as exc:
+            raise ValueError(f"data_b64 is not valid base64: {exc}") from exc
+        if len(decoded) > AUDIO_FRAME_MAX_BYTES:
+            raise ValueError(
+                f"audio_frame data_b64 decoded to {len(decoded)} bytes; cap is {AUDIO_FRAME_MAX_BYTES}"
+            )
+        return v
+
+
+class VideoFramePayload(BaseModel):
+    """HUP v1.1 `video_frame` payload (per HUP_SPEC.md §5.4.2)."""
+
+    event_type: Literal["video_frame"] = "video_frame"
+    codec: Literal["jpeg", "h264"]
+    width: int = Field(..., ge=1, le=8192)
+    height: int = Field(..., ge=1, le=8192)
+    sequence: int = Field(..., ge=0)
+    keyframe: bool = True
+    data_b64: str
+
+    @field_validator("data_b64")
+    @classmethod
+    def _data_b64_decoded_size(cls, v: str) -> str:
+        import base64
+        try:
+            decoded = base64.b64decode(v, validate=False)
+        except Exception as exc:
+            raise ValueError(f"data_b64 is not valid base64: {exc}") from exc
+        if len(decoded) > VIDEO_FRAME_MAX_BYTES:
+            raise ValueError(
+                f"video_frame data_b64 decoded to {len(decoded)} bytes; cap is {VIDEO_FRAME_MAX_BYTES}"
+            )
+        return v
 
 
 class HUPActionRequestPayload(BaseModel):

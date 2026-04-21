@@ -5,7 +5,18 @@
 
 import { z } from "zod";
 
-export const HUP_VERSION = "1.0.0";
+export const HUP_VERSION = "1.1.0";
+
+// Per-frame decoded-size caps from HUP_SPEC.md §5.4.1 / §5.4.2.
+export const AUDIO_FRAME_MAX_BYTES = 64 * 1024;
+export const VIDEO_FRAME_MAX_BYTES = 512 * 1024;
+
+function decodedBase64Size(b64: string): number {
+  // Cheap tight upper bound: bytes = (len * 3) / 4 - padding count.
+  const len = b64.length;
+  const padding = (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0);
+  return Math.floor((len * 3) / 4) - padding;
+}
 
 export const NodeType = z.enum([
   "desktop",
@@ -64,6 +75,36 @@ export const DeviceEventPayload = z.object({
   ts: z.number().default(() => Date.now() / 1000),
 });
 export type DeviceEventPayload = z.infer<typeof DeviceEventPayload>;
+
+// HUP v1.1 audio_frame payload — per HUP_SPEC.md §5.4.1.
+export const AudioFramePayload = z.object({
+  event_type: z.literal("audio_frame").default("audio_frame"),
+  codec: z.enum(["opus", "pcm16"]),
+  sample_rate: z.number().int().min(8000).max(96000),
+  channels: z.number().int().min(1).max(2),
+  frame_ms: z.number().int().min(1).max(120).default(20),
+  sequence: z.number().int().min(0),
+  data_b64: z.string().refine(
+    (v) => decodedBase64Size(v) <= AUDIO_FRAME_MAX_BYTES,
+    { message: `audio_frame data_b64 exceeds ${AUDIO_FRAME_MAX_BYTES} bytes decoded` },
+  ),
+});
+export type AudioFramePayload = z.infer<typeof AudioFramePayload>;
+
+// HUP v1.1 video_frame payload — per HUP_SPEC.md §5.4.2.
+export const VideoFramePayload = z.object({
+  event_type: z.literal("video_frame").default("video_frame"),
+  codec: z.enum(["jpeg", "h264"]),
+  width: z.number().int().min(1).max(8192),
+  height: z.number().int().min(1).max(8192),
+  sequence: z.number().int().min(0),
+  keyframe: z.boolean().default(true),
+  data_b64: z.string().refine(
+    (v) => decodedBase64Size(v) <= VIDEO_FRAME_MAX_BYTES,
+    { message: `video_frame data_b64 exceeds ${VIDEO_FRAME_MAX_BYTES} bytes decoded` },
+  ),
+});
+export type VideoFramePayload = z.infer<typeof VideoFramePayload>;
 
 export const HUPActionRequestPayload = z.object({
   action_id: z.string().min(1).max(64),

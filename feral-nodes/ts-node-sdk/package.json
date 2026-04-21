@@ -1,6 +1,6 @@
 {
   "name": "@feral-ai/node-sdk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Official FERAL Hardware Unification Protocol (HUP v1) client SDK for Node.js / TypeScript.",
   "license": "Apache-2.0",
   "main": "dist/index.js",

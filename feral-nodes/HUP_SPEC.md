@@ -1,6 +1,6 @@
 # Hardware Unification Protocol (HUP) — Public Specification
 
-**Version:** `HUP v1.0.0`
+**Version:** `HUP v1.1.0`
 **Status:** Stable
 **License:** Apache-2.0
 **Canonical schemas:** this file (normative) + Pydantic mirror in
@@ -310,6 +310,88 @@ Conventions for common events:
 | `button_press`     | `{"button": str, "pressed": bool, "count": int?}`                      |
 | `camera_frame`     | `{"encoding": "jpeg", "resolution": [w,h], "data_b64": str (≤512KB)}`  |
 | `microphone_chunk` | `{"encoding": "pcm16", "sample_rate": int, "data_b64": str}`           |
+| `audio_frame`      | v1.1 media frame — see §5.4.1                                           |
+| `video_frame`      | v1.1 media frame — see §5.4.2                                           |
+
+`camera_frame` and `microphone_chunk` remain valid for v1.0.0 daemons.
+New daemons SHOULD emit `audio_frame` / `video_frame` instead — those
+names are first-class in v1.1 with explicit codec + sequence fields
+for jitter buffering.
+
+### 5.4.1 `audio_frame` (v1.1+)
+
+Push audio samples from a daemon (glasses, wristband, phone-bridge,
+room mic) to the brain. Rides inside the existing `device_event`
+envelope; only `payload.event_type` and `payload` shape are new.
+
+```json
+{
+  "hup_version": "1.1.0",
+  "type": "device_event",
+  "ts": 1734369931.210,
+  "node_id": "feral-w300-0001",
+  "seq": 842,
+  "payload": {
+    "event_type": "audio_frame",
+    "codec": "opus",
+    "sample_rate": 24000,
+    "channels": 1,
+    "frame_ms": 20,
+    "sequence": 842,
+    "data_b64": "…base64(opus packet)…"
+  }
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `codec` | `"opus" \| "pcm16"` | yes | Opus strongly preferred over wireless links |
+| `sample_rate` | int | yes | Hz; SHOULD be 16000 or 24000 |
+| `channels` | int | yes | 1 or 2 |
+| `frame_ms` | int | no, default 20 | Duration of this frame |
+| `sequence` | int | yes | Per-stream monotonic counter for jitter buffer |
+| `data_b64` | string | yes | Base64 of the raw codec payload. Decoded size MUST be ≤ 64 KiB. |
+
+Brain behaviour: sequence-number reorder buffer with ≤ 200 ms tolerance;
+drop frames older than that. Route to `state.audio.ingest_frame(node_id, payload)`.
+
+### 5.4.2 `video_frame` (v1.1+)
+
+Push JPEG or H.264 video frames from a camera-capable node.
+
+```json
+{
+  "hup_version": "1.1.0",
+  "type": "device_event",
+  "ts": 1734369931.250,
+  "node_id": "feral-w300-0001",
+  "seq": 843,
+  "payload": {
+    "event_type": "video_frame",
+    "codec": "jpeg",
+    "width": 1280,
+    "height": 720,
+    "sequence": 127,
+    "keyframe": true,
+    "data_b64": "…base64(frame)…"
+  }
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `codec` | `"jpeg" \| "h264"` | yes | JPEG easiest for glasses at 2-5 fps; H.264 for higher rates |
+| `width` | int | yes | Pixels |
+| `height` | int | yes | Pixels |
+| `sequence` | int | yes | Per-stream monotonic counter |
+| `keyframe` | bool | H.264 only | Required for H.264; ignored for JPEG (always keyframe) |
+| `data_b64` | string | yes | Base64 of the codec payload. Decoded size MUST be ≤ 512 KiB per §2. |
+
+Brain behaviour: drop non-keyframes that arrive before the first
+keyframe of an H.264 stream. Route every decoded frame into
+`state.vision_buffer.push(node_id, payload)`. Every 10 s, run a
+vision-LLM caption on the most recent frame and store it in episodic
+memory.
 
 ### 5.5 `hup_action_request` (brain → daemon)
 
@@ -516,6 +598,7 @@ Reserved codes:
 | 1006 | `payload_too_large`   | Frame > 1 MiB or decoded base64 > 512 KiB.                       |
 | 1007 | `timeout`             | Action deadline exceeded.                                        |
 | 1099 | `internal`            | Brain-side bug. Daemon should retry with backoff.                |
+| 4020 | `frame_too_large`     | v1.1+: `audio_frame.data_b64` > 64 KiB decoded, or `video_frame.data_b64` > 512 KiB decoded. Brain closes the socket; daemon MUST reconnect with a saner encoder bitrate. |
 
 Codes `>= 2000` are reserved for vendor-private extensions.
 
@@ -564,4 +647,26 @@ Zod) so daemons written with them are conformant by construction.
 | Capability enum                       | Union of `NodeRegisterPayload.capabilities` strings and `DeviceCapability.category`/sensors/actuators seen in `FERAL_GLASSES_MANIFEST` |
 
 Deltas from the current `/v1/node` handler are tracked in
-`feral-nodes/README.md`; they will be reconciled in `HUP v1.1.0`.
+`feral-nodes/README.md`.
+
+---
+
+## Appendix B — Version Changelog
+
+### v1.1.0 (2026-04-21)
+
+- **Added** `audio_frame` event type (§5.4.1) — Opus/PCM16 frames with
+  `sample_rate`, `channels`, `frame_ms`, `sequence`, `data_b64`. Cap:
+  64 KiB decoded per frame.
+- **Added** `video_frame` event type (§5.4.2) — JPEG/H.264 frames with
+  `width`, `height`, `sequence`, `keyframe`, `data_b64`. Cap: 512 KiB
+  decoded per frame.
+- **Added** error code `4020 frame_too_large` for over-cap media frames.
+- **Backward-compat:** strictly additive. v1.0.0 daemons remain
+  conformant. v1.0.0 brains MUST ignore unknown event types per §1's
+  forward-compat rule. Legacy `camera_frame` / `microphone_chunk` stay
+  valid; new daemons SHOULD migrate to `video_frame` / `audio_frame`.
+
+### v1.0.0
+
+- Initial public release of the Hardware Unification Protocol.

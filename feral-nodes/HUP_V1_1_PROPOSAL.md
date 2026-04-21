@@ -1,6 +1,8 @@
 # HUP v1.1.0 — Additive Proposal (`audio_frame` + `video_frame`)
 
-> **Status:** proposed (not yet merged into `HUP_SPEC.md` §5.4).
+> **Status:** merged into [`HUP_SPEC.md`](HUP_SPEC.md) §5.4.1 and §5.4.2
+> in 2026.4.18-dev. Kept in-tree as the historical design note; the
+> normative spec is now `HUP_SPEC.md`.
 > **Version bump:** `v1.0.0` → `v1.1.0`. Strictly additive — no breaking
 > changes — so daemons on v1.0.0 remain conformant and brains on v1.1.0
 > must accept them.

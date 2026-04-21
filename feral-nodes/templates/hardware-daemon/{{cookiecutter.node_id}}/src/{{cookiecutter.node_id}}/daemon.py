@@ -53,6 +53,39 @@ async def telemetry_loop() -> None:
         await asyncio.sleep(1.0)
 
 
+async def audio_frame_example(data_b64: str, sequence: int) -> None:
+    """HUP v1.1 reference: push an Opus audio frame to the brain.
+
+    Use this pattern for a microphone-capable node (glasses, wristband,
+    phone-bridge). ``data_b64`` is the base64 of your Opus packet; keep
+    the decoded size ≤ 64 KiB per frame (HUP_SPEC.md §5.4.1).
+    """
+    await node.emit_audio_frame(
+        data_b64,
+        codec="opus",
+        sample_rate=24000,
+        channels=1,
+        sequence=sequence,
+        frame_ms=20,
+    )
+
+
+async def video_frame_example(jpeg_b64: str, sequence: int) -> None:
+    """HUP v1.1 reference: push a JPEG video frame to the brain.
+
+    Use this pattern for a camera-capable node. Keep JPEG frames ≤ 512 KiB
+    decoded per HUP_SPEC.md §5.4.2.
+    """
+    await node.emit_video_frame(
+        jpeg_b64,
+        codec="jpeg",
+        width=1280,
+        height=720,
+        sequence=sequence,
+        keyframe=True,
+    )
+
+
 def main() -> None:
     node.run(telemetry_loop())
 

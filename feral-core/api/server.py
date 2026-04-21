@@ -910,6 +910,32 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         for sid in state.get_sessions_for_daemon(effective_node):
                             state.perception.update_vision(sid, state.vision_buffer, effective_node)
 
+            elif msg.type == "video_frame":
+                # HUP v1.1 §5.4.2 — route video frames into the vision buffer,
+                # same sink as the legacy vision_frame branch above.
+                _handle_video_frame(node_id, raw.get("payload", {}), msg.msg_id)
+
+            elif msg.type == "audio_frame":
+                # HUP v1.1 §5.4.1 — route audio frames into the audio pipeline
+                # when available; otherwise log and move on.
+                _handle_audio_frame(node_id, raw.get("payload", {}))
+
+            elif msg.type == "device_event":
+                # HUP v1.1 `device_event` envelope. Unwrap to the concrete
+                # event_type and dispatch. Unknown event_types are ignored
+                # per the forward-compat rule in HUP_SPEC.md §1.
+                de_payload = raw.get("payload", {}) or {}
+                ev_type = de_payload.get("event_type", "")
+                if ev_type == "audio_frame":
+                    _handle_audio_frame(node_id, de_payload)
+                elif ev_type == "video_frame":
+                    _handle_video_frame(node_id, de_payload, msg.msg_id)
+                else:
+                    logger.debug(
+                        "Ignoring unknown device_event event_type=%r from %s",
+                        ev_type, node_id,
+                    )
+
     except WebSocketDisconnect:
         if node_id:
             logger.info(f"Daemon disconnected: {node_id}")
@@ -994,6 +1020,74 @@ _BIOMETRIC_KEY_MAP = {
     "steps": ("steps_daily", "activity"),
     "calories": ("calories_daily", "activity"),
 }
+
+
+AUDIO_FRAME_MAX_BYTES = 64 * 1024  # HUP_SPEC.md §5.4.1 cap
+VIDEO_FRAME_MAX_BYTES = 512 * 1024  # HUP_SPEC.md §5.4.2 cap (matches existing VISION_MAX_FRAME_KB)
+
+
+def _handle_video_frame(node_id, frame_payload: dict, msg_id=None) -> None:
+    """Dispatch a HUP v1.1 ``video_frame`` payload into the vision buffer.
+
+    Shares the existing vision-buffer sink with the legacy ``vision_frame``
+    branch so downstream perception code stays unchanged. Over-cap frames
+    are dropped with a warning per HUP_SPEC.md error code 4020.
+    """
+    data_b64 = frame_payload.get("data_b64", "") or ""
+    if len(data_b64) > VIDEO_FRAME_MAX_BYTES:
+        logger.warning(
+            "Rejecting oversized video_frame from %s: %dB > %dB (HUP error 4020)",
+            node_id, len(data_b64), VIDEO_FRAME_MAX_BYTES,
+        )
+        return
+
+    effective_node = node_id or frame_payload.get("node_id", "unknown")
+    state.vision_buffer.push(effective_node, frame_payload)
+
+    for sid in state.get_sessions_for_daemon(effective_node):
+        state.perception.update_vision(sid, state.vision_buffer, effective_node)
+
+    change_event = state.change_detector.should_analyze(
+        effective_node, data_b64, frame_payload.get("codec", "jpeg"),
+    )
+    if change_event and state.scene and state.scene.available:
+        mode = "tracking" if change_event.trigger_reason == "scene_change" else "general"
+        asyncio.ensure_future(
+            _analyze_scene_background(effective_node, frame_payload, mode=mode)
+        )
+
+    if msg_id and state.orchestrator:
+        state.orchestrator.resolve_pending_frame(msg_id, frame_payload)
+
+
+def _handle_audio_frame(node_id, frame_payload: dict) -> None:
+    """Dispatch a HUP v1.1 ``audio_frame`` payload into the audio pipeline.
+
+    Falls back to a debug log when ``state.audio`` does not expose an
+    ``ingest_frame`` hook — the Brain boot tolerates the pipeline being
+    absent, so we must too.
+    """
+    data_b64 = frame_payload.get("data_b64", "") or ""
+    if len(data_b64) > AUDIO_FRAME_MAX_BYTES:
+        logger.warning(
+            "Rejecting oversized audio_frame from %s: %dB > %dB (HUP error 4020)",
+            node_id, len(data_b64), AUDIO_FRAME_MAX_BYTES,
+        )
+        return
+
+    effective_node = node_id or frame_payload.get("node_id", "unknown")
+    audio = getattr(state, "audio", None)
+    ingest = getattr(audio, "ingest_frame", None)
+    if callable(ingest):
+        try:
+            ingest(effective_node, frame_payload)
+        except Exception as exc:
+            logger.warning("audio.ingest_frame raised for %s: %s", effective_node, exc)
+    else:
+        logger.debug(
+            "Received audio_frame from %s but state.audio has no ingest_frame hook; dropping.",
+            effective_node,
+        )
 
 
 def _record_biometrics_to_baseline(data: dict) -> None:

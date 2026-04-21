@@ -130,6 +130,69 @@ class FeralNode:
         )
         await self._send("device_event", payload)
 
+    async def emit_audio_frame(
+        self,
+        data_b64: str,
+        *,
+        codec: str = "opus",
+        sample_rate: int = 24000,
+        channels: int = 1,
+        sequence: int = 0,
+        frame_ms: int = 20,
+    ) -> None:
+        """Send a HUP v1.1 ``audio_frame`` to the brain.
+
+        The SDK validates the payload against ``AudioFramePayload`` before
+        sending, so an oversize or malformed frame raises locally instead
+        of being rejected by the brain with error 4020.
+        """
+        from .schemas import AudioFramePayload, DeviceEventPayload as _DE
+
+        af = AudioFramePayload(
+            codec=codec,
+            sample_rate=sample_rate,
+            channels=channels,
+            frame_ms=frame_ms,
+            sequence=sequence,
+            data_b64=data_b64,
+        )
+        envelope = _DE(
+            node_id=self.node_id,
+            event_type="audio_frame",
+            data=af.model_dump(),
+            ts=time.time(),
+        )
+        await self._send("device_event", envelope)
+
+    async def emit_video_frame(
+        self,
+        data_b64: str,
+        *,
+        codec: str = "jpeg",
+        width: int,
+        height: int,
+        sequence: int = 0,
+        keyframe: bool = True,
+    ) -> None:
+        """Send a HUP v1.1 ``video_frame`` to the brain."""
+        from .schemas import VideoFramePayload, DeviceEventPayload as _DE
+
+        vf = VideoFramePayload(
+            codec=codec,
+            width=width,
+            height=height,
+            sequence=sequence,
+            keyframe=keyframe,
+            data_b64=data_b64,
+        )
+        envelope = _DE(
+            node_id=self.node_id,
+            event_type="video_frame",
+            data=vf.model_dump(),
+            ts=time.time(),
+        )
+        await self._send("device_event", envelope)
+
     @staticmethod
     async def discover_brain(timeout_s: float = 3.0) -> Optional[str]:
         """Resolve a FERAL brain on the LAN via mDNS. See `discovery.py`."""
