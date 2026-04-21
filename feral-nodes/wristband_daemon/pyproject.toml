@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feral-wristband-daemon"
+version = "1.1.0"
+description = "First-party FERAL HUP v1.1 daemon for a Bluetooth-LE health wristband."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "feral-node-sdk>=1.1.0",
+  "bleak>=0.22.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+wristband-daemon = "wristband_daemon.daemon:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feral-w300-daemon"
+version = "1.1.0"
+description = "First-party FERAL HUP v1.1 daemon for W300-class smart glasses."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "feral-node-sdk>=1.1.0",
+]
+
+[project.optional-dependencies]
+camera = ["opencv-python-headless>=4.10"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+w300-daemon = "w300_daemon.daemon:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,27 @@
+{
+  "name": "wristband_daemon",
+  "version": "1.1.0",
+  "node_id": "feral-wristband",
+  "node_type": "wearable",
+  "hup_version": "1.1.0",
+  "description": "First-party FERAL HUP v1.1 daemon for a Bluetooth-LE health wristband. Reads heart rate (GATT 0x2A37) and SpO2 (GATT 0x2A5E) and streams them as device_event(event_type=heart_rate|spo2). Supports a haptic buzz actuator via hup_action_request. If the wristband exposes a GATT audio stream, relays Opus frames as HUP v1.1 audio_frame events.",
+  "manufacturer": "Theora",
+  "capabilities": [
+    "heart_rate",
+    "spo2",
+    "haptic",
+    "audio_frame"
+  ],
+  "hardware": {
+    "requires": ["wristband"],
+    "transport": "bluetooth_le",
+    "known_models": ["WB-100"]
+  },
+  "config": {
+    "ble_address_env": "FERAL_WRISTBAND_BLE_ADDRESS",
+    "brain_url_env": "FERAL_BRAIN_URL",
+    "api_key_env": "FERAL_API_KEY"
+  },
+  "live_test_env": "FERAL_LIVE_WRISTBAND_TEST",
+  "license": "Apache-2.0"
+}
