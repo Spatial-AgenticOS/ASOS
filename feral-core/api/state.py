@@ -63,6 +63,7 @@ from agents.session_handoff import SessionHandoffManager
 from agents.identity_loader import IdentityLoader
 from agents.baseline_engine import BaselineEngine
 from agents.about_me import AboutMeStore
+from agents.ideas_engine import IdeasEngine, IdeasStore
 from security.device_pairing import DevicePairingStore
 from api.boot_report import BootReport, boot_subsystem
 
@@ -166,6 +167,9 @@ class BrainState:
         # AboutMe store — structured self-model of the user (see agents/about_me.py).
         # Initialised alongside BaselineEngine during state.init().
         self.about_me: Optional[AboutMeStore] = None
+        # Ideas engine — "For you today" pane (see agents/ideas_engine.py).
+        # Built on top of AboutMe + BaselineEngine + ConsciousnessStore.
+        self.ideas_engine: Optional[IdeasEngine] = None
         self.somatic_engine = None
         self.tool_genesis = None
         self.agent_mitosis = None
@@ -233,6 +237,18 @@ class BrainState:
                 except RuntimeError:
                     return  # no loop (e.g. during boot) — broadcast is optional
                 loop.create_task(self.broadcast_event(event_name, payload))
+                # Kick IdeasEngine whenever something enters waiting_user so
+                # the "Right now" pane renders a fresh nudge within seconds.
+                if (
+                    event_name == "consciousness_status"
+                    and isinstance(payload, dict)
+                    and payload.get("status") == "waiting_user"
+                    and self.ideas_engine is not None
+                ):
+                    try:
+                        self.ideas_engine.refresh_waiting_user()
+                    except Exception as exc:
+                        logger.debug("IdeasEngine.refresh_waiting_user failed: %s", exc)
 
             self.consciousness.set_on_change(_on_consciousness_change)
 
@@ -495,6 +511,35 @@ class BrainState:
             self.about_me = AboutMeStore(db_path=_about_me_db)
             self.memory.set_about_me_store(self.about_me)
 
+        with boot_subsystem(self._boot_report, "IdeasEngine"):
+            _ideas_db = str(feral_home() / "ideas.db")
+            _ideas_store = IdeasStore(db_path=_ideas_db)
+
+            def _on_ideas_updated(_ideas):
+                try:
+                    import asyncio as _aio
+                    loop = _aio.get_running_loop()
+                except RuntimeError:
+                    return
+                loop.create_task(self.broadcast_event("ideas_updated", {"count": len(_ideas)}))
+
+            try:
+                _settings = self.config.get_settings() if hasattr(self.config, "get_settings") else {}
+            except Exception:
+                _settings = {}
+            _polish_enabled = bool((_settings or {}).get("ideas_llm_polish", False))
+
+            self.ideas_engine = IdeasEngine(
+                store=_ideas_store,
+                consciousness=self.consciousness,
+                baseline=self.baseline_engine,
+                about_me=self.about_me,
+                on_ideas_updated=_on_ideas_updated,
+                llm_polish_enabled=_polish_enabled,
+            )
+            if self.baseline_engine is not None:
+                self.baseline_engine.on_alert(self.ideas_engine.handle_baseline_alert)
+
         with boot_subsystem(self._boot_report, "SomaticEngine"):
             from perception.somatic import SomaticEngine
             self.somatic_engine = SomaticEngine()
@@ -519,6 +564,29 @@ class BrainState:
             from agents.intent_compiler import IntentCompiler
             _intent_db = str(feral_data_home() / "intents.db")
             self.intent_compiler = IntentCompiler(llm=_shared_llm, db_path=_intent_db)
+
+        if self.ideas_engine is not None:
+            async def _ideas_daily_brief_loop():
+                while True:
+                    now = time.time()
+                    dt = datetime.fromtimestamp(now).astimezone()
+                    target = dt.replace(hour=7, minute=30, second=0, microsecond=0)
+                    if dt >= target:
+                        target = target.replace(day=target.day) + _timedelta(days=1)
+                    wait_s = max(60.0, (target.timestamp() - now))
+                    await asyncio.sleep(wait_s)
+                    try:
+                        self.ideas_engine.morning_brief()
+                    except Exception as exc:
+                        logger.debug("Ideas morning_brief failed: %s", exc)
+
+            from datetime import datetime, timedelta as _timedelta
+            import asyncio
+            asyncio.create_task(_ideas_daily_brief_loop())
+            try:
+                self.ideas_engine.morning_brief()
+            except Exception as exc:
+                logger.debug("Ideas initial morning_brief failed: %s", exc)
 
         self.proactive = None
         with boot_subsystem(self._boot_report, "ProactiveEngine"):

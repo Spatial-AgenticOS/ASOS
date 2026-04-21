@@ -87,6 +87,16 @@ class BaselineEngine:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(self._DDL)
+        self._alert_listeners: list = []
+
+    def on_alert(self, callback) -> None:
+        """Register a listener that fires every time an alert is persisted.
+
+        Listeners receive the :class:`BaselineAlert` instance. Failures in
+        individual callbacks are swallowed so one broken listener can't
+        suppress subsequent ones or corrupt anomaly detection.
+        """
+        self._alert_listeners.append(callback)
 
     def record(
         self,
@@ -285,3 +295,8 @@ class BaselineEngine:
             ),
         )
         self._conn.commit()
+        for listener in list(self._alert_listeners):
+            try:
+                listener(alert)
+            except Exception as exc:
+                logger.debug("Baseline alert listener failed: %s", exc)
