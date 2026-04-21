@@ -4,22 +4,24 @@ import Glass from '../ui/Glass';
 import EmptyState from '../ui/EmptyState';
 import StatusDot from '../ui/StatusDot';
 import CodeEditor from '../ui/CodeEditor';
+import { SelfWorkspace } from '../components/SelfEditors';
 import { apiFetch, apiJson } from '../lib/api';
 import { API_BASE } from '../lib/config';
 
 /**
- * Settings — ten real sections (General / Providers / Memory / Channels /
- * Autonomy / Voice / Security / Integrations / Sync / MCP). Every control
- * round-trips through a real Brain endpoint.
+ * Settings — thirteen real sections. Self is the first section users
+ * expect to find for "about me / my agent's personality" and it embeds
+ * the same IDENTITY / SOUL / MEMORY editors that live at /identity so
+ * users never have to hunt through the ⌘K hub to find them.
  */
 
 const SECTIONS = [
-  'General', 'Providers', 'Memory', 'Channels', 'Autonomy', 'Voice',
+  'Self', 'General', 'Providers', 'Memory', 'Channels', 'Autonomy', 'Voice',
   'Security', 'Integrations', 'Sync', 'Handoff', 'Push', 'MCP',
 ];
 
 export default function Settings() {
-  const [section, setSection] = useState('General');
+  const [section, setSection] = useState('Self');
 
   return (
     <div className="v2-page v2-page--split" data-testid="v2-marker">
@@ -41,6 +43,7 @@ export default function Settings() {
         </Glass>
       </aside>
       <Pane title={section}>
+        {section === 'Self' && <SelfSection />}
         {section === 'General' && <GeneralSection />}
         {section === 'Providers' && <ProvidersSection />}
         {section === 'Memory' && <MemorySection />}
@@ -55,6 +58,18 @@ export default function Settings() {
         {section === 'MCP' && <McpSection />}
       </Pane>
     </div>
+  );
+}
+
+function SelfSection() {
+  return (
+    <>
+      <p className="v2-p v2-p--muted">
+        Your agent's personality + what it knows about you.
+        Same editors you'll find at <code>/identity</code>.
+      </p>
+      <SelfWorkspace defaultTab="identity" showIntro={false} />
+    </>
   );
 }
 
