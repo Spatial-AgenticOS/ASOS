@@ -147,6 +147,13 @@ class Orchestrator:
         self._pending_permission_requests: dict[str, dict] = {}
         self._fallback_learning_state: dict[str, dict] = {}
         self._auto_learn_threshold = 3
+        # Paused thoughts keyed by session_id. When a consciousness
+        # entity of kind=thought is resumed, its text is pre-threaded
+        # into the next turn's system-level context so the LLM sees
+        # the half-formed sentence BEFORE the user's new input. This
+        # is the "I started saying X, came back next morning, continue
+        # that same sentence" contract.
+        self._paused_thoughts: dict[str, list[dict]] = {}
         self._auto_learn_window_seconds = 1800
         self._auto_learn_cooldown_seconds = 3600
         self._session_finalized: set[str] = set()
@@ -181,6 +188,40 @@ class Orchestrator:
         self.llm = llm
         if self._multi_agent_enabled:
             self._init_multi_agent()
+
+    def register_paused_thought(self, *, session_id: str, thought_id: str, text: str) -> None:
+        """Queue a paused-thought fragment so the next turn re-threads it.
+
+        Called by ``/api/consciousness/resume`` when the user resumes a
+        kind=thought entity. On the next ``handle_command`` for this
+        session the orchestrator prepends a synthetic assistant message
+        quoting the paused fragment to the LLM history so the model
+        continues the same thread rather than starting cold.
+
+        Idempotent on ``thought_id`` — resuming the same thought twice
+        won't duplicate the re-thread.
+        """
+        if not session_id or not text:
+            return
+        bucket = self._paused_thoughts.setdefault(session_id, [])
+        if any(t.get("id") == thought_id for t in bucket):
+            return
+        bucket.append({"id": thought_id, "text": text})
+        logger.info(
+            "[%s] registered paused thought for re-thread on next turn (id=%s, %d chars)",
+            session_id[:8] if len(session_id) >= 8 else session_id,
+            thought_id[:8], len(text),
+        )
+
+    def drain_paused_thoughts(self, session_id: str) -> list[dict]:
+        """Pop and return any paused thoughts for this session.
+
+        Called by ``handle_command`` before building the LLM history.
+        Once drained the thoughts are gone — this is intentional. If a
+        turn doesn't actually re-thread them (user ignored the resume),
+        the ConsciousnessStore still holds the canonical record.
+        """
+        return self._paused_thoughts.pop(session_id, []) or []
 
     def set_vault(self, vault):
         """Wire the BlindVault into the skill executor for secure key injection."""
@@ -559,6 +600,19 @@ class Orchestrator:
 
         if session_id not in self.conversation_history:
             self.conversation_history[session_id] = []
+
+        # Re-thread any paused thoughts registered via
+        # /api/consciousness/resume (kind=thought). The fragments are
+        # pre-pended as synthetic assistant messages so the LLM sees
+        # "I was mid-sentence saying: X" before the user's new input.
+        for paused in self.drain_paused_thoughts(session_id):
+            fragment = paused.get("text") or ""
+            if not fragment:
+                continue
+            self.conversation_history[session_id].append({
+                "role": "assistant",
+                "content": f"[RESUMED THOUGHT] {fragment}",
+            })
 
         user_content = perception_frame.to_llm_user_content(text)
         user_message = {"role": "user", "content": user_content}

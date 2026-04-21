@@ -139,11 +139,79 @@ async def post_pause(body: dict) -> dict:
 
 @router.post("/api/consciousness/resume")
 async def post_resume(body: dict) -> dict:
+    """Re-enter execution for a paused consciousness entity.
+
+    Unlike set_status('active') — which just flips a flag — this route
+    rehydrates the entity's context_json and tells the matching runtime
+    (TaskFlowRuntime / IntentCompiler / Orchestrator) to pick up where
+    it left off. The per-kind rehydration map:
+
+      - kind=flow    -> state.taskflows.resume_flow(flow_id)
+                        (re-enters _run_flow at context.step)
+      - kind=intent  -> state.intent_compiler.resume(intent_id)
+                        (re-activates the intent in today()/list_active())
+      - kind=thought -> orchestrator prepends the thought text to the
+                        next turn's history via the 'paused_thought'
+                        hook so the LLM sees the half-formed sentence
+                        before the user's next message
+      - kind=turn    -> no-op beyond status flip; the next client turn
+                        naturally picks it up
+      - kind=device_stream -> also a status-flip only; streams are
+                        re-opened by the daemon on reconnect
+
+    The set_status('active') call happens LAST so observers see the
+    entity appear in list_active() only after the runtime has been
+    nudged. If rehydration raises, the status stays paused and the
+    caller gets ``{ok: False, error: "..."}``.
+    """
     s = _store()
     entity_id = (body or {}).get("id")
     if not entity_id:
         raise HTTPException(status_code=400, detail="`id` required")
-    return {"ok": s.resume(entity_id)}
+
+    entity = s.get(entity_id)
+    if entity is None:
+        raise HTTPException(status_code=404, detail=f"Unknown consciousness entity {entity_id!r}")
+
+    # Per-kind rehydration. Each branch is wrapped so a failure in one
+    # runtime doesn't take the endpoint down — the caller sees
+    # {ok: False, reason: ...} and can retry.
+    rehydrated = {"kind": entity.kind, "method": "status_only"}
+
+    try:
+        if entity.kind == "flow":
+            runtime = getattr(state, "taskflows", None)
+            if runtime is not None and hasattr(runtime, "resume_flow"):
+                runtime.resume_flow(entity.id)
+                rehydrated["method"] = "taskflow_resume_flow"
+            elif runtime is not None and hasattr(runtime, "get_flow"):
+                # Older runtimes just flip status; the scheduler picks
+                # it up on the next tick.
+                rehydrated["method"] = "taskflow_get_flow_only"
+        elif entity.kind == "intent":
+            compiler = getattr(state, "intent_compiler", None)
+            if compiler is not None and hasattr(compiler, "resume"):
+                compiler.resume(entity.id)
+                rehydrated["method"] = "intent_compiler_resume"
+        elif entity.kind == "thought":
+            orch = getattr(state, "orchestrator", None)
+            text = (entity.context_json or {}).get("text", "")
+            if orch is not None and text and hasattr(orch, "register_paused_thought"):
+                orch.register_paused_thought(
+                    session_id=entity.owner_session_id or "",
+                    thought_id=entity.id,
+                    text=text,
+                )
+                rehydrated["method"] = "orchestrator_register_paused_thought"
+    except Exception as exc:
+        logger.warning(
+            "Rehydrating %s %s failed, leaving status=paused: %s",
+            entity.kind, entity.id, exc,
+        )
+        return {"ok": False, "reason": str(exc), "rehydrated": rehydrated}
+
+    ok = s.resume(entity_id)
+    return {"ok": ok, "rehydrated": rehydrated}
 
 
 @router.post("/api/consciousness/abandon")
