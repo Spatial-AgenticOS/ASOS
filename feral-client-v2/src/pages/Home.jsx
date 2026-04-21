@@ -87,23 +87,33 @@ export default function Home() {
     limit: 1,
   });
 
+  const [jobs, setJobs] = useState([]);
+  const [jobCounts, setJobCounts] = useState({});
+
   const refresh = useCallback(async () => {
     const results = await Promise.allSettled([
       apiJson('/api/dashboard'),
       apiJson('/skills'),
       apiJson('/api/llm/status'),
-      apiJson('/api/taskflows?limit=3'),
+      apiJson('/api/jobs?limit=10'),
       apiJson('/api/channels'),
       apiJson('/api/ambient/briefing'),
       apiJson('/api/ambient/next_event'),
       apiJson('/api/ambient/wind_down'),
       apiJson('/api/ambient/snapshot'),
     ]);
-    const [d, s, l, f, c, b, n, w, snap] = results;
+    const [d, s, l, j, c, b, n, w, snap] = results;
     if (d.status === 'fulfilled') setDashboard(d.value);
     if (s.status === 'fulfilled') setSkills(s.value?.skills || (Array.isArray(s.value) ? s.value : []));
     if (l.status === 'fulfilled') setLlm(l.value);
-    if (f.status === 'fulfilled') setFlows(f.value?.flows || []);
+    if (j.status === 'fulfilled') {
+      const items = j.value?.items || [];
+      setJobs(items);
+      setJobCounts(j.value?.counts_by_kind || {});
+      // Back-compat: keep `flows` populated for the legacy TaskFlow
+      // widget so anything downstream that reads it still works.
+      setFlows(items.filter((it) => it.kind === 'taskflow'));
+    }
     if (c.status === 'fulfilled') setChannels(c.value?.status_by_channel || c.value?.channels || c.value || {});
     if (b.status === 'fulfilled') setBriefing(b.value);
     if (n.status === 'fulfilled') setNextEvent(n.value);
@@ -420,19 +430,41 @@ export default function Home() {
       </div>
 
       <div className="v2-dash-row v2-dash-row--double">
-        <Pane title="Active flows" actions={(
-          <Link to="/flows" className="v2-btn v2-btn--ghost">Manage <ChevronRight size={12} /></Link>
-        )}>
-          {flows.length === 0 ? (
-            <EmptyState title="No flows running" hint="Schedule or one-shot multi-step routines." />
+        <Pane
+          title={`Right now${jobs.length ? ` · ${jobs.length}` : ''}`}
+          actions={(
+            <Link to="/flows" className="v2-btn v2-btn--ghost">Manage flows <ChevronRight size={12} /></Link>
+          )}
+        >
+          <p className="v2-p v2-p--muted">
+            Everything FERAL is working on — TaskFlows, scheduled routines, specialists on standby, Tool Genesis drafts, and live HUP daemons.
+          </p>
+          {jobs.length === 0 ? (
+            <EmptyState title="Idle" hint="No active jobs. Schedule a routine or start a TaskFlow to see activity here." />
           ) : (
             <div className="v2-flow-mini-list">
-              {flows.map((f) => (
-                <Glass key={f.id} level={0} radius="sm" padding="sm" className="v2-flow-row">
-                  <StatusDot tone={f.status === 'running' ? 'live' : f.status === 'failed' ? 'error' : 'neutral'} pulse={f.status === 'running'} />
-                  <div className="v2-flow-title">{f.title || f.id}</div>
-                  <div className="v2-flow-status">{f.status}</div>
+              {jobs.map((j) => (
+                <Glass key={j.id} level={0} radius="sm" padding="sm" className="v2-flow-row" title={j.detail ? JSON.stringify(j.detail) : ''}>
+                  <StatusDot
+                    tone={j.status === 'running' ? 'live' : j.status === 'failed' || j.status === 'error' ? 'error' : j.status === 'paused' ? 'warn' : 'neutral'}
+                    pulse={j.status === 'running' || j.status === 'connected'}
+                  />
+                  <div className="v2-flow-title">
+                    <span className="v2-chip v2-chip--muted" style={{ marginRight: 6 }}>{j.kind}</span>
+                    {j.name}
+                  </div>
+                  <div className="v2-flow-status">
+                    {j.status}
+                    {typeof j.progress === 'number' && ` · ${Math.round(j.progress * 100)}%`}
+                  </div>
                 </Glass>
+              ))}
+            </div>
+          )}
+          {Object.keys(jobCounts).length > 0 && (
+            <div className="v2-device-caps" style={{ marginTop: 10 }}>
+              {Object.entries(jobCounts).map(([kind, count]) => (
+                <span key={kind} className="v2-chip v2-chip--muted">{kind}: {count}</span>
               ))}
             </div>
           )}

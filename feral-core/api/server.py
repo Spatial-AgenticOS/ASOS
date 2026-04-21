@@ -70,6 +70,7 @@ from api.routes.webhooks import router as webhooks_router
 from api.routes.ambient import router as ambient_router
 from api.routes.auth import router as auth_router
 from api.routes.personas import router as personas_router
+from api.routes.jobs import router as jobs_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -246,6 +247,7 @@ app.include_router(webhooks_router)
 app.include_router(ambient_router)
 app.include_router(auth_router)
 app.include_router(personas_router)
+app.include_router(jobs_router)
 
 
 # ─────────────────────────────────────────────
