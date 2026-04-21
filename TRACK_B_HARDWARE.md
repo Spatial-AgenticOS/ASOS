@@ -35,11 +35,14 @@ with live verification, unblock desktop when certs are available.
 
 ## Work breakdown
 
-### Week 8 — HUP v1.1 (additive spec bump)
+### Week 8 — HUP v1.1 (additive spec bump) — **MERGED 2026-04-21**
 
-Shipped **as documentation + schema-mirror sync in this commit**. See
-[`feral-nodes/HUP_V1_1_PROPOSAL.md`](feral-nodes/HUP_V1_1_PROPOSAL.md)
-for the exact additive message types:
+**Status:** shipped in commit `14f5f2f` (2026.4.18-dev). Spec is now
+v1.1.0; both `audio_frame` (§5.4.1) and `video_frame` (§5.4.2) are
+normative. Python SDK + TS SDK + Brain handler + cookiecutter all
+synced in the same commit per AGENT_PROMPT.md's systematic-sync rule.
+See [`feral-nodes/HUP_V1_1_PROPOSAL.md`](feral-nodes/HUP_V1_1_PROPOSAL.md)
+for the original proposal (status flipped to "merged"):
 
 | New event type | Purpose | Payload |
 |---|---|---|
@@ -55,21 +58,30 @@ Systematic-sync per AGENT_PROMPT.md: when HUP v1.1 lands in
 in the **same commit**. Anything less introduces drift that AGENT_PROMPT
 bans.
 
-### Week 9 — W300 + wristband daemons
+### Week 9 — W300 + wristband daemons — **SHIPPED 2026-04-21 (offline unit-tested; live-verification gated)**
 
-| Daemon | Dir | Hardware | Verification |
-|---|---|---|---|
-| W300 smart-glasses | `feral-nodes/w300-daemon/` | Maintainer owns W300 devkit per ROADMAP Pillar A | Voice command "FERAL, look at this" answers in < 3s |
-| Wristband | `feral-nodes/wristband-daemon/` | Maintainer owns devkit; `feral-core/hardware/adapters/wristband.py` already wired | Live HR + SpO2 frames flow to dashboard; buzz actuator fires on `hup_action_request` |
+| Daemon | Dir | Hardware | Verification | Status |
+|---|---|---|---|---|
+| W300 smart-glasses | [`feral-nodes/w300_daemon/`](feral-nodes/w300_daemon/) | Maintainer owns W300 devkit per ROADMAP Pillar A | Voice command "FERAL, look at this" answers in < 3s | **Shipped in commit `c13460b`.** 3/3 offline pytest green; live test gated behind `FERAL_LIVE_W300_TEST=1` for user to run against real glasses. |
+| Wristband | [`feral-nodes/wristband_daemon/`](feral-nodes/wristband_daemon/) | Maintainer owns devkit; `feral-core/hardware/adapters/wristband.py` already wired | Live HR + SpO2 frames flow to dashboard; buzz actuator fires on `hup_action_request` | **Shipped in commit `c13460b`.** 9/9 offline pytest green; live test gated behind `FERAL_LIVE_WRISTBAND_TEST=1` + `FERAL_WRISTBAND_BLE_ADDRESS`. |
 
-### Week 10 — HomeKit + Matter bridges
+Naming note: the directories use underscore names (`w300_daemon/`,
+`wristband_daemon/`) to match what
+[`feral-registry/scripts/seed_first_party.py::_load_daemon_seeds`](feral-registry/scripts/seed_first_party.py)
+already expected. An earlier draft of this doc used hyphen names that
+wouldn't have been picked up by the seed loader.
+
+### Week 10 — HomeKit + Matter bridges — **QUEUED (next Track B PR)**
 
 | Bridge | Dir | Underlying | Notes |
 |---|---|---|---|
-| HomeKit | `feral-nodes/homekit-bridge/` | `HAP-python` | Requires iCloud device to pair |
-| Matter | `feral-nodes/matter-bridge/` | `python-matter-server` | Requires a Thread border router + commissioner |
+| HomeKit | `feral-nodes/homekit_bridge/` | `HAP-python` | Requires iCloud device to pair |
+| Matter | `feral-nodes/matter_bridge/` | `python-matter-server` | Requires a Thread border router + commissioner |
 
-Each ships as a `kind=daemon` registry item.
+Each ships as a `kind=daemon` registry item. Same pattern as the two
+daemons above: offline unit tests run in CI, a `FERAL_LIVE_HOMEKIT_TEST`
+/ `FERAL_LIVE_MATTER_TEST` env flag unlocks the live path once the
+maintainer has a paired iCloud device / Thread border router.
 
 ### Week 11 — Desktop app v1
 
