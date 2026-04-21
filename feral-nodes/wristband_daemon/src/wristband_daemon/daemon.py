@@ -23,28 +23,37 @@ from feral_node_sdk import FeralNode
 
 logger = logging.getLogger("feral.wristband_daemon")
 
-# GATT UUIDs
+# Production note (2026.4.22+):
+#
+# This desktop BLE daemon is ONLY useful for generic BLE-GATT health
+# wristbands that expose the standard GATT Heart Rate (0x2A37) and SpO2
+# (0x2A5E) profiles and don't require a vendor iOS/Android SDK. It's
+# kept in-tree as a reference implementation of the HUP v1.1 daemon
+# pattern.
+#
+# The first-party Theora wristband uses the Veepoo iOS SDK and ONLY
+# pairs through an iPhone — the phone is the HUP daemon, not a
+# desktop process. See feral-nodes/ios-node-sdk/ (scaffolded in
+# 2026.4.22) for the real production path. Setting a haptic vendor
+# UUID here does nothing useful for a Theora wristband because
+# Veepoo's haptic is driven through its high-level SDK methods, not
+# raw GATT writes.
 HEART_RATE_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 SPO2_UUID = "00002a5e-0000-1000-8000-00805f9b34fb"
 
-# Placeholder vendor-specific haptic characteristic. This UUID is NOT
-# standardised anywhere; no real wristband will respond to it. Users
-# who want the buzz actuator to work must export
-# FERAL_WRISTBAND_BUZZ_UUID to the vendor UUID from their wristband's
-# SDK documentation before starting the daemon. When the placeholder
-# is active the daemon logs a warning at boot and v2's Devices page
-# surfaces a "Buzz: placeholder UUID" yellow chip on the wristband
-# card — so nobody thinks buzz is silently working.
-WRISTBAND_BUZZ_UUID_PLACEHOLDER = "0000fe10-0000-1000-8000-00805f9b34fb"
-WRISTBAND_BUZZ_UUID = WRISTBAND_BUZZ_UUID_PLACEHOLDER  # backcompat alias
-
 
 def resolve_buzz_uuid() -> tuple[str, bool]:
-    """Return (uuid, is_placeholder). Reads FERAL_WRISTBAND_BUZZ_UUID."""
+    """Return (uuid, is_unconfigured).
+
+    Reads FERAL_WRISTBAND_BUZZ_UUID. When unset, returns ("", True) and
+    the daemon runs without a buzz actuator — not with a pretend one.
+    For Theora wristbands: use the iOS FeralNode bridge, not this
+    desktop daemon.
+    """
     override = (os.environ.get("FERAL_WRISTBAND_BUZZ_UUID") or "").strip()
     if override:
         return override, False
-    return WRISTBAND_BUZZ_UUID_PLACEHOLDER, True
+    return "", True
 
 
 # ------------------------------------------------------------------
@@ -149,22 +158,23 @@ class WristbandConfig:
     brain_url: Optional[str] = None
     api_key: Optional[str] = None
     node_id: str = "feral-wristband-0001"
-    # Resolved at construction time from FERAL_WRISTBAND_BUZZ_UUID or the
-    # placeholder. Stored on the config (not recomputed every buzz) so
-    # the daemon's startup log and the Devices UI see a stable value.
+    # Resolved at construction time from FERAL_WRISTBAND_BUZZ_UUID.
+    # ``buzz_uuid`` is empty string (not a placeholder) when unset — the
+    # daemon honestly runs without a haptic actuator rather than writing
+    # to a made-up UUID that no real wristband responds to.
     buzz_uuid: str = ""
-    buzz_is_placeholder: bool = True
+    buzz_configured: bool = False
 
     @classmethod
     def from_env(cls) -> "WristbandConfig":
-        buzz_uuid, is_placeholder = resolve_buzz_uuid()
+        buzz_uuid, unconfigured = resolve_buzz_uuid()
         return cls(
             ble_address=os.environ.get("FERAL_WRISTBAND_BLE_ADDRESS", ""),
             brain_url=os.environ.get("FERAL_BRAIN_URL"),
             api_key=os.environ.get("FERAL_API_KEY"),
             node_id=os.environ.get("FERAL_WRISTBAND_NODE_ID", "feral-wristband-0001"),
             buzz_uuid=buzz_uuid,
-            buzz_is_placeholder=is_placeholder,
+            buzz_configured=not unconfigured,
         )
 
 
@@ -186,13 +196,15 @@ class WristbandDaemon:
         self._running = False
 
     def _make_node(self, cfg: WristbandConfig) -> FeralNode:
-        # Surface the placeholder state as a distinct capability string so
-        # the v2 Devices page can paint the 'Buzz: placeholder' chip ONLY
-        # when the env override wasn't provided. "haptic" without
-        # "haptic_placeholder" = real vendor UUID in place.
-        caps = ["heart_rate", "spo2", "haptic"]
-        if cfg.buzz_is_placeholder:
-            caps.append("haptic_placeholder")
+        # Capabilities reflect what this daemon can actually do, not a
+        # wish-list. Haptic only appears when a real buzz UUID is
+        # configured (FERAL_WRISTBAND_BUZZ_UUID set). For the Theora
+        # production wristband use the iOS FeralNode bridge; the
+        # Veepoo SDK runs on-phone and cannot be talked to via this
+        # desktop bleak daemon.
+        caps = ["heart_rate", "spo2"]
+        if cfg.buzz_configured:
+            caps.append("haptic")
         node = FeralNode(
             node_id=cfg.node_id,
             name="FERAL Wristband",
@@ -240,19 +252,26 @@ class WristbandDaemon:
     # -- Actions ----------------------------------------------------
 
     async def buzz(self, duration_ms: int, pattern: str = "single") -> bool:
-        """Drive the vendor-specific haptic characteristic.
+        """Drive the vendor-specific haptic characteristic, if configured.
 
-        Uses ``self.config.buzz_uuid`` (resolved from
-        ``FERAL_WRISTBAND_BUZZ_UUID`` or the placeholder). When the UUID
-        is the placeholder the write will succeed against any complying
-        BLE stack but no real wristband will actuate — we still return
-        True so flow-level tests keep passing, but the boot-time warning
-        and the Devices UI chip make the no-op obvious to the user.
+        Returns False when no buzz UUID is configured — we do not
+        pretend-actuate against a made-up characteristic. For Theora
+        wristbands the production path is the iOS bridge in
+        ``feral-nodes/ios-node-sdk/`` which calls Veepoo's SDK haptic
+        method directly; this desktop daemon won't reach them.
         """
         if self.ble is None:
             logger.warning("Buzz requested with no BLE client — dropping.")
             return False
-        uuid = self.config.buzz_uuid or WRISTBAND_BUZZ_UUID_PLACEHOLDER
+        if not self.config.buzz_configured or not self.config.buzz_uuid:
+            logger.warning(
+                "Buzz requested but no vendor haptic UUID is configured. "
+                "This daemon supports only generic GATT BLE wristbands. "
+                "For Theora wristbands use the iOS FeralNode bridge "
+                "(feral-nodes/ios-node-sdk/) which drives the Veepoo "
+                "SDK haptic directly."
+            )
+            return False
         # 1B duration-tens-of-ms + 1B pattern id (vendor-specific).
         payload = struct.pack(
             "<BB",
@@ -260,15 +279,7 @@ class WristbandDaemon:
             {"single": 0, "double": 1, "long": 2}.get(pattern, 0),
         )
         try:
-            await self.ble.write_gatt_char(uuid, payload)
-            if self.config.buzz_is_placeholder:
-                logger.warning(
-                    "Buzz GATT write succeeded against the PLACEHOLDER UUID %s. "
-                    "Real wristbands won't actuate. Export "
-                    "FERAL_WRISTBAND_BUZZ_UUID=<vendor-uuid> from your "
-                    "wristband's SDK docs to enable the real actuator.",
-                    uuid,
-                )
+            await self.ble.write_gatt_char(self.config.buzz_uuid, payload)
             return True
         except Exception as exc:
             logger.warning("Buzz GATT write failed: %s", exc)
@@ -284,15 +295,13 @@ class WristbandDaemon:
                 "FERAL_WRISTBAND_BLE_ADDRESS is unset. The wristband daemon "
                 "cannot fake a connection; export the real MAC first."
             )
-        if cfg.buzz_is_placeholder:
-            logger.warning(
-                "WRISTBAND_BUZZ_UUID is a PLACEHOLDER (%s). Heart-rate and "
-                "SpO2 readings will work, but the buzz actuator will not "
-                "actually vibrate any real wristband until you export "
-                "FERAL_WRISTBAND_BUZZ_UUID=<vendor-uuid>. v2 Devices page "
-                "surfaces a yellow 'Buzz: placeholder UUID' chip on the "
-                "wristband card as a reminder.",
-                cfg.buzz_uuid,
+        if not cfg.buzz_configured:
+            logger.info(
+                "wristband_daemon: buzz actuator not configured "
+                "(FERAL_WRISTBAND_BUZZ_UUID unset). Heart-rate and SpO2 "
+                "readings will work. For Theora wristbands use the iOS "
+                "FeralNode bridge in feral-nodes/ios-node-sdk/ instead "
+                "— it drives Veepoo SDK haptic directly."
             )
         else:
             logger.info(

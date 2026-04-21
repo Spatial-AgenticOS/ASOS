@@ -106,10 +106,10 @@ export default function Devices() {
                     ))}
                   </div>
                 )}
-                {(d.capabilities || []).includes('haptic_placeholder') && (
+                {d.type === 'wearable' && !(d.capabilities || []).includes('haptic') && (
                   <div className="v2-device-caps" style={{ marginTop: 6 }}>
-                    <span className="v2-chip v2-chip--warn" title="The wristband daemon is using the placeholder GATT UUID for the buzz actuator. Export FERAL_WRISTBAND_BUZZ_UUID with the vendor UUID from your wristband's SDK docs to enable real vibration.">
-                      Buzz: placeholder UUID
+                    <span className="v2-chip v2-chip--muted" title="This daemon hasn't declared a haptic capability. For Theora wristbands the production path is the iOS FeralNode bridge which drives Veepoo SDK haptic directly.">
+                      Haptic: unwired
                     </span>
                   </div>
                 )}

@@ -42,51 +42,38 @@ python -m wristband_daemon
 
 ## Honest limitations
 
-### Buzz actuator uses a placeholder GATT UUID by default
+### Scope: generic GATT BLE wristbands only
 
-The default `WRISTBAND_BUZZ_UUID` (`0000fe10-...`) is a **placeholder**.
-No real wristband on the market will vibrate when we write to it — the
-UUID isn't standardised anywhere.
+This desktop daemon is intended for **generic** BLE-GATT health
+wristbands that expose the standard Heart Rate (0x2A37) and SpO2
+(0x2A5E) profiles and don't require a vendor SDK. It's a reference
+implementation of the HUP v1.1 daemon pattern.
 
-Three signs you're running with the placeholder:
+**It is NOT the right path for the first-party Theora wristband.**
+The Theora wristband uses the Veepoo iOS SDK and only pairs through
+an iPhone — the phone is the HUP daemon in that topology, not a
+desktop process. See [`feral-nodes/ios-node-sdk/`](../ios-node-sdk/)
+for the production bridge (scaffolded in `2026.4.22`).
 
-1. At daemon boot you'll see a warning log:
+### Haptic / buzz actuator
 
-   ```
-   WRISTBAND_BUZZ_UUID is a PLACEHOLDER (0000fe10-...). Heart-rate and
-   SpO2 readings will work, but the buzz actuator will not actually
-   vibrate any real wristband until you export
-   FERAL_WRISTBAND_BUZZ_UUID=<vendor-uuid>.
-   ```
-
-2. Every successful buzz call emits another warning:
-
-   ```
-   Buzz GATT write succeeded against the PLACEHOLDER UUID ... Real
-   wristbands won't actuate.
-   ```
-
-3. v2 Devices page shows a yellow **"Buzz: placeholder UUID"** chip on
-   the wristband card. This is driven by the daemon declaring a
-   ``haptic_placeholder`` capability in its ``node_register`` payload
-   alongside the regular ``haptic`` one.
-
-### Fix: set the real vendor UUID
-
-Find the vendor haptic GATT characteristic UUID in your wristband's
-SDK docs and export:
+The daemon emits `heart_rate` and `spo2` events by default. It does
+**not** include a `haptic` capability unless you've configured a real
+vendor GATT UUID for the buzz characteristic:
 
 ```bash
 export FERAL_WRISTBAND_BUZZ_UUID="0000xxxx-0000-1000-8000-00805f9b34fb"
 python -m wristband_daemon
 ```
 
-On next boot the warning disappears, the Devices page drops the chip,
-and buzz writes hit the real characteristic.
+When unset (the default), calls to `buzz()` return `False` with a
+clear log line rather than writing to a made-up UUID. The `haptic`
+capability simply doesn't appear in the daemon's `node_register`
+payload, so v2 Devices correctly shows it as "Haptic: unwired".
 
 ### Audio relay
 
 Audio relay is opt-in and only fires if the wristband exposes a
-recognized audio stream. Most wristbands don't — this is scaffolded for
-the glasses+wristband combo case where the wristband is a mic-on-wrist
-companion.
+recognised audio stream. Most wristbands don't — this is scaffolded
+for the glasses+wristband combo case where the wristband is a
+mic-on-wrist companion.

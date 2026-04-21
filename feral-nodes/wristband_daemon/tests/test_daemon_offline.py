@@ -15,7 +15,6 @@ import pytest
 from wristband_daemon.daemon import (
     HEART_RATE_UUID,
     SPO2_UUID,
-    WRISTBAND_BUZZ_UUID,
     WristbandConfig,
     WristbandDaemon,
     decode_heart_rate,
@@ -181,18 +180,38 @@ async def test_daemon_emits_heart_rate_event(wired_daemon):
 
 
 @pytest.mark.asyncio
-async def test_daemon_buzz_writes_gatt(wired_daemon):
+async def test_daemon_buzz_writes_gatt_when_uuid_configured(wired_daemon):
+    """Buzz fires a GATT write only when FERAL_WRISTBAND_BUZZ_UUID is
+    set. Otherwise the daemon refuses to write to a made-up UUID."""
     daemon, get_ble, node = wired_daemon
+    # Inject a configured buzz UUID so the write path runs.
+    daemon.config.buzz_uuid = "0000cafe-0000-1000-8000-00805f9b34fb"
+    daemon.config.buzz_configured = True
     task = await _start_and_settle(daemon, node)
     ok = await daemon.buzz(duration_ms=200, pattern="double")
     assert ok
     ble = get_ble()
     assert ble.writes
     char, payload = ble.writes[-1]
-    assert char == WRISTBAND_BUZZ_UUID
+    assert char == "0000cafe-0000-1000-8000-00805f9b34fb"
     # Encoded as (duration_ms // 10, pattern_id)
     assert payload[0] == 20
     assert payload[1] == 1  # double
+    await _stop(task, node, daemon)
+
+
+@pytest.mark.asyncio
+async def test_daemon_buzz_refuses_when_unconfigured(wired_daemon):
+    """Without a buzz UUID, buzz() returns False rather than writing
+    to a made-up UUID that no real wristband responds to."""
+    daemon, get_ble, node = wired_daemon
+    daemon.config.buzz_configured = False
+    daemon.config.buzz_uuid = ""
+    task = await _start_and_settle(daemon, node)
+    ok = await daemon.buzz(duration_ms=200, pattern="double")
+    assert ok is False
+    ble = get_ble()
+    assert ble.writes == []  # no GATT write at all
     await _stop(task, node, daemon)
 
 
@@ -204,63 +223,64 @@ def test_daemon_refuses_without_ble_address():
 
 
 # ------------------------------------------------------------------
-# Buzz UUID placeholder handling
+# Buzz UUID configuration (no placeholders)
 # ------------------------------------------------------------------
 
-def test_resolve_buzz_uuid_defaults_to_placeholder(monkeypatch):
-    from wristband_daemon.daemon import resolve_buzz_uuid, WRISTBAND_BUZZ_UUID_PLACEHOLDER
+def test_resolve_buzz_uuid_unconfigured_when_env_unset(monkeypatch):
+    from wristband_daemon.daemon import resolve_buzz_uuid
 
     monkeypatch.delenv("FERAL_WRISTBAND_BUZZ_UUID", raising=False)
-    uuid, is_placeholder = resolve_buzz_uuid()
-    assert uuid == WRISTBAND_BUZZ_UUID_PLACEHOLDER
-    assert is_placeholder is True
+    uuid, unconfigured = resolve_buzz_uuid()
+    assert uuid == ""
+    assert unconfigured is True
 
 
 def test_resolve_buzz_uuid_env_override(monkeypatch):
     from wristband_daemon.daemon import resolve_buzz_uuid
 
     monkeypatch.setenv("FERAL_WRISTBAND_BUZZ_UUID", "0000abcd-0000-1000-8000-00805f9b34fb")
-    uuid, is_placeholder = resolve_buzz_uuid()
+    uuid, unconfigured = resolve_buzz_uuid()
     assert uuid == "0000abcd-0000-1000-8000-00805f9b34fb"
-    assert is_placeholder is False
+    assert unconfigured is False
 
 
-def test_config_from_env_records_placeholder_flag(monkeypatch):
+def test_config_from_env_records_unconfigured_flag(monkeypatch):
     monkeypatch.delenv("FERAL_WRISTBAND_BUZZ_UUID", raising=False)
     monkeypatch.setenv("FERAL_WRISTBAND_BLE_ADDRESS", "AA:BB:CC:DD:EE:FF")
     cfg = WristbandConfig.from_env()
-    assert cfg.buzz_is_placeholder is True
+    assert cfg.buzz_configured is False
+    assert cfg.buzz_uuid == ""
 
 
-def test_config_from_env_without_placeholder_when_override_set(monkeypatch):
+def test_config_from_env_when_override_set(monkeypatch):
     monkeypatch.setenv("FERAL_WRISTBAND_BUZZ_UUID", "0000cafe-0000-1000-8000-00805f9b34fb")
     monkeypatch.setenv("FERAL_WRISTBAND_BLE_ADDRESS", "AA:BB:CC:DD:EE:FF")
     cfg = WristbandConfig.from_env()
-    assert cfg.buzz_is_placeholder is False
+    assert cfg.buzz_configured is True
     assert cfg.buzz_uuid == "0000cafe-0000-1000-8000-00805f9b34fb"
 
 
-@pytest.mark.asyncio
-async def test_node_capabilities_include_haptic_placeholder_marker(wired_daemon):
-    """When placeholder is active the FeralNode is built with
-    `haptic_placeholder` in capabilities so v2 UI can detect it."""
-    daemon, _get_ble, node = wired_daemon
-    # Force placeholder mode by overwriting the config flag before start.
-    daemon.config.buzz_is_placeholder = True
-    task = await _start_and_settle(daemon, node)
-    # wired_daemon injects a fake node; the capabilities list is passed
-    # to the real _make_node only when no node_factory override is set.
-    # Instead we re-enter _make_node to verify the capability shape.
-    real_node_args_path = daemon._node_factory
-    await _stop(task, node, daemon)
-    # Rebuild the capability list the same way _make_node does.
-    from wristband_daemon.daemon import WristbandDaemon
-    fresh = WristbandDaemon(daemon.config)
-    caps_when_placeholder = (
-        ["heart_rate", "spo2", "haptic"]
-        + (["haptic_placeholder"] if daemon.config.buzz_is_placeholder else [])
+def test_capabilities_exclude_haptic_when_unconfigured():
+    """When buzz isn't configured, 'haptic' must NOT appear in the
+    node_register capabilities. The daemon reports what it can do,
+    never what it pretends to do."""
+    cfg = WristbandConfig(ble_address="AA:BB:CC:DD:EE:FF", buzz_configured=False, buzz_uuid="")
+    caps = ["heart_rate", "spo2"]
+    if cfg.buzz_configured:
+        caps.append("haptic")
+    assert "haptic" not in caps
+
+
+def test_capabilities_include_haptic_when_configured():
+    cfg = WristbandConfig(
+        ble_address="AA:BB:CC:DD:EE:FF",
+        buzz_configured=True,
+        buzz_uuid="0000cafe-0000-1000-8000-00805f9b34fb",
     )
-    assert "haptic_placeholder" in caps_when_placeholder
+    caps = ["heart_rate", "spo2"]
+    if cfg.buzz_configured:
+        caps.append("haptic")
+    assert "haptic" in caps
 
 
 # ------------------------------------------------------------------
