@@ -106,9 +106,9 @@ export default function Devices() {
                     ))}
                   </div>
                 )}
-                {d.type === 'wearable' && (d.capabilities || []).includes('haptic') && (
+                {(d.capabilities || []).includes('haptic_placeholder') && (
                   <div className="v2-device-caps" style={{ marginTop: 6 }}>
-                    <span className="v2-chip v2-chip--warn" title="The shipped wristband daemon uses a placeholder GATT UUID for the buzz actuator. Set FERAL_WRISTBAND_BUZZ_UUID to the vendor UUID before relying on it.">
+                    <span className="v2-chip v2-chip--warn" title="The wristband daemon is using the placeholder GATT UUID for the buzz actuator. Export FERAL_WRISTBAND_BUZZ_UUID with the vendor UUID from your wristband's SDK docs to enable real vibration.">
                       Buzz: placeholder UUID
                     </span>
                   </div>

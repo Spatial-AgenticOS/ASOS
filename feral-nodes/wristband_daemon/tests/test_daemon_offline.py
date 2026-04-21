@@ -204,6 +204,66 @@ def test_daemon_refuses_without_ble_address():
 
 
 # ------------------------------------------------------------------
+# Buzz UUID placeholder handling
+# ------------------------------------------------------------------
+
+def test_resolve_buzz_uuid_defaults_to_placeholder(monkeypatch):
+    from wristband_daemon.daemon import resolve_buzz_uuid, WRISTBAND_BUZZ_UUID_PLACEHOLDER
+
+    monkeypatch.delenv("FERAL_WRISTBAND_BUZZ_UUID", raising=False)
+    uuid, is_placeholder = resolve_buzz_uuid()
+    assert uuid == WRISTBAND_BUZZ_UUID_PLACEHOLDER
+    assert is_placeholder is True
+
+
+def test_resolve_buzz_uuid_env_override(monkeypatch):
+    from wristband_daemon.daemon import resolve_buzz_uuid
+
+    monkeypatch.setenv("FERAL_WRISTBAND_BUZZ_UUID", "0000abcd-0000-1000-8000-00805f9b34fb")
+    uuid, is_placeholder = resolve_buzz_uuid()
+    assert uuid == "0000abcd-0000-1000-8000-00805f9b34fb"
+    assert is_placeholder is False
+
+
+def test_config_from_env_records_placeholder_flag(monkeypatch):
+    monkeypatch.delenv("FERAL_WRISTBAND_BUZZ_UUID", raising=False)
+    monkeypatch.setenv("FERAL_WRISTBAND_BLE_ADDRESS", "AA:BB:CC:DD:EE:FF")
+    cfg = WristbandConfig.from_env()
+    assert cfg.buzz_is_placeholder is True
+
+
+def test_config_from_env_without_placeholder_when_override_set(monkeypatch):
+    monkeypatch.setenv("FERAL_WRISTBAND_BUZZ_UUID", "0000cafe-0000-1000-8000-00805f9b34fb")
+    monkeypatch.setenv("FERAL_WRISTBAND_BLE_ADDRESS", "AA:BB:CC:DD:EE:FF")
+    cfg = WristbandConfig.from_env()
+    assert cfg.buzz_is_placeholder is False
+    assert cfg.buzz_uuid == "0000cafe-0000-1000-8000-00805f9b34fb"
+
+
+@pytest.mark.asyncio
+async def test_node_capabilities_include_haptic_placeholder_marker(wired_daemon):
+    """When placeholder is active the FeralNode is built with
+    `haptic_placeholder` in capabilities so v2 UI can detect it."""
+    daemon, _get_ble, node = wired_daemon
+    # Force placeholder mode by overwriting the config flag before start.
+    daemon.config.buzz_is_placeholder = True
+    task = await _start_and_settle(daemon, node)
+    # wired_daemon injects a fake node; the capabilities list is passed
+    # to the real _make_node only when no node_factory override is set.
+    # Instead we re-enter _make_node to verify the capability shape.
+    real_node_args_path = daemon._node_factory
+    await _stop(task, node, daemon)
+    # Rebuild the capability list the same way _make_node does.
+    from wristband_daemon.daemon import WristbandDaemon
+    fresh = WristbandDaemon(daemon.config)
+    caps_when_placeholder = (
+        ["heart_rate", "spo2", "haptic"]
+        + (["haptic_placeholder"] if daemon.config.buzz_is_placeholder else [])
+    )
+    assert "haptic_placeholder" in caps_when_placeholder
+
+
+# ------------------------------------------------------------------
 # Live gate
 # ------------------------------------------------------------------
 

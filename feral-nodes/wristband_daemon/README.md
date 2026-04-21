@@ -42,10 +42,51 @@ python -m wristband_daemon
 
 ## Honest limitations
 
-- The haptic actuator UUID is vendor-specific; replace
-  `WRISTBAND_BUZZ_UUID` in `daemon.py` with the real GATT char from
-  your wristband's SDK before relying on the buzz actuator.
-- Audio relay is opt-in and only fires if the wristband exposes a
-  recognized audio stream. Most wristbands don't — this is scaffolded
-  for the glasses+wristband combo case where the wristband is a
-  mic-on-wrist companion.
+### Buzz actuator uses a placeholder GATT UUID by default
+
+The default `WRISTBAND_BUZZ_UUID` (`0000fe10-...`) is a **placeholder**.
+No real wristband on the market will vibrate when we write to it — the
+UUID isn't standardised anywhere.
+
+Three signs you're running with the placeholder:
+
+1. At daemon boot you'll see a warning log:
+
+   ```
+   WRISTBAND_BUZZ_UUID is a PLACEHOLDER (0000fe10-...). Heart-rate and
+   SpO2 readings will work, but the buzz actuator will not actually
+   vibrate any real wristband until you export
+   FERAL_WRISTBAND_BUZZ_UUID=<vendor-uuid>.
+   ```
+
+2. Every successful buzz call emits another warning:
+
+   ```
+   Buzz GATT write succeeded against the PLACEHOLDER UUID ... Real
+   wristbands won't actuate.
+   ```
+
+3. v2 Devices page shows a yellow **"Buzz: placeholder UUID"** chip on
+   the wristband card. This is driven by the daemon declaring a
+   ``haptic_placeholder`` capability in its ``node_register`` payload
+   alongside the regular ``haptic`` one.
+
+### Fix: set the real vendor UUID
+
+Find the vendor haptic GATT characteristic UUID in your wristband's
+SDK docs and export:
+
+```bash
+export FERAL_WRISTBAND_BUZZ_UUID="0000xxxx-0000-1000-8000-00805f9b34fb"
+python -m wristband_daemon
+```
+
+On next boot the warning disappears, the Devices page drops the chip,
+and buzz writes hit the real characteristic.
+
+### Audio relay
+
+Audio relay is opt-in and only fires if the wristband exposes a
+recognized audio stream. Most wristbands don't — this is scaffolded for
+the glasses+wristband combo case where the wristband is a mic-on-wrist
+companion.

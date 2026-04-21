@@ -26,9 +26,25 @@ logger = logging.getLogger("feral.wristband_daemon")
 # GATT UUIDs
 HEART_RATE_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 SPO2_UUID = "00002a5e-0000-1000-8000-00805f9b34fb"
-# Vendor-specific haptic characteristic — replace with your wristband's
-# real UUID before relying on the buzz actuator.
-WRISTBAND_BUZZ_UUID = "0000fe10-0000-1000-8000-00805f9b34fb"
+
+# Placeholder vendor-specific haptic characteristic. This UUID is NOT
+# standardised anywhere; no real wristband will respond to it. Users
+# who want the buzz actuator to work must export
+# FERAL_WRISTBAND_BUZZ_UUID to the vendor UUID from their wristband's
+# SDK documentation before starting the daemon. When the placeholder
+# is active the daemon logs a warning at boot and v2's Devices page
+# surfaces a "Buzz: placeholder UUID" yellow chip on the wristband
+# card — so nobody thinks buzz is silently working.
+WRISTBAND_BUZZ_UUID_PLACEHOLDER = "0000fe10-0000-1000-8000-00805f9b34fb"
+WRISTBAND_BUZZ_UUID = WRISTBAND_BUZZ_UUID_PLACEHOLDER  # backcompat alias
+
+
+def resolve_buzz_uuid() -> tuple[str, bool]:
+    """Return (uuid, is_placeholder). Reads FERAL_WRISTBAND_BUZZ_UUID."""
+    override = (os.environ.get("FERAL_WRISTBAND_BUZZ_UUID") or "").strip()
+    if override:
+        return override, False
+    return WRISTBAND_BUZZ_UUID_PLACEHOLDER, True
 
 
 # ------------------------------------------------------------------
@@ -133,14 +149,22 @@ class WristbandConfig:
     brain_url: Optional[str] = None
     api_key: Optional[str] = None
     node_id: str = "feral-wristband-0001"
+    # Resolved at construction time from FERAL_WRISTBAND_BUZZ_UUID or the
+    # placeholder. Stored on the config (not recomputed every buzz) so
+    # the daemon's startup log and the Devices UI see a stable value.
+    buzz_uuid: str = ""
+    buzz_is_placeholder: bool = True
 
     @classmethod
     def from_env(cls) -> "WristbandConfig":
+        buzz_uuid, is_placeholder = resolve_buzz_uuid()
         return cls(
             ble_address=os.environ.get("FERAL_WRISTBAND_BLE_ADDRESS", ""),
             brain_url=os.environ.get("FERAL_BRAIN_URL"),
             api_key=os.environ.get("FERAL_API_KEY"),
             node_id=os.environ.get("FERAL_WRISTBAND_NODE_ID", "feral-wristband-0001"),
+            buzz_uuid=buzz_uuid,
+            buzz_is_placeholder=is_placeholder,
         )
 
 
@@ -162,6 +186,13 @@ class WristbandDaemon:
         self._running = False
 
     def _make_node(self, cfg: WristbandConfig) -> FeralNode:
+        # Surface the placeholder state as a distinct capability string so
+        # the v2 Devices page can paint the 'Buzz: placeholder' chip ONLY
+        # when the env override wasn't provided. "haptic" without
+        # "haptic_placeholder" = real vendor UUID in place.
+        caps = ["heart_rate", "spo2", "haptic"]
+        if cfg.buzz_is_placeholder:
+            caps.append("haptic_placeholder")
         node = FeralNode(
             node_id=cfg.node_id,
             name="FERAL Wristband",
@@ -170,7 +201,7 @@ class WristbandDaemon:
             node_type="wearable",
             brain_url=cfg.brain_url,
             api_key=cfg.api_key,
-            capabilities=["heart_rate", "spo2", "haptic"],
+            capabilities=caps,
         )
 
         @node.on_action("buzz")
@@ -209,10 +240,19 @@ class WristbandDaemon:
     # -- Actions ----------------------------------------------------
 
     async def buzz(self, duration_ms: int, pattern: str = "single") -> bool:
-        """Drive the vendor-specific haptic characteristic."""
+        """Drive the vendor-specific haptic characteristic.
+
+        Uses ``self.config.buzz_uuid`` (resolved from
+        ``FERAL_WRISTBAND_BUZZ_UUID`` or the placeholder). When the UUID
+        is the placeholder the write will succeed against any complying
+        BLE stack but no real wristband will actuate — we still return
+        True so flow-level tests keep passing, but the boot-time warning
+        and the Devices UI chip make the no-op obvious to the user.
+        """
         if self.ble is None:
             logger.warning("Buzz requested with no BLE client — dropping.")
             return False
+        uuid = self.config.buzz_uuid or WRISTBAND_BUZZ_UUID_PLACEHOLDER
         # 1B duration-tens-of-ms + 1B pattern id (vendor-specific).
         payload = struct.pack(
             "<BB",
@@ -220,7 +260,15 @@ class WristbandDaemon:
             {"single": 0, "double": 1, "long": 2}.get(pattern, 0),
         )
         try:
-            await self.ble.write_gatt_char(WRISTBAND_BUZZ_UUID, payload)
+            await self.ble.write_gatt_char(uuid, payload)
+            if self.config.buzz_is_placeholder:
+                logger.warning(
+                    "Buzz GATT write succeeded against the PLACEHOLDER UUID %s. "
+                    "Real wristbands won't actuate. Export "
+                    "FERAL_WRISTBAND_BUZZ_UUID=<vendor-uuid> from your "
+                    "wristband's SDK docs to enable the real actuator.",
+                    uuid,
+                )
             return True
         except Exception as exc:
             logger.warning("Buzz GATT write failed: %s", exc)
@@ -235,6 +283,21 @@ class WristbandDaemon:
             raise RuntimeError(
                 "FERAL_WRISTBAND_BLE_ADDRESS is unset. The wristband daemon "
                 "cannot fake a connection; export the real MAC first."
+            )
+        if cfg.buzz_is_placeholder:
+            logger.warning(
+                "WRISTBAND_BUZZ_UUID is a PLACEHOLDER (%s). Heart-rate and "
+                "SpO2 readings will work, but the buzz actuator will not "
+                "actually vibrate any real wristband until you export "
+                "FERAL_WRISTBAND_BUZZ_UUID=<vendor-uuid>. v2 Devices page "
+                "surfaces a yellow 'Buzz: placeholder UUID' chip on the "
+                "wristband card as a reminder.",
+                cfg.buzz_uuid,
+            )
+        else:
+            logger.info(
+                "wristband buzz actuator wired to vendor UUID %s",
+                cfg.buzz_uuid,
             )
         self.node = self._node_factory(cfg)
         self.ble = self._ble_factory(cfg.ble_address)
