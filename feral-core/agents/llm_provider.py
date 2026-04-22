@@ -887,6 +887,16 @@ class LLMProvider:
         """Accept external config (e.g. from ConfigLoader) for fallback routing."""
         self._config = config
 
+    def set_catalog(self, catalog) -> None:
+        """Attach the shared :class:`ProviderCatalog` for metadata lookups.
+
+        Commit 1 only stores the reference; the runtime keeps reading
+        its primary config from env vars exactly as before so this is
+        backward-compatible. Commit 3 flips the primary source over to
+        the catalog once every adapter has been reviewed.
+        """
+        self._catalog = catalog
+
     @staticmethod
     def _normalize_anthropic_response(data: dict) -> dict:
         """Convert raw Anthropic Messages API response to OpenAI-shaped dict."""

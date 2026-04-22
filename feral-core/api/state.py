@@ -58,6 +58,7 @@ from gateway.protocol import MethodRegistry, GatewaySession, register_core_metho
 from hardware.mesh import HardwareMesh
 from identity.workspace import IdentityWorkspace
 from genui.generator import GenUIEngine, ServiceProviderRegistry
+from providers.catalog import ProviderCatalog, default_cache_path as _default_catalog_cache
 from skills.impl.browser_use import BrowserController
 from agents.session_handoff import SessionHandoffManager
 from agents.identity_loader import IdentityLoader
@@ -156,6 +157,11 @@ class BrainState:
         self.wasm_sandbox: Optional[WASMSandbox] = None
         self.wake_word: Optional[WakeWordDetector] = None
         self.orchestrator: Optional[Orchestrator] = None
+        # ProviderCatalog — single source of truth for the LLM provider
+        # inventory + model lists (see feral-core/providers/catalog.py).
+        # Shared by the runtime LLMProvider, the REST /api/llm routes,
+        # the CLI setup wizard, and v2 /setup page.
+        self.provider_catalog: Optional[ProviderCatalog] = None
         self.activity_log: deque = deque(maxlen=100)
         self.gemini_proxy: Optional[GeminiRealtimeProxy] = None
         self.gateway_registry: Optional[MethodRegistry] = None
@@ -273,9 +279,17 @@ class BrainState:
                 except Exception as exc:
                     logger.warning("Consciousness snapshot restore skipped: %s", exc)
 
+        with boot_subsystem(self._boot_report, "ProviderCatalog", optional=False):
+            # Single registry of LLM providers + live model lists.
+            # Built before LLMProvider so the runtime reads its config
+            # through the catalog instead of a private tuple.
+            self.provider_catalog = ProviderCatalog(cache_path=_default_catalog_cache())
+
         from agents.llm_provider import LLMProvider
         with boot_subsystem(self._boot_report, "LLMProvider", optional=False):
             _shared_llm = LLMProvider()
+            if self.provider_catalog is not None:
+                _shared_llm.set_catalog(self.provider_catalog)
         self.learner = Learner(llm=_shared_llm, memory=self.memory)
         self.scene = SceneAnalyzer(llm=_shared_llm)
         scene_cooldown = int(os.environ.get("FERAL_SCENE_COOLDOWN", "10"))
