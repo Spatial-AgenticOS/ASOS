@@ -54,6 +54,7 @@ from api.routes.memory import router as memory_router
 from api.routes.routines import router as routines_router
 from api.routes.taskflows import router as taskflows_router
 from api.routes.llm import router as llm_router
+from api.routes.audio import router as audio_router
 from api.routes.genui import router as genui_router
 from api.routes.mcp import router as mcp_router
 from api.routes.channels import router as channels_router
@@ -235,6 +236,7 @@ app.include_router(memory_router)
 app.include_router(routines_router)
 app.include_router(taskflows_router)
 app.include_router(llm_router)
+app.include_router(audio_router)
 app.include_router(genui_router)
 app.include_router(mcp_router)
 app.include_router(channels_router)
