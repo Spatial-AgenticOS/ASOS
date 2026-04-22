@@ -290,6 +290,15 @@ class BrainState:
             _shared_llm = LLMProvider()
             if self.provider_catalog is not None:
                 _shared_llm.set_catalog(self.provider_catalog)
+            try:
+                _llm_cfg = dict(self.config._merged.get("llm", {})) if self.config else {}
+            except Exception:
+                _llm_cfg = {}
+            if _llm_cfg:
+                # Propagate fallback_providers + any other runtime-tunable
+                # llm.* keys into the LLMProvider's internal config so
+                # classify_error-triggered failover actually uses them.
+                _shared_llm.set_config(_llm_cfg)
         self.learner = Learner(llm=_shared_llm, memory=self.memory)
         self.scene = SceneAnalyzer(llm=_shared_llm)
         scene_cooldown = int(os.environ.get("FERAL_SCENE_COOLDOWN", "10"))

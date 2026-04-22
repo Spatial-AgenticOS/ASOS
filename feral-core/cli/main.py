@@ -403,17 +403,40 @@ def cmd_serve(host: str | None = None, port: int | None = None, tls: bool = Fals
 
 
 def _is_first_run() -> bool:
-    """Check if this is the first time running FERAL."""
-    home_path = feral_home()
-    creds_path = home_path / "credentials.json"
-    has_creds = creds_path.exists()
-    has_env_key = bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-                       or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GROQ_API_KEY"))
+    """Check if this is the first time running FERAL.
 
-    if has_env_key:
+    The canonical source is ``settings.json.meta.setup_complete`` — it
+    gets set to ``True`` by the setup wizard + the REST ``POST
+    /api/llm/config`` route on success. Fall back to the historical
+    heuristics (env API key / non-empty credentials.json / Ollama
+    provider in settings) so existing installs upgraded from older
+    versions don't get a surprise wizard.
+
+    Local-only setups (Ollama, LMStudio) used to re-run the wizard on
+    every boot because ``credentials.json`` was empty — this branch
+    handles that case explicitly via the provider lookup.
+    """
+    home_path = feral_home()
+    settings_path = home_path / "settings.json"
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+            meta = settings.get("meta") or {}
+            if meta.get("setup_complete"):
+                return False
+            llm = settings.get("llm") or {}
+            provider = (llm.get("provider") or "").strip().lower()
+            if provider in ("ollama", "lmstudio", "local") and llm.get("model"):
+                return False
+        except Exception:
+            pass
+
+    if os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") \
+       or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GROQ_API_KEY"):
         return False
 
-    if has_creds:
+    creds_path = home_path / "credentials.json"
+    if creds_path.exists():
         try:
             creds = json.loads(creds_path.read_text())
             if any(v for v in creds.values() if v):

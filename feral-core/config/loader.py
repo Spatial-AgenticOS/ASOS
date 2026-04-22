@@ -177,7 +177,9 @@ class ConfigLoader:
             "FERAL_MULTI_AGENT": ("features", "multi_agent"),
             "FERAL_SCENE_COOLDOWN": ("vision", "scene_cooldown"),
             "FERAL_STT_PROVIDER": ("audio", "stt_provider"),
+            "FERAL_STT_MODEL": ("audio", "stt_model"),
             "FERAL_TTS_PROVIDER": ("audio", "tts_provider"),
+            "FERAL_TTS_MODEL": ("audio", "tts_model"),
             "FERAL_TTS_VOICE": ("audio", "tts_voice"),
             "NODE_API_KEY": ("security", "node_api_key"),
         }
@@ -400,6 +402,23 @@ class ConfigLoader:
         env["FERAL_LLM_MODEL"] = llm.get("model", "gpt-4o-mini")
         if llm.get("base_url"):
             env["FERAL_LLM_BASE_URL"] = llm["base_url"]
+
+        # Audio subsystem — propagate every ``audio.*`` key into the
+        # env vars that AudioPipeline / voice clients read. Before
+        # this change the settings tree was silently ignored because
+        # AudioPipeline's constructor only consulted the FERAL_STT_*
+        # / FERAL_TTS_* environment variables directly.
+        audio = self._merged.get("audio", {}) or {}
+        if audio.get("stt_provider"):
+            env["FERAL_STT_PROVIDER"] = str(audio["stt_provider"])
+        if audio.get("stt_model"):
+            env["FERAL_STT_MODEL"] = str(audio["stt_model"])
+        if audio.get("tts_provider"):
+            env["FERAL_TTS_PROVIDER"] = str(audio["tts_provider"])
+        if audio.get("tts_model"):
+            env["FERAL_TTS_MODEL"] = str(audio["tts_model"])
+        if audio.get("tts_voice"):
+            env["FERAL_TTS_VOICE"] = str(audio["tts_voice"])
 
         vision = self._merged.get("vision", {})
         env["FERAL_VISION_ENABLED"] = str(vision.get("enabled", False)).lower()
