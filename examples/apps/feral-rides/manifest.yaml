@@ -1,0 +1,197 @@
+app_id: feral-rides
+version: 0.9.0
+author: feral-team
+description: Ride-request app with authored request + generated confirm surfaces.
+
+brand:
+  name: Rides
+  primary_color: "#2563EB"
+  secondary_color: "#1D4ED8"
+
+permissions:
+  - location
+
+data_schemas:
+  - schema_id: ride_request_payload
+    description: Form submit value carrying pickup + destination strings.
+    schema:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: object
+          required: [pickup, destination]
+          properties:
+            pickup:      { type: string, minLength: 2 }
+            destination: { type: string, minLength: 2 }
+  - schema_id: ride_status
+    description: Live ride context surfaced by the brain after request_ride fires.
+    schema:
+      type: object
+      properties:
+        ride_id:    { type: string }
+        status:     { type: string, enum: [requested, en_route, arrived, cancelled] }
+        eta_min:    { type: number }
+        fare_estimate: { type: string }
+        driver:
+          type: object
+          properties:
+            name:   { type: string }
+            rating: { type: number }
+        pickup_lat: { type: number }
+        pickup_lon: { type: number }
+        car_lat:    { type: number }
+        car_lon:    { type: number }
+
+entry_surface_id: request
+
+surfaces:
+  - surface_id: request
+    title: Request a ride
+    kind: authored
+    template_root:
+      type: VStack
+      spacing: md
+      padding: md
+      children:
+        - type: Text
+          value: "Where to?"
+          style: headline
+        - type: Form
+          action_id: request_ride
+          submit_label: "Request ride"
+          fields:
+            - name: pickup
+              type: text
+              label: "Pickup"
+              placeholder: "Current location"
+            - name: destination
+              type: text
+              label: "Destination"
+              placeholder: "e.g. SFO"
+        - type: Text
+          value: "We'll show fare + ETA before charging anything."
+          style: caption
+    action_contract:
+      - action_id: request_ride
+        handler: navigate
+        target: confirm
+        description: Validate fields + show the confirmation surface.
+        value_schema_ref: "#/data_schemas/ride_request_payload"
+
+  - surface_id: confirm
+    title: Confirm
+    kind: hybrid
+    description: Confirmation step before the ride request is submitted.
+    data_schema_ref: ride_status
+    schema_version: 1
+    generation_prompt: |
+      The user is confirming a ride request. Build a single screen that:
+      1) Restates pickup + destination clearly (use names, never raw lat/lon).
+      2) Shows the fare estimate as a metric card with the brand primary color.
+      3) Includes one primary 'Confirm' button (action_id=confirm_ride) and one
+         secondary 'Cancel' button (action_id=cancel_ride). Per the
+         interactions.destructive_confirmation_required=true contract, surface
+         the cancel as a Modal-gated destructive action only after the ride
+         is actually en route.
+      Keep the layout vertical, no maps on this surface, and no raw IDs.
+    template_root:
+      type: VStack
+      spacing: md
+      padding: md
+      children:
+        - type: Text
+          value: "Confirm your ride"
+          style: headline
+        - type: Card
+          children:
+            - type: Text
+              style: subtitle
+              value: "$data.pickup_summary"
+            - type: Text
+              style: body
+              value: "$data.destination_summary"
+            - type: Divider
+            - type: Text
+              style: caption
+              value: "Fare estimate"
+            - type: Text
+              style: subtitle
+              value: "$data.fare_estimate"
+        - type: HStack
+          spacing: md
+          children:
+            - type: Button
+              label: "Confirm"
+              style: primary
+              action_id: confirm_ride
+            - type: Button
+              label: "Cancel"
+              style: ghost
+              action_id: cancel_ride
+    action_contract:
+      - action_id: confirm_ride
+        handler: app_event
+        description: Persist the ride request + transition to the live status surface.
+      - action_id: cancel_ride
+        handler: navigate
+        target: request
+        description: Bail out of the request and return to the form.
+        requires_confirmation: false
+
+  - surface_id: status
+    title: Live ride
+    kind: authored
+    data_schema_ref: ride_status
+    template_root:
+      type: VStack
+      spacing: md
+      padding: md
+      children:
+        - type: Text
+          value: "Ride en route"
+          style: headline
+        - type: Card
+          children:
+            - type: Text
+              style: subtitle
+              value: "$data.driver.name"
+            - type: Text
+              style: caption
+              value: "$data.eta_min"
+            - type: ProgressBar
+              label: "ETA"
+              value: 0.4
+              color: "#2563EB"
+            - type: MapView
+              center_lat: "$data.pickup_lat"
+              center_lon: "$data.pickup_lon"
+              markers:
+                - lat: "$data.car_lat"
+                  lon: "$data.car_lon"
+                  label: "Driver"
+        - type: Button
+          label: "Cancel ride"
+          style: danger
+          action_id: cancel_ride
+    action_contract:
+      - action_id: cancel_ride
+        handler: app_event
+        description: Cancel the active ride. Destructive — gated by Modal in interactions.
+        requires_confirmation: true
+
+interactions:
+  button_style_priority: ["primary", "secondary", "ghost"]
+  destructive_confirmation_required: true
+  list_render_preference: auto
+  accessibility_notes:
+    - "Map markers must carry an aria-label describing the driver position."
+  prose_guidance: |
+    Never show raw lat/lon — translate into 'X minutes away' / nearby
+    landmarks. Currency in the user's locale. Keep the cancel CTA below
+    the fold once the ride is en_route so users don't tap it by accident.
+
+notifications:
+  enabled: true
+  default_priority: high
+  default_deep_link_surface_id: status

@@ -1,0 +1,166 @@
+app_id: feral-messages
+version: 1.0.0
+author: feral-team
+description: A tiny example messaging app — two contacts, real bubbles, no fakes.
+
+brand:
+  name: Messages
+  primary_color: "#22C55E"
+  secondary_color: "#16A34A"
+
+permissions:
+  - storage
+
+data_schemas:
+  - schema_id: inbox
+    description: Top-level inbox snapshot — one row per contact.
+    schema:
+      type: object
+      properties:
+        contacts:
+          type: array
+          items:
+            type: object
+            properties:
+              contact_id: { type: string }
+              name:       { type: string }
+              unread:     { type: integer }
+              preview:    { type: string }
+  - schema_id: thread
+    description: A single conversation thread.
+    schema:
+      type: object
+      properties:
+        contact_id: { type: string }
+        contact_name: { type: string }
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              id:        { type: string }
+              from:      { type: string, enum: [me, contact] }
+              text:      { type: string }
+              timestamp: { type: number }
+  - schema_id: send_message_payload
+    description: Payload the composer's submit action carries.
+    schema:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: object
+          required: [text]
+          properties:
+            text: { type: string, minLength: 1, maxLength: 4000 }
+
+entry_surface_id: inbox
+
+surfaces:
+  - surface_id: inbox
+    title: Inbox
+    kind: authored
+    data_schema_ref: inbox
+    template_root:
+      type: VStack
+      spacing: md
+      padding: md
+      children:
+        - type: Text
+          value: "Messages"
+          style: headline
+        - type: Divider
+        - type: List
+          spacing: sm
+          empty_title: "Inbox is clean."
+          empty_hint: "When a contact messages you, their thread will show up here."
+          items:
+            - type: Card
+              children:
+                - type: HStack
+                  spacing: md
+                  children:
+                    - type: Text
+                      style: subtitle
+                      value: "Amy"
+                    - type: Text
+                      style: caption
+                      value: "$data.contacts.0.preview"
+                    - type: Spacer
+                    - type: Button
+                      label: "Open"
+                      style: primary
+                      action_id: open_thread
+                      value: { contact_id: amy }
+            - type: Card
+              children:
+                - type: HStack
+                  spacing: md
+                  children:
+                    - type: Text
+                      style: subtitle
+                      value: "Sam"
+                    - type: Text
+                      style: caption
+                      value: "$data.contacts.1.preview"
+                    - type: Spacer
+                    - type: Button
+                      label: "Open"
+                      style: primary
+                      action_id: open_thread
+                      value: { contact_id: sam }
+    action_contract:
+      - action_id: open_thread
+        handler: navigate
+        target: thread
+        description: Open the selected contact's thread.
+
+  - surface_id: thread
+    title: Thread
+    kind: authored
+    data_schema_ref: thread
+    template_root:
+      type: VStack
+      spacing: md
+      padding: md
+      children:
+        - type: Text
+          style: headline
+          value: "$data.contact_name"
+        - type: Divider
+        - type: List
+          spacing: sm
+          empty_title: "Say hi."
+          items: []
+        - type: Form
+          action_id: send_message
+          submit_label: "Send"
+          fields:
+            - name: text
+              type: text
+              label: "Message"
+              placeholder: "Type your reply…"
+    action_contract:
+      - action_id: send_message
+        handler: app_event
+        description: Append the composed text to the thread + emit a new bubble.
+        value_schema_ref: "#/data_schemas/send_message_payload"
+      - action_id: back_to_inbox
+        handler: navigate
+        target: inbox
+
+interactions:
+  button_style_priority: ["primary", "secondary", "ghost"]
+  destructive_confirmation_required: true
+  list_render_preference: list
+  accessibility_notes:
+    - "Surface unread counts both visually (badge) and via aria-label."
+  prose_guidance: |
+    Never show raw contact_ids — use display names. Localise timestamps
+    to the user's preferred locale. Outgoing bubbles use brand primary;
+    incoming use a muted neutral.
+
+notifications:
+  enabled: true
+  default_priority: normal
+  default_deep_link_surface_id: inbox

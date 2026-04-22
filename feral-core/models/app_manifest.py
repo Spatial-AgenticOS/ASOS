@@ -118,7 +118,14 @@ class DataSchemaSpec(BaseModel):
     binding shape) and `ActionSpec.value_schema_ref` (for event
     payloads). The validator resolves `$ref` strings of the form
     `#/data_schemas/<id>` at publish time.
+
+    The Pydantic field is named ``schema`` because that's the
+    publisher-facing key in manifest YAML/JSON. Pydantic warns about
+    the BaseModel.schema() shadowing — silence it with model_config
+    so the warning doesn't pollute test output.
     """
+
+    model_config = {"protected_namespaces": ()}
 
     schema_id: str = Field(..., min_length=1)
     schema: dict[str, Any]

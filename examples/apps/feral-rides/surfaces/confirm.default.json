@@ -1,0 +1,26 @@
+{
+  "type": "VStack",
+  "spacing": "md",
+  "padding": "md",
+  "children": [
+    {"type": "Text", "value": "Confirm your ride", "style": "headline"},
+    {
+      "type": "Card",
+      "children": [
+        {"type": "Text", "style": "subtitle", "value": "$data.pickup_summary"},
+        {"type": "Text", "style": "body", "value": "$data.destination_summary"},
+        {"type": "Divider"},
+        {"type": "MetricCard", "label": "Fare estimate", "value": "$data.fare_estimate", "color": "#2563EB"},
+        {"type": "Text", "style": "caption", "value": "Tap Confirm to charge the card on file."}
+      ]
+    },
+    {
+      "type": "HStack",
+      "spacing": "md",
+      "children": [
+        {"type": "Button", "label": "Confirm", "style": "primary", "action_id": "confirm_ride"},
+        {"type": "Button", "label": "Cancel", "style": "ghost", "action_id": "cancel_ride"}
+      ]
+    }
+  ]
+}

@@ -425,6 +425,12 @@ class HybridGenerator:
         if kind == "hybrid":
             assert surface.template_root is not None
             if regenerate:
+                # Try the publisher's shipped default first when present.
+                # That's the "signed default" path the plan calls out.
+                default_tree = _read_publisher_default(bundle_dir, surface.surface_id)
+                if default_tree is not None and self._genui is None:
+                    self._write_cache(cache_path, default_tree)
+                    return _hydrate(default_tree, data)
                 generated = await self._llm_generate(manifest, surface, data)
                 self._write_cache(cache_path, generated)
                 return _hydrate(generated, data)
@@ -544,6 +550,16 @@ def _resolve_placeholder(text: str, data: dict) -> str | Any:
     for part in parts:
         if isinstance(current, dict) and part in current:
             current = current[part]
+        elif isinstance(current, list):
+            # Numeric segment indexes into the list (e.g. contacts.0.name).
+            try:
+                idx = int(part)
+            except ValueError:
+                return ""
+            if 0 <= idx < len(current):
+                current = current[idx]
+            else:
+                return ""
         else:
             return ""
     return current
