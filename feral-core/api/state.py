@@ -64,6 +64,13 @@ from agents.identity_loader import IdentityLoader
 from agents.baseline_engine import BaselineEngine
 from agents.about_me import AboutMeStore
 from agents.ideas_engine import IdeasEngine, IdeasStore
+from agents.app_registry import (
+    AppRegistry,
+    HybridGenerator,
+    default_apps_db_path,
+    default_apps_dir,
+    default_hybrid_cache_dir,
+)
 from security.device_pairing import DevicePairingStore
 from api.boot_report import BootReport, boot_subsystem
 
@@ -170,6 +177,11 @@ class BrainState:
         # Ideas engine — "For you today" pane (see agents/ideas_engine.py).
         # Built on top of AboutMe + BaselineEngine + ConsciousnessStore.
         self.ideas_engine: Optional[IdeasEngine] = None
+        # GenUI third-party app platform (see agents/app_registry.py).
+        # AppRegistry indexes installed apps; HybridGenerator renders
+        # authored + cached + LLM-generated surfaces.
+        self.app_registry: Optional[AppRegistry] = None
+        self.hybrid_genui: Optional[HybridGenerator] = None
         self.somatic_engine = None
         self.tool_genesis = None
         self.agent_mitosis = None
@@ -464,6 +476,20 @@ class BrainState:
             self.service_providers = ServiceProviderRegistry()
             if self.orchestrator:
                 self.orchestrator.set_genui_engine(self.genui_engine)
+
+        with boot_subsystem(self._boot_report, "AppRegistry"):
+            # Install directory + SQLite index of third-party GenUI apps.
+            # HybridGenerator wraps GenUIEngine to add the authored /
+            # cached / regenerate branches the plan specifies.
+            self.hybrid_genui = HybridGenerator(
+                genui_engine=self.genui_engine,
+                cache_dir=default_hybrid_cache_dir(),
+            )
+            self.app_registry = AppRegistry(
+                db_path=default_apps_db_path(),
+                apps_dir=default_apps_dir(),
+                hybrid_generator=self.hybrid_genui,
+            )
 
         with boot_subsystem(self._boot_report, "BrowserController"):
             self.browser = BrowserController()
