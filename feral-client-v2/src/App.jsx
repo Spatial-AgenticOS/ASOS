@@ -21,6 +21,8 @@ import Agents from './pages/Agents';
 import Health from './pages/Health';
 import Webhooks from './pages/Webhooks';
 import Geofences from './pages/Geofences';
+import Apps from './pages/Apps';
+import AppSurface from './pages/AppSurface';
 
 export default function App() {
   return (
@@ -45,6 +47,8 @@ export default function App() {
         <Route path="/flows" element={<Flows />} />
         <Route path="/intents" element={<Intents />} />
         <Route path="/marketplace" element={<Marketplace />} />
+        <Route path="/apps" element={<Apps />} />
+        <Route path="/apps/:app_id" element={<AppSurface />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/ambient" element={<Home />} />
         <Route path="*" element={<Navigate to="/" replace />} />

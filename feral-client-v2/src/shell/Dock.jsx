@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   MessageSquare, ListChecks, Cpu, LayoutDashboard, SquareStack,
-  Settings as SettingsIcon, LayoutGrid,
+  Settings as SettingsIcon, LayoutGrid, AppWindow,
 } from 'lucide-react';
 import HubLauncher from '../components/HubLauncher';
 
@@ -15,6 +15,7 @@ const PRIMARY_ITEMS = [
   { to: '/chat', label: 'Chat', Icon: MessageSquare },
   { to: '/flows', label: 'Flows', Icon: ListChecks },
   { to: '/devices', label: 'Devices', Icon: Cpu },
+  { to: '/apps', label: 'Apps', Icon: AppWindow },
   { to: '/canvas', label: 'Canvas', Icon: SquareStack },
 ];
 

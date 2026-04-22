@@ -6,7 +6,7 @@ import Tabs from '../ui/Tabs';
 import EmptyState from '../ui/EmptyState';
 import { apiJson, apiFetch } from '../lib/api';
 
-const KINDS = ['skill', 'daemon', 'mcp', 'channel', 'provider', 'memory', 'workflow', 'agent'];
+const KINDS = ['skill', 'app', 'daemon', 'mcp', 'channel', 'provider', 'memory', 'workflow', 'agent'];
 
 export default function Marketplace() {
   const [tab, setTab] = useState('browse');
@@ -59,14 +59,22 @@ function BrowseTab() {
 
   const install = async (it) => {
     const id = it.id || it.item_id;
+    const itKind = it.kind || kind;
     setBusy(id);
     try {
-      const r = await apiFetch('/api/marketplace/install', {
-        method: 'POST',
-        body: JSON.stringify({ id, kind: it.kind || kind }),
-      });
-      const body = await r.json().catch(() => ({}));
-      setMsg(r.ok ? `Installed ${it.name || id}` : (body?.error || `${r.status}`));
+      // Third-party GenUI apps install through AppRegistry, not the
+      // legacy MarketplaceClient, so /api/apps/install is the right
+      // endpoint for kind=app. Everything else still routes through
+      // the marketplace legacy path.
+      const body = itKind === 'app'
+        ? { registry_id: id }
+        : { id, kind: itKind };
+      const url = itKind === 'app'
+        ? '/api/apps/install'
+        : '/api/marketplace/install';
+      const r = await apiFetch(url, { method: 'POST', body: JSON.stringify(body) });
+      const data = await r.json().catch(() => ({}));
+      setMsg(r.ok ? `Installed ${it.name || id}` : (data?.detail || data?.error || `${r.status}`));
       setTimeout(() => setMsg(null), 4000);
     } finally { setBusy(null); }
   };
