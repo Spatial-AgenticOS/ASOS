@@ -38,6 +38,8 @@ def _infer_node_type(node_id: str, ws) -> str:
         return "glasses"
     if "wristband" in low or "watch" in low:
         return "wearable"
+    if "browser" in low and "camera" in low:
+        return "browser_camera"
     if "phone" in low or "pixel" in low or "iphone" in low:
         return "phone"
     if "robot" in low:

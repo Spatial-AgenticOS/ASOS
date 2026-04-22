@@ -144,7 +144,7 @@ class NodeRegisterPayload(BaseModel):
     node_type: Literal[
         "desktop", "server", "rpi", "robot", "glasses", "phone",
         "tablet", "actuator", "sensor", "wearable", "camera",
-        "vehicle", "appliance",
+        "vehicle", "appliance", "browser_camera",
     ]
     os: str = ""
     platform: str = ""  # "ios", "android", "linux", "macos"

@@ -5,13 +5,22 @@ import { apiFetch } from '../lib/api';
  * DeviceQRCode — renders the PNG returned by GET /api/devices/pair/qr.
  * Falls back to a copy-the-URL view if the endpoint returns JSON or an
  * error (some Brain builds expose a text pairing link instead of a PNG).
+ *
+ * When a `value` prop is supplied, the component skips the Brain roundtrip
+ * and simply renders a text-link view of that string (the phone-camera-share
+ * flow uses this path so the modal can show a ready-to-open URL without
+ * re-pairing).
  */
-export default function DeviceQRCode({ size = 220 }) {
+export default function DeviceQRCode({ size = 220, value = null }) {
   const [imgUrl, setImgUrl] = useState(null);
   const [textLink, setTextLink] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    if (value) {
+      setTextLink(value);
+      return undefined;
+    }
     let cancelled = false;
     let createdUrl = null;
     (async () => {
@@ -46,7 +55,7 @@ export default function DeviceQRCode({ size = 220 }) {
       cancelled = true;
       if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
-  }, []);
+  }, [value]);
 
   if (error) {
     return (

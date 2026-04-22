@@ -6,6 +6,7 @@ import Modal from '../ui/Modal';
 import StatusDot from '../ui/StatusDot';
 import EmptyState from '../ui/EmptyState';
 import PairDeviceModal from '../components/PairDeviceModal';
+import PerceptionShare from '../components/PerceptionShare';
 import { apiJson, apiFetch } from '../lib/api';
 
 /**
@@ -81,6 +82,8 @@ export default function Devices() {
           />
         )}
       </Pane>
+
+      <PerceptionShare />
 
       {connected.length > 0 && (
         <Pane title={`Live (${connected.length})`}>

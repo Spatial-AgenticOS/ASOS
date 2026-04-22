@@ -5,11 +5,16 @@ import Menubar from './Menubar';
 import Dock from './Dock';
 import { VoiceProvider, useVoice } from './VoiceContext';
 import VoiceOverlay from './VoiceOverlay';
+import PerceptionShare from '../components/PerceptionShare';
 
 /**
  * Shell is the v2 chrome: ambient background + minimal top menubar + bottom
  * dock. Pages render in the Outlet between them. The VoiceProvider lifts
  * voice state so Menubar + VoiceOverlay agree on one mode.
+ *
+ * PerceptionShare.FloatingChip is mounted at the Shell level so the
+ * "Sharing camera" indicator is visible no matter which route the user
+ * navigates to after they grant permission.
  */
 function ShellFrame() {
   const voice = useVoice();
@@ -22,6 +27,7 @@ function ShellFrame() {
       </main>
       <Dock />
       <VoiceOverlay />
+      <PerceptionShare.FloatingChip />
     </div>
   );
 }
