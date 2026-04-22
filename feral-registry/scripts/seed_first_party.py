@@ -167,6 +167,85 @@ def _load_workflow_seeds() -> list[SeedItem]:
     return seeds
 
 
+def _load_app_seeds() -> list[SeedItem]:
+    """Pick up every example GenUI app under ``examples/apps/<app_id>/``.
+
+    Each subdirectory must contain a ``manifest.yaml`` (or
+    ``manifest.json``) parseable by AppManifest. We wrap the raw
+    manifest in a registry envelope (kind=app + name=app_id +
+    version) so the registry's per-kind validator is happy. Surface
+    template files referenced by relative path inside the manifest
+    are inlined the same way ``feral app build`` does, so the
+    resulting bundle matches what a publisher would upload.
+    """
+    apps_root = _repo_root() / "examples" / "apps"
+    seeds: list[SeedItem] = []
+    if not apps_root.exists():
+        return seeds
+    for app_dir in sorted(apps_root.iterdir()):
+        if not app_dir.is_dir():
+            continue
+        manifest_path = None
+        for cand in ("manifest.yaml", "manifest.yml", "manifest.json"):
+            if (app_dir / cand).exists():
+                manifest_path = app_dir / cand
+                break
+        if manifest_path is None:
+            continue
+        try:
+            if manifest_path.suffix in (".yaml", ".yml"):
+                import yaml  # type: ignore
+                raw = yaml.safe_load(manifest_path.read_text()) or {}
+            else:
+                raw = json.loads(manifest_path.read_text())
+        except Exception:
+            continue
+        # Inline template_root file refs (mirror app_registry behaviour).
+        surfaces = raw.get("surfaces")
+        if isinstance(surfaces, list):
+            for surface in surfaces:
+                if isinstance(surface, dict):
+                    template_root = surface.get("template_root")
+                    if isinstance(template_root, str):
+                        candidate = (app_dir / template_root).resolve()
+                        if candidate.is_file():
+                            try:
+                                surface["template_root"] = json.loads(candidate.read_text())
+                            except Exception:
+                                pass
+        app_id = raw.get("app_id") or app_dir.name
+        version = str(raw.get("version", "1.0.0"))
+        # Bundle every file under the app dir (skipping dist/).
+        files: list[tuple[str, bytes]] = []
+        for path in sorted(app_dir.rglob("*")):
+            rel = path.relative_to(app_dir)
+            if str(rel).startswith("dist"):
+                continue
+            if path.is_file() and path.stat().st_size < 1_000_000:
+                files.append((str(rel), path.read_bytes()))
+        manifest_envelope: dict = {
+            "kind": "app",
+            "name": app_id,
+            "version": version,
+            "description": raw.get("description"),
+            "author": raw.get("author", "feral-team"),
+            "app_id": app_id,
+            "brand": raw.get("brand", {}),
+            "entry_surface_id": raw.get("entry_surface_id"),
+            "surfaces": raw.get("surfaces", []),
+        }
+        seeds.append(
+            SeedItem(
+                kind="app",
+                name=app_id,
+                version=version,
+                manifest=manifest_envelope,
+                files=files,
+            )
+        )
+    return seeds
+
+
 def _load_daemon_seeds() -> list[SeedItem]:
     nodes_root = _repo_root() / "feral-nodes"
     seeds: list[SeedItem] = []
@@ -265,6 +344,7 @@ async def seed() -> int:
 
     seeds = (
         _load_skill_seeds()
+        + _load_app_seeds()
         + _load_daemon_seeds()
         + _load_agent_seeds()
         + _load_workflow_seeds()
