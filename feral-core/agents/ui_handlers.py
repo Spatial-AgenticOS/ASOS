@@ -1,14 +1,50 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, Optional
 
 from models.protocol import FeralMessage, SDUIPayload
 
 logger = logging.getLogger("feral.orchestrator")
 
 
-async def handle_ui_event(orchestrator, session_id: str, action_id: str, event: str, value=None):
-    logger.info(f"[{session_id[:8]}] UI: {event} -> {action_id} = {value}")
+async def handle_ui_event(
+    orchestrator,
+    session_id: str,
+    action_id: str,
+    event: str,
+    value: Any = None,
+    app_id: Optional[str] = None,
+    screen_id: Optional[str] = None,
+):
+    """Dispatch a UI event to the right handler.
+
+    When ``app_id`` is present, the event is scoped to a third-party
+    GenUI app: we resolve the surface from ``screen_id`` (which has
+    the shape ``<app_id>:<surface_id>:<session>`` assigned at
+    ``AppRegistry.open_surface`` time), validate the action against
+    the declared ``action_contract``, and route per the action's
+    handler (navigate / patch / skill_call / app_event / close).
+    Malformed app events are rejected with a short text reply so a
+    compromised client can't invoke arbitrary skill endpoints by
+    guessing action ids.
+    """
+    logger.info(
+        "[%s] UI: %s -> %s = %r (app_id=%s)",
+        session_id[:8], event, action_id, value, app_id or "",
+    )
+
+    if app_id:
+        await _handle_app_action(
+            orchestrator,
+            session_id=session_id,
+            app_id=app_id,
+            action_id=action_id,
+            event=event,
+            value=value,
+            screen_id=screen_id,
+        )
+        return
 
     if action_id.startswith("call_"):
         tool_ref = action_id[5:]
@@ -34,6 +70,140 @@ async def handle_ui_event(orchestrator, session_id: str, action_id: str, event: 
             session_id,
             f"The user interacted with '{action_id}' (event: {event}, value: {value}). What should happen next?",
         )
+
+
+async def _handle_app_action(
+    orchestrator,
+    *,
+    session_id: str,
+    app_id: str,
+    action_id: str,
+    event: str,
+    value: Any,
+    screen_id: Optional[str],
+) -> None:
+    """Dispatch a ui_event that belongs to a third-party GenUI app.
+
+    Flow:
+    1. Lookup AppRegistry on ``state`` — bail out with a polite text
+       reply if the subsystem isn't initialised (boot race / tests).
+    2. Resolve the surface_id from ``screen_id``. If the client didn't
+       send an app-scoped screen_id we use the app's ``entry_surface_id``
+       so the action still has a valid surface context.
+    3. Validate the action against the surface's ``action_contract``.
+       Unknown action ids are refused; the handler never falls through
+       to ``handle_command`` on an app path.
+    4. Dispatch per the action's declared handler.
+    """
+    try:
+        from api.state import state as _state
+    except Exception:
+        _state = None
+    registry = getattr(_state, "app_registry", None) if _state else None
+    if registry is None:
+        await orchestrator._send_text(
+            session_id,
+            "The app registry isn't available right now. Please retry shortly.",
+        )
+        return
+
+    app = registry.get(app_id)
+    if app is None:
+        await orchestrator._send_text(
+            session_id,
+            f"App '{app_id}' is not installed on this brain.",
+        )
+        return
+
+    surface_id = None
+    if screen_id:
+        resolved = registry.resolve_app_and_surface(screen_id)
+        if resolved and resolved[0] == app_id:
+            surface_id = resolved[1]
+    if not surface_id:
+        surface_id = app.manifest.entry_surface_id
+
+    try:
+        action_spec = registry.validate_action(app_id, surface_id, action_id)
+    except Exception as exc:
+        logger.warning(
+            "Rejecting unsigned app action: app=%s surface=%s action=%s (%s)",
+            app_id, surface_id, action_id, exc,
+        )
+        await orchestrator._send_text(
+            session_id,
+            f"That action isn't in {app_id}'s surface contract.",
+        )
+        return
+
+    handler = action_spec.handler
+
+    if handler == "navigate":
+        target = action_spec.target or ""
+        if not target:
+            await orchestrator._send_text(session_id, "App navigation had no target surface.")
+            return
+        result = await registry.open_surface(
+            app_id=app_id,
+            surface_id=target,
+            session_id=session_id,
+            data=value if isinstance(value, dict) else {},
+        )
+        await orchestrator.send(
+            session_id,
+            FeralMessage(
+                session_id=session_id,
+                hop="brain",
+                type="sdui",
+                payload=SDUIPayload(
+                    screen_id=result["screen_id"],
+                    root=result["root"],
+                ).model_dump(),
+            ),
+        )
+        return
+
+    if handler == "close":
+        await orchestrator._send_text(session_id, f"Closed {app_id}/{surface_id}.")
+        return
+
+    if handler == "skill_call":
+        if not action_spec.target:
+            await orchestrator._send_text(
+                session_id,
+                f"App {app_id} declared a skill_call but no target endpoint.",
+            )
+            return
+        tool_call = {"name": action_spec.target, "args": value if isinstance(value, dict) else {}}
+        try:
+            await orchestrator._execute_tool_call(session_id, tool_call, [])
+        except Exception as exc:
+            logger.warning("App skill_call failed: %s", exc)
+            await orchestrator._send_text(session_id, f"The app's tool call failed: {exc}")
+        return
+
+    if handler == "patch":
+        # Patch handler is reserved — the publisher's app backend is
+        # expected to push sdui_patch envelopes directly in a follow-up
+        # commit. For now we acknowledge so the client isn't stuck.
+        logger.info(
+            "App %s/%s emitted a patch-handler action %s; no patch backend wired yet",
+            app_id, surface_id, action_id,
+        )
+        return
+
+    # Default handler: "app_event" — the brain forwards the tuple to
+    # the orchestrator as an LLM-visible event so the agent can decide
+    # what to do next (e.g. log the action, surface a confirmation,
+    # or call an unrelated skill). Keeps publishers productive even
+    # before they wire a dedicated backend.
+    await orchestrator.handle_command(
+        session_id,
+        (
+            f"App '{app_id}' surface '{surface_id}' emitted action '{action_id}' "
+            f"(event: {event}, value: {value}). What should happen next?"
+        ),
+    )
 
 
 async def send_permission_request(orchestrator, session_id: str, path: str, operation: str, reason: str = "") -> None:

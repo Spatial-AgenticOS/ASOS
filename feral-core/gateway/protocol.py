@@ -502,8 +502,17 @@ def register_core_methods(registry: MethodRegistry, state):
         action_id = params.get("action_id", "")
         event = params.get("event", "tap")
         value = params.get("value")
+        app_id = params.get("app_id")
+        screen_id = params.get("screen_id")
         if state.orchestrator:
-            await state.orchestrator.handle_ui_event(session_id, action_id, event, value)
+            await state.orchestrator.handle_ui_event(
+                session_id,
+                action_id,
+                event,
+                value,
+                app_id=app_id,
+                screen_id=screen_id,
+            )
         return {"handled": True}
 
     @registry.method("vision.frame")

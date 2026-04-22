@@ -59,11 +59,19 @@ class BiometricPayload(BaseModel):
 
 
 class UIEventPayload(BaseModel):
-    """User interacted with a generated UI element."""
+    """User interacted with a generated UI element.
+
+    ``app_id`` is optional and backward-compatible: legacy SDUI /
+    proactive events still work without it. When present, the brain
+    routes the event through ``AppRegistry.validate_action`` first so
+    third-party apps can't dispatch to skill endpoints they didn't
+    declare in their surface's ``action_contract``.
+    """
     screen_id: str
     event: Literal["tap", "toggle", "slider", "text_input", "dismiss"]
     action_id: str
     value: Optional[Any] = None
+    app_id: Optional[str] = None
 
 
 # ─────────────────────────────────────────────

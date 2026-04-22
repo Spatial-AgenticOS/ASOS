@@ -74,6 +74,7 @@ from api.routes.jobs import router as jobs_router
 from api.routes.consciousness import router as consciousness_router
 from api.routes.about_me import router as about_me_router
 from api.routes.ideas import router as ideas_router
+from api.routes.apps import router as apps_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -254,6 +255,7 @@ app.include_router(jobs_router)
 app.include_router(consciousness_router)
 app.include_router(about_me_router)
 app.include_router(ideas_router)
+app.include_router(apps_router)
 
 
 # ─────────────────────────────────────────────
@@ -575,6 +577,8 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
                         action_id=payload.action_id,
                         event=payload.event,
                         value=payload.value,
+                        app_id=payload.app_id,
+                        screen_id=payload.screen_id,
                     )
 
                 elif msg.type == "device_register" and isinstance(payload, DeviceRegisterPayload):

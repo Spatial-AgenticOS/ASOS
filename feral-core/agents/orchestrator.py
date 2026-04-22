@@ -1367,8 +1367,16 @@ class Orchestrator:
     # UI Events & Daemon Results
     # ─────────────────────────────────────────────
 
-    async def handle_ui_event(self, session_id: str, action_id: str, event: str, value=None):
-        await helper_handle_ui_event(self, session_id=session_id, action_id=action_id, event=event, value=value)
+    async def handle_ui_event(self, session_id: str, action_id: str, event: str, value=None, app_id: str | None = None, screen_id: str | None = None):
+        await helper_handle_ui_event(
+            self,
+            session_id=session_id,
+            action_id=action_id,
+            event=event,
+            value=value,
+            app_id=app_id,
+            screen_id=screen_id,
+        )
 
     async def send_permission_request(self, session_id: str, path: str, operation: str, reason: str = "") -> None:
         await helper_send_permission_request(
