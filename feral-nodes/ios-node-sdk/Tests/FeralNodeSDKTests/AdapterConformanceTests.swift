@@ -12,6 +12,9 @@ final class AdapterConformanceTests: XCTestCase {
             VeepooAdapter(),
             JWBleAdapter(),
             QCSDKAdapter(),
+            CameraPermissionAdapter(
+                permissionProbe: FixedPermissionProbe(video: true, audio: true)
+            ),
         ]
         let caps = adapters.map(\.capability)
         XCTAssertEqual(Set(caps).count, caps.count, "adapter capability strings must be unique")

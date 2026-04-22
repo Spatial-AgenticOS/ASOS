@@ -13,6 +13,11 @@ public enum FeralNodeError: Error, LocalizedError {
     case notConnected
     case brainRejected(code: Int, message: String)
     case malformedFrame(underlying: Error)
+    /// The user denied a system permission prompt (camera, microphone,
+    /// location, etc.). Never silently retried — the adapter surfaces
+    /// this so the host app can either guide the user to Settings or
+    /// disable the capability entirely.
+    case permissionDenied(capability: String, reason: String)
 
     public var errorDescription: String? {
         switch self {
@@ -25,6 +30,9 @@ public enum FeralNodeError: Error, LocalizedError {
             return "Brain rejected the frame (code \(code)): \(message)."
         case .malformedFrame(let underlying):
             return "Malformed HUP frame: \(underlying.localizedDescription)."
+        case .permissionDenied(let capability, let reason):
+            return "FeralNodeSDK adapter \(capability) could not start: \(reason). " +
+                   "The user must grant this permission in system Settings."
         }
     }
 }
