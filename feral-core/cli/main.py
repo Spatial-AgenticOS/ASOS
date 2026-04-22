@@ -1143,6 +1143,13 @@ def main():
     sub.add_parser("install-service", help="Install FERAL Brain as a system daemon (launchd/systemd)")
     sub.add_parser("uninstall-service", help="Remove the FERAL Brain system daemon")
 
+    # feral app ...
+    try:
+        from cli.app_commands import register_app_subparser
+        register_app_subparser(sub)
+    except Exception:
+        pass
+
     # Parse known args — everything else is treated as a message
     args, remaining = parser.parse_known_args()
     _apply_connection_args(args)
@@ -1207,6 +1214,9 @@ def main():
     elif args.subcommand == "uninstall-service":
         from cli.daemon import uninstall_service
         uninstall_service()
+    elif args.subcommand == "app":
+        from cli.app_commands import dispatch_app_subcommand
+        dispatch_app_subcommand(args)
     elif args.subcommand is None and not remaining:
         asyncio.run(repl())
     else:

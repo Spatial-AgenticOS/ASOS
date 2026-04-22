@@ -1,12 +1,16 @@
 """Pydantic request/response schemas.
 
-The registry hosts eight content categories. Each is a ``kind`` in the
+The registry hosts nine content categories. Each is a ``kind`` in the
 ``items`` table; publishers upload a tarball with a ``manifest.json`` at
-the root, and the ``Manifest`` model below accepts any of the eight
+the root, and the ``Manifest`` model below accepts any of the nine
 discriminated shapes. Categories:
 
 * ``skill``     — Python skill (manifest + impl.py) loaded into the
                   SkillRegistry on the user's FERAL brain.
+* ``app``       — GenUI third-party app (AppManifest + brand + surfaces
+                  + interaction rules). Installs into AppRegistry;
+                  renders on v2 via SduiRenderer. See
+                  feral-core/models/app_manifest.py.
 * ``daemon``    — HUP-speaking hardware daemon, one per physical device
                   class (wristband, glasses, thermostat, …).
 * ``mcp``       — MCP server spec (command + env) that FERAL can spawn
@@ -36,6 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Kind = Literal[
     "skill",
+    "app",
     "daemon",
     "mcp",
     "channel",
@@ -47,6 +52,7 @@ Kind = Literal[
 
 ALL_KINDS: tuple[Kind, ...] = (
     "skill",
+    "app",
     "daemon",
     "mcp",
     "channel",
@@ -77,6 +83,12 @@ class Manifest(BaseModel):
 _REQUIRED_PER_KIND: dict[str, tuple[str, ...]] = {
     # kind: keys that must be present in the manifest on top of the base fields
     "skill": ("skill_id",),
+    # GenUI app bundles must declare a valid app_id, a brand, an entry
+    # surface, and at least one surface. Deeper cross-ref checks run
+    # in feral-core's AppManifest validator; the registry only guards
+    # against the top-level shape here so an obviously-broken bundle
+    # can't reach a blob lock.
+    "app": ("app_id", "brand", "entry_surface_id", "surfaces"),
     "daemon": ("node_id", "capabilities"),
     "mcp": ("mcp_command",),
     "channel": ("channel_id",),
