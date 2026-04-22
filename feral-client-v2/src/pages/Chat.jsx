@@ -4,7 +4,8 @@ import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import Orb from '../ui/Orb';
 import EmptyState from '../ui/EmptyState';
-import { useFeralSocket } from '../hooks/useFeralSocket';
+import SduiRenderer, { applySduiPatches } from '../ui/SduiRenderer';
+import { useFeralSocket, sendUiEvent } from '../hooks/useFeralSocket';
 import { useConnectionStatus } from '../hooks/useConnectionStatus';
 import { apiJson, apiFetch } from '../lib/api';
 
@@ -141,6 +142,34 @@ export default function Chat() {
           ? p.text.slice(7) : (p.text || '');
         if (!text) return;
         setMessages((prev) => [...prev, { id: newId(), role, text, source: 'voice' }]);
+      } else if (type === 'sdui') {
+        // Brain-emitted SDUI payload. Append as its own message so the
+        // recursive renderer can mount the tree inline in the chat log.
+        const p = msg.payload || {};
+        const root = p.root || p;
+        if (!root || typeof root !== 'object') return;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: newId(),
+            role: 'assistant',
+            type: 'sdui',
+            sdui: root,
+            screen_id: p.screen_id || null,
+          },
+        ]);
+      } else if (type === 'sdui_patch') {
+        // In-place mutation of an already-mounted SDUI message. Match
+        // on the trailing screen_id so multiple surfaces don't clobber
+        // each other.
+        const p = msg.payload || {};
+        const targetId = p.screen_id;
+        if (!targetId) return;
+        setMessages((prev) => prev.map((m) => (
+          m.type === 'sdui' && m.screen_id === targetId
+            ? { ...m, sdui: applySduiPatches(m.sdui, p.patches || []) }
+            : m
+        )));
       }
     });
     return unsub;
@@ -209,7 +238,20 @@ export default function Chat() {
               <div className="v2-chat-role" aria-hidden="true">
                 <Orb size={22} mode={m.role === 'user' ? 'observing' : 'idle'} />
               </div>
-              <div className="v2-chat-body">{m.text}</div>
+              <div className="v2-chat-body">
+                {m.type === 'sdui' ? (
+                  <SduiRenderer
+                    tree={m.sdui}
+                    onAction={(action_id, value) => sendUiEvent(socket, {
+                      screen_id: m.screen_id || m.id,
+                      action_id,
+                      value,
+                    })}
+                  />
+                ) : (
+                  m.text
+                )}
+              </div>
             </div>
           ))}
           {streamingText && (

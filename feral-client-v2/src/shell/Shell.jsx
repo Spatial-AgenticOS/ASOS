@@ -6,6 +6,7 @@ import Dock from './Dock';
 import { VoiceProvider, useVoice } from './VoiceContext';
 import VoiceOverlay from './VoiceOverlay';
 import PerceptionShare from '../components/PerceptionShare';
+import ProactiveToast from '../components/ProactiveToast';
 
 /**
  * Shell is the v2 chrome: ambient background + minimal top menubar + bottom
@@ -27,6 +28,7 @@ function ShellFrame() {
       </main>
       <Dock />
       <VoiceOverlay />
+      <ProactiveToast />
       <PerceptionShare.FloatingChip />
     </div>
   );

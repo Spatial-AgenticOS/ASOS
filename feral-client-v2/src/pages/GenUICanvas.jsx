@@ -5,7 +5,8 @@ import Glass from '../ui/Glass';
 import Modal from '../ui/Modal';
 import Tabs from '../ui/Tabs';
 import EmptyState from '../ui/EmptyState';
-import { useFeralSocket } from '../hooks/useFeralSocket';
+import SduiRenderer, { applySduiPatches } from '../ui/SduiRenderer';
+import { useFeralSocket, sendUiEvent } from '../hooks/useFeralSocket';
 import { apiJson, apiFetch } from '../lib/api';
 
 export default function GenUICanvas() {
@@ -45,13 +46,26 @@ function LiveTab() {
 
   useEffect(() => {
     const unsub = socket.subscribe((msg) => {
+      if (msg?.type === 'sdui_patch') {
+        const p = msg.payload || {};
+        const targetId = p.screen_id;
+        if (!targetId) return;
+        setPanes((prev) => prev.map((pane) => (
+          pane.id === targetId
+            ? { ...pane, tree: applySduiPatches(pane.tree, p.patches || []) }
+            : pane
+        )));
+        return;
+      }
       if (msg?.type !== 'sdui_render' && msg?.type !== 'genui_render' && msg?.type !== 'sdui') return;
       const payload = msg.payload || msg;
-      const id = payload.pane_id || payload.id || `pane_${Date.now()}`;
+      const id = payload.screen_id || payload.pane_id || payload.id || `pane_${Date.now()}`;
+      const tree = payload.root || payload.tree || payload;
+      const title = payload.title || payload.app_id || id;
       setPanes((prev) => {
         const existing = prev.find((p) => p.id === id);
-        if (existing) return prev.map((p) => (p.id === id ? { ...p, spec: payload } : p));
-        return [...prev, { id, spec: payload }];
+        if (existing) return prev.map((p) => (p.id === id ? { ...p, tree, title } : p));
+        return [...prev, { id, tree, title }];
       });
     });
     return unsub;
@@ -62,16 +76,25 @@ function LiveTab() {
   return (
     <Pane title={`Live panes (${panes.length})`}>
       {panes.length === 0 && (
-        <EmptyState title="Waiting for a render" hint="Any skill / third-party app that emits sdui_render appears here." />
+        <EmptyState title="Waiting for a render" hint="Any skill / third-party app that emits sdui / sdui_render appears here." />
       )}
       <div className="v2-canvas-grid">
-        {panes.map(({ id, spec }) => (
+        {panes.map(({ id, tree, title }) => (
           <Glass key={id} level={2} radius="md" padding="md" className="v2-canvas-pane">
             <header className="v2-canvas-head">
-              <h3 className="v2-canvas-title">{spec.title || spec.app_id || id}</h3>
-              <button type="button" className="v2-btn v2-btn--ghost" onClick={() => dismiss(id)}>×</button>
+              <h3 className="v2-canvas-title">{title}</h3>
+              <button type="button" className="v2-btn v2-btn--ghost" onClick={() => dismiss(id)} aria-label="Dismiss pane">
+                <Trash2 size={13} />
+              </button>
             </header>
-            <pre className="v2-code">{JSON.stringify(spec, null, 2).slice(0, 1200)}</pre>
+            <SduiRenderer
+              tree={tree}
+              onAction={(action_id, value) => sendUiEvent(socket, {
+                screen_id: id,
+                action_id,
+                value,
+              })}
+            />
           </Glass>
         ))}
       </div>
