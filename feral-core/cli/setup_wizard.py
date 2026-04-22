@@ -482,15 +482,15 @@ def _get_local_ip() -> str:
 
 
 def run_setup():
-    """Entry point — called by `feral setup` or the install script."""
-    if HAS_RICH:
-        wizard = OnboardWizard(Console())
-    else:
-        wizard = OnboardWizardPlain()
-    try:
-        asyncio.run(wizard.run())
-    except (KeyboardInterrupt, EOFError):
-        print("\n  Setup cancelled. Run `feral setup` anytime to continue.\n")
+    """Entry point — delegates to the new modular wizard.
+
+    Kept as a thin shim so any external script that imports
+    ``cli.setup_wizard.run_setup`` continues to work; the modular
+    implementation lives in ``cli.setup``.
+    """
+    from cli.setup import run_setup as _run_setup
+
+    _run_setup()
 
 
 # ═══════════════════════════════════════════════════════════
