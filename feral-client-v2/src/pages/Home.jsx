@@ -11,6 +11,7 @@ import StatusDot from '../ui/StatusDot';
 import EmptyState from '../ui/EmptyState';
 import SkillsLauncher, { readPinned, MAX_PINNED } from '../components/SkillsLauncher';
 import ResumeCockpit from '../components/ResumeCockpit';
+import ForYouToday from '../components/ForYouToday';
 import { apiJson, apiFetch } from '../lib/api';
 import { useSomatic } from '../hooks/useSomatic';
 import { useBrainEvents, EVENT_TYPES } from '../hooks/useBrainEvents';
@@ -384,6 +385,8 @@ export default function Home() {
           )}
         </div>
       )}
+
+      <ForYouToday />
 
       <ResumeCockpit />
 

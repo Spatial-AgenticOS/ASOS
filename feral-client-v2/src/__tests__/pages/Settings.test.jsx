@@ -16,8 +16,15 @@ describe('Settings', () => {
   it('exposes a Self button in the settings nav that opens the Self editors', () => {
     const { getAllByText } = renderV2(<Settings />);
     // Self is in the left-nav AND rendered by default so it's present
-    // immediately. The SelfWorkspace Pane title "Self — IDENTITY / SOUL / MEMORY"
-    // also renders into the DOM when Self is the active section.
-    expect(getAllByText(/IDENTITY \/ SOUL \/ MEMORY/i).length).toBeGreaterThan(0);
+    // immediately. The SelfWorkspace Pane title includes ABOUT-ME now.
+    expect(getAllByText(/IDENTITY \/ SOUL \/ MEMORY \/ ABOUT-ME/i).length).toBeGreaterThan(0);
+  });
+
+  it('exposes an ABOUT ME tab inside the Self workspace', () => {
+    const { getByRole } = renderV2(<Settings />);
+    // Tabs renders each tab with role="tab"; ABOUT ME is the fourth
+    // tab and must be clickable so the user can jump to /api/about-me
+    // without leaving Settings.
+    expect(getByRole('tab', { name: /ABOUT ME/i })).toBeInTheDocument();
   });
 });

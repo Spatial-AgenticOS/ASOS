@@ -67,8 +67,8 @@ export class StubWebSocket {
   }
 }
 
-export function renderV2(ui, { route = '/' } = {}) {
-  installFetchMock();
+export function renderV2(ui, { route = '/', fetch } = {}) {
+  installFetchMock(fetch);
   vi.stubGlobal('WebSocket', StubWebSocket);
   if (!window.matchMedia) {
     window.matchMedia = vi.fn().mockImplementation((q) => ({
