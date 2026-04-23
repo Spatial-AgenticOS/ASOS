@@ -104,4 +104,63 @@ describe('BrowserNode', () => {
     const { BrowserNode } = await import('../node/BrowserNode.js');
     expect(() => new BrowserNode({})).toThrow(/token/i);
   });
+
+  it('sendVoiceConfig emits voice_config frame before any audio_chunk', async () => {
+    const { BrowserNode } = await import('../node/BrowserNode.js');
+    const node = new BrowserNode({ token: 'vc-1', voiceProvider: 'gemini' });
+    await node.connect();
+    const ws = MockWebSocket.instances[0];
+    // one node_register already queued
+    ws.sent = [];
+
+    await node.sendVoiceConfig();
+    expect(ws.sent).toHaveLength(1);
+    const frame = JSON.parse(ws.sent[0]);
+    expect(frame.type).toBe('voice_config');
+    expect(frame.payload.provider).toBe('gemini');
+    expect(frame.payload.supports_realtime).toBe(true);
+    expect(frame.payload.sample_rate).toBe(16000);
+    expect(frame.payload.encoding).toBe('pcm16');
+  });
+
+  it('_pushAudioChunk sends an audio_chunk with PCM16 base64 + chunk_index', async () => {
+    const { BrowserNode } = await import('../node/BrowserNode.js');
+    const node = new BrowserNode({ token: 'a-1' });
+    await node.connect();
+    const ws = MockWebSocket.instances[0];
+    ws.sent = [];
+
+    // Fake Float32 samples
+    const samples = new Float32Array(320);
+    for (let i = 0; i < samples.length; i++) samples[i] = Math.sin(i * 0.1);
+    node._pushAudioChunk(samples);
+
+    expect(ws.sent).toHaveLength(1);
+    const frame = JSON.parse(ws.sent[0]);
+    expect(frame.type).toBe('audio_chunk');
+    expect(frame.payload.encoding).toBe('pcm16');
+    expect(frame.payload.sample_rate).toBe(16000);
+    expect(typeof frame.payload.data_b64).toBe('string');
+    expect(frame.payload.data_b64.length).toBeGreaterThan(0);
+    expect(frame.payload.chunk_index).toBe(0);
+
+    node._pushAudioChunk(samples);
+    const second = JSON.parse(ws.sent[1]);
+    expect(second.payload.chunk_index).toBe(1);
+  });
+
+  it('floatToPCM16 produces a 2x-byte payload per sample', async () => {
+    // Indirectly verified by _pushAudioChunk above, but re-assert shape.
+    const { BrowserNode } = await import('../node/BrowserNode.js');
+    const node = new BrowserNode({ token: 'pcm-1' });
+    await node.connect();
+    const ws = MockWebSocket.instances[0];
+    ws.sent = [];
+
+    const samples = new Float32Array(160); // 10ms @ 16kHz
+    node._pushAudioChunk(samples);
+    const frame = JSON.parse(ws.sent[0]);
+    // 160 samples * 2 bytes = 320 raw bytes; base64 → ceil(320/3)*4 = 428 chars
+    expect(frame.payload.data_b64.length).toBe(Math.ceil(320 / 3) * 4);
+  });
 });

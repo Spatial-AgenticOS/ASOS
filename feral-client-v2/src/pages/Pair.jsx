@@ -85,20 +85,67 @@ export default function Pair() {
     );
   }
 
-  if (phase === "live" || phase === "registered" || phase === "acknowledged") {
+  const isLive = phase === "live" || phase === "registered"
+    || phase === "acknowledged" || phase === "mic_streaming"
+    || phase === "camera_streaming" || phase === "voice_config";
+
+  const toggleMic = async () => {
+    if (!node) return;
+    if (permissions.mic) {
+      await node.stopMic();
+      setPermissions((p) => ({ ...p, mic: false }));
+    } else {
+      await node.startMic();
+      setPermissions((p) => ({ ...p, mic: true }));
+    }
+  };
+
+  const toggleCamera = async () => {
+    if (!node) return;
+    if (permissions.camera) {
+      await node.stopCamera();
+      setPermissions((p) => ({ ...p, camera: false }));
+    } else {
+      await node.startCamera();
+      setPermissions((p) => ({ ...p, camera: true }));
+    }
+  };
+
+  if (isLive) {
     return (
       <Frame>
         <Card>
           <Header icon={CheckCircle2} title="Paired" tone="live" />
           <p>
-            This device is now a live FERAL node. Sensor streams you
-            allowed are flowing to the Brain.
+            This device is now a live FERAL node. Toggle individual
+            streams below — each goes live only while you flip it on.
           </p>
-          <ul style={bulletList}>
-            <li>Location: {permissions.location ? "live" : "disabled"}</li>
-            <li>Camera: {permissions.camera ? "live" : "disabled"}</li>
-            <li>Microphone: {permissions.mic ? "live" : "disabled"}</li>
-          </ul>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
+            <LiveRow
+              label="Location"
+              active={permissions.location}
+              color="#30D158"
+            />
+            <LiveRow
+              label="Microphone"
+              active={permissions.mic}
+              color="#FF9F0A"
+              onToggle={toggleMic}
+            />
+            <LiveRow
+              label="Camera"
+              active={permissions.camera}
+              color="#FF453A"
+              onToggle={toggleCamera}
+            />
+          </div>
+          <p style={{ marginTop: 12, fontSize: 12, opacity: 0.6 }}>
+            Mic streams PCM16 @ 16 kHz as
+            <code style={{ margin: "0 4px" }}>audio_chunk</code>
+            frames; camera streams
+            <code style={{ margin: "0 4px" }}>frame</code>
+            jpeg payloads every ~750 ms.
+          </p>
           <button
             type="button"
             onClick={disconnect}
@@ -200,6 +247,40 @@ function PermissionToggle({ label, on, onChange }) {
         style={{ width: 20, height: 20 }}
       />
     </label>
+  );
+}
+
+function LiveRow({ label, active, color, onToggle }) {
+  return (
+    <div style={toggleRow}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+        <span
+          style={{
+            width: 8, height: 8, borderRadius: "50%",
+            background: active ? color : "rgba(255,255,255,0.3)",
+            boxShadow: active ? `0 0 8px ${color}` : "none",
+            animation: active ? "v2-pulse 1.4s ease-in-out infinite" : "none",
+          }}
+        />
+        <span>{label}</span>
+      </span>
+      {onToggle ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          style={{
+            ...btnSecondary,
+            marginTop: 0,
+            padding: "6px 12px",
+            background: active ? "rgba(255,69,58,0.2)" : "rgba(255,255,255,0.06)",
+          }}
+        >
+          {active ? "Stop" : "Start"}
+        </button>
+      ) : (
+        <span style={{ fontSize: 12, opacity: 0.6 }}>{active ? "live" : "off"}</span>
+      )}
+    </div>
   );
 }
 

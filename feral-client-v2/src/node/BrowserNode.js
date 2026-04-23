@@ -7,11 +7,13 @@
  * with node_type="browser_node", and streams live sensor data back to the
  * Brain. No app install needed.
  *
- * Capabilities:
- *   • location — navigator.geolocation.watchPosition
- *   • camera   — captured frames (on demand, never background)
- *   • mic      — short audio blobs (on demand, never background)
- *   • display  — local notifications / vibration for actuator calls
+ * Frames the Brain understands:
+ *   • location — navigator.geolocation.watchPosition → POST /api/location/update
+ *   • mic      — AudioWorklet PCM16 @ 16kHz → WS `audio_chunk`
+ *                 {data_b64, chunk_index, is_final, encoding, sample_rate}
+ *   • camera   — canvas.toBlob('image/jpeg') → WS `frame`
+ *                 {data_b64, width, height, mime}
+ *   • display  — server-pushed `action` frames (notify / vibrate)
  *
  * Privacy rules (non-negotiable):
  *   • Sensor streams only start when the user taps "Allow".
@@ -20,6 +22,11 @@
  */
 
 const HUP_VERSION = "1.0";
+const AUDIO_TARGET_SAMPLE_RATE = 16000;
+const AUDIO_CHUNK_MS = 250; // 200-400ms per chunk — matches the VoiceRouter contract
+const VIDEO_INTERVAL_MS = 750;
+const VIDEO_MAX_WIDTH = 640;
+const VIDEO_JPEG_QUALITY = 0.7;
 
 function nowTs() {
   return Date.now() / 1000;
@@ -60,6 +67,58 @@ function defaultCapabilities() {
   return caps;
 }
 
+function floatToPCM16Base64(float32) {
+  // Convert a Float32Array of [-1..1] samples to base64-encoded PCM16LE.
+  const len = float32.length;
+  const buf = new ArrayBuffer(len * 2);
+  const view = new DataView(buf);
+  for (let i = 0; i < len; i++) {
+    let s = Math.max(-1, Math.min(1, float32[i]));
+    s = s < 0 ? s * 0x8000 : s * 0x7fff;
+    view.setInt16(i * 2, s, true);
+  }
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return typeof btoa !== "undefined" ? btoa(binary) : Buffer.from(binary, "binary").toString("base64");
+}
+
+// AudioWorklet source for downsampling + buffering. Built as a Blob URL
+// so callers don't need to ship a separate .js file. Runs on the audio
+// thread; posts Float32 batches back to the main thread every chunk.
+const WORKLET_SOURCE = `
+class FeralCaptureProcessor extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    this.targetRate = options.processorOptions?.targetRate || 16000;
+    this.inputRate = sampleRate;
+    this.ratio = this.inputRate / this.targetRate;
+    this.chunkSamples = Math.round(this.targetRate * (options.processorOptions?.chunkMs || 250) / 1000);
+    this.buffer = [];
+    this.acc = 0;
+  }
+  process(inputs) {
+    const input = inputs[0] && inputs[0][0];
+    if (!input) return true;
+    // Linear-resample to targetRate.
+    for (let i = 0; i < input.length; i++) {
+      this.acc += 1;
+      if (this.acc >= this.ratio) {
+        this.acc -= this.ratio;
+        this.buffer.push(input[i]);
+        if (this.buffer.length >= this.chunkSamples) {
+          const out = new Float32Array(this.buffer);
+          this.port.postMessage(out, [out.buffer]);
+          this.buffer = [];
+        }
+      }
+    }
+    return true;
+  }
+}
+registerProcessor("feral-capture", FeralCaptureProcessor);
+`;
+
 export class BrowserNode {
   /**
    * @param {object} opts
@@ -69,6 +128,7 @@ export class BrowserNode {
    * @param {string} [opts.nodeId]     — stable id (persisted in localStorage).
    * @param {string} [opts.name]       — display name.
    * @param {string[]} [opts.capabilities]
+   * @param {string} [opts.voiceProvider]  — "openai" | "gemini" | "whisper"
    * @param {(phase: string, detail?: any) => void} [opts.onPhase]
    * @param {(err: Error) => void} [opts.onError]
    */
@@ -80,6 +140,7 @@ export class BrowserNode {
     this.name = opts.name || "Browser Node";
     this.platform = detectPlatform();
     this.capabilities = opts.capabilities || defaultCapabilities();
+    this.voiceProvider = opts.voiceProvider || "openai";
     this.onPhase = opts.onPhase || (() => {});
     this.onError = opts.onError || ((e) => console.warn("[BrowserNode]", e));
 
@@ -94,8 +155,14 @@ export class BrowserNode {
     this._stopped = false;
     this._locationWatchId = null;
     this._mediaStream = null;
+    this._audioContext = null;
+    this._workletNode = null;
+    this._audioChunkIndex = 0;
+    this._videoTimer = null;
+    this._videoElement = null;
     this._pausedAt = 0;
     this._visibilityHandler = null;
+    this._voiceConfigSent = false;
   }
 
   async connect() {
@@ -106,7 +173,7 @@ export class BrowserNode {
 
     await new Promise((resolve, reject) => {
       this._ws.onopen = () => resolve();
-      this._ws.onerror = (e) => reject(new Error("WebSocket error"));
+      this._ws.onerror = () => reject(new Error("WebSocket error"));
     });
     this.onPhase("connected");
 
@@ -156,8 +223,12 @@ export class BrowserNode {
     this.onPhase("registered");
   }
 
+  /**
+   * Start sensor streams. Safe to call repeatedly — each flag is
+   * idempotent. Pass `{location: false}` to not start location.
+   */
   async startSensors({ location = true, camera = false, mic = false } = {}) {
-    if (location && navigator.geolocation) {
+    if (location && navigator.geolocation && this._locationWatchId == null) {
       this._locationWatchId = navigator.geolocation.watchPosition(
         (pos) => this._pushLocation(pos),
         (err) => this.onError(err),
@@ -165,16 +236,90 @@ export class BrowserNode {
       );
       this.onPhase("location_streaming");
     }
-    if ((camera || mic) && navigator.mediaDevices?.getUserMedia) {
-      try {
-        this._mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: !!camera,
-          audio: !!mic,
-        });
-        this.onPhase("media_acquired");
-      } catch (err) {
-        this.onError(err);
+
+    if (mic) await this.startMic();
+    if (camera) await this.startCamera();
+  }
+
+  async sendVoiceConfig(overrides = {}) {
+    const payload = {
+      mode: "realtime",
+      provider: this.voiceProvider,
+      supports_realtime: true,
+      sample_rate: AUDIO_TARGET_SAMPLE_RATE,
+      encoding: "pcm16",
+      ...overrides,
+    };
+    await this._send("voice_config", payload);
+    this._voiceConfigSent = true;
+    this.onPhase("voice_config", payload);
+  }
+
+  async startMic() {
+    if (this._workletNode) return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.onError(new Error("getUserMedia not available"));
+      return;
+    }
+    if (!this._voiceConfigSent) {
+      // Always send voice_config before the first audio_chunk so the
+      // Brain knows which realtime provider to wire.
+      await this.sendVoiceConfig();
+    }
+    try {
+      this._mediaStream = this._mediaStream || await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      // AudioContext + Worklet
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      this._audioContext = new AudioCtx();
+      const blob = new Blob([WORKLET_SOURCE], { type: "application/javascript" });
+      const workletUrl = URL.createObjectURL(blob);
+      await this._audioContext.audioWorklet.addModule(workletUrl);
+      URL.revokeObjectURL(workletUrl);
+
+      const source = this._audioContext.createMediaStreamSource(this._mediaStream);
+      this._workletNode = new AudioWorkletNode(this._audioContext, "feral-capture", {
+        processorOptions: {
+          targetRate: AUDIO_TARGET_SAMPLE_RATE,
+          chunkMs: AUDIO_CHUNK_MS,
+        },
+      });
+      this._workletNode.port.onmessage = (event) => this._pushAudioChunk(event.data);
+      source.connect(this._workletNode);
+      // Connect to a silent gain so the graph actually runs in some browsers.
+      const silent = this._audioContext.createGain();
+      silent.gain.value = 0;
+      this._workletNode.connect(silent).connect(this._audioContext.destination);
+      this.onPhase("mic_streaming");
+    } catch (err) {
+      this.onError(err);
+    }
+  }
+
+  async startCamera() {
+    if (this._videoTimer) return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.onError(new Error("getUserMedia not available"));
+      return;
+    }
+    try {
+      this._mediaStream = this._mediaStream || await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+      });
+      // Attach to a hidden <video> element so canvas.drawImage works.
+      if (typeof document !== "undefined") {
+        const video = document.createElement("video");
+        video.playsInline = true;
+        video.muted = true;
+        video.srcObject = this._mediaStream;
+        await video.play().catch(() => {});
+        this._videoElement = video;
       }
+      this._videoTimer = setInterval(() => this._pushCameraFrame(), VIDEO_INTERVAL_MS);
+      this.onPhase("camera_streaming");
+    } catch (err) {
+      this.onError(err);
     }
   }
 
@@ -183,11 +328,72 @@ export class BrowserNode {
       navigator.geolocation.clearWatch(this._locationWatchId);
       this._locationWatchId = null;
     }
+    if (this._videoTimer) {
+      clearInterval(this._videoTimer);
+      this._videoTimer = null;
+    }
+    if (this._workletNode) {
+      try { this._workletNode.disconnect(); } catch { /* ignore */ }
+      this._workletNode = null;
+    }
+    if (this._audioContext) {
+      this._audioContext.close().catch(() => {});
+      this._audioContext = null;
+    }
+    if (this._videoElement) {
+      this._videoElement.pause?.();
+      this._videoElement.srcObject = null;
+      this._videoElement = null;
+    }
     if (this._mediaStream) {
       for (const track of this._mediaStream.getTracks()) track.stop();
       this._mediaStream = null;
     }
+    this._voiceConfigSent = false;
     this.onPhase("paused");
+  }
+
+  async stopMic() {
+    if (this._workletNode) {
+      try { this._workletNode.disconnect(); } catch { /* ignore */ }
+      this._workletNode = null;
+    }
+    if (this._audioContext) {
+      await this._audioContext.close().catch(() => {});
+      this._audioContext = null;
+    }
+    if (this._mediaStream) {
+      for (const track of this._mediaStream.getAudioTracks()) track.stop();
+    }
+    // Send one final is_final=true frame so the voice router can close
+    // its current utterance cleanly.
+    if (this._voiceConfigSent) {
+      await this._send("audio_chunk", {
+        node_id: this.nodeId,
+        data_b64: "",
+        chunk_index: this._audioChunkIndex++,
+        is_final: true,
+        encoding: "pcm16",
+        sample_rate: AUDIO_TARGET_SAMPLE_RATE,
+      });
+    }
+    this.onPhase("mic_stopped");
+  }
+
+  async stopCamera() {
+    if (this._videoTimer) {
+      clearInterval(this._videoTimer);
+      this._videoTimer = null;
+    }
+    if (this._videoElement) {
+      this._videoElement.pause?.();
+      this._videoElement.srcObject = null;
+      this._videoElement = null;
+    }
+    if (this._mediaStream) {
+      for (const track of this._mediaStream.getVideoTracks()) track.stop();
+    }
+    this.onPhase("camera_stopped");
   }
 
   async stop() {
@@ -221,6 +427,54 @@ export class BrowserNode {
         }),
       },
     ).catch((err) => this.onError(err));
+  }
+
+  _pushAudioChunk(float32) {
+    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+    const b64 = floatToPCM16Base64(float32);
+    this._send("audio_chunk", {
+      node_id: this.nodeId,
+      data_b64: b64,
+      chunk_index: this._audioChunkIndex++,
+      is_final: false,
+      encoding: "pcm16",
+      sample_rate: AUDIO_TARGET_SAMPLE_RATE,
+    });
+  }
+
+  _pushCameraFrame() {
+    if (!this._videoElement || typeof document === "undefined") return;
+    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+    const video = this._videoElement;
+    if (!video.videoWidth || !video.videoHeight) return;
+    const maxW = VIDEO_MAX_WIDTH;
+    const scale = Math.min(1, maxW / video.videoWidth);
+    const w = Math.round(video.videoWidth * scale);
+    const h = Math.round(video.videoHeight * scale);
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, w, h);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        // strip the `data:image/jpeg;base64,` prefix
+        const dataUrl = reader.result || "";
+        const b64 = typeof dataUrl === "string" ? dataUrl.split(",")[1] || "" : "";
+        if (!b64) return;
+        this._send("frame", {
+          node_id: this.nodeId,
+          data_b64: b64,
+          width: w,
+          height: h,
+          mime: "image/jpeg",
+        });
+      };
+      reader.readAsDataURL(blob);
+    }, "image/jpeg", VIDEO_JPEG_QUALITY);
   }
 
   _onFrame(event) {
