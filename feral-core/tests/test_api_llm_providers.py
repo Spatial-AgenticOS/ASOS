@@ -47,7 +47,17 @@ def test_list_providers_returns_all_builtin(client):
     assert r.status_code == 200
     body = r.json()
     ids = {p["id"] for p in body["providers"]}
-    assert {"openai", "anthropic", "ollama"} <= ids
+    # Every built-in descriptor must be exposed to the v2 UI — not a
+    # hardcoded subset. This protects against regressions where a
+    # provider is added to BUILT_IN_DESCRIPTORS but the UI silently
+    # ignores it (the whole reason Settings → Providers was skinny).
+    required = {
+        "openai", "anthropic", "gemini", "groq", "deepseek",
+        "openrouter", "together", "fireworks", "bedrock",
+        "ollama", "lmstudio",
+    }
+    missing = required - ids
+    assert not missing, f"catalog is missing providers: {missing}"
 
 
 def test_provider_descriptor_includes_alias_list(client):

@@ -165,116 +165,278 @@ function GeneralSection() {
 
 function ProvidersSection() {
   const [status, setStatus] = useState(null);
+  const [providers, setProviders] = useState([]);
   const [presets, setPresets] = useState([]);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [provider, setProvider] = useState('');
-  const [model, setModel] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [validationMsg, setValidationMsg] = useState(null);
+  const [selected, setSelected] = useState(null); // currently-edited provider card
 
   const refresh = useCallback(async () => {
     try {
-      const [s, p] = await Promise.all([apiJson('/api/llm/status'), apiJson('/api/llm/presets')]);
-      setStatus(s);
-      setProvider(s.provider || '');
-      setModel(s.model || '');
-      setPresets(p.presets || []);
-    } catch (e) { setError(e.message); }
+      const [s, providersResp, presetsResp] = await Promise.all([
+        apiJson('/api/llm/status').catch(() => null),
+        apiJson('/api/llm/providers').catch(() => ({ providers: [] })),
+        apiJson('/api/llm/presets').catch(() => ({ presets: [] })),
+      ]);
+      if (s) setStatus(s);
+      setProviders(providersResp.providers || providersResp || []);
+      setPresets(presetsResp.presets || []);
+      setError(null);
+    } catch (e) {
+      setError(e?.message || 'failed to load provider catalog');
+    }
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const validate = async () => {
-    if (!apiKey.trim()) return;
-    setBusy(true);
-    try {
-      const r = await apiFetch('/api/config/validate-key', {
-        method: 'POST',
-        body: JSON.stringify({ provider, api_key: apiKey }),
-      });
-      const body = await r.json();
-      setValidationMsg(body.valid || body.ok ? 'Key validated ✓' : (body.message || 'Invalid'));
-    } catch (e) {
-      setValidationMsg(e.message);
-    } finally { setBusy(false); }
-  };
-
-  const saveKeyAndSwitch = async () => {
-    setBusy(true);
-    try {
-      if (apiKey.trim()) {
-        await apiFetch('/api/config/credentials', {
-          method: 'POST',
-          body: JSON.stringify({ [`${provider.toUpperCase()}_API_KEY`]: apiKey }),
-        });
-      }
-      await apiFetch('/api/llm/switch', {
-        method: 'POST',
-        body: JSON.stringify({ provider, model, api_key: apiKey || undefined }),
-      });
-      setApiKey('');
-      setValidationMsg('Switched ✓');
-      await refresh();
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  };
-
   const applyPreset = async (preset) => {
-    setBusy(true);
-    try {
-      await apiFetch('/api/llm/presets/apply', { method: 'POST', body: JSON.stringify({ preset }) });
-      await refresh();
-    } finally { setBusy(false); }
+    await apiFetch('/api/llm/presets/apply', {
+      method: 'POST',
+      body: JSON.stringify({ preset }),
+    });
+    refresh();
   };
-
-  if (!status) return <EmptyState title={error || 'Loading provider status…'} />;
 
   return (
-    <div className="v2-setting-stack">
-      <Row label="Current provider" hint="Live inference backend">
-        <Status tone={status.available ? 'live' : 'warn'}>
-          {status.provider || 'none'}{status.available ? ' · ready' : ' · unavailable'}
-        </Status>
-      </Row>
-      <Row label="Provider">
-        <Select
-          value={provider}
-          onChange={setProvider}
-          options={[
-            { value: 'openai', label: 'OpenAI' },
-            { value: 'anthropic', label: 'Anthropic' },
-            { value: 'gemini', label: 'Gemini' },
-            { value: 'groq', label: 'Groq' },
-            { value: 'deepseek', label: 'DeepSeek' },
-            { value: 'ollama', label: 'Ollama (local)' },
-          ]}
-        />
-      </Row>
-      <Row label="Model">
-        <input className="v2-input" value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-4o-mini, claude-sonnet-4.5, …" />
-      </Row>
-      <Row label="API key (optional)">
-        <input className="v2-input" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Leave blank to keep existing" />
-      </Row>
-      <Row label="">
-        <button type="button" className="v2-btn" onClick={validate} disabled={busy || !apiKey.trim()}>Validate key</button>
-        <button type="button" className="v2-btn v2-btn--primary" onClick={saveKeyAndSwitch} disabled={busy || !provider}>
-          {busy ? 'Switching…' : 'Save + switch'}
-        </button>
-      </Row>
-      {validationMsg && <div className="v2-chip v2-chip--live">{validationMsg}</div>}
-      {presets.length > 0 && (
-        <Row label="Presets" hint="One-click provider + model">
-          <div className="v2-preset-chips">
-            {presets.map((p) => (
-              <button key={p.id || p.preset} type="button" className="v2-btn" onClick={() => applyPreset(p.id || p.preset)} disabled={busy}>
-                {p.label || p.id || p.preset}
-              </button>
-            ))}
+    <div className="v2-providers">
+      {error && <div className="v2-chip v2-chip--error">{error}</div>}
+
+      <div className="v2-providers-current">
+        <div>
+          <div className="v2-stat-label">Current provider</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+            <StatusDot tone={status?.available ? 'live' : 'warn'} pulse={!!status?.available} />
+            <strong>{status?.provider || 'none'}</strong>
+            <span className="v2-p v2-p--muted">{status?.model || ''}</span>
           </div>
-        </Row>
+          <div className="v2-p v2-p--muted v2-p--tiny">
+            {status?.available
+              ? 'Live inference backend — reconfigure via any card below.'
+              : 'No available provider. Configure one below.'}
+          </div>
+        </div>
+        <button type="button" className="v2-btn v2-btn--ghost" onClick={refresh}>Refresh</button>
+      </div>
+
+      {presets.length > 0 && (
+        <div className="v2-providers-presets">
+          <div className="v2-stat-label" style={{ marginRight: 6 }}>Presets</div>
+          {presets.map((p) => (
+            <button
+              key={p.id || p.preset}
+              type="button"
+              className="v2-btn"
+              onClick={() => applyPreset(p.id || p.preset)}
+            >
+              {p.label || p.id || p.preset}
+            </button>
+          ))}
+        </div>
       )}
+
+      <div className="v2-providers-grid">
+        {providers.map((p) => {
+          const pid = p.id || p.provider_id;
+          return (
+            <ProviderCard
+              key={pid}
+              provider={{ ...p, provider_id: pid }}
+              isCurrent={(status?.provider || '').toLowerCase() === (pid || '').toLowerCase()}
+              isEditing={selected === pid}
+              onEdit={() => setSelected(pid)}
+              onCancel={() => setSelected(null)}
+              onSaved={() => { setSelected(null); refresh(); }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ProviderCard({ provider, isCurrent, isEditing, onEdit, onCancel, onSaved }) {
+  const supportsLocal = !!provider.supports_local;
+  const requiresKey = !!provider.requires_api_key;
+  // `reachable` is null until the user probes; `configured` = has a key
+  // (or no-key-required). Show that cleanly in the dot + label.
+  const reachable = provider.reachable;
+  const configured = !!provider.configured;
+  const statusTone =
+    reachable === true ? 'live'
+      : reachable === false ? 'off'
+      : configured ? 'warn'
+      : requiresKey ? 'off'
+      : 'neutral';
+  const statusLabel =
+    reachable === true ? 'ready'
+      : reachable === false ? 'unreachable'
+      : configured ? 'configured'
+      : requiresKey ? 'needs key'
+      : 'unconfigured';
+
+  return (
+    <Glass level={0} radius="md" padding="sm" className={`v2-provider-card${isCurrent ? ' is-current' : ''}`}>
+      <div className="v2-provider-head">
+        <div>
+          <div className="v2-provider-name">{provider.display_name || provider.provider_id}</div>
+          <div className="v2-p v2-p--tiny v2-p--muted">
+            <code>{provider.provider_id}</code>
+            {supportsLocal && <> · local</>}
+            {!requiresKey && <> · no key required</>}
+            {isCurrent && <> · <span style={{ color: 'var(--v2-accent)' }}>current</span></>}
+          </div>
+        </div>
+        <div className="v2-provider-status">
+          <StatusDot tone={statusTone} />
+          <span className="v2-p v2-p--tiny">{statusLabel}</span>
+        </div>
+      </div>
+
+      {isEditing ? (
+        <ProviderForm provider={provider} onCancel={onCancel} onSaved={onSaved} />
+      ) : (
+        <div className="v2-provider-actions">
+          <button type="button" className="v2-btn v2-btn--primary" onClick={onEdit}>
+            {isCurrent ? 'Reconfigure' : 'Use this provider'}
+          </button>
+        </div>
+      )}
+    </Glass>
+  );
+}
+
+function ProviderForm({ provider, onCancel, onSaved }) {
+  const [models, setModels] = useState([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelError, setModelError] = useState(null);
+  const [selectedModel, setSelectedModel] = useState(provider.default_model || '');
+  const [apiKey, setApiKey] = useState('');
+  const [baseUrl, setBaseUrl] = useState(provider.default_base_url || '');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const loadModels = useCallback(async () => {
+    setLoadingModels(true);
+    setModelError(null);
+    try {
+      const d = await apiJson(`/api/llm/providers/${encodeURIComponent(provider.provider_id)}/models?live=true`);
+      const list = d.models || d || [];
+      setModels(list);
+      if (list.length > 0 && !selectedModel) {
+        setSelectedModel(list[0].id || list[0]);
+      }
+    } catch (e) {
+      setModelError(e?.message || 'failed to fetch models');
+    } finally {
+      setLoadingModels(false);
+    }
+  }, [provider.provider_id, selectedModel]);
+
+  useEffect(() => { loadModels(); }, [loadModels]);
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const r = await apiFetch('/api/llm/config', {
+        method: 'POST',
+        body: JSON.stringify({
+          provider: provider.provider_id,
+          model: selectedModel || provider.default_model || 'gpt-4o-mini',
+          api_key: apiKey || undefined,
+          base_url: baseUrl || undefined,
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok || body?.success === false) {
+        setErr(body?.detail || body?.error || `${r.status}`);
+        return;
+      }
+      const p = body.persisted || {};
+      const warn = p.warnings || [];
+      if (warn.length) {
+        setMsg(`Saved — warning: ${warn.join('; ')}`);
+      } else {
+        setMsg('Saved and switched ✓');
+      }
+      setTimeout(() => onSaved(), 600);
+    } catch (e) {
+      setErr(e?.message || 'failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="v2-provider-form">
+      {provider.requires_api_key && (
+        <label className="v2-identity-field">
+          <span className="v2-identity-field-label">{provider.credential_env_var || 'API key'}</span>
+          <input
+            className="v2-input"
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={provider.configured ? 'leave blank to keep existing key' : 'paste new key'}
+            autoComplete="off"
+          />
+        </label>
+      )}
+
+      {provider.supports_local && (
+        <label className="v2-identity-field">
+          <span className="v2-identity-field-label">Base URL</span>
+          <input
+            className="v2-input"
+            type="text"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder={provider.default_base_url || 'http://localhost:1234/v1'}
+          />
+        </label>
+      )}
+
+      <div className="v2-identity-field">
+        <span className="v2-identity-field-label">Model</span>
+        <div className="v2-provider-model-row">
+          <input
+            className="v2-input"
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            placeholder={provider.default_model || 'gpt-4o-mini'}
+            list={`models-${provider.provider_id}`}
+          />
+          <button type="button" className="v2-btn v2-btn--ghost" onClick={loadModels} disabled={loadingModels}>
+            {loadingModels ? 'Loading…' : 'Refresh models'}
+          </button>
+          <datalist id={`models-${provider.provider_id}`}>
+            {models.map((m, i) => {
+              const id = typeof m === 'string' ? m : (m.id || m.name || '');
+              return <option key={id || i} value={id}>{id}</option>;
+            })}
+          </datalist>
+        </div>
+        {loadingModels && <span className="v2-p v2-p--muted v2-p--tiny">Probing /models…</span>}
+        {!loadingModels && models.length > 0 && (
+          <span className="v2-p v2-p--muted v2-p--tiny">{models.length} model{models.length === 1 ? '' : 's'} available</span>
+        )}
+        {!loadingModels && models.length === 0 && !modelError && (
+          <span className="v2-p v2-p--muted v2-p--tiny">No models returned — type any model id above to use.</span>
+        )}
+        {modelError && (
+          <span className="v2-chip v2-chip--warn">{modelError}</span>
+        )}
+      </div>
+
+      <div className="v2-provider-actions" style={{ justifyContent: 'flex-end' }}>
+        <button type="button" className="v2-btn" onClick={onCancel} disabled={busy}>Cancel</button>
+        <button type="button" className="v2-btn v2-btn--primary" onClick={save} disabled={busy || !selectedModel}>
+          {busy ? 'Saving…' : 'Save & switch'}
+        </button>
+      </div>
+      {msg && <div className="v2-chip v2-chip--live">{msg}</div>}
+      {err && <div className="v2-chip v2-chip--error">{err}</div>}
     </div>
   );
 }

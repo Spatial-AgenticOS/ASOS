@@ -752,6 +752,69 @@
   .v2-chat-pane { top: auto; bottom: 120px; right: 12px; left: 12px; width: auto; }
 }
 
+/* Providers (Settings → Providers) */
+.v2-providers { display: flex; flex-direction: column; gap: 14px; }
+.v2-providers-current {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--v2-surface-0);
+  border: 1px solid var(--v2-hairline);
+  border-radius: var(--v2-radius-md);
+}
+.v2-providers-presets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.v2-providers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+.v2-provider-card { display: flex; flex-direction: column; gap: 10px; }
+.v2-provider-card.is-current { outline: 1px solid var(--v2-accent-ring); }
+.v2-provider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.v2-provider-name {
+  font-size: var(--v2-size-sm);
+  font-weight: 600;
+  color: var(--v2-text-primary);
+}
+.v2-provider-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--v2-text-tertiary);
+}
+.v2-provider-actions {
+  display: flex;
+  gap: 6px;
+}
+.v2-provider-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--v2-hairline);
+}
+.v2-provider-model-row {
+  display: flex;
+  gap: 6px;
+}
+.v2-provider-model-row > .v2-input {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Twin & Delegation */
 .v2-twin-section { display: flex; flex-direction: column; gap: 10px; }
 .v2-twin-domains { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
