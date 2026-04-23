@@ -9,7 +9,7 @@ lowering it requires a commit-message justification.
 | Surface        | Tool         | Floor             | Evidence                                    |
 |----------------|--------------|-------------------|---------------------------------------------|
 | `feral-core/`  | pytest-cov   | 50% lines         | `feral-core/pyproject.toml [tool.coverage]` |
-| `feral-client-v2/` | vitest v8 | 28/21/22/30 (stmts/branches/funcs/lines) | `feral-client-v2/vitest.config.js` |
+| `feral-client-v2/` | vitest v8 | 31/24/25/33 (stmts/branches/funcs/lines) | `feral-client-v2/vitest.config.js` |
 
 The 50% backend target reflects the 51.51% measured across 1875 tests on
 this commit — we set the gate just below so a small single-PR regression
@@ -24,7 +24,8 @@ gate.
 |-------------------|---------------|--------------------------|
 | **2026.4.27**     | 50%           | 24 / 17 / 18 / 26        |
 | **Stage 5.1**     | 50%           | 26 / 19 / 20 / 28        |
-| **Stage 5.2 (this commit)** | 50%  | 28 / 21 / 22 / 30        |
+| **Stage 5.2**     | 50%           | 28 / 21 / 22 / 30        |
+| **Stage 5.3 (this commit)** | 50%  | 31 / 24 / 25 / 33        |
 | +3 commits (Supervisor + Twin tests landing) | 55%           | 30 / 22 / 25 / 32        |
 | Stable ambient-OS 2026 Q2 | 65% | 45 / 35 / 40 / 45 |
 | Stable ambient-OS 2026 Q3 | 75% | 60 / 50 / 55 / 60 |

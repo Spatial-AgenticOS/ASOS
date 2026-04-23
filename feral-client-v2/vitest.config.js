@@ -26,14 +26,14 @@ export default defineConfig({
         'src/styles/**',
       ],
       thresholds: {
-        // Stage 5.2 (Settings sections): measured 28.98 / 21.02 /
-        // 23.17 / 30.9. Floor = measured − 1 per axis. Ratchet plan
-        // in docs/coverage.md. Never lower without a commit-message
-        // justification.
-        statements: 28,
-        branches: 21,
-        functions: 22,
-        lines: 30,
+        // Stage 5.3 (Geofences/Webhooks/Wiki/Identity/Skills/SetupWizard/
+        // Dashboard/Health/Memory): measured 32.02 / 24.4 / 25.85 /
+        // 34.09. Floor = measured − 1 per axis. Ratchet plan in
+        // docs/coverage.md.
+        statements: 31,
+        branches: 24,
+        functions: 25,
+        lines: 33,
       },
     },
   },
