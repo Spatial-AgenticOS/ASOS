@@ -1,6 +1,6 @@
 /**
  * SelfEditors — reusable IDENTITY / SOUL / MEMORY.md / ABOUT-ME editors.
- *
+m *
  * Originally lived inline in feral-client-v2/src/pages/Identity.jsx.
  * Factored out so both the standalone /identity route AND the new
  * Settings -> Self section can import the exact same editors without
