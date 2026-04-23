@@ -54,3 +54,11 @@ ONBOARDING.md
 STATE_OF_FERAL.md
 AGENT_PROMPT.md
 ROADMAP_NEXT.md
+
+# Internal-only: private demo scripts, walkthroughs, and the internal
+# analysis dossier. Everything under these paths stays on local disk.
+# Never pushed. CI's committed smoke tests (feral-core/tests/test_demo_*_smoke.py)
+# protect the underlying pipelines without exposing the demos themselves.
+private/
+docs/analysis.md
+docs/demos/
