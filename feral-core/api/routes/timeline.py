@@ -4,7 +4,7 @@ FERAL Timeline API — Chronological life view
 from __future__ import annotations
 
 import time
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from api.state import state
 
@@ -160,33 +160,94 @@ async def update_location(body: dict):
 
 @router.post("/api/geofences")
 async def add_geofence(body: dict):
-    """Add a geofence."""
+    """Add a geofence.
+
+    Accepts either the canonical ``{lat, lon, radius_m}`` body or the
+    v2 client shape ``{lat, lng, radius}`` — the two-letter field names
+    drifted between the UI and the engine and this route normalises both.
+    """
     if not state.location_engine:
-        return {"error": "Location engine not initialized"}
+        raise HTTPException(status_code=503, detail="Location engine not initialized")
     try:
+        name = body["name"]
+        lat = body["lat"]
+        lon = body.get("lon", body.get("lng"))
+        if lon is None:
+            raise HTTPException(status_code=400, detail="lat and lon (or lng) required")
+        radius_m = body.get("radius_m", body.get("radius", 200))
         state.location_engine.add_geofence(
-            name=body["name"],
-            lat=body["lat"],
-            lon=body["lon"],
-            radius_m=body.get("radius_m", 200),
+            name=name,
+            lat=lat,
+            lon=lon,
+            radius_m=radius_m,
             on_enter=body.get("on_enter", ""),
             on_exit=body.get("on_exit", ""),
         )
-        return {"success": True}
+        return {
+            "success": True,
+            "geofence": {
+                "id": name,
+                "name": name,
+                "lat": lat,
+                "lng": lon,
+                "lon": lon,
+                "radius": radius_m,
+                "radius_m": radius_m,
+            },
+        }
+    except HTTPException:
+        raise
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"missing field: {exc}")
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/api/geofences")
 async def list_geofences():
-    """List all geofences."""
+    """List all geofences. Returns both lat/lon and lat/lng for client parity."""
     if not state.location_engine:
-        return {"fences": []}
+        return {"geofences": [], "fences": []}
     try:
         fences = state.location_engine.list_geofences()
-        return {"fences": [{"name": f.name, "lat": f.center.lat, "lon": f.center.lon, "radius_m": f.radius_m} for f in fences]}
+        rows = [
+            {
+                "id": f.name,
+                "name": f.name,
+                "lat": f.center.lat,
+                "lng": f.center.lon,
+                "lon": f.center.lon,
+                "radius": f.radius_m,
+                "radius_m": f.radius_m,
+                "on_enter": getattr(f, "on_enter", "") or "",
+                "on_exit": getattr(f, "on_exit", "") or "",
+            }
+            for f in fences
+        ]
+        # Keep the legacy `fences` key so any old client (and the server-side
+        # snapshot at test_perception_deep.py) doesn't break.
+        return {"geofences": rows, "fences": rows}
     except Exception as e:
-        return {"fences": [], "error": str(e)}
+        return {"geofences": [], "fences": [], "error": str(e)}
+
+
+@router.delete("/api/geofences/{fence_id}")
+async def delete_geofence(fence_id: str):
+    """Delete a geofence by its id (aka its unique name).
+
+    The v2 Geofences page calls this with ``f.id`` — we route that through
+    ``LocationEngine.remove_geofence(name)`` which is the canonical
+    delete primitive.
+    """
+    if not state.location_engine:
+        raise HTTPException(status_code=503, detail="Location engine not initialized")
+    try:
+        removed = state.location_engine.remove_geofence(fence_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"geofence {fence_id!r} not found")
+    return {"success": True, "id": fence_id}
 
 
 @router.post("/api/push/register")

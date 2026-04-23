@@ -1,0 +1,192 @@
+"""Audit backend routes vs frontend callers.
+
+Scans every ``@router.(get|post|put|delete|patch)`` + ``@app.(get|post|…)``
+decorator in ``feral-core/api/**/*.py`` and collects each route's
+full path (including router prefixes).
+
+Then scans ``feral-client-v2/src/**/*.{js,jsx}`` + ``feral-client/src/**/*.{js,jsx}``
++ ``feral-extension/**/*.{js,html}`` for witnesses:
+  apiJson('/...')         apiFetch('/...')         fetch(`${API_BASE}/...`)
+  fetch('/api/...')       navigate('/...')
+
+Emits ``docs/route_audit.md`` with one row per route plus a
+``[UNREFERENCED]`` marker for routes with zero witnesses. WebSocket-only
+and webhook routes are flagged separately so we don't delete legit ones.
+
+Usage:
+    python scripts/audit_routes.py
+
+Run from the ASOS repo root.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+API_DIR = ROOT / "feral-core" / "api"
+CLIENT_DIRS = [
+    ROOT / "feral-client-v2" / "src",
+    ROOT / "feral-client" / "src",
+    ROOT / "feral-extension",
+]
+
+# Routes we expect to be hit via WebSockets, webhooks, or external clients
+# (CLI, iOS, Android, daemons). These are NEVER flagged as unreferenced.
+NON_UI_CATEGORIES: dict[str, str] = {
+    "/v1/node": "WebSocket daemon",
+    "/ws": "WebSocket session",
+    "/api/auth/local-key": "CLI auth",
+    "/api/boot-report": "Boot / health",
+    "/api/health": "Health probe",
+    "/health": "Health probe",
+    "/metrics": "Prometheus scrape",
+    "/docs": "FastAPI docs",
+    "/redoc": "FastAPI redoc",
+    "/openapi.json": "FastAPI schema",
+    "/api/channels/whatsapp/webhook": "Webhook",
+    "/api/webhooks/ingest": "Webhook",
+    "/internal/": "Internal (LLM tools only)",
+    "/api/mcp/": "MCP client",
+}
+
+ROUTE_DECOR = re.compile(
+    r"""
+    @(?P<scope>router|app)\.
+    (?P<verb>get|post|put|delete|patch)\s*\(
+    \s*["'](?P<path>[^"']+)["']
+    """,
+    re.VERBOSE,
+)
+
+PREFIX_DECL = re.compile(
+    r"""APIRouter\s*\(\s*[^)]*?prefix\s*=\s*["'](?P<prefix>[^"']+)["']""",
+    re.DOTALL,
+)
+
+WITNESS_PATTERNS = [
+    re.compile(r"""apiJson\s*\(\s*[`"']([^`"']+)[`"']"""),
+    re.compile(r"""apiFetch\s*\(\s*[`"']([^`"']+)[`"']"""),
+    re.compile(r"""fetch\s*\(\s*`\$\{API_BASE\}([^`]+)`"""),
+    re.compile(r"""fetch\s*\(\s*["']([^"']+)["']"""),
+]
+
+
+def find_routes() -> list[tuple[str, str, Path]]:
+    """Return [(verb, full_path, source_file), ...]."""
+    routes: list[tuple[str, str, Path]] = []
+    for py in API_DIR.rglob("*.py"):
+        text = py.read_text()
+        prefix_match = PREFIX_DECL.search(text)
+        prefix = prefix_match.group("prefix") if prefix_match else ""
+        for m in ROUTE_DECOR.finditer(text):
+            path = m.group("path")
+            verb = m.group("verb").upper()
+            scope = m.group("scope")
+            full = path if scope == "app" else prefix + path
+            routes.append((verb, full, py.relative_to(ROOT)))
+    return routes
+
+
+def find_witnesses() -> dict[str, set[Path]]:
+    """Return {normalised_path_regex: {source_files}}."""
+    witnesses: dict[str, set[Path]] = defaultdict(set)
+    for d in CLIENT_DIRS:
+        if not d.exists():
+            continue
+        for ext in ("*.js", "*.jsx", "*.ts", "*.tsx", "*.html"):
+            for path in d.rglob(ext):
+                # Skip node_modules + dist + tests output.
+                rel = path.relative_to(ROOT)
+                if any(p in rel.parts for p in ("node_modules", "dist", "__tests__", "coverage")):
+                    continue
+                try:
+                    text = path.read_text(errors="ignore")
+                except OSError:
+                    continue
+                for pat in WITNESS_PATTERNS:
+                    for m in pat.finditer(text):
+                        raw = m.group(1)
+                        # Strip query strings + hash fragments.
+                        clean = raw.split("?", 1)[0].split("#", 1)[0]
+                        # Strip trailing slashes except root.
+                        if len(clean) > 1:
+                            clean = clean.rstrip("/")
+                        witnesses[clean].add(rel)
+    return witnesses
+
+
+def route_matches_witness(full_route: str, witness: str) -> bool:
+    """Substitute path params with a placeholder and compare."""
+    pattern = re.sub(r"\{[^/}]+\}", "[^/]+", full_route)
+    pattern = "^" + pattern.rstrip("/") + "$"
+    # Also match without trailing slash variations.
+    w = witness.rstrip("/")
+    try:
+        return re.match(pattern, w) is not None
+    except re.error:
+        return False
+
+
+def categorize(full_route: str) -> str | None:
+    for prefix, note in NON_UI_CATEGORIES.items():
+        if full_route == prefix or full_route.startswith(prefix):
+            return note
+    return None
+
+
+def main() -> int:
+    routes = find_routes()
+    witnesses = find_witnesses()
+
+    rows: list[str] = []
+    rows.append("# Route audit")
+    rows.append("")
+    rows.append(f"_Generated by `scripts/audit_routes.py` — {len(routes)} routes, {sum(len(v) for v in witnesses.values())} witnesses._")
+    rows.append("")
+    rows.append("| Verb | Route | Category | Witnesses | Source |")
+    rows.append("|------|-------|----------|-----------|--------|")
+
+    unreferenced: list[tuple[str, str, Path]] = []
+    for verb, full, source in sorted(routes, key=lambda r: (r[1], r[0])):
+        category = categorize(full)
+        matching_witnesses = sorted(
+            {f for w, files in witnesses.items() if route_matches_witness(full, w) for f in files}
+        )
+        count = len(matching_witnesses)
+        if count == 0 and category is None:
+            unreferenced.append((verb, full, source))
+            marker = "**UNREFERENCED**"
+        elif count == 0 and category is not None:
+            marker = category
+        else:
+            marker = f"{count} site" + ("" if count == 1 else "s")
+        witness_line = ", ".join(f"`{w}`" for w in matching_witnesses[:3])
+        if len(matching_witnesses) > 3:
+            witness_line += f" (+{len(matching_witnesses) - 3} more)"
+        rows.append(
+            f"| {verb} | `{full}` | {category or '—'} | {marker} {witness_line} | `{source}` |"
+        )
+
+    rows.append("")
+    rows.append(f"## Unreferenced routes ({len(unreferenced)})")
+    rows.append("")
+    if not unreferenced:
+        rows.append("_None — every route has a witness or a non-UI category._")
+    else:
+        for verb, full, source in sorted(unreferenced, key=lambda r: r[1]):
+            rows.append(f"- `{verb} {full}` — {source}")
+
+    out = ROOT / "docs" / "route_audit.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(rows) + "\n")
+    print(f"Wrote {out.relative_to(ROOT)} ({len(routes)} routes, {len(unreferenced)} unreferenced)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

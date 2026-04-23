@@ -99,6 +99,41 @@ async def delete_tool(tool_id: str):
     return {"success": True, "deleted": tool_id}
 
 
+@router.post("/api/tool-genesis/reject")
+async def reject_proposal(body: dict):
+    """Reject a pending tool-genesis proposal.
+
+    The v2 Forge page tries ``/api/skills/reject`` first and falls back
+    to this endpoint — without it, rejection quietly no-ops. Accepts
+    either ``{tool_id}`` (canonical) or ``{id}`` / ``{draft_id}`` /
+    ``{proposal_id}`` for client parity.
+    """
+    engine = _engine_or_503()
+    body = body or {}
+    tool_id = (
+        body.get("tool_id")
+        or body.get("id")
+        or body.get("draft_id")
+        or body.get("proposal_id")
+    )
+    if not tool_id:
+        raise HTTPException(status_code=400, detail="tool_id required")
+    if not engine.reject(tool_id):
+        raise HTTPException(status_code=404, detail=f"No tool {tool_id}")
+    return {"success": True, "rejected": tool_id}
+
+
+@router.post("/api/tool-genesis/{tool_id}/reject")
+async def reject_proposal_path(tool_id: str):
+    """Reject a proposal by URL path — parity with the hint in
+    ``/api/jobs`` (`cancellable_via: POST /api/tool-genesis/<id>/reject`).
+    """
+    engine = _engine_or_503()
+    if not engine.reject(tool_id):
+        raise HTTPException(status_code=404, detail=f"No tool {tool_id}")
+    return {"success": True, "rejected": tool_id}
+
+
 @router.get("/api/tool-genesis/list")
 async def list_generated():
     if not state.tool_genesis:
