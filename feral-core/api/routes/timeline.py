@@ -144,15 +144,24 @@ async def health_summary():
 
 @router.post("/api/location/update")
 async def update_location(body: dict):
-    """Update user's location from phone bridge."""
+    """Update the user's location.
+
+    Source can be anything (``browser``, ``phone``, ``wristband`` …). We
+    no longer default to ``"phone"`` — honest source labels or
+    ``"unknown"`` when the client doesn't say.
+    """
     if not state.location_engine:
         return {"error": "Location engine not initialized"}
     lat = body.get("lat")
     lon = body.get("lon")
+    if lon is None:
+        lon = body.get("lng")
     if lat is None or lon is None:
-        return {"error": "lat and lon required"}
+        return {"error": "lat and lon (or lng) required"}
     try:
-        triggered = state.location_engine.update_location(lat, lon, source=body.get("source", "phone"))
+        triggered = state.location_engine.update_location(
+            lat, lon, source=body.get("source", "unknown"),
+        )
         return {"success": True, "triggered_fences": triggered}
     except Exception as e:
         return {"success": False, "error": str(e)}

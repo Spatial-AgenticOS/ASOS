@@ -792,9 +792,13 @@ class BrainState:
                         brain.memory.working_replace(channel_session_id, list(history))
 
             if brain.session_handoff:
+                # Messaging bridges are channels, not phones. Labelling them
+                # "phone" made every Telegram/Slack/Discord session show up
+                # as a permanently-connected phone even when the user never
+                # paired one. Honest label = "channel" (see NODE_TYPES).
                 brain.session_handoff.register_device(
                     channel_session_id,
-                    "phone",
+                    "channel",
                     node_id=f"{channel_msg.channel_type}_{channel_msg.user_id}",
                 )
 

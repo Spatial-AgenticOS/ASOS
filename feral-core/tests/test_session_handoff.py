@@ -39,7 +39,12 @@ def test_node_types_tuple():
     assert "desktop" in NODE_TYPES
     assert "wristband" in NODE_TYPES
     assert "glasses" in NODE_TYPES
-    assert len(NODE_TYPES) == 4
+    # Added as part of the "no-phone-placeholder" work so Telegram /
+    # Slack / Discord sessions register honestly as "channel" and
+    # upcoming browser-Node attachments use "browser_node".
+    assert "channel" in NODE_TYPES
+    assert "browser_node" in NODE_TYPES
+    assert len(NODE_TYPES) == 6
 
 
 # ── SessionHandoffManager — initialization ─────────────────────────────────

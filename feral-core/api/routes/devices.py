@@ -40,8 +40,12 @@ def _infer_node_type(node_id: str, ws) -> str:
         return "wearable"
     if "browser" in low and "camera" in low:
         return "browser_camera"
-    if "phone" in low or "pixel" in low or "iphone" in low:
-        return "phone"
+    if "browser" in low:
+        return "browser_node"
+    # "phone" label is only reserved for daemons that explicitly declared
+    # it at register time (handled above via ws._feral_node_type). A
+    # substring heuristic was mislabelling random node_ids + making the UI
+    # show a phone that didn't exist.
     if "robot" in low:
         return "robot"
     return "unknown"
@@ -245,8 +249,14 @@ async def pair_device(request: Request):
 
 
 @router.get("/api/devices/pair/qr")
-async def pair_device_qr(name: str = "phone"):
-    """Generate a QR code PNG containing pairing info for a new device."""
+async def pair_device_qr(name: str = "unnamed"):
+    """Generate a QR code PNG containing pairing info for a new device.
+
+    ``name`` is a label the user gives the device they're about to pair —
+    it is NOT an implicit device type. Default changed from "phone" to
+    "unnamed" so the brain no longer pretends every QR issued corresponds
+    to a phone.
+    """
     store = state.device_pairing_store
     if not store:
         return {"error": "Pairing store not initialized"}

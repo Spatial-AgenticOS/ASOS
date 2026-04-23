@@ -110,7 +110,7 @@ class LocationEngine:
         return [self._load_fence(row) for row in rows]
 
     async def update_location(self, lat: float, lon: float,
-                              source: str = "phone") -> list[dict[str, Any]]:
+                              source: str = "unknown") -> list[dict[str, Any]]:
         """Update current location, check geofences, fire callbacks.
 
         Returns a list of triggered fence events.

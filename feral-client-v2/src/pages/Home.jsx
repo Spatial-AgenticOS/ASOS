@@ -266,9 +266,9 @@ export default function Home() {
           <div className="v2-dash-cta-body">
             <Plug size={18} aria-hidden="true" />
             <div>
-              <div className="v2-dash-cta-title">Connect a device</div>
+              <div className="v2-dash-cta-title">No devices connected</div>
               <div className="v2-dash-cta-hint">
-                Pair your phone, wristband, smart glasses, or any HUP node.
+                Pair a phone browser, wristband, smart glasses, laptop bridge, or any HUP node. FERAL starts reading their sensors the moment they attach.
               </div>
             </div>
             <Link to="/devices" className="v2-btn v2-btn--primary">Pair</Link>

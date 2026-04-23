@@ -19,7 +19,7 @@ from typing import Any, Callable, Awaitable, Optional
 
 logger = logging.getLogger("feral.agents.session_handoff")
 
-NODE_TYPES = ("phone", "desktop", "wristband", "glasses")
+NODE_TYPES = ("phone", "desktop", "wristband", "glasses", "channel", "browser_node")
 DEFAULT_HISTORY_DEPTH = 20
 
 
