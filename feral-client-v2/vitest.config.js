@@ -26,14 +26,14 @@ export default defineConfig({
         'src/styles/**',
       ],
       thresholds: {
-        // Stage 5.3 (Geofences/Webhooks/Wiki/Identity/Skills/SetupWizard/
-        // Dashboard/Health/Memory): measured 32.02 / 24.4 / 25.85 /
-        // 34.09. Floor = measured − 1 per axis. Ratchet plan in
-        // docs/coverage.md.
-        statements: 31,
-        branches: 24,
-        functions: 25,
-        lines: 33,
+        // Stage 5.4 (Modal/CodeEditor/DeviceQRCode/LiveOpsStream +
+        // tab_pages + chat_devices): measured 34.53 / 27.14 / 28.52 /
+        // 36.68. Floor = measured − 1 per axis. Ratchet plan in
+        // docs/coverage.md. Target for follow-up: real 50% branches.
+        statements: 33,
+        branches: 26,
+        functions: 27,
+        lines: 35,
       },
     },
   },

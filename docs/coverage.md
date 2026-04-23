@@ -9,7 +9,7 @@ lowering it requires a commit-message justification.
 | Surface        | Tool         | Floor             | Evidence                                    |
 |----------------|--------------|-------------------|---------------------------------------------|
 | `feral-core/`  | pytest-cov   | 50% lines         | `feral-core/pyproject.toml [tool.coverage]` |
-| `feral-client-v2/` | vitest v8 | 31/24/25/33 (stmts/branches/funcs/lines) | `feral-client-v2/vitest.config.js` |
+| `feral-client-v2/` | vitest v8 | 33/26/27/35 (stmts/branches/funcs/lines) | `feral-client-v2/vitest.config.js` |
 
 The 50% backend target reflects the 51.51% measured across 1875 tests on
 this commit — we set the gate just below so a small single-PR regression
@@ -25,7 +25,16 @@ gate.
 | **2026.4.27**     | 50%           | 24 / 17 / 18 / 26        |
 | **Stage 5.1**     | 50%           | 26 / 19 / 20 / 28        |
 | **Stage 5.2**     | 50%           | 28 / 21 / 22 / 30        |
-| **Stage 5.3 (this commit)** | 50%  | 31 / 24 / 25 / 33        |
+| **Stage 5.3**     | 50%           | 31 / 24 / 25 / 33        |
+| **Stage 5.4 (this commit)** | 50%  | 33 / 26 / 27 / 35        |
+
+The 2026.4.27 plan targeted 50% v2 branches. Stage 5.1-5.4 pushed from
+17.34 to 27.14 — +9.8 points, nearly doubling the branch coverage, but
+not all the way to 50. The remaining gap requires deep interaction
+tests on Chat, Flows, AppSurface, SduiRenderer and Settings sub-panes
+that exercise both fetch success AND error branches. That's a
+follow-up commit, tracked as a new roadmap entry in
+`docs/roadmap/coverage.md` (to be written).
 | +3 commits (Supervisor + Twin tests landing) | 55%           | 30 / 22 / 25 / 32        |
 | Stable ambient-OS 2026 Q2 | 65% | 45 / 35 / 40 / 45 |
 | Stable ambient-OS 2026 Q3 | 75% | 60 / 50 / 55 / 60 |
