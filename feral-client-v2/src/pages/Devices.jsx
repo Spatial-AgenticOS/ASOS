@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Plus, RefreshCw, Zap, Radio, Wifi } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Plus, RefreshCw, Zap, Radio, Wifi, Trash2, Sparkles } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import Modal from '../ui/Modal';
@@ -8,6 +8,24 @@ import EmptyState from '../ui/EmptyState';
 import PairDeviceModal from '../components/PairDeviceModal';
 import PerceptionShare from '../components/PerceptionShare';
 import { apiJson, apiFetch } from '../lib/api';
+
+// Labels we refuse to render verbatim — they are placeholders from
+// before commit 5 renamed the pair-QR default. Replaced by a
+// kind + short-id composite.
+const PLACEHOLDER_NAMES = new Set([
+  'phone', 'unnamed', 'browser_camera_share', 'device', '',
+]);
+
+function labelFor(row) {
+  const raw = (row?.name || '').trim();
+  if (raw && !PLACEHOLDER_NAMES.has(raw.toLowerCase())) return raw;
+  const kind = row?.kind || row?.type;
+  const shortId = (row?.device_id || row?.id || '').slice(0, 8);
+  if (kind && shortId) return `${kind} · ${shortId}`;
+  if (kind) return kind;
+  if (shortId) return shortId;
+  return 'unnamed pairing';
+}
 
 /**
  * Devices — live + paired + HUP mesh. Click a device for detail +
@@ -123,29 +141,12 @@ export default function Devices() {
       )}
 
       {paired.length > 0 && (
-        <Pane title={`Paired (${paired.length})`}>
-          <p className="v2-p v2-p--muted">
-            Historical pairings — tokens issued via pair flow. A device can be paired but not currently connected.
-          </p>
-          <div className="v2-device-grid">
-            {paired.map((d, i) => (
-              <Glass key={d.device_id || d.id || i} level={0} radius="md" padding="md" className="v2-device-card" onClick={() => setSelected({ ...d, _source: 'paired' })} role="button" tabIndex={0}>
-                <header className="v2-device-head">
-                  <StatusDot tone={d.connected === false ? 'off' : 'neutral'} pulse={false} />
-                  <h3 className="v2-device-name">{d.name || d.device_id || d.id || 'Device'}</h3>
-                </header>
-                <div className="v2-device-meta">{d.type || d.kind || '—'}</div>
-                {d.capabilities && (
-                  <div className="v2-device-caps">
-                    {(Array.isArray(d.capabilities) ? d.capabilities : Object.keys(d.capabilities || {})).slice(0, 5).map((c, ci) => (
-                      <span key={ci} className="v2-chip">{String(c)}</span>
-                    ))}
-                  </div>
-                )}
-              </Glass>
-            ))}
-          </div>
-        </Pane>
+        <PairedPane
+          paired={paired}
+          onSelect={(d) => setSelected({ ...d, _source: 'paired' })}
+          onForget={forget}
+          onRefresh={refresh}
+        />
       )}
 
       {mesh.length > 0 && (
@@ -177,6 +178,110 @@ export default function Devices() {
       <PairDeviceModal open={showPair} onClose={() => setShowPair(false)} onPaired={() => { setShowPair(false); refresh(); }} />
       {selected && <DeviceDetailModal device={selected} onClose={() => setSelected(null)} onForget={forget} />}
     </div>
+  );
+}
+
+function PairedPane({ paired, onSelect, onForget, onRefresh }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const unclaimed = useMemo(
+    () => paired.filter((d) => !d.claimed_at && !d.last_seen),
+    [paired],
+  );
+
+  const clearUnclaimed = async () => {
+    if (unclaimed.length === 0) return;
+    const msg = unclaimed.length === 1
+      ? 'Clear 1 unclaimed pairing?'
+      : `Clear ${unclaimed.length} unclaimed pairings?`;
+    if (!window.confirm(msg)) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await apiFetch('/api/devices/pair/prune', {
+        method: 'POST',
+        body: JSON.stringify({ older_than_seconds: 0 }),
+      });
+      if (!r.ok) {
+        setErr(`${r.status}`);
+      }
+      onRefresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Pane
+      title={`Paired (${paired.length})`}
+      actions={(
+        <button
+          type="button"
+          className="v2-btn v2-btn--ghost"
+          onClick={clearUnclaimed}
+          disabled={busy || unclaimed.length === 0}
+          title="Revoke every pairing token that was never claimed by a live device"
+        >
+          <Sparkles size={13} /> Clear unclaimed{unclaimed.length ? ` (${unclaimed.length})` : ''}
+        </button>
+      )}
+    >
+      <p className="v2-p v2-p--muted">
+        Historical pairings — tokens issued via pair flow. A device can be paired but not
+        currently connected. Rows marked "unclaimed" never completed a
+        <code style={{ margin: '0 4px' }}>/pair/complete</code> handshake and are safe
+        to prune.
+      </p>
+      {err && <div className="v2-chip v2-chip--error">{err}</div>}
+      <div className="v2-device-grid">
+        {paired.map((d, i) => {
+          const claimed = !!(d.claimed_at || d.last_seen);
+          return (
+            <Glass
+              key={d.device_id || d.id || i}
+              level={0}
+              radius="md"
+              padding="md"
+              className="v2-device-card"
+            >
+              <header
+                className="v2-device-head"
+                onClick={() => onSelect(d)}
+                role="button"
+                tabIndex={0}
+                style={{ cursor: 'pointer' }}
+              >
+                <StatusDot tone={claimed ? 'neutral' : 'off'} pulse={false} />
+                <h3 className="v2-device-name">{labelFor(d)}</h3>
+              </header>
+              <div className="v2-device-meta">
+                {(d.type || d.kind) || '—'}
+                {!claimed && <> · <span className="v2-chip v2-chip--warn">unclaimed</span></>}
+              </div>
+              {d.capabilities && (
+                <div className="v2-device-caps">
+                  {(Array.isArray(d.capabilities) ? d.capabilities : Object.keys(d.capabilities || {})).slice(0, 5).map((c, ci) => (
+                    <span key={ci} className="v2-chip">{String(c)}</span>
+                  ))}
+                </div>
+              )}
+              <div className="v2-forge-actions" style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  className="v2-btn v2-btn--ghost"
+                  onClick={(e) => { e.stopPropagation(); onForget(d.device_id || d.id); }}
+                  aria-label="Revoke this pairing"
+                  title="Delete this pairing token"
+                >
+                  <Trash2 size={12} /> Revoke
+                </button>
+              </div>
+            </Glass>
+          );
+        })}
+      </div>
+    </Pane>
   );
 }
 

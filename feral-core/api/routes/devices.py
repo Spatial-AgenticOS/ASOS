@@ -376,6 +376,27 @@ async def pair_device_url(request: Request, name: str = "unnamed"):
     return _pair_payload(result, mode="web", request_origin=origin)
 
 
+@router.post("/api/devices/pair/prune")
+async def prune_unclaimed_pairings(body: dict = None):
+    """Bulk-revoke pairing tokens that were issued but never attached.
+
+    Body shape::
+        { "older_than_seconds": 1800 }  # default: 30 minutes
+
+    A token becomes "claimed" only when a daemon / browser-node
+    connects to /v1/node with it AND `/api/devices/pair/complete` is
+    hit. The v2 Devices page calls this on the "Clear all unclaimed"
+    button so legacy rows named ``phone`` / ``unnamed`` /
+    ``browser_camera_share`` can be scrubbed in one click.
+    """
+    store = state.device_pairing_store
+    if not store:
+        raise HTTPException(status_code=503, detail="Pairing store not initialized")
+    older = float((body or {}).get("older_than_seconds", 1800))
+    result = store.revoke_unclaimed(older_than_seconds=older)
+    return {"success": True, **result}
+
+
 @router.post("/api/devices/pair/complete")
 async def pair_device_complete(body: dict):
     """Mark a pairing token as claimed by the device that just attached.

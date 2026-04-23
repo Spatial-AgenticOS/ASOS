@@ -928,7 +928,7 @@ def _open_browser_setup() -> None:
         print(f"  Paste this into your browser instead: {url}")
 
 
-def cmd_pair(name: str, list_devices: bool, revoke: str):
+def cmd_pair(name: str, list_devices: bool, revoke: str, prune: int = -1):
     """Manage per-node device pairing."""
     from security.device_pairing import DevicePairingStore
 
@@ -954,6 +954,13 @@ def cmd_pair(name: str, list_devices: bool, revoke: str):
             print(f"  Revoked device {revoke}")
         else:
             print(f"  Device {revoke} not found.")
+        return
+
+    if prune >= 0:
+        result = store.revoke_unclaimed(older_than_seconds=float(prune))
+        print(f"  Pruned {result['pruned']} unclaimed pairings (kept {result['kept']}).")
+        for row in result["rows"]:
+            print(f"    - {row}")
         return
 
     if not name:
@@ -1194,6 +1201,13 @@ def main():
     pair_p.add_argument("--name", default="", help="Friendly name for the device")
     pair_p.add_argument("--list", action="store_true", dest="list_devices", help="List paired devices")
     pair_p.add_argument("--revoke", default="", help="Revoke a device by ID")
+    pair_p.add_argument(
+        "--prune",
+        type=int,
+        default=-1,
+        metavar="SECONDS",
+        help="Bulk-revoke unclaimed pair tokens older than N seconds (0 = all)",
+    )
 
     # feral wake-test
     sub.add_parser("wake-test", help="Test wake word detection from your microphone")
@@ -1312,6 +1326,7 @@ def main():
             name=getattr(args, "name", ""),
             list_devices=getattr(args, "list_devices", False),
             revoke=getattr(args, "revoke", ""),
+            prune=getattr(args, "prune", -1),
         )
     elif args.subcommand == "wake-test":
         cmd_wake_test()

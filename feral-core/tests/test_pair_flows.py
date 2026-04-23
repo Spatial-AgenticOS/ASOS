@@ -148,6 +148,47 @@ def test_pair_complete_missing_token(client):
 # ── paired list exposes typed metadata ──────────────────────────────
 
 
+def test_prune_unclaimed_only(client):
+    c, store = client
+    # Row 1: unclaimed (will be pruned)
+    c.post("/api/devices/pair", json={"kind": "browser", "name": "abandoned"})
+    # Row 2: unclaimed but young — we pass older_than_seconds=0 so all
+    # unclaimed are eligible.
+    c.post("/api/devices/pair", json={"kind": "name", "name": "old"})
+    # Row 3: claimed via /api/devices/pair/complete
+    issued = c.get("/api/devices/pair/url?name=keeper").json()
+    c.post("/api/devices/pair/complete", json={"token": issued["token"]})
+
+    r = c.post("/api/devices/pair/prune", json={"older_than_seconds": 0})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert body["pruned"] == 2
+    assert body["kept"] == 1
+
+    remaining = store.list_devices()
+    assert len(remaining) == 1
+    assert remaining[0]["name"] == "keeper"
+    assert remaining[0]["claimed_at"] is not None
+
+
+def test_prune_default_threshold_keeps_recent_rows(client):
+    c, _store = client
+    # Fresh unclaimed row — default prune threshold is 30 min so it stays.
+    c.post("/api/devices/pair", json={"kind": "name", "name": "fresh"})
+    r = c.post("/api/devices/pair/prune", json={})
+    assert r.status_code == 200
+    assert r.json()["pruned"] == 0
+    assert r.json()["kept"] == 1
+
+
+def test_prune_empty_store_is_noop(client):
+    c, _store = client
+    r = c.post("/api/devices/pair/prune", json={"older_than_seconds": 0})
+    assert r.status_code == 200
+    assert r.json() == {"success": True, "pruned": 0, "kept": 0, "rows": []}
+
+
 def test_list_paired_includes_kind_and_capabilities(client):
     c, _store = client
     c.post("/api/devices/pair", json={

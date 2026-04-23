@@ -233,6 +233,48 @@ class DevicePairingStore:
             logger.info("Revoked device %s", device_id)
         return deleted
 
+    def revoke_unclaimed(self, older_than_seconds: float = 0.0) -> dict:
+        """Revoke every pairing token that was issued but never attached.
+
+        A "claim" happens when a daemon / browser-node actually connects
+        to /v1/node with the token AND ``/api/devices/pair/complete`` marks
+        ``claimed_at``. Tokens older than ``older_than_seconds`` that are
+        still unclaimed are bulk-deleted.
+
+        Returns ``{pruned: int, kept: int, rows: list[device_id]}``.
+        """
+        cutoff = time.time() - max(0.0, older_than_seconds)
+        with self._lock:
+            conn = self._conn()
+            try:
+                to_prune = [
+                    r["device_id"]
+                    for r in conn.execute(
+                        """SELECT device_id FROM paired_devices
+                           WHERE claimed_at IS NULL
+                             AND paired_at < ?""",
+                        (cutoff,),
+                    ).fetchall()
+                ]
+                kept = conn.execute(
+                    "SELECT COUNT(*) FROM paired_devices",
+                ).fetchone()[0] - len(to_prune)
+                if to_prune:
+                    placeholders = ",".join("?" * len(to_prune))
+                    conn.execute(
+                        f"DELETE FROM paired_devices WHERE device_id IN ({placeholders})",
+                        to_prune,
+                    )
+                    conn.commit()
+            finally:
+                conn.close()
+        if to_prune:
+            logger.info(
+                "Pruned %d unclaimed pairing token(s) older than %ss",
+                len(to_prune), older_than_seconds,
+            )
+        return {"pruned": len(to_prune), "kept": kept, "rows": to_prune}
+
 
 _store: Optional[DevicePairingStore] = None
 
