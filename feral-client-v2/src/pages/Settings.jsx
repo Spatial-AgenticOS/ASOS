@@ -17,7 +17,7 @@ import { API_BASE } from '../lib/config';
 
 const SECTIONS = [
   'Self', 'General', 'Providers', 'Memory', 'Channels', 'Autonomy', 'Voice',
-  'Security', 'Integrations', 'Sync', 'Handoff', 'Push', 'MCP',
+  'Twin', 'Security', 'Integrations', 'Sync', 'Handoff', 'Push', 'MCP',
 ];
 
 export default function Settings() {
@@ -56,6 +56,7 @@ export default function Settings() {
         {section === 'Handoff' && <HandoffSection />}
         {section === 'Push' && <PushSection />}
         {section === 'MCP' && <McpSection />}
+        {section === 'Twin' && <TwinSection />}
       </Pane>
     </div>
   );
@@ -1084,6 +1085,172 @@ function McpSection() {
       )}
 
       {msg && <div className="v2-chip v2-chip--live">{msg}</div>}
+    </div>
+  );
+}
+
+
+// ── Twin & Delegation ─────────────────────────────────────────
+
+const TWIN_DOMAINS = [
+  { id: 'respond_imessage', label: 'Respond to iMessage' },
+  { id: 'draft_email', label: 'Draft email' },
+  { id: 'reply_slack', label: 'Reply on Slack' },
+  { id: 'reply_telegram', label: 'Reply on Telegram' },
+  { id: 'reply_whatsapp', label: 'Reply on WhatsApp' },
+  { id: 'schedule_meeting', label: 'Schedule meetings' },
+  { id: 'buy_groceries', label: 'Buy groceries' },
+  { id: 'summarise_reading', label: 'Summarise readings' },
+  { id: 'post_journal', label: 'Post to journal' },
+];
+
+function TwinSection() {
+  const [policies, setPolicies] = useState({});
+  const [pending, setPending] = useState([]);
+  const [paused, setPaused] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const pols = await apiJson('/api/twin/policies').catch(() => ({ policies: [] }));
+      const map = {};
+      for (const p of (pols.policies || [])) map[p.domain] = p;
+      setPolicies(map);
+      const approvals = await apiJson('/api/twin/approvals?status=pending').catch(() => ({ approvals: [] }));
+      setPending(approvals.approvals || []);
+      const stats = await apiJson('/api/supervisor/stats').catch(() => null);
+      if (stats) setPaused(!!stats.paused);
+    } catch (e) {
+      setErr(e?.message || 'failed to load twin state');
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const upsert = async (domain, patch) => {
+    const current = policies[domain] || {
+      domain,
+      mode: 'draft_only',
+      time_windows: [],
+      max_per_day: 10,
+      requires_user_online: false,
+    };
+    const body = { ...current, ...patch, domain };
+    await apiFetch('/api/twin/policies', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    refresh();
+  };
+
+  const revoke = async (domain) => {
+    await apiFetch(`/api/twin/policies/${encodeURIComponent(domain)}`, { method: 'DELETE' });
+    refresh();
+  };
+
+  const resolveApproval = async (id, verdict) => {
+    await apiFetch(`/api/twin/approvals/${encodeURIComponent(id)}/${verdict}`, { method: 'POST' });
+    refresh();
+  };
+
+  const togglePause = async () => {
+    await apiFetch('/api/supervisor/pause', {
+      method: 'POST',
+      body: JSON.stringify({ paused: !paused }),
+    });
+    refresh();
+  };
+
+  return (
+    <div className="v2-twin-section">
+      <p className="v2-p v2-p--muted">
+        Let the digital twin act for you — one toggle per domain. Draft-only keeps
+        every action in the approval queue below; auto-send fires immediately
+        within the window + daily cap. The big red button pauses every twin call
+        and every orchestrator dispatch at once.
+      </p>
+
+      <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button
+          type="button"
+          className={`v2-btn ${paused ? 'v2-btn--primary' : ''}`}
+          onClick={togglePause}
+        >
+          {paused ? 'Resume all actions' : 'Pause all actions'}
+        </button>
+        <span className="v2-p v2-p--muted v2-p--tiny">
+          Kill switch — routes through <code>/api/supervisor/pause</code>.
+        </span>
+      </div>
+
+      {err && <div className="v2-chip v2-chip--error" style={{ marginTop: 8 }}>{err}</div>}
+
+      <div className="v2-twin-domains">
+        {TWIN_DOMAINS.map(({ id, label }) => {
+          const p = policies[id];
+          const mode = p?.mode || 'off';
+          const windows = (p?.time_windows || []).join(', ');
+          const cap = p?.max_per_day ?? 10;
+          return (
+            <Glass key={id} level={0} radius="md" padding="sm" className="v2-twin-domain">
+              <div className="v2-twin-domain-head">
+                <div>
+                  <div className="v2-twin-domain-label">{label}</div>
+                  <div className="v2-p v2-p--tiny v2-p--muted">
+                    <code>{id}</code> · {mode === 'off' ? 'not configured' : `${mode} · cap ${cap}/day`}{windows ? ` · ${windows}` : ''}
+                  </div>
+                </div>
+                <div className="v2-twin-domain-actions">
+                  <button type="button" className={`v2-btn ${mode === 'draft_only' ? 'v2-btn--primary' : ''}`} onClick={() => upsert(id, { mode: 'draft_only' })} disabled={busy}>Draft</button>
+                  <button type="button" className={`v2-btn ${mode === 'auto_send' ? 'v2-btn--primary' : ''}`} onClick={() => upsert(id, { mode: 'auto_send' })} disabled={busy}>Auto</button>
+                  <button type="button" className={`v2-btn ${mode === 'disabled' ? 'v2-btn--primary' : ''}`} onClick={() => upsert(id, { mode: 'disabled' })} disabled={busy}>Off</button>
+                  {p && <button type="button" className="v2-btn v2-btn--ghost" onClick={() => revoke(id)} disabled={busy}>Clear</button>}
+                </div>
+              </div>
+            </Glass>
+          );
+        })}
+      </div>
+
+      <div style={{ marginTop: 18 }}>
+        <h3 style={{ margin: 0, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--v2-text-secondary)' }}>
+          Pending approvals
+        </h3>
+        {pending.length === 0 ? (
+          <p className="v2-p v2-p--muted" style={{ marginTop: 6 }}>Queue is empty.</p>
+        ) : (
+          <ul className="v2-twin-approvals">
+            {pending.map((row) => (
+              <li key={row.approval_id}>
+                <Glass level={0} radius="md" padding="sm">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontWeight: 600 }}>{row.domain} · {row.action}</div>
+                      <div className="v2-p v2-p--tiny v2-p--muted">
+                        queued {new Date((row.created_at || 0) * 1000).toLocaleString()}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button type="button" className="v2-btn v2-btn--primary" onClick={() => resolveApproval(row.approval_id, 'approve')}>Approve</button>
+                      <button type="button" className="v2-btn" onClick={() => resolveApproval(row.approval_id, 'reject')}>Reject</button>
+                    </div>
+                  </div>
+                  {row.context && Object.keys(row.context).length > 0 && (
+                    <pre className="v2-publish-error" style={{ color: 'var(--v2-text-secondary)' }}>
+                      {JSON.stringify(row.context, null, 2)}
+                    </pre>
+                  )}
+                </Glass>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }

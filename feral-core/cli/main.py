@@ -92,6 +92,50 @@ def _http_get(path: str) -> dict:
         return {"error": str(e)}
 
 
+def _http_post(path: str, payload: dict) -> dict:
+    """Synchronous HTTP POST — same URL base as _http_get."""
+    if httpx:
+        try:
+            r = httpx.post(f"{HTTP_BASE}{path}", json=payload, timeout=10)
+            try:
+                return r.json()
+            except Exception:
+                return {"error": f"non-json {r.status_code}", "text": r.text}
+        except Exception as e:
+            return {"error": str(e)}
+    try:
+        import urllib.request
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{HTTP_BASE}{path}", data=data, method="POST",
+            headers={"content-type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _http_delete(path: str) -> dict:
+    """Synchronous HTTP DELETE."""
+    if httpx:
+        try:
+            r = httpx.delete(f"{HTTP_BASE}{path}", timeout=10)
+            try:
+                return r.json()
+            except Exception:
+                return {"error": f"non-json {r.status_code}", "text": r.text}
+        except Exception as e:
+            return {"error": str(e)}
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"{HTTP_BASE}{path}", method="DELETE")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def _installed_pkg_info() -> tuple[str, str]:
     """Return installed package version and location."""
     try:
@@ -1200,6 +1244,23 @@ def main():
     sub.add_parser("install-service", help="Install FERAL Brain as a system daemon (launchd/systemd)")
     sub.add_parser("uninstall-service", help="Remove the FERAL Brain system daemon")
 
+    # feral twin — manage digital-twin policies + approvals
+    twin_p = sub.add_parser("twin", help="Manage the digital twin's per-domain policies + approvals")
+    twin_sub = twin_p.add_subparsers(dest="action")
+    twin_grant = twin_sub.add_parser("grant", help="Grant / update a twin domain policy")
+    twin_grant.add_argument("domain", help="respond_imessage / draft_email / …")
+    twin_grant.add_argument("--draft-only", dest="twin_mode_draft", action="store_true")
+    twin_grant.add_argument("--auto-send", dest="twin_mode_auto", action="store_true")
+    twin_grant.add_argument("--disabled", dest="twin_mode_disabled", action="store_true")
+    twin_grant.add_argument("--window", dest="twin_windows", action="append", default=[],
+                            help="HH:MM-HH:MM (repeatable)")
+    twin_grant.add_argument("--max-per-day", type=int, default=10)
+    twin_grant.add_argument("--requires-user-online", action="store_true")
+    twin_sub.add_parser("list", help="List every twin policy on this brain")
+    twin_revoke = twin_sub.add_parser("revoke", help="Remove a twin policy")
+    twin_revoke.add_argument("domain")
+    twin_sub.add_parser("pending", help="List pending twin-approval queue rows")
+
     # feral bridge install — wraps scripts/install-phone-bridge.sh
     bridge_p = sub.add_parser("bridge", help="Install the FERAL phone-bridge daemon on this host")
     bridge_sub = bridge_p.add_subparsers(dest="action")
@@ -1289,6 +1350,9 @@ def main():
     elif args.subcommand == "bridge":
         from cli.bridge_commands import cmd_bridge
         cmd_bridge(args)
+    elif args.subcommand == "twin":
+        from cli.twin_commands import cmd_twin
+        cmd_twin(args)
     elif args.subcommand is None and not remaining:
         asyncio.run(repl())
     else:

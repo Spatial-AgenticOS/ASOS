@@ -32,10 +32,125 @@ class DigitalTwin:
         memory: "MemoryStore",
         identity_loader: "IdentityLoader",
         llm: "LLMProvider",
+        policy_engine=None,
     ):
         self._memory = memory
         self._identity = identity_loader
         self._llm = llm
+        # Optional TwinPolicyEngine — when wired, execute() gates every
+        # action through per-domain policy + kill-switch + approval queue.
+        self._policy = policy_engine
+
+    def set_policy_engine(self, policy_engine) -> None:
+        self._policy = policy_engine
+
+    async def execute(
+        self,
+        domain: str,
+        action: str,
+        context: dict,
+        *,
+        executor=None,
+    ) -> dict:
+        """Attempt a twin action in a given domain.
+
+        Returns a decision dict::
+
+            {
+              "status": "queued" | "executed" | "denied",
+              "approval_id": "...",          # when queued
+              "result": {...},               # when executed
+              "reason": "...",
+              "domain": domain,
+              "action": action,
+            }
+
+        Execution path depends on the per-domain policy (see
+        agents/twin_policy.TwinPolicyEngine):
+          * disabled       → denied.
+          * draft_only     → queued in the approval store.
+          * auto_send      → executor(...) called immediately. The
+            twin is responsible for providing a valid executor callable
+            (a coroutine returning a dict). Without one, we queue and
+            warn.
+        """
+        if self._policy is None:
+            return {
+                "status": "denied",
+                "reason": "policy_engine_not_wired",
+                "domain": domain,
+                "action": action,
+            }
+
+        decision = self._policy.decide(domain)
+        verdict = decision["verdict"]
+        if verdict == "denied":
+            return {
+                "status": "denied",
+                "reason": decision["reason"],
+                "domain": domain,
+                "action": action,
+                "policy": decision.get("policy"),
+            }
+        if verdict == "queued":
+            row = self._policy.queue_for_approval(domain, action, context)
+            return {
+                "status": "queued",
+                "approval_id": row.approval_id,
+                "reason": decision["reason"],
+                "domain": domain,
+                "action": action,
+                "policy": decision.get("policy"),
+            }
+
+        if executor is None:
+            # auto_send authorised but there's nothing to execute —
+            # treat as queued so the user can see what was drafted.
+            row = self._policy.queue_for_approval(domain, action, context)
+            return {
+                "status": "queued",
+                "approval_id": row.approval_id,
+                "reason": "auto_send_no_executor",
+                "domain": domain,
+                "action": action,
+            }
+
+        try:
+            result = await executor(context)
+        except Exception as exc:
+            logger.exception("Twin executor for %s/%s failed: %s", domain, action, exc)
+            return {
+                "status": "denied",
+                "reason": f"executor_error:{exc}",
+                "domain": domain,
+                "action": action,
+            }
+
+        self._policy.record_execution(domain)
+        if getattr(self._policy, "supervisor", None):
+            try:
+                self._policy.supervisor.record(
+                    source="twin",
+                    kind="action_executed",
+                    actor="twin",
+                    payload=context,
+                    decision="allowed",
+                    detail={
+                        "domain": domain,
+                        "action": action,
+                        "result": _truncate_dict(result),
+                    },
+                )
+            except Exception as exc:
+                logger.debug("supervisor.record(twin:executed) failed: %s", exc)
+
+        return {
+            "status": "executed",
+            "result": result,
+            "reason": "auto_send_ok",
+            "domain": domain,
+            "action": action,
+        }
 
     async def ask(self, question: str, session_id: str = "") -> str:
         """Answer a question as the user would, based on their full context."""
@@ -214,14 +329,35 @@ class DigitalTwin:
             return ""
 
     @staticmethod
-    def _parse_json_safely(text: str) -> dict:
-        import json
-        text = text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            lines = [line for line in lines if not line.strip().startswith("```")]
-            text = "\n".join(lines).strip()
-        try:
-            return json.loads(text)
-        except (json.JSONDecodeError, ValueError):
-            return {}
+    def _parse_json_safely(text: str) -> dict:  # noqa: E501
+        return _parse_json_safely(text)
+
+
+def _truncate_dict(d: dict, limit: int = 200) -> dict:
+    """Trim long strings / lists in a result dict for audit-log safety."""
+    if not isinstance(d, dict):
+        return {"value": str(d)[:limit]}
+    out: dict = {}
+    for k, v in d.items():
+        if isinstance(v, str):
+            out[k] = v[:limit]
+        elif isinstance(v, (list, tuple)):
+            out[k] = [str(x)[:limit] for x in v[:10]]
+        elif isinstance(v, dict):
+            out[k] = _truncate_dict(v, limit)
+        else:
+            out[k] = v
+    return out
+
+
+def _parse_json_safely(text: str) -> dict:
+    import json as _json
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = [line for line in lines if not line.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+    try:
+        return _json.loads(text)
+    except (_json.JSONDecodeError, ValueError):
+        return {}

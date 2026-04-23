@@ -191,6 +191,7 @@ class BrainState:
         self.somatic_engine = None
         self.tool_genesis = None
         self.supervisor = None
+        self.twin_policy = None
         self.agent_mitosis = None
         self.intent_compiler = None
         self.mqtt_bridge = None
@@ -443,6 +444,15 @@ class BrainState:
 
             self.supervisor = _Supervisor(broadcaster=_broadcast_supervisor_event)
             self.supervisor.wrap(self.orchestrator)
+
+        with boot_subsystem(self._boot_report, "TwinPolicyEngine"):
+            # Digital-twin policy + approval queue. The twin's execute()
+            # checks this engine before acting on the user's behalf; the
+            # engine in turn respects the Supervisor kill switch.
+            from agents.twin_policy import TwinPolicyEngine as _TPE
+            self.twin_policy = _TPE(supervisor=self.supervisor)
+            if self.digital_twin is not None:
+                self.digital_twin.set_policy_engine(self.twin_policy)
 
         with boot_subsystem(self._boot_report, "RealtimeProxy"):
             self.realtime_proxy = RealtimeProxy(

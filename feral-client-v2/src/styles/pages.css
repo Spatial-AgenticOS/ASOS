@@ -752,6 +752,14 @@
   .v2-chat-pane { top: auto; bottom: 120px; right: 12px; left: 12px; width: auto; }
 }
 
+/* Twin & Delegation */
+.v2-twin-section { display: flex; flex-direction: column; gap: 10px; }
+.v2-twin-domains { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.v2-twin-domain-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.v2-twin-domain-label { font-weight: 600; font-size: var(--v2-size-sm); }
+.v2-twin-domain-actions { display: inline-flex; gap: 4px; }
+.v2-twin-approvals { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+
 /* Oversight */
 .v2-oversight { max-width: 1080px; }
 .v2-oversight-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
