@@ -152,11 +152,8 @@ def test_snapshot_ring_limit_enforced(store):
 
 def test_orchestrator_forwards_query_to_build_system_prompt():
     """Orchestrator._build_system_prompt must accept + forward `query`."""
-    from agents.orchestrator import Orchestrator
-
-    orch = MagicMock(spec=Orchestrator)
-    # Lazy import — the signature check happens via the module, not an instance.
     import inspect
+    from agents.orchestrator import Orchestrator
 
     sig = inspect.signature(Orchestrator._build_system_prompt)
     assert "query" in sig.parameters, "Orchestrator._build_system_prompt must accept query"
