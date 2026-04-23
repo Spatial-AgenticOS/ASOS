@@ -1,10 +1,26 @@
 # Changelog
 
-<!-- feral-version: 2026.4.26 -->
+<!-- feral-version: 2026.4.27 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.4.27] - 2026-04-22
+
+### Fixed
+
+- **"API key is gone" / 401 storm** ([feral-core/api/routes/config.py](feral-core/api/routes/config.py), [feral-core/api/routes/llm.py](feral-core/api/routes/llm.py)). `save_credentials` used to whitelist only OPENAI/GROQ/ANTHROPIC; every other provider's key dropped into a silent hole. Now every `/api/llm/providers/{id}/configure` and `/api/llm/config` call writes through **vault + credentials.json + env + hot-swap** in one step, and the response carries `{persisted: {ok, vault, credentials_json, warnings}}` so the UI never reports "saved" when disk writes fail. `_load_stored_credentials` falls back to the BlindVault when `credentials.json` is missing / corrupt, and the vault itself now survives bad JSON by moving the file to `.corrupt` and starting empty instead of crashing boot.
+- **Paired devices page was full of stale "phone" rows you never paired.** New `PairedPane` in [feral-client-v2/src/pages/Devices.jsx](feral-client-v2/src/pages/Devices.jsx) with a **Clear unclaimed (N)** bulk-revoke button + per-row **Revoke** button. Placeholder names (`phone` / `unnamed` / `browser_camera_share`) are replaced with `<kind> · <short_id>` so the UI never lies about what a daemon actually declared. Backend: `POST /api/devices/pair/prune` + `DevicePairingStore.revoke_unclaimed` + `feral pair --prune <SECONDS>`.
+- **Digital twin + chat showed raw httpx 401 when your key was wrong.** `DigitalTwin.ask()` now detects error-dict responses and returns `"Couldn't reach your LLM — Configure a working provider at Settings → Providers."` instead of bubbling the exception string. `classify_error` promotes `401/403 + "invalid api key"` to `AUTH_PERMANENT` (24h cooldown) so the broken provider stops getting probed every 30s.
+
+### Added
+
+- **Universal LLM failover.** [feral-core/agents/llm_provider.py](feral-core/agents/llm_provider.py) `chat()` now auto-delegates to `chat_with_failover` whenever `fallback_providers` is configured — every caller (DigitalTwin, Proactive, Ideas engine) gains cross-provider failover without knowing about the distinction. `health_snapshot()` returns live candidate + cooldown state for each provider. `GET /api/llm/health` exposes it.
+- **Auto-prepend previous primary on switch.** `POST /api/llm/config` adds the current primary to `fallback_providers` automatically when you switch to a new provider, so failover works by default. Explicit `fallback_providers: []` opts out.
+- **Settings → Providers is now a real catalog picker.** Replaces the hardcoded 6-provider `<Select>` with a card grid sourced from `GET /api/llm/providers`. Every built-in descriptor (OpenAI, Anthropic, Gemini, Groq, DeepSeek, OpenRouter, Together, Fireworks, Bedrock, Ollama, LM Studio) is exposed. Each card shows live status (ready / unreachable / configured / needs key / unconfigured) + a Use/Reconfigure button that opens an inline form with API key + base URL + a **live model picker** driven by `GET /api/llm/providers/{id}/models?live=true` with a Refresh button.
+- **Fallbacks card in Settings → Providers.** Reorderable list showing each fallback with a status dot (green / amber-cooldown / red) + `cooling down Ns` hint. Add from any configured candidate, remove with ×, reorder with ↑/↓. Writes persist via `POST /api/config/update`.
+- **Mic + camera streaming from the browser node.** [feral-client-v2/src/node/BrowserNode.js](feral-client-v2/src/node/BrowserNode.js) gained `sendVoiceConfig()`, `startMic()`, `startCamera()`, `stopMic()`, `stopCamera()`. Mic: AudioContext + AudioWorkletNode downsamples to 16 kHz PCM16, batches every 250 ms, sends as `audio_chunk` frames with monotonic `chunk_index`. Camera: canvas.toBlob JPEG every 750 ms, auto-scaled to 640 px, sent as `frame` frames. Always sends `voice_config` before the first `audio_chunk`. Pair.jsx live state now has colored-dot toggles per stream with real Start/Stop buttons.
 
 ## [2026.4.26] - 2026-04-22
 
