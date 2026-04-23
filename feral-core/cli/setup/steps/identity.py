@@ -41,7 +41,7 @@ def run(state: WizardState) -> None:
 
     # Write a USER.md so the identity loader picks it up right away.
     user_md = state.home / "USER.md"
-    blurb_lines = [f"# About Me\n"]
+    blurb_lines = ["# About Me\n"]
     if state.identity.get("name"):
         blurb_lines.append(f"Name: {state.identity['name']}")
     if state.identity.get("occupation"):

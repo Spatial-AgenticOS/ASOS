@@ -616,9 +616,10 @@ def default_cache_path() -> Path:
     """~/.feral/.cache/model_catalog.json."""
     try:
         from config.loader import feral_home
+        home = feral_home()
     except Exception:
-        feral_home = lambda: Path.home() / ".feral"  # type: ignore[assignment]
-    return feral_home() / ".cache" / "model_catalog.json"
+        home = Path.home() / ".feral"
+    return home / ".cache" / "model_catalog.json"
 
 
 def get_shared_catalog() -> ProviderCatalog:

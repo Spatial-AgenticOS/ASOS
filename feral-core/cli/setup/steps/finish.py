@@ -22,7 +22,7 @@ def run(state: WizardState) -> None:
         + (f" · voice {audio.get('tts_voice', '?')}" if audio.get('tts_voice') else ""),
     ]
     if ha_on:
-        summary_lines.append(f"  HA:      enabled")
+        summary_lines.append("  HA:      enabled")
     if channels:
         summary_lines.append(f"  Channels: {', '.join(channels)}")
     summary_lines += [

@@ -134,7 +134,7 @@ async def run_model_step(state: WizardState) -> None:
 
     if _RICH_AVAILABLE:
         console.print()
-        console.print(f"[bold]Step 2 · Model[/]")
+        console.print("[bold]Step 2 · Model[/]")
         console.print(
             f"Discovered {len(models)} models for {desc.display_name} "
             f"(source: {cached.source})."
