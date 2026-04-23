@@ -253,64 +253,25 @@ def test_onboard_wizard_plain_init():
 # ── run_setup ─────────────────────────────────────────────────────────────────
 
 
-def test_run_setup_uses_rich_wizard_when_has_rich():
-    class _RichWizard:
-        async def run(self):
-            pass
+def test_run_setup_delegates_to_new_package():
+    """`cli.setup_wizard.run_setup` is a thin shim over the new
+    `cli.setup.run_setup` modular wizard. The legacy OnboardWizard /
+    OnboardWizardPlain entry-points are dead code paths kept only so
+    older external imports resolve."""
+    from cli import setup as new_setup
 
-    mock_wizard = _RichWizard()
-
-    with patch.object(sw, "HAS_RICH", True):
-        with patch.object(sw, "OnboardWizard", return_value=mock_wizard) as MockCls:
-            with patch.object(sw, "OnboardWizardPlain") as MockPlain:
-                with patch.object(sw, "Console", autospec=True):
-                    # Use real asyncio.run so the wizard coroutine is awaited (no RuntimeWarning).
-                    with patch.object(sw.asyncio, "run", side_effect=asyncio.run):
-                        run_setup()
-                        MockCls.assert_called_once()
-                        MockPlain.assert_not_called()
-
-
-def test_run_setup_uses_plain_wizard_when_no_rich():
-    class _PlainWizard:
-        async def run(self):
-            pass
-
-    mock_plain = _PlainWizard()
-
-    with patch.object(sw, "HAS_RICH", False):
-        with patch.object(sw, "OnboardWizard") as MockRich:
-            with patch.object(sw, "OnboardWizardPlain", return_value=mock_plain) as MockPlainCls:
-                with patch.object(sw.asyncio, "run", side_effect=asyncio.run):
-                    run_setup()
-                    MockRich.assert_not_called()
-                    MockPlainCls.assert_called_once()
-
-
-def test_run_setup_handles_keyboard_interrupt(monkeypatch):
-    """KeyboardInterrupt from asyncio.run is caught; user sees cancel message."""
-
-    def run_raises_interrupt(coro):
-        coro.close()
-        raise KeyboardInterrupt
-
-    class _Wizard:
-        def __init__(self, _console):
-            pass
-
-        async def run(self):
-            await asyncio.sleep(0)
-
-    class _StubConsole:
-        pass
-
-    monkeypatch.setattr(sw, "HAS_RICH", True)
-    monkeypatch.setattr(sw, "OnboardWizard", _Wizard)
-    monkeypatch.setattr(sw, "Console", _StubConsole)
-    monkeypatch.setattr(sw.asyncio, "run", run_raises_interrupt)
-    with patch("builtins.print") as mock_print:
+    with patch.object(new_setup, "run_setup") as mock_new_run:
         run_setup()
-    assert mock_print.called
+    mock_new_run.assert_called_once()
+
+
+def test_run_setup_reimport_still_exposes_shim():
+    """Protect against accidentally dropping the shim which breaks
+    external installer scripts that `from cli.setup_wizard import
+    run_setup`."""
+    import importlib
+    reloaded = importlib.reload(sw)
+    assert callable(getattr(reloaded, "run_setup", None))
 
 
 # ── _validate_key (httpx) ──────────────────────────────────────────────────────
