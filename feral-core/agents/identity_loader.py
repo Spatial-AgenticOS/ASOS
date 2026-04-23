@@ -8,7 +8,10 @@ every LLM conversation.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+from collections import deque
 from typing import TYPE_CHECKING
 
 from config.loader import feral_home
@@ -20,6 +23,31 @@ if TYPE_CHECKING:
     from perception.somatic import SomaticEngine
 
 logger = logging.getLogger("feral.orchestrator.identity")
+
+# Bounded in-memory ring of every `## Memory` block we assembled during a
+# session. Small (20 entries) so the /api/memory/context endpoint can prove
+# to the user that multi-memory really does fire per turn. We keep this on
+# the class (not a global) but flatten it to a module-level ring for quick
+# cross-session retrieval by the inspector.
+_SNAPSHOT_RING_MAX = 50
+_memory_snapshots: deque[dict] = deque(maxlen=_SNAPSHOT_RING_MAX)
+
+
+def record_memory_snapshot(entry: dict) -> None:
+    """Append a rendered memory-context snapshot to the inspector ring."""
+    _memory_snapshots.append(entry)
+
+
+def recent_memory_snapshots(limit: int = 20) -> list[dict]:
+    """Return the latest memory-context snapshots, newest first."""
+    ordered = list(_memory_snapshots)
+    ordered.reverse()
+    return ordered[:limit]
+
+
+def clear_memory_snapshots() -> None:
+    """Drop every cached snapshot — used by tests."""
+    _memory_snapshots.clear()
 
 
 class IdentityLoader:
@@ -136,6 +164,7 @@ class IdentityLoader:
         identity_text: str | None = None,
         full_catalog: list["SkillManifest"] | None = None,
         memory_filter: str = "",
+        query: str = "",
     ) -> str:
         """Assemble the full system prompt for an LLM conversation turn.
 
@@ -147,6 +176,10 @@ class IdentityLoader:
             full_catalog: Every registered skill, used to emit the "Available
                 (full catalog)" block so the model never claims a skill does
                 not exist. When None, only the active list is shown.
+            query: The user's current utterance. Threaded into the memory
+                context builder so knowledge-graph + episode search fire per
+                turn. Empty string = legacy behaviour (working memory + recent
+                episodes only).
         """
         identity = identity_text if identity_text is not None else self.load_identity()
 
@@ -226,14 +259,32 @@ class IdentityLoader:
         # Memory Context — a specialist-scoped memory_filter narrows the
         # surfaced episodes + recent actions so cross-domain leakage
         # (journaling thoughts bleeding into a coding turn, etc.) stops.
+        #
+        # We prefer the async builder so the knowledge graph `build_graph_context`
+        # path fires on every turn the user asked a real question. If no event
+        # loop is running (e.g. a sync caller or test), we fall back to the
+        # sync builder. Either way, the user's query is threaded through so
+        # `context_builder` actually searches KG + episodes instead of quietly
+        # guarding both behind `if query:`.
+        memory_context = ""
         if self.memory and session_id:
-            memory_context = self.memory.build_context_for_llm(
-                session_id,
-                max_tokens_budget=800,
+            started = time.monotonic()
+            memory_context = self._build_memory_context(
+                session_id=session_id,
+                query=query or "",
                 memory_filter=memory_filter or "",
             )
             if memory_context:
                 prompt += f"\n## Memory\n{memory_context}\n"
+
+            record_memory_snapshot({
+                "session_id": session_id,
+                "query": (query or "")[:240],
+                "memory_filter": memory_filter or "",
+                "memory_context": memory_context,
+                "latency_ms": int((time.monotonic() - started) * 1000),
+                "ts": time.time(),
+            })
 
         # Prose Tooling catalog (active + full). Replaces the terse
         # "Relevant skills: ..." line with a detailed enumeration so
@@ -284,6 +335,54 @@ class IdentityLoader:
             prompt += f"\n{prompt_runtime_line}\n"
 
         return prompt
+
+    def _build_memory_context(
+        self,
+        session_id: str,
+        query: str,
+        memory_filter: str,
+    ) -> str:
+        """Assemble `## Memory` content, preferring the async KG-aware path.
+
+        If an event loop is already running we can't call
+        `asyncio.run` safely — fall back to the sync builder in that case.
+        Anything exceptional is swallowed with a debug log so a flaky
+        KG backend never blocks a user turn.
+        """
+        if not self.memory:
+            return ""
+
+        async_builder = getattr(self.memory, "build_context_for_llm_async", None)
+        sync_builder = getattr(self.memory, "build_context_for_llm", None)
+
+        if async_builder is not None:
+            try:
+                return asyncio.run(
+                    async_builder(
+                        session_id,
+                        query=query,
+                        max_tokens_budget=800,
+                        memory_filter=memory_filter,
+                    )
+                )
+            except RuntimeError:
+                # Already inside an event loop; fall through to the sync path.
+                logger.debug("Event loop already running — using sync memory builder")
+            except Exception as exc:
+                logger.debug("Async memory builder failed, falling back to sync: %s", exc)
+
+        if sync_builder is not None:
+            try:
+                return sync_builder(
+                    session_id,
+                    query=query,
+                    max_tokens_budget=800,
+                    memory_filter=memory_filter,
+                )
+            except Exception as exc:
+                logger.debug("Sync memory builder failed: %s", exc)
+
+        return ""
 
     def _messaging_channels_section(self) -> str:
         """Inject the live list of configured messaging channels and how to address them.

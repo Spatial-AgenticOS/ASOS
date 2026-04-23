@@ -382,6 +382,7 @@ class Orchestrator:
         skills: list[SkillManifest],
         session_id: str = "",
         memory_filter: str = "",
+        query: str = "",
     ) -> str:
         full_catalog: list[SkillManifest] = []
         try:
@@ -395,6 +396,7 @@ class Orchestrator:
             identity_text=self._load_identity(),
             full_catalog=full_catalog,
             memory_filter=memory_filter,
+            query=query,
         )
 
     def _load_identity(self) -> str:
@@ -594,6 +596,7 @@ class Orchestrator:
             relevant_skills,
             session_id,
             memory_filter=active_memory_filter,
+            query=text or "",
         )
         if specialist:
             system_prompt = self._build_specialist_system_prompt(specialist, system_prompt)
@@ -840,6 +843,7 @@ class Orchestrator:
             relevant_skills,
             session_id,
             memory_filter=active_memory_filter,
+            query=text or "",
         )
         if specialist:
             system_prompt = self._build_specialist_system_prompt(specialist, system_prompt)

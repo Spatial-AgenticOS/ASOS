@@ -752,6 +752,56 @@
   .v2-chat-pane { top: auto; bottom: 120px; right: 12px; left: 12px; width: auto; }
 }
 
+/* Memory context inspector */
+.v2-memctx { max-width: 1080px; }
+.v2-memctx-card { display: flex; flex-direction: column; gap: 10px; }
+.v2-memctx-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
+.v2-memctx-head-left { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.v2-memctx-query {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  background: var(--v2-surface-0);
+  border: 1px solid var(--v2-hairline);
+  border-radius: var(--v2-radius-sm);
+}
+.v2-memctx-query-label {
+  font-size: var(--v2-size-xs);
+  color: var(--v2-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.v2-memctx-query-body {
+  background: transparent;
+  padding: 0;
+  font-size: var(--v2-size-sm);
+  color: var(--v2-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.v2-memctx-sections { display: flex; flex-direction: column; gap: 8px; }
+.v2-memctx-section { display: flex; flex-direction: column; gap: 2px; }
+.v2-memctx-section-title {
+  font-size: var(--v2-size-xs);
+  color: var(--v2-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.v2-memctx-section-body {
+  margin: 0;
+  padding: 6px 10px;
+  background: var(--v2-surface-0);
+  border: 1px solid var(--v2-hairline);
+  border-radius: var(--v2-radius-sm);
+  font-family: var(--v2-font-mono);
+  font-size: var(--v2-size-xs);
+  color: var(--v2-text-secondary);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
 /* Glass Brain */
 .v2-glass-brain { max-width: 1080px; }
 .v2-glass-brain-vitals {

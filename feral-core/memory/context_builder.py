@@ -1,8 +1,41 @@
 from __future__ import annotations
 
 import logging
+import re
 
 logger = logging.getLogger("feral.memory")
+
+# Common stopwords we strip so a query like "where is my wallet" still
+# matches a "wallet" triple / episode. Small, Latin-only — good enough for
+# the FTS fallbacks.
+_STOPWORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "have", "has", "had", "my", "your", "his", "her",
+    "our", "their", "its", "me", "you", "we", "they", "it", "this", "that",
+    "these", "those", "and", "or", "but", "to", "of", "in", "on", "at", "for",
+    "with", "by", "from", "as", "if", "then", "so", "than", "when", "where",
+    "what", "which", "who", "whom", "how", "why", "i",
+})
+
+
+def _fts_query(query: str) -> str:
+    """Turn a natural-language utterance into an FTS5-friendly OR query.
+
+    SQLite FTS5 treats the raw phrase as a strict AND of all terms, so
+    "where is my wallet" returns zero matches when the row only contains
+    "wallet". We tokenize, drop stopwords, and OR the rest so the search
+    actually hits.
+    """
+    if not query:
+        return ""
+    # Break on any non-alphanumeric chars, lowercase, strip stopwords.
+    tokens = [
+        t for t in re.split(r"[^A-Za-z0-9']+", query.lower())
+        if t and t not in _STOPWORDS and len(t) > 1
+    ]
+    if not tokens:
+        return query
+    return " OR ".join(tokens)
 
 
 async def build_context_for_llm_async(
@@ -23,18 +56,34 @@ async def build_context_for_llm_async(
     if working:
         sections.append(f"## Recent Context\n{working[:budget_per_section]}")
 
-    if query and store._kg:
-        graph_ctx = await store._kg.build_graph_context(query, max_chars=budget_per_section)
+    fts = _fts_query(query)
+    if query:
+        graph_ctx = ""
+        if store._kg:
+            try:
+                graph_ctx = await store._kg.build_graph_context(query, max_chars=budget_per_section)
+            except Exception as exc:
+                logger.debug("build_graph_context failed: %s", exc)
+                graph_ctx = ""
         if graph_ctx:
             sections.append(graph_ctx)
-    elif query:
-        knowledge = store.knowledge_search(query, limit=5)
-        if knowledge:
-            k_lines = [f"- {k['subject']} {k['predicate']} {k['object']}" for k in knowledge]
-            sections.append("## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
+        else:
+            # Fall back to the FTS triple store when the KG has no entities
+            # for this query. Keeps ``knowledge_store(subject, predicate, obj)``
+            # rows surfacing per turn instead of silently dropping them.
+            knowledge = store.knowledge_search(fts or query, limit=5)
+            if knowledge:
+                k_lines = [f"- {k['subject']} {k['predicate']} {k['object']}" for k in knowledge]
+                sections.append("## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
 
     if query:
-        episodes = await store.episode_search_hybrid(query, limit=3)
+        try:
+            episodes = await store.episode_search_hybrid(fts or query, limit=3)
+        except Exception as exc:
+            logger.debug("episode_search_hybrid failed, falling back to FTS: %s", exc)
+            episodes = store.episode_search(fts or query, limit=3)
+        if not episodes:
+            episodes = store.episode_search(fts or query, limit=3)
     else:
         episodes = store.episode_recent(limit=3, session_id=session_id)
     if memory_filter:
@@ -107,14 +156,15 @@ def build_context_for_llm(
     if working:
         sections.append(f"## Recent Context\n{working[:budget_per_section]}")
 
+    fts = _fts_query(query)
     if query:
-        knowledge = store.knowledge_search(query, limit=5)
+        knowledge = store.knowledge_search(fts or query, limit=5)
         if knowledge:
             k_lines = [f"- {k['subject']} {k['predicate']} {k['object']}" for k in knowledge]
             sections.append("## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
 
     if query:
-        episodes = store.episode_search(query, limit=3)
+        episodes = store.episode_search(fts or query, limit=3)
     else:
         episodes = store.episode_recent(limit=3, session_id=session_id)
     if memory_filter:

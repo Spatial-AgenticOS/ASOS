@@ -27,6 +27,21 @@ def _memory_backend_installed(module_path: str) -> bool:
         return False
 
 
+@router.get("/api/memory/context")
+async def get_memory_context(limit: int = 20):
+    """Return the recent `## Memory` blocks the Brain assembled per LLM turn.
+
+    Every system-prompt build records what multi-memory surfaced (working,
+    known facts, episodes, recent actions) into a bounded in-process ring.
+    The v2 `/memory/context` inspector reads this so users can prove the
+    memory stack really does fire on every turn — not just `working_context`.
+    """
+    from agents.identity_loader import recent_memory_snapshots
+
+    snapshots = recent_memory_snapshots(limit=max(1, min(limit, 50)))
+    return {"count": len(snapshots), "snapshots": snapshots}
+
+
 @router.get("/api/memory/backend")
 async def get_memory_backend():
     settings_path = feral_home() / "settings.json"

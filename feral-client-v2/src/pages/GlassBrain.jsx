@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, Cpu, Layers, RefreshCw, Radio, Zap } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Activity, Cpu, Layers, RefreshCw, Radio, Zap, Brain } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import ConsciousnessMindMap from '../components/ConsciousnessMindMap';
@@ -95,14 +96,19 @@ export default function GlassBrain() {
       <Pane
         title="Glass Brain"
         actions={(
-          <button
-            type="button"
-            className="v2-btn"
-            onClick={() => setRefreshKey((k) => k + 1)}
-            title="Refresh"
-          >
-            <RefreshCw size={13} /> Refresh
-          </button>
+          <>
+            <Link to="/memory/context" className="v2-btn v2-btn--ghost" title="Inspect what multi-memory surfaced per LLM turn">
+              <Brain size={13} /> Memory context
+            </Link>
+            <button
+              type="button"
+              className="v2-btn"
+              onClick={() => setRefreshKey((k) => k + 1)}
+              title="Refresh"
+            >
+              <RefreshCw size={13} /> Refresh
+            </button>
+          </>
         )}
       >
         <p className="v2-p v2-p--muted">

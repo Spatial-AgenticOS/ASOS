@@ -16,6 +16,7 @@ import SetupWizard from './pages/SetupWizard';
 import Setup from './pages/Setup';
 import Skills from './pages/Skills';
 import Memory from './pages/Memory';
+import MemoryContext from './pages/MemoryContext';
 import Wiki from './pages/Wiki';
 import Identity from './pages/Identity';
 import Agents from './pages/Agents';
@@ -38,6 +39,7 @@ export default function App() {
         <Route path="/forge" element={<Forge />} />
         <Route path="/skills" element={<Skills />} />
         <Route path="/memory" element={<Memory />} />
+        <Route path="/memory/context" element={<MemoryContext />} />
         <Route path="/wiki" element={<Wiki />} />
         <Route path="/identity" element={<Identity />} />
         <Route path="/agents" element={<Agents />} />
