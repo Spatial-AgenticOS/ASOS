@@ -16,7 +16,7 @@ m *
  *   DELETE   /api/about-me/{id}
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Save, Plus, CheckCircle2, XCircle, Trash2 } from 'lucide-react';
+import { Save, Plus, CheckCircle2, XCircle, Trash2, Code2 } from 'lucide-react';
 import Pane from '../../ui/Pane';
 import Tabs from '../../ui/Tabs';
 import EmptyState from '../../ui/EmptyState';
@@ -25,9 +25,34 @@ import Glass from '../../ui/Glass';
 import { apiJson, apiFetch } from '../../lib/api';
 
 
+const VOICE_OPTIONS = [
+  { id: 'nova', label: 'Nova — warm, neutral' },
+  { id: 'alloy', label: 'Alloy — steady, grounded' },
+  { id: 'echo', label: 'Echo — bright, precise' },
+  { id: 'shimmer', label: 'Shimmer — airy, playful' },
+  { id: 'onyx', label: 'Onyx — low, measured' },
+  { id: 'sage', label: 'Sage — calm, thoughtful' },
+];
+
+const EMPTY_IDENTITY = {
+  name: 'FERAL',
+  personality: '',
+  greeting_style: '',
+  rules: [],
+  voice: { tts_voice: 'nova' },
+};
+
+/**
+ * IdentityEditor — prose-first form that mirrors the Soul editor visually
+ * (form fields + a save bar), backed by the same IDENTITY.yaml as before.
+ * An "advanced" toggle drops into raw JSON for power users who want the
+ * full Pydantic surface.
+ */
 export function IdentityEditor() {
   const [data, setData] = useState(null);
-  const [text, setText] = useState('');
+  const [draft, setDraft] = useState(EMPTY_IDENTITY);
+  const [rawMode, setRawMode] = useState(false);
+  const [rawText, setRawText] = useState('');
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -35,32 +60,79 @@ export function IdentityEditor() {
 
   const refresh = useCallback(async () => {
     try {
-      const d = await apiJson('/api/identity');
-      setData(d);
-      setText(JSON.stringify(d, null, 2));
+      const d = (await apiJson('/api/identity')) || {};
+      const normalised = {
+        ...EMPTY_IDENTITY,
+        ...d,
+        rules: Array.isArray(d.rules) ? d.rules : [],
+        voice: { ...EMPTY_IDENTITY.voice, ...(d.voice || {}) },
+      };
+      setData(normalised);
+      setDraft(normalised);
+      setRawText(JSON.stringify(normalised, null, 2));
       setDirty(false);
+      setError(null);
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || 'failed to load identity');
     }
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  const updateField = useCallback((field, value) => {
+    setDraft((prev) => ({ ...prev, [field]: value }));
+    setDirty(true);
+  }, []);
+
+  const updateVoice = useCallback((tts_voice) => {
+    setDraft((prev) => ({ ...prev, voice: { ...(prev.voice || {}), tts_voice } }));
+    setDirty(true);
+  }, []);
+
+  const updateRule = useCallback((idx, value) => {
+    setDraft((prev) => {
+      const next = [...(prev.rules || [])];
+      next[idx] = value;
+      return { ...prev, rules: next };
+    });
+    setDirty(true);
+  }, []);
+
+  const addRule = useCallback(() => {
+    setDraft((prev) => ({ ...prev, rules: [...(prev.rules || []), ''] }));
+    setDirty(true);
+  }, []);
+
+  const removeRule = useCallback((idx) => {
+    setDraft((prev) => ({
+      ...prev,
+      rules: (prev.rules || []).filter((_, i) => i !== idx),
+    }));
+    setDirty(true);
+  }, []);
 
   const save = async () => {
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
-      let parsed;
-      try {
-        parsed = JSON.parse(text);
-      } catch (err) {
-        setError('Invalid JSON — fix the syntax before saving.');
-        return;
+      let payload = draft;
+      if (rawMode) {
+        try {
+          payload = JSON.parse(rawText);
+        } catch {
+          setError('Invalid JSON — fix the syntax before saving.');
+          return;
+        }
+      } else {
+        payload = {
+          ...payload,
+          rules: (payload.rules || []).map((r) => (r || '').trim()).filter(Boolean),
+        };
       }
       const r = await apiFetch('/api/identity', {
         method: 'POST',
-        body: JSON.stringify(parsed),
+        body: JSON.stringify(payload),
       });
       if (!r.ok) {
         setError(`${r.status} ${await r.text()}`);
@@ -75,26 +147,170 @@ export function IdentityEditor() {
     }
   };
 
-  if (!data) return <Pane title="IDENTITY"><EmptyState title="Loading…" /></Pane>;
+  const toggleRaw = () => {
+    if (rawMode) {
+      try {
+        const parsed = JSON.parse(rawText);
+        setDraft({
+          ...EMPTY_IDENTITY,
+          ...parsed,
+          rules: Array.isArray(parsed.rules) ? parsed.rules : [],
+          voice: { ...EMPTY_IDENTITY.voice, ...(parsed.voice || {}) },
+        });
+        setRawMode(false);
+        setError(null);
+      } catch {
+        setError('Invalid JSON — fix it before switching back to the form.');
+      }
+    } else {
+      setRawText(JSON.stringify(draft, null, 2));
+      setRawMode(true);
+    }
+  };
+
+  if (!data) return <Pane title="Identity"><EmptyState title="Loading…" /></Pane>;
 
   return (
-    <Pane title="IDENTITY (editable)" actions={(
-      <>
-        {dirty && <span className="v2-chip v2-chip--warn">unsaved</span>}
-        {saved && <span className="v2-chip v2-chip--live">saved</span>}
-        <button type="button" className="v2-btn v2-btn--primary" onClick={save} disabled={!dirty || busy}>
-          <Save size={13} /> Save
-        </button>
-      </>
-    )}>
-      <CodeEditor
-        value={text}
-        onChange={(v) => { setText(v); setDirty(true); }}
-        language="json"
-        rows={24}
-        aria-label="IDENTITY editor"
-      />
-      {error && <div className="v2-chip v2-chip--error">{error}</div>}
+    <Pane
+      title="Identity"
+      actions={(
+        <>
+          {dirty && <span className="v2-chip v2-chip--warn">unsaved</span>}
+          {saved && <span className="v2-chip v2-chip--live">saved</span>}
+          <button
+            type="button"
+            className={`v2-btn v2-btn--ghost${rawMode ? ' is-on' : ''}`}
+            onClick={toggleRaw}
+            title="Edit raw YAML/JSON"
+          >
+            <Code2 size={13} /> {rawMode ? 'Form' : 'Raw'}
+          </button>
+          <button
+            type="button"
+            className="v2-btn v2-btn--primary"
+            onClick={save}
+            disabled={!dirty || busy}
+          >
+            <Save size={13} /> Save
+          </button>
+        </>
+      )}
+    >
+      <p className="v2-p v2-p--muted">
+        Your agent's operating identity. Personality is the voice it writes in; rules are
+        explicit constraints; greeting style opens every conversation. Stored in
+        <code> IDENTITY.yaml</code> alongside SOUL.md and MEMORY.md.
+      </p>
+
+      {rawMode ? (
+        <CodeEditor
+          value={rawText}
+          onChange={(v) => { setRawText(v); setDirty(true); }}
+          language="json"
+          rows={24}
+          aria-label="Identity raw editor"
+        />
+      ) : (
+        <div className="v2-identity-form">
+          <label className="v2-identity-field">
+            <span className="v2-identity-field-label">Agent name</span>
+            <input
+              className="v2-input"
+              type="text"
+              value={draft.name || ''}
+              onChange={(e) => updateField('name', e.target.value)}
+              placeholder="FERAL"
+              aria-label="Agent name"
+            />
+          </label>
+
+          <label className="v2-identity-field">
+            <span className="v2-identity-field-label">Personality</span>
+            <span className="v2-identity-field-hint">
+              Describe how it thinks and speaks. Full paragraphs welcome.
+            </span>
+            <textarea
+              className="v2-input v2-textarea"
+              rows={6}
+              value={draft.personality || ''}
+              onChange={(e) => updateField('personality', e.target.value)}
+              placeholder="Sharp, dry, a little protective. Never sycophantic. Favours plain language over jargon…"
+              aria-label="Personality"
+            />
+          </label>
+
+          <label className="v2-identity-field">
+            <span className="v2-identity-field-label">Greeting style</span>
+            <span className="v2-identity-field-hint">
+              How it opens the day / a fresh chat.
+            </span>
+            <textarea
+              className="v2-input v2-textarea"
+              rows={3}
+              value={draft.greeting_style || ''}
+              onChange={(e) => updateField('greeting_style', e.target.value)}
+              placeholder="Short, direct, one question back if context is missing."
+              aria-label="Greeting style"
+            />
+          </label>
+
+          <div className="v2-identity-field">
+            <span className="v2-identity-field-label">Rules</span>
+            <span className="v2-identity-field-hint">
+              Hard constraints — one rule per line. These always win over personality.
+            </span>
+            <div className="v2-identity-rules">
+              {(draft.rules || []).length === 0 && (
+                <p className="v2-p v2-p--muted v2-p--tiny" style={{ marginTop: 0 }}>
+                  No rules yet. Add one below.
+                </p>
+              )}
+              {(draft.rules || []).map((rule, idx) => (
+                <div key={idx} className="v2-identity-rule">
+                  <input
+                    type="text"
+                    className="v2-input"
+                    value={rule}
+                    onChange={(e) => updateRule(idx, e.target.value)}
+                    placeholder="Never summarise without being asked."
+                    aria-label={`Rule ${idx + 1}`}
+                  />
+                  <button
+                    type="button"
+                    className="v2-btn v2-btn--ghost"
+                    onClick={() => removeRule(idx)}
+                    aria-label={`Remove rule ${idx + 1}`}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="v2-btn v2-btn--ghost" onClick={addRule}>
+                <Plus size={13} /> Add rule
+              </button>
+            </div>
+          </div>
+
+          <label className="v2-identity-field">
+            <span className="v2-identity-field-label">Voice</span>
+            <span className="v2-identity-field-hint">
+              Default TTS voice for proactive notifications and the voice overlay.
+            </span>
+            <select
+              className="v2-input"
+              value={draft.voice?.tts_voice || 'nova'}
+              onChange={(e) => updateVoice(e.target.value)}
+              aria-label="TTS voice"
+            >
+              {VOICE_OPTIONS.map((o) => (
+                <option key={o.id} value={o.id}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+
+      {error && <div className="v2-chip v2-chip--error" style={{ marginTop: 8 }}>{error}</div>}
     </Pane>
   );
 }

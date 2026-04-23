@@ -23,6 +23,7 @@ import Health from './pages/Health';
 import Webhooks from './pages/Webhooks';
 import Geofences from './pages/Geofences';
 import Apps from './pages/Apps';
+import AppsPublish from './pages/AppsPublish';
 import AppSurface from './pages/AppSurface';
 
 export default function App() {
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="/intents" element={<Intents />} />
         <Route path="/marketplace" element={<Marketplace />} />
         <Route path="/apps" element={<Apps />} />
+        <Route path="/apps/publish" element={<AppsPublish />} />
         <Route path="/apps/:app_id" element={<AppSurface />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/ambient" element={<Home />} />

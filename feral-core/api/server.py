@@ -108,15 +108,49 @@ app.add_middleware(
 # ─────────────────────────────────────────────
 
 _rate_limit_store: collections.OrderedDict[str, collections.deque] = collections.OrderedDict()
-RATE_LIMIT_RPM = int(os.getenv("FERAL_RATE_LIMIT_RPM", "120"))
+# Default: 1200 req/min per remote IP. Local-first clients poll aggressively
+# (dashboard / ambient / jobs / skills). We keep the limit but trust loopback.
+RATE_LIMIT_RPM = int(os.getenv("FERAL_RATE_LIMIT_RPM", "1200"))
 _RATE_LIMIT_MAX_KEYS = 10_000
 _rate_limit_last_cleanup = 0.0
+
+# Loopback clients (the Brain + same-host browser / CLI / iOS sim) are never
+# rate-limited — that would throttle the app talking to itself.
+_LOOPBACK_IPS = frozenset({"127.0.0.1", "::1", "localhost", "unknown"})
+
+# Low-cost polling endpoints exempted from the per-IP bucket so a UI tab cannot
+# DoS itself. These are idempotent reads that the Brain should always answer.
+_RATE_LIMIT_EXEMPT_PREFIXES: tuple[str, ...] = (
+    "/health",
+    "/metrics",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+    "/api/dashboard",
+    "/api/ambient/",
+    "/api/ideas/",
+    "/api/jobs",
+    "/api/skills",
+    "/api/channels",
+    "/api/llm/status",
+    "/api/identity",
+    "/api/soul",
+    "/api/memory/",
+)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         global _rate_limit_last_cleanup
         client_ip = request.client.host if request.client else "unknown"
+        path = request.url.path
+
+        # Skip loopback + well-known read-only polling endpoints entirely.
+        if client_ip in _LOOPBACK_IPS:
+            return await call_next(request)
+        if any(path == p or path.startswith(p) for p in _RATE_LIMIT_EXEMPT_PREFIXES):
+            return await call_next(request)
+
         now = time.time()
 
         if now - _rate_limit_last_cleanup > 60:

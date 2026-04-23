@@ -9,7 +9,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Trash2, RefreshCw, Store } from 'lucide-react';
+import { Trash2, RefreshCw, Store, Rocket } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import EmptyState from '../ui/EmptyState';
@@ -55,6 +55,9 @@ export default function Apps() {
         title={`Apps${apps.length ? ` · ${apps.length}` : ''}`}
         actions={(
           <>
+            <Link to="/apps/publish" className="v2-btn v2-btn--ghost" title="Publish a GenUI app">
+              <Rocket size={13} /> Publish
+            </Link>
             <Link to="/marketplace" className="v2-btn v2-btn--primary">
               <Store size={13} /> Browse marketplace
             </Link>

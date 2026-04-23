@@ -218,3 +218,75 @@ def test_dispatch_unknown_app_returns_400(client):
         json={"surface_id": "home", "action_id": "evil"},
     )
     assert r.status_code == 400
+
+
+def test_validate_accepts_valid_yaml_manifest(client):
+    c, _registry, _tmp = client
+    yaml_manifest = """
+app_id: example-valid
+version: 0.1.0
+brand:
+  name: Valid Demo
+entry_surface_id: home
+surfaces:
+  - surface_id: home
+    kind: authored
+    template_root:
+      type: stack
+      children:
+        - { type: text, value: "$data.msg" }
+    action_contract:
+      - action_id: hello
+        handler: app_event
+"""
+    r = c.post("/api/apps/validate", json={"manifest": yaml_manifest})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert body["summary"]["app_id"] == "example-valid"
+    assert "home" in body["summary"]["surfaces"]
+    assert "hello" in body["summary"]["actions"]
+
+
+def test_validate_accepts_valid_json_manifest(client):
+    c, _registry, _tmp = client
+    r = c.post(
+        "/api/apps/validate",
+        json={
+            "manifest": json.dumps(
+                {
+                    "app_id": "example-j",
+                    "brand": {"name": "J"},
+                    "entry_surface_id": "home",
+                    "surfaces": [
+                        {
+                            "surface_id": "home",
+                            "kind": "authored",
+                            "template_root": {"type": "stack"},
+                        }
+                    ],
+                }
+            )
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["summary"]["app_id"] == "example-j"
+
+
+def test_validate_rejects_empty_manifest(client):
+    c, _registry, _tmp = client
+    r = c.post("/api/apps/validate", json={"manifest": ""})
+    assert r.status_code == 400
+
+
+def test_validate_rejects_non_mapping(client):
+    c, _registry, _tmp = client
+    r = c.post("/api/apps/validate", json={"manifest": "[1, 2, 3]"})
+    assert r.status_code == 400
+
+
+def test_validate_rejects_invalid_manifest(client):
+    c, _registry, _tmp = client
+    # Missing required fields → pydantic fails
+    r = c.post("/api/apps/validate", json={"manifest": "app_id: only"})
+    assert r.status_code == 400

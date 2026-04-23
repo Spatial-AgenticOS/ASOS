@@ -1,16 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import Orb from '../ui/Orb';
 import LiveOpsStream from './LiveOpsStream';
 import { useSomatic } from '../hooks/useSomatic';
 
 /**
- * Ambient — hybrid background.
+ * Ambient — a quiet, adaptive background layer.
  *
- *   persona  ⇄  liveops
- *
- * Persona is the default resting state: large blurred Orb + a subtle
- * somatic-driven hue. Live-ops is the opt-in diagnostic state: a faint
- * stream of Brain events behind everything.
+ * Resting state: subtle somatic gradient + grain. No floating orb behind
+ * the content — the orb belongs where the user intentionally looks at it
+ * (Home hero, voice overlay, chat avatar). Live-ops is the opt-in
+ * diagnostic overlay: a faint stream of Brain events.
  *
  * Expand triggers: hover bottom-third, press Cmd-Period, or dispatch the
  * custom `v2:ambient-expand` event. Collapses after 3 s idle.
@@ -69,9 +67,8 @@ export default function Ambient() {
       className={`v2-ambient v2-ambient--${hue}${expanded ? ' is-expanded' : ''}`}
       aria-hidden="true"
     >
-      <div className="v2-ambient-persona">
-        <Orb size={420} mode={somatic.orbMode} />
-      </div>
+      <div className="v2-ambient-field" />
+      <div className="v2-ambient-grain" />
       <div className="v2-ambient-ops">
         <LiveOpsStream active={expanded} />
       </div>

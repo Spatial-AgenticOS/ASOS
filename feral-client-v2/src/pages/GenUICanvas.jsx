@@ -1,8 +1,24 @@
+/**
+ * GenUI Canvas — a live inspector / debug surface for the GenUI runtime.
+ *
+ * This is not where publishers onboard. Publisher onboarding lives at
+ * /apps/publish, which is a real step-by-step flow (scaffold → validate →
+ * install → publish). Canvas is about observing and debugging what the
+ * agent is rendering right now:
+ *
+ *   • Live renders   — every sdui / sdui_render / sdui_patch WS frame
+ *   • Installed apps — manifest + surface list + regenerate controls
+ *   • Themes         — GenUI theme swap for third-party renders
+ *   • Components     — the SDUI component vocabulary every spec composes
+ *
+ * No two-field publisher modal hiding behind a gear icon — if you want
+ * to publish, hit the top-right "Publish an app" button.
+ */
 import React, { useCallback, useEffect, useState } from 'react';
-import { Plus, Trash2, Palette, RefreshCw, Eye } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Trash2, Palette, RefreshCw, Rocket, Boxes } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
-import Modal from '../ui/Modal';
 import Tabs from '../ui/Tabs';
 import EmptyState from '../ui/EmptyState';
 import SduiRenderer, { applySduiPatches } from '../ui/SduiRenderer';
@@ -16,24 +32,32 @@ export default function GenUICanvas() {
       <Pane
         title="GenUI Canvas"
         actions={(
-          <Tabs
-            value={tab}
-            onChange={setTab}
-            items={[
-              { id: 'live', label: 'Live renders' },
-              { id: 'providers', label: 'Providers' },
-              { id: 'themes', label: 'Themes' },
-              { id: 'components', label: 'Components' },
-            ]}
-          />
+          <>
+            <Link to="/apps/publish" className="v2-btn v2-btn--primary">
+              <Rocket size={13} /> Publish an app
+            </Link>
+            <Tabs
+              value={tab}
+              onChange={setTab}
+              items={[
+                { id: 'live', label: 'Live' },
+                { id: 'apps', label: 'Installed' },
+                { id: 'themes', label: 'Themes' },
+                { id: 'components', label: 'Components' },
+              ]}
+            />
+          </>
         )}
       >
         <p className="v2-p v2-p--muted">
-          Third-party apps publish A2UI specs through registered GenUI providers. Live renders appear below; themes control how they look.
+          A developer inspector for everything FERAL is rendering right now.
+          Every frame here is a real SDUI tree — from a skill, a third-party app,
+          or a proactive alert. Use <Link to="/apps/publish">/apps/publish</Link>{' '}
+          to author your own.
         </p>
       </Pane>
       {tab === 'live' && <LiveTab />}
-      {tab === 'providers' && <ProvidersTab />}
+      {tab === 'apps' && <InstalledAppsTab />}
       {tab === 'themes' && <ThemesTab />}
       {tab === 'components' && <ComponentsTab />}
     </div>
@@ -74,9 +98,12 @@ function LiveTab() {
   const dismiss = (id) => setPanes((prev) => prev.filter((p) => p.id !== id));
 
   return (
-    <Pane title={`Live panes (${panes.length})`}>
+    <Pane title={`Live panes · ${panes.length}`}>
       {panes.length === 0 && (
-        <EmptyState title="Waiting for a render" hint="Any skill / third-party app that emits sdui / sdui_render appears here." />
+        <EmptyState
+          title="Waiting for a render"
+          hint="Any skill, third-party app, or proactive alert that emits an sdui frame appears here in real time."
+        />
       )}
       <div className="v2-canvas-grid">
         {panes.map(({ id, tree, title }) => (
@@ -102,85 +129,96 @@ function LiveTab() {
   );
 }
 
-function ProvidersTab() {
-  const [providers, setProviders] = useState([]);
+function InstalledAppsTab() {
+  const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showNew, setShowNew] = useState(false);
+  const [error, setError] = useState(null);
+  const [busyId, setBusyId] = useState(null);
 
   const refresh = useCallback(async () => {
+    setLoading(true);
     try {
-      const d = await apiJson('/api/genui/providers');
-      setProviders(d.providers || d || []);
+      const d = await apiJson('/api/apps');
+      setApps(d?.apps || []);
+      setError(null);
+    } catch (e) {
+      setError(e?.message || 'failed to load apps');
     } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  return (
-    <>
-      <Pane
-        title={`Registered providers (${providers.length})`}
-        actions={(
-          <>
-            <button type="button" className="v2-btn v2-btn--ghost" onClick={refresh}><RefreshCw size={13} /></button>
-            <button type="button" className="v2-btn v2-btn--primary" onClick={() => setShowNew(true)}>
-              <Plus size={13} /> Register
-            </button>
-          </>
-        )}
-      >
-        {loading && <EmptyState title="Loading…" />}
-        {!loading && providers.length === 0 && <EmptyState title="No GenUI providers registered" />}
-        <ul className="v2-mem-list">
-          {providers.map((p) => (
-            <li key={p.id || p.provider_id}>
-              <Glass level={0} radius="md" padding="md">
-                <div className="v2-flow-card-head">
-                  <div className="v2-flow-card-title">{p.name || p.id}</div>
-                  <code className="v2-flow-card-status">{p.id || p.provider_id}</code>
-                </div>
-                {p.description && <div className="v2-mem-content">{p.description}</div>}
-              </Glass>
-            </li>
-          ))}
-        </ul>
-      </Pane>
-      {showNew && <RegisterProviderModal onClose={() => setShowNew(false)} onRegistered={() => { setShowNew(false); refresh(); }} />}
-    </>
-  );
-}
-
-function RegisterProviderModal({ onClose, onRegistered }) {
-  const [id, setId] = useState('');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const submit = async () => {
-    setBusy(true);
+  const regenerate = async (app_id, surface_id) => {
+    setBusyId(`${app_id}:${surface_id}`);
     try {
-      const r = await apiFetch('/api/genui/providers/register', {
+      await apiFetch(`/api/apps/${encodeURIComponent(app_id)}/surfaces/${encodeURIComponent(surface_id)}/render`, {
         method: 'POST',
-        body: JSON.stringify({ id, name, description }),
+        body: JSON.stringify({ regenerate: true }),
       });
-      if (!r.ok) setError(`${r.status}`);
-      else onRegistered();
-    } finally { setBusy(false); }
+    } finally { setBusyId(null); }
   };
+
   return (
-    <Modal open onClose={onClose} title="Register GenUI provider" actions={(
-      <>
-        <button type="button" className="v2-btn" onClick={onClose}>Cancel</button>
-        <button type="button" className="v2-btn v2-btn--primary" onClick={submit} disabled={busy || !id || !name}>
-          {busy ? 'Registering…' : 'Register'}
-        </button>
-      </>
-    )}>
-      <label className="v2-step-field"><span>Provider id</span><input className="v2-input" value={id} onChange={(e) => setId(e.target.value)} placeholder="my-app" /></label>
-      <label className="v2-step-field"><span>Name</span><input className="v2-input" value={name} onChange={(e) => setName(e.target.value)} /></label>
-      <label className="v2-step-field"><span>Description</span><textarea className="v2-code-editor" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} /></label>
+    <Pane
+      title={`Installed apps · ${apps.length}`}
+      actions={(
+        <>
+          <button type="button" className="v2-btn v2-btn--ghost" onClick={refresh} aria-label="Refresh">
+            <RefreshCw size={13} />
+          </button>
+          <Link to="/apps" className="v2-btn v2-btn--ghost">Open launcher</Link>
+        </>
+      )}
+    >
+      <p className="v2-p v2-p--muted">
+        Every third-party GenUI app installed on this brain — with its manifest,
+        declared surfaces, and a regenerate button per hybrid/generated surface
+        that clears that surface's cache so the agent re-authors it on next open.
+      </p>
       {error && <div className="v2-chip v2-chip--error">{error}</div>}
-    </Modal>
+      {loading && <EmptyState title="Loading…" />}
+      {!loading && apps.length === 0 && (
+        <EmptyState
+          title="No apps installed"
+          hint="Publish one from /apps/publish or install from a path / git URL / registry id."
+          action={<Link to="/apps/publish" className="v2-btn v2-btn--primary"><Rocket size={13} /> Publish an app</Link>}
+        />
+      )}
+      <div className="v2-canvas-apps">
+        {apps.map((app) => (
+          <Glass key={app.app_id} level={1} radius="md" padding="md">
+            <header className="v2-canvas-head">
+              <div>
+                <h3 className="v2-canvas-title"><Boxes size={13} /> {app.brand?.name || app.app_id}</h3>
+                <div className="v2-p v2-p--muted v2-p--tiny">
+                  <code>{app.app_id}</code> · v{app.version} · {app.author || 'unknown author'}
+                </div>
+              </div>
+              <Link to={`/apps/${encodeURIComponent(app.app_id)}`} className="v2-btn v2-btn--ghost">Open</Link>
+            </header>
+            {app.description && (
+              <p className="v2-p v2-p--muted" style={{ marginTop: 6 }}>{app.description}</p>
+            )}
+            <div className="v2-canvas-surfaces">
+              {(app.surfaces || []).map((surface_id) => (
+                <div key={surface_id} className="v2-canvas-surface">
+                  <code>{surface_id}</code>
+                  <button
+                    type="button"
+                    className="v2-btn v2-btn--ghost"
+                    onClick={() => regenerate(app.app_id, surface_id)}
+                    disabled={busyId === `${app.app_id}:${surface_id}`}
+                    title="Force the agent to regenerate this surface for the current user"
+                  >
+                    <RefreshCw size={12} /> Regenerate
+                  </button>
+                </div>
+              ))}
+            </div>
+          </Glass>
+        ))}
+      </div>
+    </Pane>
   );
 }
 
@@ -204,7 +242,7 @@ function ThemesTab() {
   };
 
   return (
-    <Pane title={`Themes (${themes.length})`} actions={<button type="button" className="v2-btn v2-btn--ghost" onClick={refresh}><RefreshCw size={13} /></button>}>
+    <Pane title={`Themes · ${themes.length}`} actions={<button type="button" className="v2-btn v2-btn--ghost" onClick={refresh}><RefreshCw size={13} /></button>}>
       {loading && <EmptyState title="Loading…" />}
       {!loading && themes.length === 0 && <EmptyState title="No themes" />}
       <div className="v2-skills-grid">
@@ -230,7 +268,7 @@ function ComponentsTab() {
   const [components, setComponents] = useState([]);
   useEffect(() => { apiJson('/api/genui/components').then((d) => setComponents(d.components || d || [])); }, []);
   return (
-    <Pane title={`Components (${components.length})`}>
+    <Pane title={`Components · ${components.length}`}>
       <p className="v2-p v2-p--muted">Every renderable SDUI component type. Third-party specs compose these.</p>
       {components.length === 0 && <EmptyState title="No components registered" />}
       <div className="v2-skill-card-phrases">

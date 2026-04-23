@@ -1,10 +1,29 @@
 # Changelog
 
-<!-- feral-version: 2026.4.25 -->
+<!-- feral-version: 2026.4.26 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.4.26] - 2026-04-22
+
+### Fixed
+
+- **API rate-limit storm from the v2 browser.** [`feral-core/api/server.py`](feral-core/api/server.py) `RateLimitMiddleware` now bypasses loopback clients (127.0.0.1 / ::1) entirely and exempts read-only polling paths (`/api/dashboard`, `/api/ambient/*`, `/api/ideas/*`, `/api/jobs`, `/api/skills`, `/api/channels`, `/api/llm/status`, `/api/identity`, `/api/soul`, `/api/memory/*`, `/health`, `/metrics`). Default `FERAL_RATE_LIMIT_RPM` raised from 120 → 1200 for the still-rate-limited remote buckets. The Brain can no longer DOS itself.
+- **Deprecated Apple PWA meta tag warning.** [`feral-client-v2/index.html`](feral-client-v2/index.html) adds `<meta name="mobile-web-app-capable" content="yes" />` alongside the Apple one per the Chrome deprecation notice.
+- **Glass Brain showed a broken v1 iframe + Home content leaking in.** Completely rewrote [`feral-client-v2/src/pages/GlassBrain.jsx`](feral-client-v2/src/pages/GlassBrain.jsx) as a native v2 surface: system-vitals strip (brain / in-flight entities / sessions / devices / skills), `ConsciousnessMindMap`, a live entity-kind legend with counts, and the raw event stream. Killed the iframe — the `BrowserRouter` + `#/glass-brain` hash never matched a v1 path so it always rendered Home inside itself. Dead `.v2-glass-brain-iframe*` CSS removed.
+- **420 px blurred orb haunting every page.** Removed the ambient persona orb. [`feral-client-v2/src/shell/Ambient.jsx`](feral-client-v2/src/shell/Ambient.jsx) now draws a quiet somatic-driven gradient + mono film grain only (`.v2-ambient-field`, `.v2-ambient-grain`). The Orb still ships where it's intentional (Home hero, Chat avatar, voice overlay) — no longer ghosting behind app content.
+- **Dock looked chunky and not translucent.** Rebuilt [`feral-client-v2/src/styles/ui.css`](feral-client-v2/src/styles/ui.css) `.v2-dock*` as a macOS Tahoe-style pill: thinner hairline, heavier blur (`--v2-blur-lg`), 40 × 40 icon-only buttons with floating tooltip labels on hover, active-state indicator dot beneath the icon.
+- **Settings pane shifted sideways on tab click.** Locked the grid in [`feral-client-v2/src/styles/pages.css`](feral-client-v2/src/styles/pages.css): `.v2-page--split` uses `minmax(0, 1fr)` + `min-height: 640px`; `.v2-shell-main` gets `scrollbar-gutter: stable` so content reflow never nudges the layout horizontally.
+- **Identity editor read like a JSON schema.** Replaced the raw JSON dump in [`feral-client-v2/src/components/SelfEditors/index.jsx`](feral-client-v2/src/components/SelfEditors/index.jsx) `IdentityEditor` with a prose-first form: agent name, personality (6-row textarea), greeting style, rules (add/remove list), voice select. Matches the Soul editor's style. A **Raw** toggle falls back to full JSON for power users.
+
+### Added
+
+- **Real GenUI publisher flow at `/apps/publish`.** New [`feral-client-v2/src/pages/AppsPublish.jsx`](feral-client-v2/src/pages/AppsPublish.jsx) is a proper 5-step wizard: **Scaffold** (`feral app init coffee-log`) → **Author** (surfaces + action_contract + data schemas with a working sample) → **Validate** (live POST to new `/api/apps/validate`) → **Install** (local path / git URL / registry id wired to `/api/apps/install`) → **Publish** (`feral app build` + `feral app publish`). Plus a live state footer showing currently-installed app count. Replaces the two-field "Register GenUI provider" modal that used to live on `/canvas`.
+- **`POST /api/apps/validate` — run the pydantic validator without installing.** [`feral-core/api/routes/apps.py`](feral-core/api/routes/apps.py) new endpoint accepts a raw YAML/JSON manifest body, parses it, runs the full `AppManifest` validator, and returns a summary (app_id, surfaces, actions, permissions, entry_surface_id). Same validator the registry uses at publish time → zero drift between "works locally" and "works when installed". 5 new tests in [`feral-core/tests/test_api_apps.py`](feral-core/tests/test_api_apps.py) (28 total, all green).
+- **Canvas is now a developer inspector.** Rewrote [`feral-client-v2/src/pages/GenUICanvas.jsx`](feral-client-v2/src/pages/GenUICanvas.jsx) with 4 tabs: Live (every `sdui` / `sdui_render` / `sdui_patch` WS frame rendered live), Installed (every installed app's manifest + per-surface **Regenerate** button that clears the hybrid cache), Themes, Components. Prominent "Publish an app" CTA in the header.
+- **Apps launcher grew a Publish button.** [`feral-client-v2/src/pages/Apps.jsx`](feral-client-v2/src/pages/Apps.jsx) surfaces a Publish link so developers have a one-click path from the user-facing launcher into the authoring flow.
 
 ## [2026.4.25] - 2026-04-22
 

@@ -82,6 +82,70 @@ async def get_manifest(app_id: str):
     }
 
 
+class ValidateRequest(BaseModel):
+    manifest: str  # raw YAML or JSON text
+
+
+@router.post("/api/apps/validate")
+async def validate_manifest(req: ValidateRequest):
+    """Validate an AppManifest *without* installing it.
+
+    Used by the v2 publisher flow so developers can lint their
+    manifest against the exact same pydantic validator the registry
+    and brain use at install time — no drift between "works locally"
+    and "works when installed".
+    """
+    text = (req.manifest or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="manifest is empty")
+
+    try:
+        import yaml  # type: ignore
+    except Exception:  # pragma: no cover
+        yaml = None  # type: ignore
+
+    data: Any
+    first_error: Optional[str] = None
+    try:
+        import json
+        data = json.loads(text)
+    except Exception as json_err:
+        first_error = str(json_err)
+        if yaml is None:
+            raise HTTPException(status_code=400, detail=f"invalid manifest: {first_error}")
+        try:
+            data = yaml.safe_load(text)
+        except Exception as yaml_err:
+            raise HTTPException(status_code=400, detail=f"invalid YAML/JSON: {yaml_err}")
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="manifest must be a mapping at the top level")
+
+    try:
+        from models.app_manifest import AppManifest
+        manifest = AppManifest(**data)
+    except Exception as exc:  # pydantic.ValidationError or value error
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    actions: list[str] = []
+    for surface in manifest.surfaces:
+        for action in surface.action_contract:
+            if action.action_id not in actions:
+                actions.append(action.action_id)
+
+    return {
+        "success": True,
+        "summary": {
+            "app_id": manifest.app_id,
+            "version": manifest.version,
+            "surfaces": [s.surface_id for s in manifest.surfaces],
+            "actions": actions,
+            "permissions": list(manifest.permissions),
+            "entry_surface_id": manifest.entry_surface_id,
+        },
+    }
+
+
 class InstallRequest(BaseModel):
     # Exactly one of these should be set; the handler validates.
     path: Optional[str] = None
