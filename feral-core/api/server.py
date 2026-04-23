@@ -76,6 +76,7 @@ from api.routes.consciousness import router as consciousness_router
 from api.routes.about_me import router as about_me_router
 from api.routes.ideas import router as ideas_router
 from api.routes.apps import router as apps_router
+from api.routes.supervisor import router as supervisor_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -140,6 +141,10 @@ _RATE_LIMIT_EXEMPT_PREFIXES: tuple[str, ...] = (
     # hit them before anything else and we don't want to lock them out.
     "/api/devices/pair",
     "/install-phone-bridge.sh",
+    # Supervisor oversight surface polls aggressively on the /oversight
+    # v2 page; it's a read-only audit view.
+    "/api/supervisor/events",
+    "/api/supervisor/stats",
 )
 
 
@@ -306,6 +311,7 @@ app.include_router(consciousness_router)
 app.include_router(about_me_router)
 app.include_router(ideas_router)
 app.include_router(apps_router)
+app.include_router(supervisor_router)
 
 
 # ─────────────────────────────────────────────

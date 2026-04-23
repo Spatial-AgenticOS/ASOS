@@ -27,6 +27,7 @@ import Apps from './pages/Apps';
 import AppsPublish from './pages/AppsPublish';
 import AppSurface from './pages/AppSurface';
 import Pair from './pages/Pair';
+import Oversight from './pages/Oversight';
 
 export default function App() {
   return (
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="/devices" element={<Devices />} />
         <Route path="/canvas" element={<GenUICanvas />} />
         <Route path="/glass-brain" element={<GlassBrain />} />
+        <Route path="/oversight" element={<Oversight />} />
         <Route path="/timeline" element={<Timeline />} />
         <Route path="/flows" element={<Flows />} />
         <Route path="/intents" element={<Intents />} />

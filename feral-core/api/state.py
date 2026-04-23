@@ -190,6 +190,7 @@ class BrainState:
         self.hybrid_genui: Optional[HybridGenerator] = None
         self.somatic_engine = None
         self.tool_genesis = None
+        self.supervisor = None
         self.agent_mitosis = None
         self.intent_compiler = None
         self.mqtt_bridge = None
@@ -422,6 +423,26 @@ class BrainState:
                 self.orchestrator.set_tool_genesis(self.tool_genesis)
             if self.agent_mitosis:
                 self.orchestrator.set_mitosis_engine(self.agent_mitosis)
+
+        with boot_subsystem(self._boot_report, "Supervisor"):
+            # One seat that sees every input the Brain acts on. Wraps the
+            # orchestrator's three public entry points with an audit +
+            # kill-switch layer. Keeps the orchestrator unchanged.
+            from agents.supervisor import Supervisor as _Supervisor
+
+            def _broadcast_supervisor_event(frame: dict):
+                if not self.sessions:
+                    return None
+                async def _fan():
+                    for sid in list(self.sessions.keys()):
+                        try:
+                            await self.send_to_session(sid, frame)
+                        except Exception:
+                            pass
+                return _fan()
+
+            self.supervisor = _Supervisor(broadcaster=_broadcast_supervisor_event)
+            self.supervisor.wrap(self.orchestrator)
 
         with boot_subsystem(self._boot_report, "RealtimeProxy"):
             self.realtime_proxy = RealtimeProxy(

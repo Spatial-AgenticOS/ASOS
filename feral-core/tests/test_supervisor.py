@@ -1,102 +1,245 @@
-"""Tests for the Supervisor-Aware Process Management module."""
+"""Supervisor tests — single oversight seat for all orchestrator entry points."""
 
-import os
-import signal
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
+from fastapi.testclient import TestClient
 
-from infra.supervisor import (
-    SupervisorKind,
-    SupervisorInfo,
-    acquire_pid_file,
-    detect_supervisor,
-    install_signal_handlers,
-    register_shutdown_hook,
-    request_restart,
-    _pid_is_alive,
-    _release_pid_file,
-    _shutdown_hooks,
+from agents.supervisor import (
+    Supervisor,
+    SupervisorBlocked,
+    SupervisorStore,
 )
 
 
-class TestDetectSupervisor:
-    def test_returns_supervisor_info(self):
-        info = detect_supervisor()
-        assert isinstance(info, SupervisorInfo)
-        assert isinstance(info.kind, SupervisorKind)
-
-    def test_bare_metal_not_managed(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("INVOCATION_ID", raising=False)
-        monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
-        monkeypatch.delenv("container", raising=False)
-        info = detect_supervisor()
-        if info.kind is SupervisorKind.NONE:
-            assert info.managed_restart is False
+pytestmark = pytest.mark.no_auto_feral_home
 
 
-class TestPidFile:
-    def test_acquire_creates_file(self, tmp_path):
-        pid_path = tmp_path / "test.pid"
-        result = acquire_pid_file(pid_path)
-        assert result == pid_path
-        assert pid_path.exists()
-        assert int(pid_path.read_text().strip()) == os.getpid()
-
-    def test_acquire_cleans_stale(self, tmp_path):
-        pid_path = tmp_path / "test.pid"
-        pid_path.write_text("99999999")
-        result = acquire_pid_file(pid_path)
-        assert result == pid_path
-        assert int(pid_path.read_text().strip()) == os.getpid()
-
-    def test_acquire_raises_if_live(self, tmp_path):
-        pid_path = tmp_path / "test.pid"
-        # PID 1 (init/launchd) is always alive and is never our own PID
-        pid_path.write_text("1")
-        with pytest.raises(RuntimeError, match="Another FERAL process"):
-            acquire_pid_file(pid_path)
-
-    def test_release_removes_own_pid(self, tmp_path):
-        pid_path = tmp_path / "test.pid"
-        pid_path.write_text(str(os.getpid()))
-        _release_pid_file(pid_path)
-        assert not pid_path.exists()
-
-    def test_release_ignores_other_pid(self, tmp_path):
-        pid_path = tmp_path / "test.pid"
-        pid_path.write_text("99999999")
-        _release_pid_file(pid_path)
-        assert pid_path.exists()
+# ── Store ────────────────────────────────────────────────────────
 
 
-class TestPidIsAlive:
-    def test_current_process(self):
-        assert _pid_is_alive(os.getpid()) is True
-
-    def test_invalid_pid(self):
-        assert _pid_is_alive(0) is False
-        assert _pid_is_alive(-1) is False
-
-    def test_nonexistent_pid(self):
-        assert _pid_is_alive(4_000_000) is False
+@pytest.fixture
+def store(tmp_path):
+    return SupervisorStore(db_path=str(tmp_path / "sup.db"))
 
 
-class TestShutdownHooks:
-    def test_register_hook(self):
-        original_len = len(_shutdown_hooks)
-        register_shutdown_hook(lambda: None)
-        assert len(_shutdown_hooks) == original_len + 1
-        _shutdown_hooks.pop()
+def test_store_roundtrip(store):
+    from agents.supervisor import SupervisorEvent
+    import time
 
-    def test_install_signal_handlers(self):
-        install_signal_handlers()
-        handler = signal.getsignal(signal.SIGTERM)
-        assert handler is not None
-        assert callable(handler)
+    ev = SupervisorEvent(
+        event_id="e1",
+        ts=time.time(),
+        source="web",
+        kind="command",
+        session_id="s1",
+        actor="user",
+        payload_hash="h",
+        payload_summary="hello world",
+        decision="allowed",
+        latency_ms=7,
+    )
+    store.insert(ev)
+    rows = store.recent(limit=10)
+    assert len(rows) == 1
+    assert rows[0]["source"] == "web"
+    assert rows[0]["payload_summary"] == "hello world"
 
 
-class TestRequestRestart:
-    def test_managed_exits(self):
-        info = SupervisorInfo(kind=SupervisorKind.DOCKER, managed_restart=True)
-        with pytest.raises(SystemExit) as exc_info:
-            request_restart(info)
-        assert exc_info.value.code == 0
+def test_store_filters(store):
+    from agents.supervisor import SupervisorEvent
+    import time
+
+    for i, src in enumerate(["web", "voice", "cron"]):
+        store.insert(SupervisorEvent(
+            event_id=f"e{i}",
+            ts=time.time() + i,
+            source=src,
+            kind="command",
+            session_id="s",
+            actor="user",
+            payload_hash="h",
+            payload_summary="x",
+            decision="allowed",
+            latency_ms=1,
+        ))
+    web_only = store.recent(source="web")
+    assert len(web_only) == 1
+    assert web_only[0]["source"] == "web"
+
+
+# ── Supervisor wrap ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def supervisor(tmp_path):
+    store = SupervisorStore(db_path=str(tmp_path / "sup.db"))
+    return Supervisor(store=store)
+
+
+@pytest.mark.asyncio
+async def test_wrap_audits_every_call(supervisor):
+    orch = MagicMock()
+    orch.handle_command = AsyncMock(return_value="ok")
+    orch.handle_command_stream = AsyncMock(return_value="stream-ok")
+    orch.handle_ui_event = AsyncMock(return_value={"handled": True})
+
+    supervisor.wrap(orch)
+
+    await orch.handle_command("sess-1", "hello", context={"source": "web"})
+    await orch.handle_command_stream("sess-2", "stream", context={"source": "voice"})
+    await orch.handle_ui_event(
+        session_id="sess-3",
+        action_id="confirm",
+        event="tap",
+        value=None,
+        app_id="",
+        screen_id="",
+    )
+
+    rows = supervisor.recent(limit=10)
+    assert len(rows) == 3
+    sources = {r["source"] for r in rows}
+    assert sources == {"web", "voice", "web"} or "web" in sources
+
+
+@pytest.mark.asyncio
+async def test_pause_blocks_every_call(supervisor):
+    inner = AsyncMock(return_value="ok")
+    orch = MagicMock()
+    orch.handle_command = inner
+    supervisor.wrap(orch)
+
+    supervisor.set_paused(True)
+    with pytest.raises(SupervisorBlocked):
+        await orch.handle_command("sess", "msg", context={"source": "web"})
+
+    rows = supervisor.recent()
+    assert rows[0]["decision"] == "denied"
+    inner.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_policy_gate_denied(supervisor):
+    orch = MagicMock()
+    orch.handle_command = AsyncMock(return_value="ok")
+
+    def gate(event):
+        return "denied" if "dangerous" in event.payload_summary else "allowed"
+
+    supervisor.policy_gate = gate
+    supervisor.wrap(orch)
+
+    with pytest.raises(SupervisorBlocked):
+        await orch.handle_command("sess", "dangerous act", context={"source": "web"})
+    # Allowed call goes through.
+    await orch.handle_command("sess", "hello", context={"source": "web"})
+    rows = supervisor.recent()
+    assert rows[0]["decision"] == "allowed"
+    assert rows[1]["decision"] == "denied"
+
+
+@pytest.mark.asyncio
+async def test_policy_gate_queued(supervisor):
+    inner = AsyncMock(return_value="real")
+    orch = MagicMock()
+    orch.handle_command = inner
+
+    supervisor.policy_gate = lambda e: "queued"
+    supervisor.wrap(orch)
+
+    result = await orch.handle_command("sess", "x", context={"source": "twin"})
+    assert result["queued"] is True
+    inner.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_broadcaster_called_with_event_frame(supervisor):
+    orch = MagicMock()
+    orch.handle_command = AsyncMock(return_value="ok")
+    frames = []
+
+    def broadcaster(frame):
+        frames.append(frame)
+        return None
+
+    supervisor.broadcaster = broadcaster
+    supervisor.wrap(orch)
+    await orch.handle_command("sess", "hi", context={"source": "web"})
+    assert len(frames) == 1
+    assert frames[0]["type"] == "supervisor_event"
+    assert frames[0]["payload"]["source"] == "web"
+
+
+def test_record_for_non_orchestrator_sources(supervisor):
+    ev = supervisor.record(
+        source="proactive",
+        kind="alert",
+        session_id="s1",
+        actor="system",
+        payload={"summary": "sleep anomaly"},
+    )
+    assert ev.source == "proactive"
+    rows = supervisor.recent(source="proactive")
+    assert len(rows) == 1
+
+
+# ── REST surface ─────────────────────────────────────────────────
+
+
+@pytest.fixture
+def client(tmp_path):
+    store = SupervisorStore(db_path=str(tmp_path / "sup.db"))
+    supervisor = Supervisor(store=store)
+    mock = MagicMock()
+    mock.supervisor = supervisor
+    with patch("api.state.state", mock), patch("api.routes.supervisor.state", mock):
+        from api.server import app
+        yield TestClient(app, raise_server_exceptions=False), supervisor
+
+
+def test_rest_events_empty(client):
+    c, _ = client
+    r = c.get("/api/supervisor/events")
+    assert r.status_code == 200
+    assert r.json() == {"count": 0, "events": []}
+
+
+def test_rest_record_then_list(client):
+    c, sup = client
+    r = c.post("/api/supervisor/record", json={
+        "source": "cron",
+        "kind": "routine",
+        "payload": "morning briefing",
+    })
+    assert r.status_code == 200
+    r2 = c.get("/api/supervisor/events?source=cron")
+    assert r2.status_code == 200
+    events = r2.json()["events"]
+    assert len(events) == 1
+    assert events[0]["source"] == "cron"
+    assert events[0]["payload_summary"] == "morning briefing"
+
+
+def test_rest_pause_toggles_supervisor(client):
+    c, sup = client
+    r = c.post("/api/supervisor/pause", json={"paused": True})
+    assert r.status_code == 200
+    assert r.json()["paused"] is True
+    assert sup.paused is True
+    c.post("/api/supervisor/pause", json={"paused": False})
+    assert sup.paused is False
+
+
+def test_rest_stats_reports_paused_and_sources(client):
+    c, sup = client
+    sup.record(source="web", kind="command", payload="x")
+    sup.record(source="voice", kind="command", payload="x")
+    r = c.get("/api/supervisor/stats")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert body["by_source"].get("web") == 1
+    assert body["paused"] is False

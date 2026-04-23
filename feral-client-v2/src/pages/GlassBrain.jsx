@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, Cpu, Layers, RefreshCw, Radio, Zap, Brain } from 'lucide-react';
+import { Activity, Cpu, Layers, RefreshCw, Radio, Zap, Brain, Shield } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import ConsciousnessMindMap from '../components/ConsciousnessMindMap';
@@ -97,6 +97,9 @@ export default function GlassBrain() {
         title="Glass Brain"
         actions={(
           <>
+            <Link to="/oversight" className="v2-btn v2-btn--ghost" title="Supervisor audit + kill switch">
+              <Shield size={13} /> Oversight
+            </Link>
             <Link to="/memory/context" className="v2-btn v2-btn--ghost" title="Inspect what multi-memory surfaced per LLM turn">
               <Brain size={13} /> Memory context
             </Link>
