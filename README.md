@@ -326,6 +326,9 @@ feral/
 └── docs/                # Documentation site (Docusaurus)
 ```
 
+For how the Orchestrator, Supervisor, and parallel tool dispatch
+actually flow a request, see [`docs/orchestration.md`](docs/orchestration.md).
+
 ---
 
 ## Contributing
