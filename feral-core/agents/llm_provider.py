@@ -864,6 +864,69 @@ class LLMProvider:
         self.available = bool(self.api_key)
         logger.info(f"Switched LLM to {provider}/{self.model} (available={self.available})")
 
+    async def reconfigure(
+        self,
+        *,
+        provider: str,
+        model: str = "",
+        api_key: str = "",
+        base_url: str = "",
+    ) -> dict:
+        """Hot-swap provider / model / key / base_url in one call.
+
+        Same wire as ``switch_provider`` but:
+          * accepts ``base_url`` so local providers (LM Studio, custom
+            Ollama port) can land end-to-end from the Settings form;
+          * returns a structured result the REST layer can surface to
+            the UI (``{provider, model, available, reason}``);
+          * emits a supervisor event so the swap lands in the audit
+            log right alongside user commands.
+        """
+        if base_url:
+            os.environ["FERAL_LLM_BASE_URL"] = base_url
+        previous_provider = self.provider
+        try:
+            await self.switch_provider(provider=provider, model=model, api_key=api_key)
+        except Exception as exc:
+            logger.warning("reconfigure(%s) failed: %s", provider, exc)
+            return {
+                "ok": False,
+                "provider": provider,
+                "model": model,
+                "available": False,
+                "reason": str(exc),
+            }
+
+        reason = "ok" if self.available else "no_api_key"
+        try:
+            from api.state import state as _state
+            sup = getattr(_state, "supervisor", None)
+            if sup is not None:
+                sup.record(
+                    source="config",
+                    kind="llm_reconfigure",
+                    actor="user",
+                    payload={
+                        "from": previous_provider,
+                        "to": self.provider,
+                        "model": self.model,
+                        "has_key": bool(self.api_key),
+                    },
+                    decision="allowed" if self.available else "queued",
+                    detail={"reason": reason, "base_url": self.base_url},
+                )
+        except Exception as exc:
+            logger.debug("supervisor.record(llm_reconfigure) failed: %s", exc)
+
+        return {
+            "ok": True,
+            "provider": self.provider,
+            "model": self.model,
+            "available": bool(self.available),
+            "base_url": self.base_url,
+            "reason": reason,
+        }
+
     async def apply_preset(self, preset_id: str) -> dict:
         preset = LLM_PRESETS.get(preset_id)
         if not preset:

@@ -1039,39 +1039,71 @@ class BrainState:
 
     @staticmethod
     def _load_stored_credentials():
-        """Load API keys from ~/.feral/credentials.json into environment if not already set."""
+        """Load API keys from ~/.feral/credentials.json into environment.
+
+        If ``credentials.json`` is missing OR corrupt we fall back to
+        reading every known env var out of the BlindVault directly.
+        The vault is the authoritative store written by
+        ``/api/llm/providers/{id}/configure`` and ``/api/config/credentials``;
+        ``credentials.json`` is the plaintext mirror used for boot-time
+        convenience. Keeping both loadable means a single-file corruption
+        never locks a user out of their provider keys.
+        """
+        env_keys = [
+            "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+            "GROQ_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY",
+            "TOGETHER_API_KEY", "FIREWORKS_API_KEY",
+            "MOONSHOT_API_KEY", "DASHSCOPE_API_KEY",
+            "TAVILY_API_KEY", "BRAVE_API_KEY", "EXA_API_KEY",
+            "SERPER_API_KEY", "GITHUB_TOKEN", "SPOTIFY_CLIENT_ID",
+            "PERPLEXITY_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CSE_ID",
+            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+            # Messaging channels
+            "FERAL_TELEGRAM_BOT_TOKEN",
+            "FERAL_SLACK_BOT_TOKEN", "FERAL_SLACK_APP_TOKEN", "FERAL_SLACK_SIGNING_SECRET",
+            "FERAL_DISCORD_BOT_TOKEN",
+            "FERAL_WHATSAPP_PHONE_NUMBER_ID", "FERAL_WHATSAPP_ACCESS_TOKEN",
+            "FERAL_WHATSAPP_VERIFY_TOKEN", "FERAL_WHATSAPP_APP_SECRET",
+        ]
+        loaded: list[str] = []
+        creds: dict = {}
         creds_path = feral_home() / "credentials.json"
-        if not creds_path.exists():
-            return
-        try:
-            import json as _json
-            creds = _json.loads(creds_path.read_text())
-            env_keys = [
-                "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
-                "GROQ_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY",
-                "MOONSHOT_API_KEY", "DASHSCOPE_API_KEY",
-                "TAVILY_API_KEY", "BRAVE_API_KEY", "EXA_API_KEY",
-                "SERPER_API_KEY", "GITHUB_TOKEN", "SPOTIFY_CLIENT_ID",
-                "PERPLEXITY_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CSE_ID",
-                # Messaging channels
-                "FERAL_TELEGRAM_BOT_TOKEN",
-                "FERAL_SLACK_BOT_TOKEN", "FERAL_SLACK_APP_TOKEN", "FERAL_SLACK_SIGNING_SECRET",
-                "FERAL_DISCORD_BOT_TOKEN",
-                "FERAL_WHATSAPP_PHONE_NUMBER_ID", "FERAL_WHATSAPP_ACCESS_TOKEN",
-                "FERAL_WHATSAPP_VERIFY_TOKEN", "FERAL_WHATSAPP_APP_SECRET",
-            ]
-            loaded = []
-            for key in env_keys:
-                if creds.get(key) and not os.environ.get(key):
-                    os.environ[key] = creds[key]
-                    loaded.append(key)
-            if creds.get("web_search") and not os.environ.get("TAVILY_API_KEY"):
-                os.environ["TAVILY_API_KEY"] = creds["web_search"]
-                loaded.append("TAVILY_API_KEY")
-            if loaded:
-                logger.info(f"Loaded credentials from {creds_path}: {', '.join(loaded)}")
-        except Exception as e:
-            logger.warning(f"Failed to load credentials: {e}")
+        creds_corrupt = False
+        if creds_path.exists():
+            try:
+                import json as _json
+                creds = _json.loads(creds_path.read_text())
+            except Exception as exc:
+                creds_corrupt = True
+                logger.warning(
+                    "credentials.json is corrupt (%s) — falling back to vault", exc,
+                )
+
+        for key in env_keys:
+            if creds.get(key) and not os.environ.get(key):
+                os.environ[key] = creds[key]
+                loaded.append(key)
+        if creds.get("web_search") and not os.environ.get("TAVILY_API_KEY"):
+            os.environ["TAVILY_API_KEY"] = creds["web_search"]
+            loaded.append("TAVILY_API_KEY")
+
+        # Vault fallback — only for keys still missing from env.
+        if creds_corrupt or not loaded:
+            try:
+                from security.vault import BlindVault
+                vault = BlindVault()
+                for key in env_keys:
+                    if os.environ.get(key):
+                        continue
+                    val = vault.retrieve(key) if hasattr(vault, "retrieve") else None
+                    if val:
+                        os.environ[key] = val
+                        loaded.append(key + "(vault)")
+            except Exception as exc:
+                logger.debug("vault fallback during boot failed: %s", exc)
+
+        if loaded:
+            logger.info(f"Loaded credentials: {', '.join(loaded)}")
 
     async def send_to_session(self, session_id: str, msg: FeralMessage):
         ws = self.sessions.get(session_id)

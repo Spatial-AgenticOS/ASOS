@@ -1,11 +1,16 @@
 """Setup, configuration, identity, and credential endpoints."""
 
+import logging
 import os
+import re
+
 from fastapi import APIRouter
 
 from api.state import state
 from config.loader import feral_home
 from config.runtime import ollama_base_url
+
+logger = logging.getLogger("feral.api.config")
 
 router = APIRouter()
 
@@ -132,26 +137,106 @@ async def update_config(body: dict):
     return {"ok": True, "section": section, "key": key, "value": value}
 
 
+_KEY_ENV_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*_API_KEY$")
+
+# Extra env vars providers use that DON'T end in _API_KEY — we still want
+# them persisted when Settings → Providers saves them.
+_EXTRA_PROVIDER_ENV_VARS: frozenset[str] = frozenset({
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "MOONSHOT_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "FERAL_TELEGRAM_BOT_TOKEN",
+    "FERAL_DISCORD_BOT_TOKEN",
+    "FERAL_SLACK_BOT_TOKEN",
+})
+
+
+def _catalog_env_vars() -> set[str]:
+    """Gather every credential_env_var the ProviderCatalog knows about."""
+    catalog = getattr(state, "provider_catalog", None)
+    if catalog is None:
+        return set()
+    try:
+        descriptors = catalog.list_providers()
+    except Exception:
+        return set()
+    return {d.credential_env_var for d in descriptors if getattr(d, "credential_env_var", "")}
+
+
+def _is_accepted_env_key(key: str) -> bool:
+    if not isinstance(key, str) or not key:
+        return False
+    if key in _EXTRA_PROVIDER_ENV_VARS:
+        return True
+    if key in _catalog_env_vars():
+        return True
+    return bool(_KEY_ENV_PATTERN.match(key))
+
+
 @router.post("/api/config/credentials")
 async def save_credentials(body: dict):
-    """Save API credentials. Body: {OPENAI_API_KEY: "...", skill_keys: {...}}"""
-    creds = {}
-    for key in ("OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY"):
-        if key in body:
-            creds[key] = body[key]
-            os.environ[key] = body[key]
-    if "skill_keys" in body:
-        creds["skill_keys"] = body["skill_keys"]
-        for skill_id, api_key in body["skill_keys"].items():
-            os.environ[f"FERAL_KEY_{skill_id}"] = api_key
-    state.config.save_credentials(creds)
+    """Save API credentials.
+
+    Accepts any env var the provider catalog declares, any key matching
+    ``^[A-Z][A-Z0-9_]*_API_KEY$``, and a fixed set of provider-specific
+    non-``_API_KEY`` env vars (e.g. ``GOOGLE_API_KEY``, AWS creds,
+    channel bot tokens). Previously whitelisted only 3 providers and
+    silently dropped every other key typed in the UI.
+
+    Body shape::
+
+        { "OPENAI_API_KEY": "...", "GEMINI_API_KEY": "...",
+          "skill_keys": { "<skill_id>": "..." } }
+    """
+    creds: dict = {}
+    rejected: list[str] = []
+    for key, value in (body or {}).items():
+        if key == "skill_keys" and isinstance(value, dict):
+            creds["skill_keys"] = value
+            for skill_id, api_key in value.items():
+                os.environ[f"FERAL_KEY_{skill_id}"] = api_key
+            continue
+        if not _is_accepted_env_key(key):
+            rejected.append(key)
+            continue
+        if not isinstance(value, str) or not value:
+            continue
+        creds[key] = value
+        os.environ[key] = value
+
+    persisted_to_creds = False
+    try:
+        if creds:
+            state.config.save_credentials(creds)
+            persisted_to_creds = True
+    except Exception as exc:  # pragma: no cover — disk write failure
+        logger.warning("save_credentials failed to write credentials.json: %s", exc)
+
+    persisted_to_vault: list[str] = []
+    if state.vault is not None:
+        for env_var, secret in creds.items():
+            if env_var == "skill_keys":
+                continue
+            try:
+                state.vault.store(env_var, secret, stored_by="settings_credentials")
+                persisted_to_vault.append(env_var)
+            except Exception as exc:
+                logger.warning("vault.store failed for %s: %s", env_var, exc)
 
     if state.orchestrator and state.orchestrator.llm:
-        for key_name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY",
-                         "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"):
+        for key_name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+                         "GROQ_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY",
+                         "TOGETHER_API_KEY", "FIREWORKS_API_KEY"):
             if key_name in creds and creds[key_name]:
                 provider = state.orchestrator.llm.provider
-                state.orchestrator.llm.switch_provider(provider, api_key=creds[key_name])
+                try:
+                    await state.orchestrator.llm.switch_provider(provider, api_key=creds[key_name])
+                except Exception as exc:
+                    logger.debug("switch_provider after save_credentials failed: %s", exc)
                 break
 
     if state.channel_manager:
@@ -166,7 +251,13 @@ async def save_credentials(body: dict):
                 import asyncio
                 asyncio.create_task(state.channel_manager.start_channel(channel_type, {"bot_token": token, "enabled": True}))
 
-    return {"ok": True, "keys_saved": list(creds.keys())}
+    return {
+        "ok": True,
+        "keys_saved": [k for k in creds.keys() if k != "skill_keys"],
+        "persisted_to_credentials_json": persisted_to_creds,
+        "persisted_to_vault": persisted_to_vault,
+        "rejected": rejected,
+    }
 
 
 async def _validate_key_for_provider(provider: str, api_key: str, base_url: str = None) -> tuple[bool, str]:

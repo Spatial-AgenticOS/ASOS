@@ -127,7 +127,11 @@ def test_configure_stores_key_in_vault(client):
         json={"api_key": "sk-live", "base_url": "https://openai.example"},
     )
     assert r.status_code == 200
-    vault.store.assert_called_with("OPENAI_API_KEY", "sk-live", stored_by="setup_wizard")
+    # Commit 1 widened "stored_by" from "setup_wizard" to "settings" — the
+    # key routing is now a single pipe used by setup + Settings alike.
+    vault.store.assert_called_with("OPENAI_API_KEY", "sk-live", stored_by="settings")
+    body = r.json()
+    assert body["persisted"]["vault"] is True
 
 
 def test_configure_unknown_provider_404(client):
@@ -162,7 +166,8 @@ def test_set_config_persists_and_stores_key(client):
     assert body["provider"] == "openai"
     assert body["model"] == "gpt-new-model-not-yet-released"
     assert store["llm"]["provider"] == "openai"
-    vault.store.assert_called_with("OPENAI_API_KEY", "sk-new", stored_by="setup_wizard")
+    # See note in test_configure_stores_key_in_vault — stored_by unified.
+    vault.store.assert_called_with("OPENAI_API_KEY", "sk-new", stored_by="settings")
 
 
 def test_set_config_rejects_unknown_provider(client):

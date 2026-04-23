@@ -181,13 +181,59 @@ class ConfigureRequest(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+def _persist_key(env_var: str, api_key: str) -> dict:
+    """Write *api_key* through every persistence layer we have.
+
+    Returns ``{ok, vault, credentials_json, env, warnings}`` so the
+    caller (REST endpoint) can surface honest success/failure state
+    to the UI instead of silently swallowing errors.
+    """
+    warnings: list[str] = []
+    vault_ok = False
+    creds_ok = False
+
+    if env_var:
+        os.environ[env_var] = api_key
+
+    if state.vault is not None and env_var:
+        try:
+            state.vault.store(env_var, api_key, stored_by="settings")
+            vault_ok = True
+        except Exception as exc:
+            warnings.append(f"vault.store({env_var}) failed: {exc}")
+            logger.warning("vault.store failed for %s: %s", env_var, exc)
+
+    if state.config is not None and env_var:
+        try:
+            state.config.save_credentials({env_var: api_key})
+            creds_ok = True
+        except Exception as exc:
+            warnings.append(f"save_credentials({env_var}) failed: {exc}")
+            logger.warning("save_credentials failed for %s: %s", env_var, exc)
+
+    return {
+        "ok": vault_ok or creds_ok,
+        "vault": vault_ok,
+        "credentials_json": creds_ok,
+        "env": bool(env_var),
+        "warnings": warnings,
+    }
+
+
 @router.post("/api/llm/providers/{provider_id}/configure")
 async def configure_llm_provider(provider_id: str, req: ConfigureRequest):
     """Re-bind an adapter with a fresh key / base URL without restarting.
 
-    The API key is routed through the BlindVault (if wired); never
-    written to ``settings.json`` in plaintext. ``settings.json`` only
-    stores the currently-selected provider + model + base_url.
+    The API key is:
+      1. written to the BlindVault (primary store).
+      2. persisted to ``~/.feral/credentials.json`` via
+         ``ConfigLoader.save_credentials`` (secondary store so a corrupt
+         vault doesn't lose the key).
+      3. exported to ``os.environ`` so the running ``LLMProvider`` sees
+         it without waiting for a reboot.
+
+    ``settings.json`` itself never stores the plaintext key — only the
+    currently-selected provider + model + base_url.
     """
     catalog = _require_catalog()
     if catalog.get_descriptor(provider_id) is None:
@@ -201,20 +247,24 @@ async def configure_llm_provider(provider_id: str, req: ConfigureRequest):
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if req.api_key and state.vault is not None:
-        desc = catalog.get_descriptor(provider_id)
-        env_var = desc.credential_env_var if desc else ""
-        if env_var:
-            try:
-                state.vault.store(env_var, req.api_key, stored_by="setup_wizard")
-            except Exception as exc:
-                logger.debug("vault.store failed for %s: %s", env_var, exc)
+
+    desc = catalog.get_descriptor(provider_id)
+    env_var = desc.credential_env_var if desc else ""
+    persisted: dict = {"ok": True, "warnings": []}
+    if req.api_key:
+        persisted = _persist_key(env_var, req.api_key)
+
     if req.base_url and state.config is not None:
         try:
             state.config.update_settings("llm", "base_url", req.base_url)
-        except Exception:
-            pass
-    return {"success": True, "status": catalog.status_for(provider_id).to_dict()}
+        except Exception as exc:
+            logger.debug("update_settings(base_url) failed: %s", exc)
+
+    return {
+        "success": True,
+        "status": catalog.status_for(provider_id).to_dict(),
+        "persisted": persisted,
+    }
 
 
 # ----------------------------------------------------------------------
@@ -260,7 +310,13 @@ class LLMConfigRequest(BaseModel):
 
 @router.post("/api/llm/config")
 async def set_llm_config(req: LLMConfigRequest):
-    """Persist llm.* settings + optional key routing into the vault."""
+    """Persist llm.* settings + route the key into vault + credentials +
+    env + hot-swap the running LLMProvider.
+
+    This is the single entry point the v2 Settings → Providers "Save &
+    switch" button hits. After this call completes successfully the
+    next chat turn uses the new provider — no reboot needed.
+    """
     catalog = _require_catalog()
     resolved = catalog.resolve_alias(req.provider) or req.provider
     if catalog.get_descriptor(resolved) is None:
@@ -276,15 +332,37 @@ async def set_llm_config(req: LLMConfigRequest):
         state.config.update_settings("llm", "base_url", req.base_url)
     if req.fallback_providers is not None:
         state.config.update_settings("llm", "fallback_providers", req.fallback_providers)
+
+    desc = catalog.get_descriptor(resolved)
+    env_var = desc.credential_env_var if desc else ""
+    persisted: dict = {"ok": True, "warnings": []}
     if req.api_key:
-        desc = catalog.get_descriptor(resolved)
-        env_var = desc.credential_env_var if desc else ""
-        if env_var and state.vault is not None:
-            try:
-                state.vault.store(env_var, req.api_key, stored_by="setup_wizard")
-                os.environ[env_var] = req.api_key
-            except Exception as exc:
-                logger.debug("vault.store for %s failed: %s", env_var, exc)
+        persisted = _persist_key(env_var, req.api_key)
         catalog.configure(resolved, api_key=req.api_key, base_url=req.base_url)
+
     state.config.update_settings("meta", "setup_complete", True)
-    return {"success": True, "provider": resolved, "model": req.model}
+
+    # Hot-swap the running LLMProvider so the next chat turn uses the
+    # new config without waiting for a Brain reboot. Happens even when
+    # no api_key was supplied (user just switching between already-
+    # configured providers).
+    reconfigure_result: dict = {"ok": False, "reason": "orchestrator_missing"}
+    if state.orchestrator and state.orchestrator.llm:
+        try:
+            reconfigure_result = await state.orchestrator.llm.reconfigure(
+                provider=resolved,
+                model=req.model,
+                api_key=req.api_key or "",
+                base_url=req.base_url or "",
+            )
+        except Exception as exc:
+            logger.warning("reconfigure after set_llm_config failed: %s", exc)
+            reconfigure_result = {"ok": False, "reason": str(exc)}
+
+    return {
+        "success": True,
+        "provider": resolved,
+        "model": req.model,
+        "persisted": persisted,
+        "reconfigured": reconfigure_result,
+    }

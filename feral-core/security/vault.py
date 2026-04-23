@@ -43,11 +43,28 @@ class BlindVault:
         self._load()
 
     def _load(self):
-        if self._vault_path.exists():
-            with open(self._vault_path) as f:
-                self._cache = json.load(f)
-        else:
+        if not self._vault_path.exists():
             self._cache = {}
+            return
+        try:
+            with open(self._vault_path) as f:
+                parsed = json.load(f)
+        except Exception as exc:
+            # Corrupt JSON would previously crash BrainState boot. Back up
+            # the bad file and start with an empty cache so the user can
+            # re-add keys via Settings without losing access to the brain.
+            try:
+                backup = self._vault_path.with_suffix(".corrupt")
+                self._vault_path.rename(backup)
+            except Exception:
+                pass
+            import logging
+            logging.getLogger("feral.vault").warning(
+                "credentials.json unreadable (%s) — starting with empty vault", exc,
+            )
+            self._cache = {}
+            return
+        self._cache = parsed if isinstance(parsed, dict) else {}
 
     def _persist(self):
         self._vault_path.parent.mkdir(parents=True, exist_ok=True)
