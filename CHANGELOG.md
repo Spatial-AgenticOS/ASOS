@@ -1,10 +1,29 @@
 # Changelog
 
-<!-- feral-version: 2026.4.27 -->
+<!-- feral-version: 2026.4.28 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.4.28] - 2026-04-23
+
+### Added
+
+- **Parallel tool calls inside a single LLM turn.** [`feral-core/agents/orchestrator.py`](feral-core/agents/orchestrator.py) now dispatches every `tool_calls` in one turn via `asyncio.gather` behind a `Semaphore(FERAL_MAX_PARALLEL_TOOLS=6)`. A turn with weather + calendar + web_search + memory now completes in `max(tool_i)` wall-clock, not `sum`. Results are rebuilt in the original `tool_calls` order so the OpenAI `tool_call_id → result` contract stays intact. `FERAL_MAX_PARALLEL_TOOLS=1` restores strict sequential for debug.
+- **Per-session async lock.** Two concurrent turns on the same `session_id` now serialise (they share `conversation_history` + tool_call ordering). Different sessions run fully parallel. Lock dropped on `on_session_disconnect` + session eviction.
+- **Supervisor wraps `handle_daemon_result`.** [`feral-core/agents/supervisor.py`](feral-core/agents/supervisor.py) `wrap()` now wraps four public Orchestrator entry points (was three). Daemon tool results are actionable events and deserve the same audit row as chat turns.
+- **Honest cron + proactive source tagging.** Cron routines now pass `context={"source": "cron", "actor": "system", "routine_id": ..., "routine_type": ...}` into `handle_command` so the audit log stops logging every scheduled turn as `source="web"`. [`feral-core/agents/proactive_engine.py`](feral-core/agents/proactive_engine.py) `_execute_automation` now calls `state.supervisor.record(source="proactive", ...)` for every set_scene / breathing_exercise / notification — they all land in `/oversight`.
+- **Orchestration docs.** [`docs/orchestration.md`](docs/orchestration.md) — sequence diagrams for Supervisor → Orchestrator → tools, the session lock, parallel tool dispatch, and subagent spawning. Linked from README.
+- **Demo-pipeline smoke tests.** [`feral-core/tests/test_demo_mobile_ambient_smoke.py`](feral-core/tests/test_demo_mobile_ambient_smoke.py) and [`feral-core/tests/test_demo_genui_publisher_smoke.py`](feral-core/tests/test_demo_genui_publisher_smoke.py) — 5 assertions each. CI guards the HTTP contracts behind the mobile-ambient and GenUI-publisher demos even though the demos themselves stay private.
+
+### Coverage
+
+- **v2 client branches 17.34 → 27.14 (+9.8 pts, nearly doubled).** 60 new vitest tests across Pair, Oversight, MemoryContext, Settings (Providers / Fallbacks / Memory), Geofences, Webhooks, Wiki, Identity, Skills, SetupWizard, Dashboard, Health, Memory, Forge, Intents, Agents, Flows, Marketplace, AppsPublish, Chat, Devices, AppSurface, Modal, CodeEditor, DeviceQRCode, LiveOpsStream. Floors ratcheted stage-by-stage to measured − 1 per axis (33/26/27/35 for stmts/branches/funcs/lines). Target 50% branches tracked in [`docs/coverage.md`](docs/coverage.md).
+
+### Fixed
+
+- **Stale channel test assertion.** [`feral-core/tests/test_creative_features.py`](feral-core/tests/test_creative_features.py) `test_channel_handler_registers_device_for_handoff` still asserted the pre-fix `node_type="phone"` for channels. Updated to `"channel"` to match the production code that was already correct (see `api/state.py` + the 2026.4.26 phone-placeholder kill).
 
 ## [2026.4.27] - 2026-04-22
 
