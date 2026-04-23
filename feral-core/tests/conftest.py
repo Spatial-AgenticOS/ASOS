@@ -2,6 +2,14 @@ import pytest
 import os
 
 
+# Raise the rate-limit ceiling well before the server module imports so
+# CI test runs (120 req/min default is too low once we have 200+ route
+# tests) don't hit 429s on one of the Hardware / config tests. Keep the
+# legacy 120 in production by setting this only when FERAL_RATE_LIMIT_RPM
+# is unset.
+os.environ.setdefault("FERAL_RATE_LIMIT_RPM", "10000")
+
+
 @pytest.fixture(autouse=True)
 def _disable_api_key_middleware_for_tests(monkeypatch):
     """Starlette TestClient reports client host as 'testclient'; accept that as localhost
