@@ -141,6 +141,11 @@ class Orchestrator:
         self.conversation_history: dict[str, list[dict]] = {}
         self._conversation_max_per_session = 200
         self._conversation_max_sessions = 500
+        # Per-session async lock. Two concurrent turns on the SAME session
+        # used to race on `conversation_history` + the outgoing tool
+        # ordering. Different sessions still run fully parallel — only
+        # turns on the same session are serialised.
+        self._session_locks: dict[str, asyncio.Lock] = {}
         self._pending_daemon_results: dict[str, asyncio.Future] = {}
         self._pending_frame_futures: dict[str, asyncio.Future] = {}
         self._pending_confirmations: dict[str, dict] = {}
@@ -501,8 +506,33 @@ class Orchestrator:
     def update_biometric(self, session_id: str, biometric: dict):
         self.biometric_state[session_id] = biometric
 
+    def _get_session_lock(self, session_id: str) -> asyncio.Lock:
+        """Return (creating if needed) the per-session async lock.
+
+        Two concurrent `handle_command*` calls for the SAME session_id
+        must serialise — they share ``conversation_history`` and the
+        LLM tool-call ordering. Calls for DIFFERENT session_ids run
+        fully in parallel; this lock only blocks intra-session.
+        """
+        lock = self._session_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._session_locks[session_id] = lock
+        return lock
+
     async def handle_command(self, session_id: str, text: str, context: Optional[dict] = None):
-        """Process a user command through the full agentic pipeline."""
+        """Process a user command through the full agentic pipeline.
+
+        Thin wrapper that acquires a per-session lock so two concurrent
+        turns on the same session cannot race on ``conversation_history``
+        or interleave tool_call ordering. Different sessions proceed
+        fully in parallel.
+        """
+        async with self._get_session_lock(session_id):
+            return await self._handle_command_impl(session_id, text, context)
+
+    async def _handle_command_impl(self, session_id: str, text: str, context: Optional[dict] = None):
+        """Real body of handle_command. Guarded by the session lock above."""
         logger.info(f"[{session_id[:8]}] Command: {text}")
         self._session_finalized.discard(session_id)
 
@@ -719,10 +749,33 @@ class Orchestrator:
                 return
 
             if tool_calls:
-                for tc in tool_calls:
-                    t_start = time.time()
-                    result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
-                    latency_ms = (time.time() - t_start) * 1000
+                # Parallel dispatch of every tool the LLM asked for in one
+                # turn. Results ARE interleaved in wall-clock but we rebuild
+                # ``history`` in the original ``tool_calls`` order so the
+                # next LLM turn sees tool_call_id → result in sequence (the
+                # OpenAI API requires that order for tool messages).
+                #
+                # Cap concurrency with ``FERAL_MAX_PARALLEL_TOOLS`` (default 6).
+                # Set to 1 to fall back to strict sequential execution.
+                parallel_cap = max(1, int(os.environ.get("FERAL_MAX_PARALLEL_TOOLS", "6")))
+                sem = asyncio.Semaphore(parallel_cap)
+
+                async def _run_tool(tc: dict) -> dict:
+                    async with sem:
+                        t_start = time.time()
+                        result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
+                        return {
+                            "tc": tc,
+                            "result": result_data,
+                            "latency_ms": (time.time() - t_start) * 1000,
+                        }
+
+                tool_outputs = await asyncio.gather(*[_run_tool(tc) for tc in tool_calls])
+
+                for tool_output in tool_outputs:
+                    tc = tool_output["tc"]
+                    result_data = tool_output["result"]
+                    latency_ms = tool_output["latency_ms"]
 
                     tool_success = bool(result_data.get("success") or result_data.get("status") == "command_sent_to_hardware_daemon")
                     await self._emit_brain_event(session_id, "tool_exec", {"tool": tc["name"], "success": tool_success})
@@ -792,6 +845,11 @@ class Orchestrator:
             asyncio.ensure_future(self.learner.on_message(session_id, "user", text))
 
     async def handle_command_stream(self, session_id: str, text: str, context: Optional[dict] = None):
+        """Streaming variant of handle_command with a per-session lock."""
+        async with self._get_session_lock(session_id):
+            return await self._handle_command_stream_impl(session_id, text, context)
+
+    async def _handle_command_stream_impl(self, session_id: str, text: str, context: Optional[dict] = None):
         """
         Streaming variant of handle_command. Sends text deltas in real-time
         so the client gets token-by-token output.
@@ -1105,6 +1163,9 @@ class Orchestrator:
         to_remove = len(self.conversation_history) - self._conversation_max_sessions
         for sid in sorted_sids[:to_remove]:
             del self.conversation_history[sid]
+            # Drop the per-session lock too so long-running brains don't
+            # grow the lock dict without bound.
+            self._session_locks.pop(sid, None)
 
     async def on_session_disconnect(self, session_id: str):
         """Called when a client disconnects. Summarize and learn."""
@@ -1116,6 +1177,7 @@ class Orchestrator:
             await self.learner.summarize_session(session_id)
         self.conversation_history.pop(session_id, None)
         self._last_proactive_check.pop(session_id, None)
+        self._session_locks.pop(session_id, None)
         self.tool_runner.clear_session(session_id)
 
     # ─────────────────────────────────────────────
