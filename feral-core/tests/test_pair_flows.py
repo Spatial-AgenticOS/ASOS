@@ -1,0 +1,166 @@
+"""Pairing-flow tests — typed /api/devices/pair body + QR modes +
+``/api/devices/pair/complete`` ack.
+
+The v2 client has three first-class pairing paths:
+  * ``kind=browser`` — Web-phone via the /pair?t=TOKEN landing page
+  * ``kind=hup``     — daemon / node SDK with an explicit node_id
+  * ``kind=name``    — label-only pair (legacy behaviour)
+
+All three must land in DevicePairingStore with their typed metadata
+and survive a round-trip through ``GET /api/devices/paired``.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+pytestmark = pytest.mark.no_auto_feral_home
+
+
+@pytest.fixture
+def client(tmp_path):
+    from security.device_pairing import DevicePairingStore
+    store = DevicePairingStore(db_path=str(tmp_path / "pairs.db"))
+
+    mock = MagicMock()
+    mock.device_pairing_store = store
+    with patch("api.state.state", mock), patch("api.routes.devices.state", mock):
+        from api.server import app
+        yield TestClient(app, raise_server_exceptions=False), store
+
+
+# ── typed body ──────────────────────────────────────────────────────
+
+
+def test_pair_name_kind_default(client):
+    c, store = client
+    r = c.post("/api/devices/pair", json={"name": "office-laptop"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "name"
+    assert body["name"] == "office-laptop"
+    assert "token" in body and len(body["token"]) >= 32
+    assert store.verify_device(body["token"]) == body["device_id"]
+
+
+def test_pair_browser_kind(client):
+    c, _store = client
+    r = c.post("/api/devices/pair", json={
+        "kind": "browser",
+        "name": "iphone-safari",
+        "platform": "iOS 17 Safari",
+        "capabilities": ["camera", "mic", "location"],
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "browser"
+    assert body["platform"] == "iOS 17 Safari"
+    assert body["capabilities"] == ["camera", "mic", "location"]
+
+
+def test_pair_hup_kind(client):
+    c, _store = client
+    r = c.post("/api/devices/pair", json={
+        "kind": "hup",
+        "name": "W300 glasses",
+        "node_id": "feral-w300-0001",
+        "capabilities": ["camera", "display", "haptic"],
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "hup"
+    assert body["node_id"] == "feral-w300-0001"
+
+
+def test_pair_rejects_unknown_kind(client):
+    c, _store = client
+    r = c.post("/api/devices/pair", json={"kind": "telepathy"})
+    assert r.status_code == 400
+
+
+def test_pair_rejects_non_list_capabilities(client):
+    c, _store = client
+    r = c.post("/api/devices/pair", json={
+        "kind": "browser",
+        "capabilities": "camera,mic",
+    })
+    assert r.status_code == 400
+
+
+# ── QR + url helpers ────────────────────────────────────────────────
+
+
+def test_pair_url_returns_web_mode_payload(client):
+    c, store = client
+    r = c.get("/api/devices/pair/url?name=Pixel-8")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "web"
+    assert body["url"].startswith("http")
+    assert "/pair?t=" in body["url"]
+    assert body["token"] in body["url"]
+    # Record must exist with kind=browser so we can distinguish it later.
+    rows = store.list_devices()
+    assert rows and rows[0]["kind"] == "browser"
+
+
+def test_pair_qr_mode_validation(client):
+    c, _store = client
+    r = c.get("/api/devices/pair/qr?mode=nonsense")
+    assert r.status_code == 400
+
+
+# ── /api/devices/pair/complete ──────────────────────────────────────
+
+
+def test_pair_complete_marks_claim(client):
+    c, store = client
+    issued = c.get("/api/devices/pair/url?name=browser").json()
+    token = issued["token"]
+
+    r = c.post("/api/devices/pair/complete", json={"token": token})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is True
+    assert body["device_id"]
+
+    # Row should now have claimed_at set.
+    rows = store.list_devices()
+    assert rows[0]["claimed_at"] is not None
+
+
+def test_pair_complete_unknown_token(client):
+    c, _store = client
+    r = c.post("/api/devices/pair/complete", json={"token": "notaknowntoken"})
+    assert r.status_code == 404
+
+
+def test_pair_complete_missing_token(client):
+    c, _store = client
+    r = c.post("/api/devices/pair/complete", json={})
+    assert r.status_code == 400
+
+
+# ── paired list exposes typed metadata ──────────────────────────────
+
+
+def test_list_paired_includes_kind_and_capabilities(client):
+    c, _store = client
+    c.post("/api/devices/pair", json={
+        "kind": "hup",
+        "name": "Wristband",
+        "node_id": "band-1",
+        "capabilities": ["heart_rate", "haptic"],
+    })
+    r = c.get("/api/devices/paired")
+    assert r.status_code == 200
+    devices = r.json()["devices"]
+    assert len(devices) == 1
+    row = devices[0]
+    assert row["kind"] == "hup"
+    assert row["node_id"] == "band-1"
+    assert "heart_rate" in row["capabilities"]

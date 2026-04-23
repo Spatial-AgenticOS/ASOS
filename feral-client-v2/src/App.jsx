@@ -26,6 +26,7 @@ import Geofences from './pages/Geofences';
 import Apps from './pages/Apps';
 import AppsPublish from './pages/AppsPublish';
 import AppSurface from './pages/AppSurface';
+import Pair from './pages/Pair';
 
 export default function App() {
   return (
@@ -33,6 +34,8 @@ export default function App() {
       {/* New catalog-backed setup page; falls back to legacy SetupWizard for backward compat. */}
       <Route path="/setup" element={<Setup />} />
       <Route path="/setup/legacy" element={<SetupWizard />} />
+      {/* Unauthenticated browser-node pairing — any phone can land here. */}
+      <Route path="/pair" element={<Pair />} />
       <Route element={<Shell />}>
         <Route path="/" element={<Home />} />
         <Route path="/chat" element={<Chat />} />

@@ -1,19 +1,25 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Bluetooth, QrCode, KeyRound, Smartphone } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Bluetooth, QrCode, KeyRound, Smartphone, Terminal, Copy, Check, RefreshCw } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Tabs from '../ui/Tabs';
 import DeviceQRCode from '../ui/DeviceQRCode';
-import { apiFetch } from '../lib/api';
+import { apiFetch, apiJson } from '../lib/api';
 
 /**
- * PairDeviceModal — four ways to pair a device:
- * 1) QR (phone / tablet scans to auth)
- * 2) BLE (browser Bluetooth API if available)
- * 3) HUP token (vendor-provided node id + shared secret)
- * 4) Share camera from phone (zero-install browser getUserMedia flow)
+ * PairDeviceModal — four first-class pairing flows. No dead branches.
+ *
+ *   1) Web phone — generates a /pair?t=<TOKEN> URL + QR. Any phone
+ *      camera scans it, lands on Pair.jsx, one tap = live browser_node.
+ *      NO app install. This is the default tab.
+ *   2) Daemon token — generates a pairing token + shows a copy-paste
+ *      one-liner for the Python node SDK and the phone-bridge daemon.
+ *      Vendors use this.
+ *   3) QR (native app) — legacy host+port+token JSON for the iOS /
+ *      Android app.
+ *   4) Bluetooth — Web BLE for browser-level scanning (kept).
  */
 export default function PairDeviceModal({ open, onClose, onPaired }) {
-  const [tab, setTab] = useState('qr');
+  const [tab, setTab] = useState('web_phone');
   return (
     <Modal
       open={open}
@@ -25,91 +31,225 @@ export default function PairDeviceModal({ open, onClose, onPaired }) {
         value={tab}
         onChange={setTab}
         items={[
-          { id: 'qr', label: 'QR' },
-          { id: 'phone_camera', label: 'Share camera from phone' },
+          { id: 'web_phone', label: 'Web phone' },
+          { id: 'daemon', label: 'Daemon token' },
+          { id: 'app_qr', label: 'Native app QR' },
           { id: 'ble', label: 'Bluetooth' },
-          { id: 'token', label: 'HUP token' },
         ]}
       />
       <div className="v2-pair-body">
-        {tab === 'qr' && <QRTab />}
-        {tab === 'phone_camera' && <PhoneCameraTab />}
+        {tab === 'web_phone' && <WebPhoneTab onPaired={onPaired} />}
+        {tab === 'daemon' && <DaemonTokenTab onPaired={onPaired} />}
+        {tab === 'app_qr' && <AppQRTab />}
         {tab === 'ble' && <BLETab onPaired={onPaired} />}
-        {tab === 'token' && <TokenTab onPaired={onPaired} />}
       </div>
     </Modal>
   );
 }
 
-function PhoneCameraTab() {
-  const [pairing, setPairing] = useState(null);
+function useCopy() {
+  const [copied, setCopied] = useState(null);
+  const copy = useCallback((id, text) => {
+    try {
+      navigator.clipboard.writeText(text);
+      setCopied(id);
+      setTimeout(() => setCopied((c) => (c === id ? null : c)), 1400);
+    } catch { /* ignore */ }
+  }, []);
+  return [copied, copy];
+}
+
+function WebPhoneTab({ onPaired }) {
+  const [pair, setPair] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [copied, copy] = useCopy();
 
-  const generate = async () => {
+  const generate = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      const r = await apiFetch('/api/devices/pair', {
-        method: 'POST',
-        body: JSON.stringify({ name: 'browser_camera_share' }),
-      });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok || body?.error) {
-        setError(body?.error || `${r.status}`);
-        return;
-      }
-      setPairing(body);
+      const body = await apiJson('/api/devices/pair/url?name=web-phone');
+      setPair(body);
+      if (onPaired) onPaired({ source: 'web_phone', token: body.token });
     } catch (err) {
-      setError(err.message);
+      setError(err?.message || 'failed to generate token');
     } finally {
       setBusy(false);
     }
-  };
+  }, [onPaired]);
 
-  useEffect(() => { generate(); /* once on mount */ }, []);
+  useEffect(() => { generate(); }, [generate]);
 
-  const shareUrl = useMemo(() => {
-    if (!pairing?.token) return '';
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    return `${origin}/share/${pairing.token}`;
-  }, [pairing]);
+  const url = pair?.url || '';
 
   return (
-    <div className="v2-pair-phone-camera" data-testid="pair-phone-camera">
+    <div className="v2-pair-phone-camera" data-testid="pair-web-phone">
       <div className="v2-p v2-p--muted" style={{ marginBottom: 10 }}>
         <Smartphone size={13} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
-        Open this link on an iPhone / Android / any phone with a browser. They'll tap "Start sharing",
-        grant camera + mic permission, and FERAL treats them as a HUP daemon named <code>browser_camera</code>.
+        Open the phone's camera app, point it at this QR. A browser opens,
+        they tap "Pair this device" once — phone becomes a real HUP node.
         No app install.
       </div>
       {busy && <div className="v2-chip v2-chip--warn">Generating one-time link…</div>}
       {error && <div className="v2-chip v2-chip--error">{error}</div>}
-      {shareUrl && (
+      {url && (
         <>
           <div className="v2-pair-qr" style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}>
-            <DeviceQRCode size={240} value={shareUrl} />
+            <DeviceQRCode size={240} value={url} />
           </div>
-          <div className="v2-p v2-p--tiny" style={{ wordBreak: 'break-all' }} data-testid="pair-phone-camera-url">
-            {shareUrl}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+            <code className="v2-p v2-p--tiny" style={{ flex: 1, wordBreak: 'break-all' }} data-testid="pair-web-phone-url">
+              {url}
+            </code>
+            <button
+              type="button"
+              className="v2-btn v2-btn--ghost"
+              onClick={() => copy('url', url)}
+              aria-label="Copy URL"
+            >
+              {copied === 'url' ? <Check size={13} /> : <Copy size={13} />}
+            </button>
+            <button type="button" className="v2-btn v2-btn--ghost" onClick={generate} aria-label="New token">
+              <RefreshCw size={13} />
+            </button>
           </div>
         </>
       )}
-      <p className="v2-p v2-p--tiny v2-p--muted" style={{ marginTop: 8 }}>
-        Privacy: the link works once. The Brain sees the camera as a disposable daemon and the phone's
-        camera indicator is always visible to the user while they're sharing.
+      <p className="v2-p v2-p--tiny v2-p--muted" style={{ marginTop: 10 }}>
+        Privacy: sensor streams start only after the user taps "Allow".
+        Tab-hidden more than 60 s auto-pauses them. Closing the tab tears
+        down the WebSocket.
       </p>
     </div>
   );
 }
 
-function QRTab() {
+function DaemonTokenTab({ onPaired }) {
+  const [pair, setPair] = useState(null);
+  const [nodeId, setNodeId] = useState('');
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, copy] = useCopy();
+
+  const generate = useCallback(async () => {
+    if (!nodeId.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await apiFetch('/api/devices/pair', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: nodeId.trim(),
+          kind: 'hup',
+          node_id: nodeId.trim(),
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok || body?.error) {
+        setError(body?.detail || body?.error || `${r.status}`);
+        return;
+      }
+      setPair(body);
+      if (onPaired) onPaired({ source: 'daemon', ...body });
+    } catch (err) {
+      setError(err?.message || 'failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [nodeId, onPaired]);
+
+  const brainUrl = typeof window !== 'undefined' ? window.location.origin : '';
+  const wsUrl = brainUrl.replace(/^http/, 'ws') + '/v1/node';
+
+  const pythonOneLiner = pair
+    ? `pip install feral-node-sdk && python -m feral_node_sdk.cli --node-id "${pair.node_id || nodeId}" --brain-url "${wsUrl}" --token "${pair.token}"`
+    : '';
+  const bridgeOneLiner = pair
+    ? `curl -fsSL ${brainUrl}/install-phone-bridge.sh | bash -s -- --token "${pair.token}" --brain-url "${wsUrl}"`
+    : '';
+
+  return (
+    <div className="v2-pair-daemon">
+      <div className="v2-p v2-p--muted" style={{ marginBottom: 10 }}>
+        <KeyRound size={13} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+        Issue a pairing token and drop a one-liner on any laptop / server.
+        The token authenticates the next WebSocket that attaches with
+        matching <code>node_id</code>.
+      </div>
+      <label className="v2-step-field">
+        <span>Node ID (your choice — persists across reboots)</span>
+        <input
+          className="v2-input"
+          value={nodeId}
+          onChange={(e) => setNodeId(e.target.value)}
+          placeholder="my-laptop-bridge"
+        />
+      </label>
+      <button
+        type="button"
+        className="v2-btn v2-btn--primary"
+        onClick={generate}
+        disabled={busy || !nodeId.trim()}
+        style={{ marginTop: 8 }}
+      >
+        {busy ? 'Issuing…' : 'Issue token'}
+      </button>
+
+      {error && <div className="v2-chip v2-chip--error" style={{ marginTop: 8 }}>{error}</div>}
+
+      {pair && (
+        <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="v2-chip v2-chip--live">Token issued — copy either one-liner below.</div>
+
+          <OneLiner
+            id="py"
+            label="Python SDK (any OS)"
+            cmd={pythonOneLiner}
+            copied={copied === 'py'}
+            onCopy={() => copy('py', pythonOneLiner)}
+          />
+          <OneLiner
+            id="bridge"
+            label="Phone-bridge daemon (Mac / Linux)"
+            cmd={bridgeOneLiner}
+            copied={copied === 'bridge'}
+            onCopy={() => copy('bridge', bridgeOneLiner)}
+          />
+
+          <p className="v2-p v2-p--tiny v2-p--muted" style={{ marginTop: 4 }}>
+            The token is only shown once. If you lose it, revoke + reissue.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OneLiner({ id, label, cmd, copied, onCopy }) {
+  return (
+    <div className="v2-publish-cli" id={`one-${id}`}>
+      <div className="v2-publish-cli-label">{label}</div>
+      <div className="v2-publish-cli-row">
+        <Terminal size={13} aria-hidden="true" />
+        <code>{cmd}</code>
+        <button type="button" className="v2-btn v2-btn--ghost" onClick={onCopy} aria-label="Copy command">
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AppQRTab() {
   return (
     <div className="v2-pair-qr">
-      <DeviceQRCode size={240} />
+      <DeviceQRCode size={240} mode="app" />
       <div className="v2-p v2-p--muted">
         <QrCode size={13} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
-        Scan from the FERAL iOS or Android app, or from a HUP-enabled device that supports QR handoff.
+        Scan from the FERAL iOS or Android app. The QR encodes
+        <code> &#123;host, port, token&#125;</code> — the app connects to
+        the Brain and registers as a real HUP node.
       </div>
     </div>
   );
@@ -143,7 +283,9 @@ function BLETab({ onPaired }) {
     return (
       <div className="v2-p v2-p--muted">
         <Bluetooth size={13} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
-        Web Bluetooth isn't available in this browser. Use Chrome / Edge on a machine with a BLE radio, or use the desktop app for production BLE scanning.
+        Web Bluetooth isn't available in this browser. Use Chrome / Edge
+        on a machine with a BLE radio, or use the desktop app for
+        production BLE scanning.
       </div>
     );
   }
@@ -163,59 +305,5 @@ function BLETab({ onPaired }) {
       )}
       {error && <div className="v2-chip v2-chip--error">{error}</div>}
     </div>
-  );
-}
-
-function TokenTab({ onPaired }) {
-  const [nodeId, setNodeId] = useState('');
-  const [secret, setSecret] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    setResult(null);
-    try {
-      const r = await apiFetch('/api/devices/pair', {
-        method: 'POST',
-        body: JSON.stringify({ node_id: nodeId, secret, kind: 'hup' }),
-      });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok || body?.error) {
-        setError(body?.error || `${r.status}`);
-      } else {
-        setResult(body);
-        if (onPaired) onPaired(body);
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <form onSubmit={submit} className="v2-pair-token">
-      <label className="v2-step-field">
-        <span>Node ID</span>
-        <input className="v2-input" value={nodeId} onChange={(e) => setNodeId(e.target.value)} placeholder="feral-w300-0001" required />
-      </label>
-      <label className="v2-step-field">
-        <span>Shared secret</span>
-        <input className="v2-input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} required />
-      </label>
-      <div className="v2-p v2-p--muted">
-        <KeyRound size={13} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
-        Vendors ship a token in their HUP daemon setup. Brain will accept the next WS connection from a matching node_id.
-      </div>
-      <button type="submit" className="v2-btn v2-btn--primary" disabled={busy}>
-        {busy ? 'Pairing…' : 'Pair device'}
-      </button>
-      {result && <div className="v2-chip v2-chip--live">Paired — {result.node_id || nodeId}</div>}
-      {error && <div className="v2-chip v2-chip--error">{error}</div>}
-    </form>
   );
 }

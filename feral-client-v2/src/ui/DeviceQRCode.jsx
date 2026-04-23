@@ -11,7 +11,7 @@ import { apiFetch } from '../lib/api';
  * flow uses this path so the modal can show a ready-to-open URL without
  * re-pairing).
  */
-export default function DeviceQRCode({ size = 220, value = null }) {
+export default function DeviceQRCode({ size = 220, value = null, mode = 'web' }) {
   const [imgUrl, setImgUrl] = useState(null);
   const [textLink, setTextLink] = useState(null);
   const [error, setError] = useState(null);
@@ -25,7 +25,7 @@ export default function DeviceQRCode({ size = 220, value = null }) {
     let createdUrl = null;
     (async () => {
       try {
-        const r = await apiFetch('/api/devices/pair/qr');
+        const r = await apiFetch(`/api/devices/pair/qr?mode=${encodeURIComponent(mode)}`);
         if (!r.ok) throw new Error(`${r.status}`);
         const ct = r.headers.get('Content-Type') || '';
         if (ct.includes('image/')) {
@@ -55,7 +55,7 @@ export default function DeviceQRCode({ size = 220, value = null }) {
       cancelled = true;
       if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
-  }, [value]);
+  }, [value, mode]);
 
   if (error) {
     return (

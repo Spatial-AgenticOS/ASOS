@@ -4,7 +4,7 @@ import io
 import json
 import socket
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from api.state import state
@@ -223,7 +223,7 @@ async def nodes_health():
 
 @router.get("/api/devices/paired")
 async def list_paired_devices():
-    """List all paired edge-node devices."""
+    """List all paired edge-node devices — with typed metadata."""
     store = state.device_pairing_store
     devices = store.list_devices()
     safe = [
@@ -232,6 +232,11 @@ async def list_paired_devices():
             "name": d["name"],
             "paired_at": d["paired_at"],
             "last_seen": d["last_seen"],
+            "kind": d.get("kind", ""),
+            "node_id": d.get("node_id", ""),
+            "claimed_at": d.get("claimed_at"),
+            "platform": d.get("platform", ""),
+            "capabilities": d.get("capabilities", []),
         }
         for d in devices
     ]
@@ -240,44 +245,112 @@ async def list_paired_devices():
 
 @router.post("/api/devices/pair")
 async def pair_device(request: Request):
-    """Pair a new edge-node device.  Returns the device token once."""
-    body = await request.json()
-    name = body.get("name", "unnamed")
-    store = state.device_pairing_store
-    result = store.pair_device(name)
-    return result
+    """Pair a new edge-node device.
 
+    Typed body — every pairing flow goes through this endpoint:
 
-@router.get("/api/devices/pair/qr")
-async def pair_device_qr(name: str = "unnamed"):
-    """Generate a QR code PNG containing pairing info for a new device.
+        {"kind": "name"}                    — label-only pair, generic QR
+        {"kind": "hup", "node_id": "...",   — daemon / node SDK pair, declares
+         "capabilities": [...] }              its node_id + capabilities up front
+        {"kind": "browser",                 — browser-Node pair (Pair page)
+         "platform": "...",                   includes user-agent hint
+         "capabilities": [...] }
 
-    ``name`` is a label the user gives the device they're about to pair —
-    it is NOT an implicit device type. Default changed from "phone" to
-    "unnamed" so the brain no longer pretends every QR issued corresponds
-    to a phone.
+    All kinds accept an optional ``name`` label. Legacy body {name: ...}
+    without ``kind`` is still honoured (falls back to kind="name").
+
+    Returns the pairing record — token is included exactly once; clients
+    must store it immediately because it won't be returned again.
     """
+    body = await request.json() if await request.body() else {}
+    name = body.get("name", "unnamed")
+    kind = (body.get("kind") or "name").lower()
+    if kind not in {"name", "hup", "browser"}:
+        raise HTTPException(status_code=400, detail=f"unknown pair kind: {kind}")
+    node_id = body.get("node_id") or ""
+    platform = body.get("platform") or ""
+    capabilities = body.get("capabilities") or []
+    if not isinstance(capabilities, list):
+        raise HTTPException(status_code=400, detail="capabilities must be a list")
+
     store = state.device_pairing_store
     if not store:
-        return {"error": "Pairing store not initialized"}
+        raise HTTPException(status_code=503, detail="Pairing store not initialized")
 
-    result = store.pair_device(name)
+    return store.pair_device(
+        name,
+        kind=kind,
+        node_id=node_id,
+        platform=platform,
+        capabilities=capabilities,
+    )
 
+
+def _pair_payload(result: dict, *, mode: str, request_origin: str = "") -> dict:
+    """Build the JSON encoded into the pair QR.
+
+    When ``mode="app"`` we emit the historical shape:
+        {host, port, token, name}  — parsed by the native iOS / Android app.
+    When ``mode="web"`` we emit a single pair URL that a plain phone camera
+    can scan without any app installed:
+        {url: "<origin>/pair?t=<token>"}
+    """
+    if mode == "web":
+        origin = request_origin or ""
+        if not origin:
+            hostname = socket.gethostname()
+            try:
+                ip = socket.gethostbyname(hostname)
+            except OSError:
+                ip = "127.0.0.1"
+            origin = f"http://{ip}:9090"
+        return {
+            "mode": "web",
+            "url": f"{origin.rstrip('/')}/pair?t={result['token']}",
+            "token": result["token"],
+            "device_id": result["device_id"],
+        }
     hostname = socket.gethostname()
-    ip = socket.gethostbyname(hostname)
+    try:
+        ip = socket.gethostbyname(hostname)
+    except OSError:
+        ip = "127.0.0.1"
     port = 9090
-
-    payload = json.dumps({
+    return {
+        "mode": "app",
         "host": ip,
         "port": port,
         "token": result["token"],
         "name": "FERAL Brain",
-    })
+    }
+
+
+@router.get("/api/devices/pair/qr")
+async def pair_device_qr(request: Request, name: str = "unnamed", mode: str = "app"):
+    """Generate a QR code PNG for a new device.
+
+    ``mode=app`` (default) encodes ``{host, port, token, name}`` JSON for
+    the native iOS / Android app. ``mode=web`` encodes ``<origin>/pair?t=<token>``
+    so ANY phone camera app can scan it and land on the browser-side pairing
+    page — no app install required.
+    """
+    store = state.device_pairing_store
+    if not store:
+        raise HTTPException(status_code=503, detail="Pairing store not initialized")
+    if mode not in {"app", "web"}:
+        raise HTTPException(status_code=400, detail="mode must be 'app' or 'web'")
+
+    kind = "browser" if mode == "web" else "name"
+    result = store.pair_device(name, kind=kind)
+
+    origin = str(request.base_url).rstrip("/")
+    payload = _pair_payload(result, mode=mode, request_origin=origin)
+    encoded = json.dumps(payload) if mode == "app" else payload["url"]
 
     try:
         import qrcode
         qr = qrcode.QRCode(version=1, box_size=10, border=4)
-        qr.add_data(payload)
+        qr.add_data(encoded)
         qr.make(fit=True)
         img = qr.make_image(fill_color="white", back_color="black")
         buf = io.BytesIO()
@@ -285,7 +358,42 @@ async def pair_device_qr(name: str = "unnamed"):
         buf.seek(0)
         return StreamingResponse(buf, media_type="image/png")
     except ImportError:
-        return {"pairing_info": json.loads(payload), "note": "Install qrcode package for QR image"}
+        return {
+            "pairing_info": payload,
+            "note": "Install qrcode package for QR image",
+        }
+
+
+@router.get("/api/devices/pair/url")
+async def pair_device_url(request: Request, name: str = "unnamed"):
+    """Return the web-pair URL + token WITHOUT an image — handy for tests
+    and for the ``/pair`` landing page needing the token to render."""
+    store = state.device_pairing_store
+    if not store:
+        raise HTTPException(status_code=503, detail="Pairing store not initialized")
+    result = store.pair_device(name, kind="browser")
+    origin = str(request.base_url).rstrip("/")
+    return _pair_payload(result, mode="web", request_origin=origin)
+
+
+@router.post("/api/devices/pair/complete")
+async def pair_device_complete(body: dict):
+    """Mark a pairing token as claimed by the device that just attached.
+
+    Called by BrowserNode.js the moment its WebSocket register succeeds;
+    the UI on the brain-side then shows "device connected" instead of
+    "token issued, no attach yet".
+    """
+    token = (body or {}).get("token") or ""
+    if not token:
+        raise HTTPException(status_code=400, detail="token required")
+    store = state.device_pairing_store
+    if not store:
+        raise HTTPException(status_code=503, detail="Pairing store not initialized")
+    device_id = store.mark_claimed(token)
+    if device_id is None:
+        raise HTTPException(status_code=404, detail="unknown pairing token")
+    return {"success": True, "device_id": device_id}
 
 
 @router.delete("/api/devices/{device_id}")

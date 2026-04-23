@@ -60,27 +60,101 @@ class DevicePairingStore:
                     CREATE INDEX IF NOT EXISTS idx_pd_token
                     ON paired_devices(token)
                 """)
+                # Additive migrations. Silent-skip when already present so
+                # re-running on an existing DB is safe.
+                for col, decl in (
+                    ("kind", "TEXT"),             # "browser" / "hup" / "name"
+                    ("node_id", "TEXT"),          # free-form daemon id (optional)
+                    ("claimed_at", "REAL"),       # set when /v1/node authed with this token
+                    ("platform", "TEXT"),         # ua / os for browser clients
+                    ("capabilities", "TEXT"),     # JSON-encoded list
+                ):
+                    try:
+                        conn.execute(f"ALTER TABLE paired_devices ADD COLUMN {col} {decl}")
+                    except sqlite3.OperationalError:
+                        pass
                 conn.commit()
             finally:
                 conn.close()
 
-    def pair_device(self, name: str) -> dict:
-        """Register a new device.  Returns ``{device_id, token, name, paired_at}``."""
+    def pair_device(
+        self,
+        name: str,
+        *,
+        kind: str = "name",
+        node_id: str = "",
+        platform: str = "",
+        capabilities: Optional[list[str]] = None,
+    ) -> dict:
+        """Register a new device.
+
+        Args:
+            name: human-readable label the user sees in Devices.
+            kind: ``"name"`` (default pair-modal label), ``"browser"`` (a
+                browser-node attach), ``"hup"`` (daemon registering with
+                explicit node_id + capabilities). This is the "typed body"
+                the v2 PairDeviceModal needed for its HUP tab.
+            node_id: optional authoritative id the daemon will register
+                with on /v1/node (only used by kind="hup").
+            platform: user-agent / platform hint for browser clients.
+            capabilities: declared capabilities (camera / mic / location /
+                heart_rate / …), JSON-encoded in storage.
+
+        Returns ``{device_id, token, name, paired_at, kind, node_id?, …}``.
+        """
+        import json as _json
         device_id = str(uuid4())
         token = secrets.token_hex(32)
         now = time.time()
+        caps_text = _json.dumps(list(capabilities or []))
         with self._lock:
             conn = self._conn()
             try:
                 conn.execute(
-                    "INSERT INTO paired_devices (device_id, token, name, paired_at) VALUES (?, ?, ?, ?)",
-                    (device_id, token, name, now),
+                    """INSERT INTO paired_devices
+                       (device_id, token, name, paired_at, kind, node_id, platform, capabilities)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (device_id, token, name, now, kind, node_id or "", platform or "", caps_text),
                 )
                 conn.commit()
             finally:
                 conn.close()
-        logger.info("Paired device %s (%s)", device_id, name)
-        return {"device_id": device_id, "token": token, "name": name, "paired_at": now}
+        logger.info("Paired device %s (%s, kind=%s, node=%s)", device_id, name, kind, node_id or "-")
+        return {
+            "device_id": device_id,
+            "token": token,
+            "name": name,
+            "paired_at": now,
+            "kind": kind,
+            "node_id": node_id or "",
+            "platform": platform or "",
+            "capabilities": list(capabilities or []),
+        }
+
+    def mark_claimed(self, token: str) -> Optional[str]:
+        """Set ``claimed_at`` once a daemon actually attaches with *token*.
+
+        Used by /api/devices/pair/complete so the UI can distinguish
+        tokens that were issued-but-never-used from live paired devices.
+        Returns the device_id on success.
+        """
+        now = time.time()
+        with self._lock:
+            conn = self._conn()
+            try:
+                row = conn.execute(
+                    "SELECT device_id FROM paired_devices WHERE token = ?", (token,),
+                ).fetchone()
+                if row is None:
+                    return None
+                conn.execute(
+                    "UPDATE paired_devices SET claimed_at = ?, last_seen = ? WHERE token = ?",
+                    (now, now, token),
+                )
+                conn.commit()
+                return row["device_id"]
+            finally:
+                conn.close()
 
     def verify_device(self, token: str) -> Optional[str]:
         """Return the ``device_id`` for *token*, or ``None`` if invalid.
@@ -110,22 +184,36 @@ class DevicePairingStore:
         return device_id
 
     def list_devices(self) -> list[dict]:
-        """Return all paired devices."""
+        """Return all paired devices with the typed metadata."""
+        import json as _json
         conn = self._conn()
         try:
             rows = conn.execute(
-                "SELECT device_id, token, name, paired_at, last_seen FROM paired_devices ORDER BY paired_at DESC"
+                """SELECT device_id, token, name, paired_at, last_seen,
+                          kind, node_id, claimed_at, platform, capabilities
+                   FROM paired_devices
+                   ORDER BY paired_at DESC"""
             ).fetchall()
-            return [
-                {
+            out = []
+            for r in rows:
+                caps_raw = r["capabilities"] if "capabilities" in r.keys() else None
+                try:
+                    caps = _json.loads(caps_raw) if caps_raw else []
+                except Exception:
+                    caps = []
+                out.append({
                     "device_id": r["device_id"],
                     "token": r["token"],
                     "name": r["name"],
                     "paired_at": r["paired_at"],
                     "last_seen": r["last_seen"],
-                }
-                for r in rows
-            ]
+                    "kind": r["kind"] if "kind" in r.keys() else "",
+                    "node_id": r["node_id"] if "node_id" in r.keys() else "",
+                    "claimed_at": r["claimed_at"] if "claimed_at" in r.keys() else None,
+                    "platform": r["platform"] if "platform" in r.keys() else "",
+                    "capabilities": caps,
+                })
+            return out
         finally:
             conn.close()
 

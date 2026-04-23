@@ -136,6 +136,10 @@ _RATE_LIMIT_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/api/identity",
     "/api/soul",
     "/api/memory/",
+    # Pairing endpoints + installer must stay unthrottled — fresh phones
+    # hit them before anything else and we don't want to lock them out.
+    "/api/devices/pair",
+    "/install-phone-bridge.sh",
 )
 
 
@@ -209,6 +213,16 @@ FERAL_API_KEY = _load_or_generate_api_key()
 _OPEN_PATHS = frozenset({
     "/health", "/docs", "/redoc", "/openapi.json", "/metrics",
     "/api/auth/local-key", "/api/boot-report",
+    # Phone-bridge installer script must be fetchable without an API key
+    # because it's delivered over `curl … | bash` from a laptop / phone
+    # that doesn't have the key yet.
+    "/install-phone-bridge.sh",
+    # /api/devices/pair/url + QR are served so a brand-new phone can
+    # reach them after scanning the Pair modal QR; they only expose
+    # one-time pairing tokens that the Brain itself issues.
+    "/api/devices/pair/url",
+    "/api/devices/pair/qr",
+    "/api/devices/pair/complete",
 })
 
 _OPEN_PATH_PREFIXES = (
@@ -299,6 +313,31 @@ app.include_router(apps_router)
 # ─────────────────────────────────────────────
 
 from observability.metrics import in_memory_snapshot as _metrics_snapshot
+
+
+@app.get("/install-phone-bridge.sh")
+async def install_phone_bridge_script():
+    """Serve the phone-bridge installer over HTTP so the one-liner works:
+
+        curl -fsSL http://brain.local:9090/install-phone-bridge.sh | bash -s -- \
+            --token ... --brain-url ws://brain.local:9090/v1/node
+    """
+    from pathlib import Path as _Path
+    from starlette.responses import PlainTextResponse
+
+    here = _Path(__file__).resolve().parent.parent.parent
+    candidates = [
+        here / "scripts" / "install-phone-bridge.sh",
+        _Path(__file__).resolve().parent.parent / "scripts" / "install-phone-bridge.sh",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return PlainTextResponse(candidate.read_text(), media_type="text/x-shellscript")
+    return PlainTextResponse(
+        "# install-phone-bridge.sh not bundled in this build\n",
+        status_code=404,
+        media_type="text/plain",
+    )
 
 
 @app.get("/metrics")

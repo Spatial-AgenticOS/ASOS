@@ -1200,6 +1200,15 @@ def main():
     sub.add_parser("install-service", help="Install FERAL Brain as a system daemon (launchd/systemd)")
     sub.add_parser("uninstall-service", help="Remove the FERAL Brain system daemon")
 
+    # feral bridge install — wraps scripts/install-phone-bridge.sh
+    bridge_p = sub.add_parser("bridge", help="Install the FERAL phone-bridge daemon on this host")
+    bridge_sub = bridge_p.add_subparsers(dest="action")
+    bridge_install = bridge_sub.add_parser("install", help="Install + start the phone-bridge daemon")
+    bridge_install.add_argument("--token", required=True, help="Pairing token from Pair modal > Daemon token")
+    bridge_install.add_argument("--brain-url", required=True, help="ws://host:port/v1/node")
+    bridge_install.add_argument("--node-id", default="", help="Stable node id (defaults to hostname)")
+    bridge_install.add_argument("--prefix", default="", help="Install prefix (default ~/.feral/phone-bridge)")
+
     # feral app ...
     try:
         from cli.app_commands import register_app_subparser
@@ -1277,6 +1286,9 @@ def main():
     elif args.subcommand == "app":
         from cli.app_commands import dispatch_app_subcommand
         dispatch_app_subcommand(args)
+    elif args.subcommand == "bridge":
+        from cli.bridge_commands import cmd_bridge
+        cmd_bridge(args)
     elif args.subcommand is None and not remaining:
         asyncio.run(repl())
     else:
