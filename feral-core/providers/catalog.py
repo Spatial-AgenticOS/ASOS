@@ -218,6 +218,16 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         default_model="llama3.3",
         aliases=("local-ollama",),
     ),
+    ProviderDescriptor(
+        provider_id="lmstudio",
+        display_name="LM Studio (local)",
+        supports_local=True,
+        requires_api_key=False,
+        default_base_url="http://localhost:1234/v1",
+        default_model="local-model",
+        aliases=("lm studio", "lm-studio", "local-lmstudio"),
+        notes="LM Studio must be running with a model loaded.",
+    ),
 )
 
 

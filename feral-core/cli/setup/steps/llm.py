@@ -97,14 +97,23 @@ async def run_provider_step(state: WizardState) -> None:
         else:
             msg = updated.error or "unreachable"
             console.print(f"  [yellow]note:[/] probe said: {msg} — you can continue and re-probe later.")
-    elif desc.provider_id in ("ollama", "lmstudio"):
-        # Local providers — flag the user if the server isn't up yet.
+    elif desc.provider_id == "ollama":
         status = statuses.get(desc.provider_id)
-        if status and not status.reachable:
-            console.print(
-                f"  [yellow]⚠[/] {desc.display_name} is not responding at {desc.default_base_url}"
-            )
-            console.print("     Start the server, then run `feral setup` again to re-probe.")
+        if not (status and status.reachable):
+            await _handle_ollama_unreachable(console)
+        else:
+            # Reachable but maybe zero models — offer to pull one.
+            cached = await catalog.list_models(chosen.id, live=True, force=True)
+            if not cached.models:
+                await _handle_ollama_no_models(catalog, console)
+    elif desc.provider_id == "lmstudio":
+        status = statuses.get(desc.provider_id)
+        if not (status and status.reachable):
+            _show_lmstudio_instructions(console)
+        else:
+            cached = await catalog.list_models(chosen.id, live=True, force=True)
+            if not cached.models:
+                _show_lmstudio_no_model(console)
 
 
 async def run_model_step(state: WizardState) -> None:
@@ -248,3 +257,72 @@ def _default_choice(options: Iterable[Option]) -> str:
         if opt.status == STATUS_NEEDS_KEY:
             return opt.id
     return ordered[0].id if ordered else ""
+
+
+# ----------------------------------------------------------------------
+# Local provider assistance
+# ----------------------------------------------------------------------
+
+
+async def _handle_ollama_unreachable(console) -> None:
+    from ..local_providers import OLLAMA_INSTALL_HINT, ollama_cli_installed
+
+    console.print()
+    console.print(
+        "[yellow]Ollama isn't responding at http://localhost:11434.[/]"
+        if _RICH_AVAILABLE else
+        "Ollama isn't responding at http://localhost:11434."
+    )
+    if not ollama_cli_installed():
+        for line in OLLAMA_INSTALL_HINT.splitlines():
+            console.print(f"  {line}")
+        return
+    console.print("  `ollama` is on your PATH but the server isn't serving.")
+    console.print("  Start it with: ollama serve")
+    console.print("  Then re-run `feral setup` to continue.")
+
+
+async def _handle_ollama_no_models(catalog, console) -> None:
+    from ..helpers import ask_text, confirm
+    from ..local_providers import STARTER_OLLAMA_MODELS, ollama_pull_model
+
+    console.print("  Ollama is running but no models are installed yet.")
+    if not confirm("  Pull a starter model now?", default=True):
+        return
+    options_text = ", ".join(STARTER_OLLAMA_MODELS)
+    console.print(f"  Suggested: {options_text}")
+    choice = ask_text(
+        "  Model to pull",
+        default=STARTER_OLLAMA_MODELS[0],
+        allow_empty=False,
+    )
+    console.print(f"  Running `ollama pull {choice}` — streaming progress...")
+    try:
+        code = await ollama_pull_model(choice, on_line=lambda line: console.print(f"    {line}"))
+    except Exception as exc:
+        console.print(f"  [red]pull failed:[/] {exc}" if _RICH_AVAILABLE else f"  pull failed: {exc}")
+        return
+    if code == 0:
+        console.print(f"  [green]✓[/] pulled {choice}" if _RICH_AVAILABLE else f"  pulled {choice}")
+        # Refresh cache so the model step sees it.
+        try:
+            await catalog.list_models("ollama", live=True, force=True)
+        except Exception:
+            pass
+    else:
+        console.print(f"  [red]ollama pull exited with code {code}[/]" if _RICH_AVAILABLE else
+                      f"  ollama pull exited with code {code}")
+
+
+def _show_lmstudio_instructions(console) -> None:
+    from ..local_providers import LMSTUDIO_INSTRUCTIONS
+
+    console.print()
+    for line in LMSTUDIO_INSTRUCTIONS.splitlines():
+        console.print(f"  {line}")
+
+
+def _show_lmstudio_no_model(console) -> None:
+    console.print("  LM Studio is running but no model is loaded.")
+    console.print("  Open LM Studio → pick a model → Start the local server.")
+    console.print("  Then re-run `feral setup`.")
