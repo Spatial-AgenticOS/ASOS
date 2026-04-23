@@ -100,7 +100,19 @@ def classify_error(error: Exception) -> FailoverReason:
 
     if status == 429 or "rate" in err_str or "quota" in err_str:
         return FailoverReason.RATE_LIMIT
-    if status == 401 or "unauthorized" in err_str or "invalid api key" in err_str:
+    # 401/403 with an explicit "invalid" or "incorrect" API-key message is a
+    # permanent-while-current-key-is-in-place failure. Promote so the cooldown
+    # tracker keeps the broken provider out of rotation for 24 h — otherwise
+    # we'd probe it every 30 s and the user would see an error log stream.
+    hard_key = (
+        "invalid api key" in err_str
+        or "incorrect api key" in err_str
+        or "invalid_api_key" in err_str
+        or "api key not valid" in err_str
+    )
+    if status in (401, 403) and hard_key:
+        return FailoverReason.AUTH_PERMANENT
+    if status in (401, 403) or "unauthorized" in err_str or "invalid api key" in err_str:
         return FailoverReason.AUTH
     if "billing" in err_str or "payment" in err_str or "insufficient" in err_str:
         return FailoverReason.BILLING
@@ -347,7 +359,23 @@ class LLMProvider:
         """
         Send a chat completion request.
         Returns the full response dict.
+
+        When ``fallback_providers`` is configured in ``self._config``,
+        transparently delegates to :meth:`chat_with_failover` so every
+        caller (digital twin, proactive, ideas engine, wherever) gains
+        cross-provider failover without knowing about the distinction.
         """
+        fallbacks = self._config.get("fallback_providers") if isinstance(self._config, dict) else None
+        if fallbacks and not (self._local_engine and self.provider in ("local", "hybrid")):
+            try:
+                return await self.chat_with_failover(
+                    messages, tools,
+                    temperature=temperature, max_tokens=max_tokens,
+                )
+            except Exception as exc:
+                logger.warning("chat_with_failover exhausted: %s", exc)
+                return {"error": str(exc), "choices": []}
+
         if self._messages_contain_vision(messages):
             ok, reason = self._vision_support_status()
             if not ok:
@@ -1189,6 +1217,48 @@ class LLMProvider:
         if last_error:
             raise last_error
         raise RuntimeError("All LLM providers exhausted")
+
+    def health_snapshot(self) -> dict:
+        """Return a snapshot of every candidate provider's availability.
+
+        Used by `GET /api/llm/health` to power the v2 "Fallbacks" card —
+        the user can see which providers are live, which are in cooldown,
+        and why, without having to dig through server logs.
+        """
+        now = time.time()
+        primary = {
+            "provider": self.provider,
+            "model": self.model,
+            "has_key": bool(self.api_key) and self.api_key not in ("none", ""),
+            "available": bool(self.available),
+            "base_url": self.base_url,
+        }
+        candidates = []
+        try:
+            candidate_list = self._build_candidate_list()
+        except Exception:
+            candidate_list = [(self.provider, {
+                "base_url": self.base_url, "api_key": self.api_key, "model": self.model,
+            })]
+        for name, cfg in candidate_list:
+            until = self._cooldown._cooldowns.get(name, 0.0)
+            in_cooldown = until > now
+            candidates.append({
+                "provider": name,
+                "model": cfg.get("model") or "",
+                "base_url": cfg.get("base_url") or "",
+                "has_key": bool(cfg.get("api_key")) and cfg.get("api_key") not in ("none", ""),
+                "in_cooldown": in_cooldown,
+                "cooldown_until": until if in_cooldown else None,
+                "cooldown_remaining": max(0.0, until - now) if in_cooldown else 0.0,
+            })
+        fallbacks = list(self._config.get("fallback_providers", [])) if isinstance(self._config, dict) else []
+        return {
+            "active": primary,
+            "candidates": candidates,
+            "fallback_providers": fallbacks,
+            "total_available": sum(1 for c in candidates if c["has_key"] and not c["in_cooldown"]),
+        }
 
     def is_available(self) -> bool:
         """True if at least one provider has a valid key and is not in cooldown."""

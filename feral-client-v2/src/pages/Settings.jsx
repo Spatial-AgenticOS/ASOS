@@ -167,19 +167,22 @@ function ProvidersSection() {
   const [status, setStatus] = useState(null);
   const [providers, setProviders] = useState([]);
   const [presets, setPresets] = useState([]);
+  const [health, setHealth] = useState(null);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState(null); // currently-edited provider card
 
   const refresh = useCallback(async () => {
     try {
-      const [s, providersResp, presetsResp] = await Promise.all([
+      const [s, providersResp, presetsResp, h] = await Promise.all([
         apiJson('/api/llm/status').catch(() => null),
         apiJson('/api/llm/providers').catch(() => ({ providers: [] })),
         apiJson('/api/llm/presets').catch(() => ({ presets: [] })),
+        apiJson('/api/llm/health').catch(() => null),
       ]);
       if (s) setStatus(s);
       setProviders(providersResp.providers || providersResp || []);
       setPresets(presetsResp.presets || []);
+      setHealth(h);
       setError(null);
     } catch (e) {
       setError(e?.message || 'failed to load provider catalog');
@@ -233,6 +236,23 @@ function ProvidersSection() {
         </div>
       )}
 
+      {health && (
+        <FallbacksCard
+          health={health}
+          onChange={async (nextList) => {
+            await apiFetch('/api/config/update', {
+              method: 'POST',
+              body: JSON.stringify({
+                section: 'llm',
+                key: 'fallback_providers',
+                value: nextList,
+              }),
+            });
+            refresh();
+          }}
+        />
+      )}
+
       <div className="v2-providers-grid">
         {providers.map((p) => {
           const pid = p.id || p.provider_id;
@@ -250,6 +270,88 @@ function ProvidersSection() {
         })}
       </div>
     </div>
+  );
+}
+
+function FallbacksCard({ health, onChange }) {
+  const fallbacks = health.fallback_providers || [];
+  const candidates = health.candidates || [];
+  const active = health.active?.provider || '';
+  // Candidate list excluding the active one — these are what can be
+  // added as fallbacks. We render every catalog provider the user has
+  // configured (has_key: true).
+  const pool = candidates
+    .map((c) => c.provider)
+    .filter((p) => p !== active && !fallbacks.includes(p));
+
+  const setList = (next) => {
+    const deduped = [];
+    for (const p of next) if (p && !deduped.includes(p)) deduped.push(p);
+    onChange(deduped);
+  };
+  const move = (idx, delta) => {
+    const next = [...fallbacks];
+    const target = idx + delta;
+    if (target < 0 || target >= next.length) return;
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setList(next);
+  };
+  const remove = (p) => setList(fallbacks.filter((x) => x !== p));
+  const add = (p) => setList([...fallbacks, p]);
+
+  return (
+    <Glass level={1} radius="md" padding="sm" className="v2-providers-fallbacks">
+      <div className="v2-providers-fallbacks-head">
+        <div>
+          <div className="v2-stat-label">Fallbacks</div>
+          <div className="v2-p v2-p--tiny v2-p--muted">
+            When the active provider returns 401 / 429 / 5xx, the Brain
+            falls through this list in order. The previous primary is
+            auto-added here when you switch.
+          </div>
+        </div>
+        <span className="v2-chip v2-chip--muted">
+          {health.total_available || 0} of {candidates.length} live
+        </span>
+      </div>
+
+      <ul className="v2-fallback-list">
+        {fallbacks.length === 0 && (
+          <li className="v2-p v2-p--muted v2-p--tiny">No fallbacks set.</li>
+        )}
+        {fallbacks.map((p, idx) => {
+          const cand = candidates.find((c) => c.provider === p) || {};
+          const tone = cand.in_cooldown ? 'warn'
+            : cand.has_key ? 'live'
+            : 'off';
+          return (
+            <li key={p} className="v2-fallback-row">
+              <StatusDot tone={tone} />
+              <code>{p}</code>
+              <span className="v2-p v2-p--tiny v2-p--muted" style={{ flex: 1 }}>
+                {cand.in_cooldown
+                  ? `cooling down ${Math.ceil(cand.cooldown_remaining || 0)}s`
+                  : (cand.has_key ? 'ready' : 'no key')}
+              </span>
+              <button type="button" className="v2-btn v2-btn--ghost" onClick={() => move(idx, -1)} disabled={idx === 0}>↑</button>
+              <button type="button" className="v2-btn v2-btn--ghost" onClick={() => move(idx, 1)} disabled={idx === fallbacks.length - 1}>↓</button>
+              <button type="button" className="v2-btn v2-btn--ghost" onClick={() => remove(p)} aria-label="Remove">×</button>
+            </li>
+          );
+        })}
+      </ul>
+
+      {pool.length > 0 && (
+        <div className="v2-fallback-add">
+          <span className="v2-p v2-p--tiny v2-p--muted">Add:</span>
+          {pool.slice(0, 8).map((p) => (
+            <button key={p} type="button" className="v2-btn v2-btn--ghost" onClick={() => add(p)}>
+              + {p}
+            </button>
+          ))}
+        </div>
+      )}
+    </Glass>
   );
 }
 

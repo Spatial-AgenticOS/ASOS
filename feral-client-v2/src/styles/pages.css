@@ -814,6 +814,43 @@
   flex: 1;
   min-width: 0;
 }
+.v2-providers-fallbacks { display: flex; flex-direction: column; gap: 10px; }
+.v2-providers-fallbacks-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.v2-fallback-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.v2-fallback-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--v2-surface-0);
+  border-radius: var(--v2-radius-sm);
+}
+.v2-fallback-row code {
+  font-size: var(--v2-size-sm);
+  color: var(--v2-text-primary);
+  background: transparent;
+  padding: 0;
+}
+.v2-fallback-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  padding-top: 4px;
+  border-top: 1px solid var(--v2-hairline);
+}
 
 /* Twin & Delegation */
 .v2-twin-section { display: flex; flex-direction: column; gap: 10px; }

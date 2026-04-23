@@ -55,7 +55,10 @@ class TestAsk:
     async def test_ask_handles_llm_error(self, twin):
         twin._llm.chat.side_effect = RuntimeError("boom")
         result = await twin.ask("fail question")
-        assert "wasn't able to reason" in result
+        # Commit 5 changed the fallback message to point the user at
+        # Settings → Providers so they know where to fix it. Keep the
+        # assertion on the stable "Configure" wording.
+        assert "Configure a working provider" in result
 
 
 class TestPredictPreference:

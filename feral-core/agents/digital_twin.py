@@ -187,13 +187,25 @@ class DigitalTwin:
             ]
 
             response = await self._llm.chat(messages)
+            # chat() either returns a usable dict with .choices, or an
+            # error dict {"error": "..."}. Handle both so the UI never
+            # sees a raw httpx 401 message.
+            if isinstance(response, dict) and response.get("error") and not response.get("choices"):
+                logger.warning("Digital twin ask(): provider failed — %s", response.get("error"))
+                return (
+                    "Couldn't reach your LLM right now. Configure a working "
+                    "provider or add a fallback at Settings → Providers."
+                )
             text, _ = self._llm.extract_response(response)
             logger.info("Digital twin answered question (len=%d)", len(text or ""))
             return text or ""
 
         except Exception as e:
             logger.error("Digital twin ask() failed: %s", e)
-            return f"I wasn't able to reason about that right now: {e}"
+            return (
+                "Couldn't reason about that right now. Configure a working "
+                "provider or add a fallback at Settings → Providers."
+            )
 
     async def predict_preference(self, category: str) -> dict:
         """Predict user preference in a given category from memory evidence."""

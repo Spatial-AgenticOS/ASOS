@@ -308,6 +308,19 @@ class LLMConfigRequest(BaseModel):
     fallback_providers: Optional[list[str]] = None
 
 
+@router.get("/api/llm/health")
+async def llm_health():
+    """Active provider + every fallback + cooldown state.
+
+    Used by the v2 Settings → Providers → Fallbacks card to render
+    green/amber/red dots per candidate so the user can see exactly why
+    the agent fell over to a different provider this minute.
+    """
+    if not state.orchestrator or not state.orchestrator.llm:
+        return {"available": False, "active": None, "candidates": [], "fallback_providers": []}
+    return state.orchestrator.llm.health_snapshot()
+
+
 @router.post("/api/llm/config")
 async def set_llm_config(req: LLMConfigRequest):
     """Persist llm.* settings + route the key into vault + credentials +
@@ -326,12 +339,23 @@ async def set_llm_config(req: LLMConfigRequest):
         )
     if state.config is None:
         raise HTTPException(status_code=503, detail="ConfigLoader not initialised")
+
+    # Auto-prepend the previous primary as a fallback so failover works
+    # by default. User can still explicitly pass `fallback_providers`
+    # (including []) to override this.
+    previous_provider = state.config.get("llm", "provider", "") or ""
     state.config.update_settings("llm", "provider", resolved)
     state.config.update_settings("llm", "model", req.model)
     if req.base_url is not None:
         state.config.update_settings("llm", "base_url", req.base_url)
     if req.fallback_providers is not None:
-        state.config.update_settings("llm", "fallback_providers", req.fallback_providers)
+        fallbacks = list(req.fallback_providers)
+    else:
+        existing = state.config.get("llm", "fallback_providers", []) or []
+        fallbacks = [p for p in existing if p != resolved]
+        if previous_provider and previous_provider != resolved and previous_provider not in fallbacks:
+            fallbacks.insert(0, previous_provider)
+    state.config.update_settings("llm", "fallback_providers", fallbacks)
 
     desc = catalog.get_descriptor(resolved)
     env_var = desc.credential_env_var if desc else ""
@@ -355,6 +379,10 @@ async def set_llm_config(req: LLMConfigRequest):
                 api_key=req.api_key or "",
                 base_url=req.base_url or "",
             )
+            # Push the new fallback list into the running LLM so
+            # chat_with_failover picks it up on the very next turn.
+            cur = state.orchestrator.llm._config if isinstance(state.orchestrator.llm._config, dict) else {}
+            state.orchestrator.llm.set_config({**cur, "fallback_providers": fallbacks})
         except Exception as exc:
             logger.warning("reconfigure after set_llm_config failed: %s", exc)
             reconfigure_result = {"ok": False, "reason": str(exc)}

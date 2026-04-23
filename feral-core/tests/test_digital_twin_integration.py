@@ -97,7 +97,8 @@ async def test_ask_graceful_on_llm_failure(twin, mock_llm):
     """ask() returns a graceful error message when the LLM fails."""
     mock_llm.chat.side_effect = RuntimeError("API down")
     result = await twin.ask("anything")
-    assert "wasn't able to reason" in result
+    # Updated message steers the user to Settings → Providers.
+    assert "Configure a working provider" in result
 
 
 async def test_kg_context_included_in_prompt(twin, mock_llm):
