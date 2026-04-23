@@ -405,10 +405,19 @@ async def startup():
 
                 if prompt and state.orchestrator:
                     session_id = job.session_id or f"routine-{job.id}"
+                    # Pass an explicit context so the Supervisor audit log
+                    # can distinguish cron-driven turns from user / web.
+                    # Without this, source defaulted to "web".
+                    cron_context = {
+                        "source": "cron",
+                        "actor": "system",
+                        "routine_id": job.id,
+                        "routine_type": job.job_type,
+                    }
                     loop = _aio.new_event_loop()
                     try:
                         loop.run_until_complete(
-                            state.orchestrator.handle_command(session_id, prompt)
+                            state.orchestrator.handle_command(session_id, prompt, context=cron_context)
                         )
                     finally:
                         loop.close()

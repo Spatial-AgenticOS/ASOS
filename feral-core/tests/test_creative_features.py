@@ -258,6 +258,12 @@ class TestChannelHandoff:
 
     @pytest.mark.asyncio
     async def test_channel_handler_registers_device_for_handoff(self):
+        """Channel sessions must register as ``node_type="channel"``, not
+        ``"phone"``. Prior to the phone-placeholder kill every Telegram /
+        Slack / Discord session showed up as a permanently connected
+        phone. See api/state.py around ``register_device`` + Commit 4 of
+        the prior session for the production-code fix.
+        """
         from channels.base import ChannelMessage
 
         mock_handoff = MagicMock()
@@ -273,13 +279,13 @@ class TestChannelHandoff:
         channel_session_id = f"channel_{channel_msg.channel_type}_{channel_msg.user_id}"
         mock_handoff.register_device(
             channel_session_id,
-            "phone",
+            "channel",
             node_id=f"{channel_msg.channel_type}_{channel_msg.user_id}",
         )
 
         mock_handoff.register_device.assert_called_once_with(
             "channel_discord_user789",
-            "phone",
+            "channel",
             node_id="discord_user789",
         )
 

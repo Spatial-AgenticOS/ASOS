@@ -480,7 +480,13 @@ class ProactiveEngine:
                 logger.warning("Proactive delivery error: %s", e)
 
     async def _execute_automation(self, msg: ProactiveMessage):
-        """Execute smart home / automation actions attached to proactive alerts."""
+        """Execute smart home / automation actions attached to proactive alerts.
+
+        This path bypasses Orchestrator.handle_command (the supervisor
+        only wraps chat-style entry points). So we explicitly call
+        ``state.supervisor.record(source="proactive", actor="system", ...)``
+        so the automation still lands in the audit log.
+        """
         if not self._orchestrator:
             return
 
@@ -488,6 +494,16 @@ class ProactiveEngine:
         action_type = payload.get("smart_home") or payload.get("action_type")
         if not action_type:
             return
+
+        supervisor = None
+        try:
+            from api.state import state as _state
+            supervisor = getattr(_state, "supervisor", None)
+        except Exception:
+            supervisor = None
+
+        decision = "allowed"
+        result_summary = ""
 
         try:
             from skills.impl import get_implementation
@@ -497,6 +513,7 @@ class ProactiveEngine:
                 impl = get_implementation("smart_home_hue")
                 if impl:
                     await impl.execute("set_scene", {"scene": scene}, {})
+                result_summary = f"set_scene={scene}"
                 logger.info("Automation executed: set_scene=%s (trigger=%s)", scene, msg.trigger_id)
 
             elif action_type == "breathing_exercise":
@@ -504,10 +521,32 @@ class ProactiveEngine:
                 impl = get_implementation("smart_home_hue")
                 if impl:
                     await impl.execute("set_scene", {"scene": "breathing"}, {})
+                result_summary = f"breathing_exercise={duration}min"
                 logger.info("Automation executed: breathing exercise %dmin (trigger=%s)", duration, msg.trigger_id)
 
             elif action_type == "notification":
+                result_summary = "notification"
                 logger.info("Automation: notification-only for trigger=%s", msg.trigger_id)
 
         except Exception as e:
+            decision = "error"
+            result_summary = f"error: {e}"
             logger.warning("Automation execution failed for %s: %s", msg.trigger_id, e)
+
+        if supervisor is not None:
+            try:
+                supervisor.record(
+                    source="proactive",
+                    kind="automation",
+                    session_id="",
+                    actor="system",
+                    payload={
+                        "trigger_id": msg.trigger_id,
+                        "action_type": action_type,
+                        "summary": result_summary,
+                    },
+                    decision=decision,
+                    detail={"payload": payload},
+                )
+            except Exception as exc:
+                logger.debug("supervisor.record(proactive) failed: %s", exc)

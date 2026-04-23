@@ -233,6 +233,73 @@ def test_rest_pause_toggles_supervisor(client):
     assert sup.paused is False
 
 
+@pytest.mark.asyncio
+async def test_wrap_audits_handle_daemon_result(supervisor):
+    """handle_daemon_result is a real orchestrator entry point and must
+    flow through the Supervisor audit log too — not just the chat path."""
+    inner = AsyncMock(return_value={"ok": True})
+    orch = MagicMock()
+    orch.handle_daemon_result = inner
+    supervisor.wrap(orch)
+
+    await orch.handle_daemon_result("node-abc", {"skill_id": "x"}, session_id="s1")
+
+    rows = supervisor.recent(limit=5)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "handle_daemon_result"
+    assert rows[0]["session_id"] == "s1"
+    inner.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_wrap_covers_all_four_entry_points(supervisor):
+    """Every public orchestrator entry point must be wrapped by Supervisor."""
+    orch = MagicMock()
+    orch.handle_command = AsyncMock(return_value=None)
+    orch.handle_command_stream = AsyncMock(return_value=None)
+    orch.handle_ui_event = AsyncMock(return_value=None)
+    orch.handle_daemon_result = AsyncMock(return_value=None)
+    supervisor.wrap(orch)
+
+    wrapped_keys = set(supervisor._orig.keys())
+    assert wrapped_keys == {
+        "handle_command", "handle_command_stream",
+        "handle_ui_event", "handle_daemon_result",
+    }
+
+
+def test_cron_context_source_lands_in_audit_log(supervisor):
+    """When cron passes source=cron in context, the audit row must
+    reflect that — not the default "web"."""
+    supervisor.record(
+        source="cron",
+        kind="command",
+        session_id="routine-42",
+        actor="system",
+        payload="briefing",
+    )
+    rows = supervisor.recent(source="cron")
+    assert len(rows) == 1
+    assert rows[0]["source"] == "cron"
+    assert rows[0]["actor"] == "system"
+
+
+def test_proactive_automation_landing(supervisor):
+    """ProactiveEngine._execute_automation records through Supervisor."""
+    ev = supervisor.record(
+        source="proactive",
+        kind="automation",
+        actor="system",
+        payload={"trigger_id": "t1", "action_type": "set_scene"},
+        decision="allowed",
+        detail={"payload": {"scene": "calming"}},
+    )
+    assert ev.source == "proactive"
+    rows = supervisor.recent(source="proactive")
+    assert len(rows) == 1
+    assert rows[0]["actor"] == "system"
+
+
 def test_rest_stats_reports_paused_and_sources(client):
     c, sup = client
     sup.record(source="web", kind="command", payload="x")

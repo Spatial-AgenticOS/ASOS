@@ -288,7 +288,7 @@ class Supervisor:
         if self._orchestrator is orchestrator and self._orig:
             return
         self._orchestrator = orchestrator
-        for name in ("handle_command", "handle_command_stream", "handle_ui_event"):
+        for name in ("handle_command", "handle_command_stream", "handle_ui_event", "handle_daemon_result"):
             if hasattr(orchestrator, name):
                 original = getattr(orchestrator, name)
                 self._orig[name] = original
