@@ -191,13 +191,29 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 markers = ["no_auto_feral_home: skip the autouse FERAL_HOME isolation fixture"]
+# Coverage is on by default for every `pytest` run. The previous setup
+# configured [tool.coverage.*] but never forced `--cov`, so pytest-cov
+# was installed and dormant. Overridable: `pytest --no-cov` to skip
+# (e.g. when profiling or debugging).
+addopts = "--cov=. --cov-report=term-missing:skip-covered --cov-fail-under=50"
 
 [tool.coverage.run]
 source = ["."]
-omit = ["tests/*", "*/webui/*", "setup.py"]
+omit = [
+    "tests/*",
+    "*/webui/*",
+    "*/webui_v2/*",
+    "setup.py",
+    "demo/*",
+    "docs/*",
+    "*/__pycache__/*",
+]
 
 [tool.coverage.report]
-fail_under = 48
+# Raised from 48 → 50 immediately (this commit). Ratchet lives in
+# docs/coverage.md. Subsequent commits will keep pushing the floor up
+# as tests backfill.
+fail_under = 50
 show_missing = true
 exclude_lines = [
     "pragma: no cover",

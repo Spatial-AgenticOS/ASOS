@@ -1,10 +1,11 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
-// Initial v2 coverage gate is intentionally low — the scaffold is small and
-// every new page/hook/component will ship a matching smoke test per the
-// systematic-sync non-negotiable in AGENT_PROMPT.md. Raise these numbers as
-// the suite grows; never lower them without a commit-message justification.
+// v2 coverage gate. Thresholds are deliberately modest in this commit
+// because large chunks of the client talk to the live Brain WebSocket
+// and are better exercised with e2e. Ratchet lives in docs/coverage.md.
+// Raise these numbers as the suite grows; never lower without a
+// justification in the commit message.
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -14,12 +15,21 @@ export default defineConfig({
     exclude: ['node_modules/**', 'dist/**', 'e2e/**'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'lcov'],
+      reporter: ['text', 'lcov', 'json-summary'],
+      include: ['src/**/*.{js,jsx}'],
+      exclude: [
+        'src/**/__tests__/**',
+        'src/**/*.test.{js,jsx}',
+        'src/test-setup.js',
+        'src/main.jsx',
+        'src/bootstrap.js',
+        'src/styles/**',
+      ],
       thresholds: {
-        statements: 0,
-        branches: 0,
-        functions: 0,
-        lines: 0,
+        statements: 25,
+        branches: 18,
+        functions: 19,
+        lines: 27,
       },
     },
   },

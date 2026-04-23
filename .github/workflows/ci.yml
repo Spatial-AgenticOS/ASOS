@@ -52,14 +52,12 @@ jobs:
         run: pip install pip-audit && pip-audit --strict 2>&1 || echo "::warning::pip-audit found vulnerabilities"
         continue-on-error: true
 
-      - name: Run tests with coverage (46% threshold)
-        # Lowered from 48 to 46 after tightening test-environment
-        # assumptions (clearing TOOL_KEYS env, forcing the subprocess
-        # path for code_interpreter). Behavioral coverage is unchanged;
-        # the lines-touched metric dropped ~1% because the tests no
-        # longer exercise host-local Docker sandbox semantics we don't
-        # want to depend on in CI.
-        run: pytest tests/ -x -v --tb=short --cov=. --cov-report=term-missing --cov-report=xml --cov-fail-under=46
+      - name: Run tests with coverage (50% threshold)
+        # Raised from 46 → 50 alongside the pyproject.toml change.
+        # Addopts there enables --cov by default, but we still pass the
+        # explicit flags here so the CI output is self-documenting and
+        # the XML report is emitted for Codecov.
+        run: pytest tests/ -x -v --tb=short --cov=. --cov-report=term-missing --cov-report=xml --cov-fail-under=50
 
       - name: Upload coverage
         if: always()
@@ -100,6 +98,32 @@ jobs:
 
       - name: Run tests with coverage
         run: npx vitest run --coverage
+
+  client-v2:
+    name: Client v2 — vite build + vitest coverage
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: feral-client-v2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: feral-client-v2/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests with coverage (25/18/19/27)
+        # Thresholds live in vitest.config.js — the ratchet is documented
+        # in docs/coverage.md. Raising them is a single-file change.
+        run: npm run test:coverage
 
   syntax-check:
     name: Brain — syntax check
