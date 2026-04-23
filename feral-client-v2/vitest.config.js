@@ -26,15 +26,14 @@ export default defineConfig({
         'src/styles/**',
       ],
       thresholds: {
-        // Measured on 2026.4.27: stmts 25.39 / branches 17.34 /
-        // functions 19.01 / lines 27.06. Thresholds live one point
-        // below each so a single-comment edit doesn't break CI. Ratchet
-        // plan: `docs/coverage.md`. Never lower without a commit-message
-        // justification.
-        statements: 24,
-        branches: 17,
-        functions: 18,
-        lines: 26,
+        // Stage 5.1 (Pair + Oversight + MemoryContext tests): measured
+        // stmts 27.69 / branches 19.32 / functions 21.76 / lines 29.53.
+        // Floor = measured − 1 per axis. Ratchet plan in docs/coverage.md.
+        // Never lower without a commit-message justification.
+        statements: 26,
+        branches: 19,
+        functions: 20,
+        lines: 28,
       },
     },
   },
