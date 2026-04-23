@@ -13,6 +13,7 @@ import Home from './pages/Home';
 import Marketplace from './pages/Marketplace';
 import Settings from './pages/Settings';
 import SetupWizard from './pages/SetupWizard';
+import Setup from './pages/Setup';
 import Skills from './pages/Skills';
 import Memory from './pages/Memory';
 import Wiki from './pages/Wiki';
@@ -27,7 +28,9 @@ import AppSurface from './pages/AppSurface';
 export default function App() {
   return (
     <Routes>
-      <Route path="/setup" element={<SetupWizard />} />
+      {/* New catalog-backed setup page; falls back to legacy SetupWizard for backward compat. */}
+      <Route path="/setup" element={<Setup />} />
+      <Route path="/setup/legacy" element={<SetupWizard />} />
       <Route element={<Shell />}>
         <Route path="/" element={<Home />} />
         <Route path="/chat" element={<Chat />} />

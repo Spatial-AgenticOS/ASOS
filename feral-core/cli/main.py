@@ -844,14 +844,24 @@ def cmd_doctor():
         console.print()
 
 
-def cmd_setup():
-    """Launch the guided setup wizard, then auto-generate a session token."""
-    try:
-        from cli.setup_wizard import run_setup
-        run_setup()
-    except ImportError:
-        print("Setup wizard not available. Make sure cli/setup_wizard.py exists.")
-        sys.exit(1)
+def cmd_setup(*, browser: bool = False, terminal: bool = False):
+    """Launch the guided setup wizard, then auto-generate a session token.
+
+    When ``browser=True`` the CLI opens http://localhost:9090/setup in
+    the default browser so the user gets the v2 /setup page instead of
+    the terminal. Requires the brain to be running.
+    """
+    if browser and not terminal:
+        _open_browser_setup()
+        # Even in browser mode we still want a session token for the
+        # server-side auth layer; generate it now.
+    else:
+        try:
+            from cli.setup import run_setup
+            run_setup()
+        except ImportError:
+            print("Setup wizard not available.")
+            sys.exit(1)
 
     from security.session_auth import generate_session_token, save_session_token, load_session_token
     if load_session_token() is None:
@@ -859,6 +869,19 @@ def cmd_setup():
         save_session_token(token)
         print(f"  Session token generated: {token[:8]}...{token[-4:]}")
         print(f"  Stored in {feral_home() / 'session_token'}")
+
+
+def _open_browser_setup() -> None:
+    """Open http://localhost:9090/setup in the default browser."""
+    import webbrowser
+    url = f"{_runtime_http_base()}/setup"
+    print(f"  Opening {url} in your browser...")
+    print("  (Start the brain first with `feral serve` if you see a connection error.)")
+    try:
+        webbrowser.open(url)
+    except Exception as exc:
+        print(f"  Could not open browser: {exc}")
+        print(f"  Paste this into your browser instead: {url}")
 
 
 def cmd_pair(name: str, list_devices: bool, revoke: str):
@@ -1099,8 +1122,19 @@ def main():
     serve_p.add_argument("--serve-port", default=str(brain_port()), help=f"Port (default {brain_port()})")
     serve_p.add_argument("--tls", action="store_true", help="Enable TLS (auto-generates self-signed cert if needed)")
 
-    # feral setup
-    sub.add_parser("setup", help="Guided setup wizard — configure provider, keys, features")
+    # feral setup — terminal or browser
+    setup_p = sub.add_parser(
+        "setup", help="Guided setup wizard — configure provider, keys, features",
+    )
+    setup_mode = setup_p.add_mutually_exclusive_group()
+    setup_mode.add_argument(
+        "--terminal", action="store_true", dest="setup_terminal",
+        help="Stay in the terminal (default when no browser is available).",
+    )
+    setup_mode.add_argument(
+        "--browser", action="store_true", dest="setup_browser",
+        help="Open http://localhost:9090/setup in a browser window.",
+    )
 
     # feral doctor
     sub.add_parser("doctor", help="Run diagnostics — check deps, keys, brain health")
@@ -1189,7 +1223,10 @@ def main():
     elif args.subcommand == "serve":
         cmd_serve(host=args.bind, port=int(args.serve_port), tls=getattr(args, "tls", False))
     elif args.subcommand == "setup":
-        cmd_setup()
+        cmd_setup(
+            browser=getattr(args, "setup_browser", False),
+            terminal=getattr(args, "setup_terminal", False),
+        )
     elif args.subcommand == "doctor":
         cmd_doctor()
     elif args.subcommand == "status":

@@ -1,0 +1,629 @@
+/**
+ * Setup — browser equivalent of the terminal `feral setup` wizard.
+ *
+ * Reads + writes the same settings.json + credentials.json the CLI
+ * touches, via the REST endpoints added in
+ * feral-core/api/routes/llm.py and feral-core/api/routes/audio.py.
+ * That contract is the single source of truth so a user can start in
+ * the terminal and finish here, or vice versa.
+ *
+ * Steps:
+ *   1. Welcome
+ *   2. LLM provider (side-by-side table, fuzzy match, free-text model)
+ *   3. Audio (STT + TTS, local vs cloud)
+ *   4. Identity (name / occupation / location)
+ *   5. Done
+ */
+
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ChevronRight, ChevronLeft, RefreshCw, CheckCircle2 } from 'lucide-react';
+import Pane from '../ui/Pane';
+import Glass from '../ui/Glass';
+import Tabs from '../ui/Tabs';
+import StatusDot from '../ui/StatusDot';
+import EmptyState from '../ui/EmptyState';
+import { apiJson, apiFetch } from '../lib/api';
+
+
+const STEPS = [
+  { id: 'welcome', label: 'Welcome' },
+  { id: 'llm', label: 'LLM provider' },
+  { id: 'audio', label: 'Voice (STT + TTS)' },
+  { id: 'identity', label: 'About you' },
+  { id: 'done', label: 'Ready' },
+];
+
+
+function statusTone(status) {
+  if (status === 'ready') return 'live';
+  if (status === 'needs_api_key') return 'warn';
+  if (status === 'unreachable') return 'error';
+  return 'neutral';
+}
+
+
+function statusLabel(s) {
+  if (s === 'ready') return 'ready';
+  if (s === 'needs_api_key') return 'needs API key';
+  if (s === 'unreachable') return 'unreachable';
+  if (s === 'unavailable') return 'not installed';
+  return s || '';
+}
+
+
+export default function Setup() {
+  const navigate = useNavigate();
+  const [stepIdx, setStepIdx] = useState(0);
+  const step = STEPS[stepIdx];
+
+  const [providers, setProviders] = useState([]);
+  const [pickedProvider, setPickedProvider] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [models, setModels] = useState([]);
+  const [modelSource, setModelSource] = useState('');
+  const [pickedModel, setPickedModel] = useState('');
+  const [llmError, setLlmError] = useState(null);
+  const [llmBusy, setLlmBusy] = useState(false);
+
+  const [audioProviders, setAudioProviders] = useState({ stt: [], tts: [] });
+  const [audio, setAudio] = useState({
+    stt_provider: 'openai', stt_model: 'whisper-1',
+    tts_provider: 'openai', tts_model: 'tts-1', tts_voice: 'nova',
+  });
+  const [audioError, setAudioError] = useState(null);
+
+  const [identity, setIdentity] = useState({ name: '', occupation: '', location: '' });
+
+  const [saved, setSaved] = useState(false);
+
+  // Initial fetch — providers, current config
+  useEffect(() => {
+    (async () => {
+      try {
+        const [provs, currentLlm, currentAudio, audioAll] = await Promise.allSettled([
+          apiJson('/api/llm/providers'),
+          apiJson('/api/llm/config'),
+          apiJson('/api/audio/config'),
+          apiJson('/api/audio/providers'),
+        ]);
+        if (provs.status === 'fulfilled') {
+          setProviders(provs.value?.providers || []);
+          const readyLocal = (provs.value?.providers || []).find(p => p.supports_local && p.reachable);
+          const readyCloud = (provs.value?.providers || []).find(p => !p.supports_local && p.configured);
+          const fallback = (provs.value?.providers || [])[0]?.id || 'openai';
+          if (currentLlm.status === 'fulfilled' && currentLlm.value?.provider) {
+            setPickedProvider(currentLlm.value.provider);
+            setPickedModel(currentLlm.value.model || '');
+          } else {
+            setPickedProvider((readyLocal || readyCloud || { id: fallback }).id);
+          }
+        }
+        if (audioAll.status === 'fulfilled') {
+          setAudioProviders(audioAll.value || { stt: [], tts: [] });
+        }
+        if (currentAudio.status === 'fulfilled' && currentAudio.value) {
+          setAudio((prev) => ({ ...prev, ...currentAudio.value }));
+        }
+      } catch (e) {
+        // Non-fatal; user can still advance.
+      }
+    })();
+  }, []);
+
+  // Whenever provider changes, refresh its model list
+  useEffect(() => {
+    if (!pickedProvider) return;
+    (async () => {
+      setLlmError(null);
+      try {
+        const r = await apiJson(`/api/llm/providers/${encodeURIComponent(pickedProvider)}/models?live=true`);
+        setModels(r?.models || []);
+        setModelSource(r?.source || '');
+        if (!pickedModel && r?.models?.length) {
+          // Default to descriptor default if present; otherwise first model.
+          const desc = providers.find(p => p.id === pickedProvider);
+          const defaultModel = desc?.default_model && r.models.includes(desc.default_model)
+            ? desc.default_model
+            : r.models[0];
+          setPickedModel(defaultModel);
+        }
+      } catch (e) {
+        setLlmError(e?.message || 'failed to fetch models');
+      }
+    })();
+  }, [pickedProvider]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refreshProviders = useCallback(async () => {
+    try {
+      const r = await apiJson('/api/llm/providers');
+      setProviders(r?.providers || []);
+    } catch (e) {
+      setLlmError(e?.message || 'refresh failed');
+    }
+  }, []);
+
+  const probeProvider = useCallback(async (pid) => {
+    try {
+      const r = await apiFetch(`/api/llm/providers/${encodeURIComponent(pid)}/probe`, { method: 'POST' });
+      if (r.ok) {
+        await refreshProviders();
+      }
+    } catch { /* ignore */ }
+  }, [refreshProviders]);
+
+  const saveLlm = useCallback(async () => {
+    if (!pickedProvider || !pickedModel) {
+      setLlmError('Pick a provider + model before continuing.');
+      return false;
+    }
+    setLlmBusy(true);
+    setLlmError(null);
+    try {
+      const body = { provider: pickedProvider, model: pickedModel };
+      if (apiKey) body.api_key = apiKey;
+      const r = await apiFetch('/api/llm/config', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        setLlmError(err?.detail || `${r.status}`);
+        return false;
+      }
+      // Refresh status so the "ready" badge updates
+      await refreshProviders();
+      return true;
+    } finally {
+      setLlmBusy(false);
+    }
+  }, [pickedProvider, pickedModel, apiKey, refreshProviders]);
+
+  const saveAudio = useCallback(async () => {
+    setAudioError(null);
+    try {
+      const r = await apiFetch('/api/audio/config', {
+        method: 'POST',
+        body: JSON.stringify(audio),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        setAudioError(err?.detail || `${r.status}`);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      setAudioError(e?.message || 'save failed');
+      return false;
+    }
+  }, [audio]);
+
+  const next = useCallback(async () => {
+    if (step.id === 'llm') {
+      const ok = await saveLlm();
+      if (!ok) return;
+    }
+    if (step.id === 'audio') {
+      const ok = await saveAudio();
+      if (!ok) return;
+    }
+    if (step.id === 'identity') {
+      // Identity is optional — no validation.
+    }
+    if (stepIdx < STEPS.length - 1) {
+      setStepIdx(stepIdx + 1);
+    } else {
+      setSaved(true);
+      setTimeout(() => navigate('/'), 800);
+    }
+  }, [step.id, stepIdx, saveLlm, saveAudio, navigate]);
+
+  const back = useCallback(() => {
+    if (stepIdx > 0) setStepIdx(stepIdx - 1);
+  }, [stepIdx]);
+
+  const selectedDescriptor = useMemo(
+    () => providers.find((p) => p.id === pickedProvider),
+    [providers, pickedProvider],
+  );
+
+  return (
+    <div className="v2-page v2-page--stack" data-testid="v2-marker">
+      <Pane
+        title="FERAL setup"
+        actions={(
+          <Tabs
+            value={step.id}
+            onChange={(id) => {
+              const idx = STEPS.findIndex((s) => s.id === id);
+              if (idx >= 0) setStepIdx(idx);
+            }}
+            items={STEPS}
+          />
+        )}
+      >
+        <p className="v2-p v2-p--muted">
+          Same steps as <code>feral setup</code> in your terminal. Everything you enter here writes to the same
+          <code> ~/.feral/settings.json</code> so the two wizards are interchangeable.
+        </p>
+      </Pane>
+
+      {step.id === 'welcome' && <WelcomeStep />}
+
+      {step.id === 'llm' && (
+        <LLMStep
+          providers={providers}
+          pickedProvider={pickedProvider}
+          onPickProvider={(pid) => { setPickedProvider(pid); setPickedModel(''); setApiKey(''); }}
+          apiKey={apiKey}
+          onApiKey={setApiKey}
+          models={models}
+          modelSource={modelSource}
+          pickedModel={pickedModel}
+          onPickModel={setPickedModel}
+          onProbe={probeProvider}
+          onRefresh={refreshProviders}
+          error={llmError}
+          busy={llmBusy}
+          descriptor={selectedDescriptor}
+        />
+      )}
+
+      {step.id === 'audio' && (
+        <AudioStep
+          providers={audioProviders}
+          value={audio}
+          onChange={setAudio}
+          error={audioError}
+        />
+      )}
+
+      {step.id === 'identity' && (
+        <IdentityStep value={identity} onChange={setIdentity} />
+      )}
+
+      {step.id === 'done' && <DoneStep saved={saved} />}
+
+      <Pane>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+          <button
+            type="button"
+            className="v2-btn v2-btn--ghost"
+            onClick={back}
+            disabled={stepIdx === 0}
+          >
+            <ChevronLeft size={13} /> Back
+          </button>
+          <button
+            type="button"
+            className="v2-btn v2-btn--primary"
+            onClick={next}
+            disabled={llmBusy}
+            data-testid="v2-setup-next"
+          >
+            {stepIdx === STEPS.length - 1 ? 'Finish' : 'Continue'} <ChevronRight size={13} />
+          </button>
+        </div>
+      </Pane>
+    </div>
+  );
+}
+
+
+function WelcomeStep() {
+  return (
+    <Pane title="Welcome">
+      <p className="v2-p">
+        This wizard sets up your local FERAL brain in four steps:
+      </p>
+      <ol>
+        <li>Choose an LLM provider (cloud or local).</li>
+        <li>Pick STT + TTS providers for voice.</li>
+        <li>Tell the agent who you are.</li>
+        <li>Start chatting.</li>
+      </ol>
+      <p className="v2-p v2-p--muted">
+        Prefer terminal? Run <code>feral setup</code> on your shell — same endpoints, same config.
+      </p>
+    </Pane>
+  );
+}
+
+
+function LLMStep({
+  providers, pickedProvider, onPickProvider,
+  apiKey, onApiKey, models, modelSource, pickedModel, onPickModel,
+  onProbe, onRefresh, error, busy, descriptor,
+}) {
+  return (
+    <>
+      <Pane
+        title="Providers"
+        actions={(
+          <button type="button" className="v2-btn v2-btn--ghost" onClick={onRefresh} aria-label="Refresh">
+            <RefreshCw size={13} />
+          </button>
+        )}
+      >
+        <p className="v2-p v2-p--muted">
+          Click any provider to select it. Local providers show <strong>ready</strong> when detected.
+          Cloud providers show <strong>needs API key</strong> until you enter one — you can still select
+          them and add the key on the right.
+        </p>
+        <div className="v2-skills-grid" data-testid="v2-setup-providers">
+          {providers.map((p) => {
+            const isPicked = p.id === pickedProvider;
+            return (
+              <Glass
+                key={p.id}
+                level={isPicked ? 2 : 0}
+                radius="md"
+                padding="md"
+                className={isPicked ? 'v2-setup-provider is-picked' : 'v2-setup-provider'}
+              >
+                <header style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <StatusDot tone={statusTone(p.reachable ? 'ready' : (p.configured ? 'unreachable' : 'needs_api_key'))} />
+                  <div style={{ fontWeight: 600 }}>{p.display_name}</div>
+                </header>
+                <div className="v2-p v2-p--muted v2-p--tiny" style={{ marginBottom: 6 }}>
+                  {p.supports_local ? `local · ${p.default_base_url}` : `env: ${p.credential_env_var || '—'}`}
+                </div>
+                <div className="v2-p v2-p--tiny" style={{ marginBottom: 8 }}>
+                  {p.reachable ? 'ready' : p.configured ? 'unreachable' : 'needs API key'}
+                </div>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button
+                    type="button"
+                    className={`v2-btn ${isPicked ? 'v2-btn--primary' : ''}`}
+                    onClick={() => onPickProvider(p.id)}
+                    data-testid={`v2-setup-pick-${p.id}`}
+                  >
+                    {isPicked ? 'Selected' : 'Select'}
+                  </button>
+                  {!p.reachable && (
+                    <button
+                      type="button"
+                      className="v2-btn v2-btn--ghost"
+                      onClick={() => onProbe(p.id)}
+                      title="Re-probe"
+                    >
+                      Probe
+                    </button>
+                  )}
+                </div>
+              </Glass>
+            );
+          })}
+        </div>
+      </Pane>
+
+      {descriptor && descriptor.requires_api_key && !descriptor.reachable && (
+        <Pane title={`API key for ${descriptor.display_name}`}>
+          <p className="v2-p v2-p--muted">
+            Routed into the BlindVault under <code>{descriptor.credential_env_var}</code> — never written to settings.json in plaintext.
+          </p>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => onApiKey(e.target.value)}
+            placeholder={`Your ${descriptor.display_name} API key`}
+            className="v2-input"
+            data-testid="v2-setup-apikey"
+            style={{ width: '100%', padding: 8 }}
+          />
+        </Pane>
+      )}
+
+      {pickedProvider && (
+        <Pane title="Model">
+          <p className="v2-p v2-p--muted">
+            {models.length > 0
+              ? `Found ${models.length} models (source: ${modelSource}). Pick one or type a newer name.`
+              : 'No models discovered yet — type the exact model id.'}
+          </p>
+          <input
+            type="text"
+            value={pickedModel}
+            onChange={(e) => onPickModel(e.target.value)}
+            placeholder="Model id"
+            className="v2-input"
+            data-testid="v2-setup-model"
+            style={{ width: '100%', padding: 8, marginBottom: 8 }}
+          />
+          {models.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {models.slice(0, 16).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`v2-chip${m === pickedModel ? ' v2-chip--live' : ''}`}
+                  onClick={() => onPickModel(m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          )}
+        </Pane>
+      )}
+
+      {error && <div className="v2-chip v2-chip--error">{error}</div>}
+      {busy && <div className="v2-chip v2-chip--warn">Saving…</div>}
+    </>
+  );
+}
+
+
+function AudioStep({ providers, value, onChange, error }) {
+  return (
+    <>
+      <Pane title="Speech in / out">
+        <p className="v2-p v2-p--muted">
+          Cloud (OpenAI) needs the key you already entered. Local
+          (faster-whisper + piper) runs entirely offline once installed.
+        </p>
+      </Pane>
+
+      <Pane title="Speech-to-text">
+        <div className="v2-skills-grid">
+          {(providers.stt || []).map((p) => {
+            const picked = value.stt_provider === p.id;
+            return (
+              <Glass
+                key={p.id}
+                level={picked ? 2 : 0}
+                radius="md"
+                padding="md"
+                className={picked ? 'v2-setup-audio is-picked' : 'v2-setup-audio'}
+              >
+                <header style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <StatusDot tone={statusTone(p.is_local ? (p.available ? 'ready' : 'unavailable') : (p.needs_api_key ? 'needs_api_key' : 'ready'))} />
+                  <div style={{ fontWeight: 600 }}>{p.display_name}</div>
+                </header>
+                <div className="v2-p v2-p--tiny v2-p--muted">
+                  {p.is_local ? (p.available ? 'installed' : 'install via pip install feral-ai[stt]') : `env: ${p.credential_env_var}`}
+                </div>
+                <button
+                  type="button"
+                  className={`v2-btn ${picked ? 'v2-btn--primary' : ''}`}
+                  onClick={() => onChange({
+                    ...value,
+                    stt_provider: p.id,
+                    stt_model: p.default_model || (p.available_models || [])[0] || value.stt_model,
+                  })}
+                  style={{ marginTop: 6 }}
+                  data-testid={`v2-setup-stt-${p.id}`}
+                >
+                  {picked ? 'Selected' : 'Select'}
+                </button>
+              </Glass>
+            );
+          })}
+        </div>
+        {value.stt_provider && (
+          <div style={{ marginTop: 10 }}>
+            <label className="v2-p v2-p--muted">STT model</label>
+            <input
+              type="text"
+              value={value.stt_model || ''}
+              onChange={(e) => onChange({ ...value, stt_model: e.target.value })}
+              className="v2-input"
+              style={{ width: '100%', padding: 8 }}
+            />
+          </div>
+        )}
+      </Pane>
+
+      <Pane title="Text-to-speech">
+        <div className="v2-skills-grid">
+          {(providers.tts || []).map((p) => {
+            const picked = value.tts_provider === p.id;
+            return (
+              <Glass
+                key={p.id}
+                level={picked ? 2 : 0}
+                radius="md"
+                padding="md"
+                className={picked ? 'v2-setup-audio is-picked' : 'v2-setup-audio'}
+              >
+                <header style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <StatusDot tone={statusTone(p.is_local ? (p.available ? 'ready' : 'unavailable') : (p.needs_api_key ? 'needs_api_key' : 'ready'))} />
+                  <div style={{ fontWeight: 600 }}>{p.display_name}</div>
+                </header>
+                <button
+                  type="button"
+                  className={`v2-btn ${picked ? 'v2-btn--primary' : ''}`}
+                  onClick={() => onChange({
+                    ...value,
+                    tts_provider: p.id,
+                    tts_model: p.default_model || value.tts_model,
+                    tts_voice: p.default_voice || value.tts_voice,
+                  })}
+                  style={{ marginTop: 6 }}
+                  data-testid={`v2-setup-tts-${p.id}`}
+                >
+                  {picked ? 'Selected' : 'Select'}
+                </button>
+              </Glass>
+            );
+          })}
+        </div>
+        {value.tts_provider && (
+          <div style={{ marginTop: 10, display: 'grid', gap: 6, gridTemplateColumns: '1fr 1fr' }}>
+            <label className="v2-p v2-p--muted">TTS model</label>
+            <label className="v2-p v2-p--muted">Voice</label>
+            <input
+              type="text"
+              value={value.tts_model || ''}
+              onChange={(e) => onChange({ ...value, tts_model: e.target.value })}
+              className="v2-input"
+              style={{ padding: 8 }}
+            />
+            <input
+              type="text"
+              value={value.tts_voice || ''}
+              onChange={(e) => onChange({ ...value, tts_voice: e.target.value })}
+              className="v2-input"
+              style={{ padding: 8 }}
+            />
+          </div>
+        )}
+      </Pane>
+
+      {error && <div className="v2-chip v2-chip--error">{error}</div>}
+    </>
+  );
+}
+
+
+function IdentityStep({ value, onChange }) {
+  return (
+    <Pane title="About you (optional)">
+      <p className="v2-p v2-p--muted">
+        Short identity block the agent can reference. You can edit it anytime in Settings → Self.
+      </p>
+      <div style={{ display: 'grid', gap: 6, marginTop: 10 }}>
+        <label className="v2-p v2-p--muted">Name</label>
+        <input
+          type="text"
+          value={value.name || ''}
+          onChange={(e) => onChange({ ...value, name: e.target.value })}
+          className="v2-input"
+          style={{ padding: 8 }}
+          data-testid="v2-setup-identity-name"
+        />
+        <label className="v2-p v2-p--muted">Occupation</label>
+        <input
+          type="text"
+          value={value.occupation || ''}
+          onChange={(e) => onChange({ ...value, occupation: e.target.value })}
+          className="v2-input"
+          style={{ padding: 8 }}
+        />
+        <label className="v2-p v2-p--muted">Location</label>
+        <input
+          type="text"
+          value={value.location || ''}
+          onChange={(e) => onChange({ ...value, location: e.target.value })}
+          className="v2-input"
+          style={{ padding: 8 }}
+        />
+      </div>
+    </Pane>
+  );
+}
+
+
+function DoneStep({ saved }) {
+  return (
+    <Pane title="Ready">
+      <div style={{ textAlign: 'center', padding: 20 }}>
+        <CheckCircle2 size={48} style={{ color: saved ? '#22c55e' : '#64748b' }} />
+        <h2 style={{ marginTop: 12 }}>{saved ? 'Setup complete.' : 'One more tap to finish.'}</h2>
+        <p className="v2-p v2-p--muted">
+          Start a chat at <code>/chat</code> or open the dashboard at <code>/</code>.
+        </p>
+      </div>
+    </Pane>
+  );
+}

@@ -25,19 +25,23 @@ export async function bootstrapLocalApiKey() {
 }
 
 /**
- * Redirect to /v2/setup when ``setup_complete === false`` and we aren't
+ * Redirect to /setup when ``setup_complete === false`` and we aren't
  * already there. Idempotent; resolves before the SPA mounts so new users
  * never see a broken dashboard on first boot.
+ *
+ * Also honours the /v2/ prefix for the bundled webui install.
  */
 export async function maybeRedirectToSetup() {
   try {
     if (typeof window === 'undefined') return;
-    if (window.location.pathname.startsWith('/v2/setup')) return;
+    const path = window.location.pathname || '';
+    if (path.startsWith('/setup') || path.startsWith('/v2/setup')) return;
     const r = await fetch(`${API_BASE}/api/setup/status`, { credentials: 'same-origin' });
     if (!r.ok) return;
     const data = await r.json();
     if (data && data.setup_complete === false) {
-      window.location.replace('/v2/setup');
+      const target = path.startsWith('/v2/') ? '/v2/setup' : '/setup';
+      window.location.replace(target);
     }
   } catch (_e) {
     // Silent.
