@@ -71,6 +71,10 @@
   /* Keep the scrollbar gutter present so pages with less content do not
    * cause the whole viewport to jump horizontally when switching tabs. */
   scrollbar-gutter: stable;
+  /* Explicit z-index above .v2-ambient (z-index: 0) so the ambient
+   * field + grain can never paint over page content like the Glass
+   * Brain mind-map empty state. */
+  z-index: 1;
 }
 
 /* ── Menubar ─────────────────────────────────────────────────── */

@@ -146,6 +146,24 @@ export default function ConsciousnessMindMap() {
 
   const hoveredEntity = hovered ? entities.find((e) => e.id === hovered) : null;
 
+  // Empty state renders ONLY the centred message — no SVG centre dot,
+  // no ambient orbs, no kind-ring guides. Painting the FERAL anchor
+  // node when there is nothing to anchor used to overlap the prompt
+  // text and looked like a stray bug.
+  if (entities.length === 0) {
+    return (
+      <div
+        ref={containerRef}
+        className="v2-mindmap v2-mindmap--empty"
+        data-testid="consciousness-mindmap"
+      >
+        <div className="v2-mindmap-empty v2-p v2-p--muted">
+          No in-flight consciousness entities. Start a TaskFlow, intent, or chat to see the graph come alive.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div ref={containerRef} className="v2-mindmap" data-testid="consciousness-mindmap">
       <svg
@@ -257,11 +275,6 @@ export default function ConsciousnessMindMap() {
               session {hoveredEntity.owner_session_id.slice(0, 8)}
             </div>
           )}
-        </div>
-      )}
-      {entities.length === 0 && (
-        <div className="v2-mindmap-empty v2-p v2-p--muted">
-          No in-flight consciousness entities. Start a TaskFlow, intent, or chat to see the graph come alive.
         </div>
       )}
     </div>
