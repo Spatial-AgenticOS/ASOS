@@ -1,10 +1,18 @@
 # Changelog
 
-<!-- feral-version: 2026.4.28 -->
+<!-- feral-version: 2026.4.29 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.4.29] - 2026-04-24
+
+### Fixed
+
+- **"+ Pair new device" silently issued a token instead of opening the pair modal.** [`feral-client-v2/src/pages/Devices.jsx`](feral-client-v2/src/pages/Devices.jsx) + [`feral-client-v2/src/components/PairDeviceModal.jsx`](feral-client-v2/src/components/PairDeviceModal.jsx). The button already wired to `setShowPair(true)`, but `WebPhoneTab` fired its `onPaired` callback the moment `/api/devices/pair/url` returned, and the parent's `onPaired` handler closed the modal — so the modal opened and slammed shut in the same tick, leaving only an UNCLAIMED `web-phone` row in the Paired list. `WebPhoneTab` no longer treats token issuance as "pairing complete"; it only signals via the WebSocket on actual claim. The `onClose` path now refreshes `/api/devices/paired` so a freshly claimed device shows up immediately. Added the canonical footer hint `"Scan with your phone camera. Tap Pair when the page opens."` and 5 new vitest cases that exercise the modal-opens / default-tab / tab-switch / close-refresh contract.
+- **Glass Brain centre dot painted on top of the empty-state text.** [`feral-client-v2/src/components/ConsciousnessMindMap.jsx`](feral-client-v2/src/components/ConsciousnessMindMap.jsx) used to render the SVG with a "FERAL" anchor circle + kind-ring guides even when `entities.length === 0`, partially obscuring the prompt `No in-flight consciousness entities. Start a TaskFlow…`. Now returns the centred prompt directly with no SVG, no centre dot, no ambient orb. Added an explicit `z-index: 1` on `.v2-shell-main` so the ambient field + grain (`.v2-ambient`, z-index:0) can never paint over page content even if a future stacking context sneaks in. Test coverage: empty state asserts no `<svg>` child; with-entities asserts `>0` node circles.
+- **No in-app way back from `/oversight` or `/memory/context`.** Both routes are reached from page-action links inside Glass Brain. Browser back worked, but the page header had no exit affordance. New [`feral-client-v2/src/ui/BackButton.jsx`](feral-client-v2/src/ui/BackButton.jsx) calls `useNavigate(-1)` when there is in-app history, falls back to `/glass-brain` when `location.key === 'default'` (deep-link / refresh on this route). [`feral-client-v2/src/ui/Pane.jsx`](feral-client-v2/src/ui/Pane.jsx) gains a `leading` slot so every deep page can drop in `<BackButton />` without bespoke layout. Wired into Oversight + MemoryContext. Test coverage on both pages: button exists, click fires `navigate(-1)` with history, `navigate('/glass-brain')` on deep-link.
 
 ## [2026.4.28] - 2026-04-23
 
