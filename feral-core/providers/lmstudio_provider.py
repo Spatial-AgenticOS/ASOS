@@ -78,13 +78,10 @@ class LMStudioProvider(BaseProvider):
         )
 
     async def refresh_models(self) -> list[str]:
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as c:
-                r = await c.get(f"{self._base_url}/models")
-                r.raise_for_status()
-            ids = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
-            if ids:
-                self._models = sorted(ids)
-        except Exception as exc:
-            logger.debug("lmstudio refresh_models failed: %s", exc)
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.get(f"{self._base_url}/models")
+            r.raise_for_status()
+        ids = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
+        if ids:
+            self._models = sorted(ids)
         return list(self._models)

@@ -94,13 +94,10 @@ class GeminiProvider(BaseProvider):
     async def refresh_models(self) -> list[str]:
         if not self._api_key:
             return list(self._models)
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                r = await c.get(f"{self._base_url}/models?key={self._api_key}")
-                r.raise_for_status()
-            ids = [m["name"].split("/")[-1] for m in r.json().get("models", [])]
-            if ids:
-                self._models = sorted(set(ids))
-        except Exception as exc:
-            logger.debug("gemini refresh_models failed: %s", exc)
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.get(f"{self._base_url}/models?key={self._api_key}")
+            r.raise_for_status()
+        ids = [m["name"].split("/")[-1] for m in r.json().get("models", [])]
+        if ids:
+            self._models = sorted(set(ids))
         return list(self._models)

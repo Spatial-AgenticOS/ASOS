@@ -410,6 +410,12 @@ function ProviderForm({ provider, onCancel, onSaved }) {
   const [models, setModels] = useState([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelError, setModelError] = useState(null);
+  // `modelWarning` is the backend-reported warning for the current cache row
+  // (e.g. "provider rejected the API key (HTTP 401)") so the picker can
+  // honestly tell the user the dropdown is a fallback list, not live data.
+  const [modelWarning, setModelWarning] = useState('');
+  const [modelSource, setModelSource] = useState('');
+  const [modelFilter, setModelFilter] = useState('');
   const [selectedModel, setSelectedModel] = useState(provider.default_model || '');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState(provider.default_base_url || '');
@@ -417,13 +423,18 @@ function ProviderForm({ provider, onCancel, onSaved }) {
   const [msg, setMsg] = useState(null);
   const [err, setErr] = useState(null);
 
-  const loadModels = useCallback(async () => {
+  // `force=true` is what the explicit "Refresh models" button hits — it
+  // bypasses the 6h disk cache so the user always gets a wire fetch.
+  const loadModels = useCallback(async ({ force = false } = {}) => {
     setLoadingModels(true);
     setModelError(null);
     try {
-      const d = await apiJson(`/api/llm/providers/${encodeURIComponent(provider.provider_id)}/models?live=true`);
+      const qs = force ? 'live=true&force=true' : 'live=true';
+      const d = await apiJson(`/api/llm/providers/${encodeURIComponent(provider.provider_id)}/models?${qs}`);
       const list = d.models || d || [];
       setModels(list);
+      setModelWarning(d.warning || '');
+      setModelSource(d.source || '');
       if (list.length > 0 && !selectedModel) {
         setSelectedModel(list[0].id || list[0]);
       }
@@ -462,6 +473,12 @@ function ProviderForm({ provider, onCancel, onSaved }) {
       } else {
         setMsg('Saved and switched ✓');
       }
+      // If the user pasted a new key, immediately re-fetch the model
+      // list with force=true so the picker reflects what the new key
+      // can actually see (the whole point of "settings honesty").
+      if (apiKey) {
+        try { await loadModels({ force: true }); } catch (_) { /* swallow */ }
+      }
       setTimeout(() => onSaved(), 600);
     } catch (e) {
       setErr(e?.message || 'failed');
@@ -469,6 +486,19 @@ function ProviderForm({ provider, onCancel, onSaved }) {
       setBusy(false);
     }
   };
+
+  // Typeahead filter only kicks in when the list is large — avoids
+  // adding chrome the user doesn't need for a 5-model provider.
+  const SEARCHABLE_THRESHOLD = 20;
+  const normalisedFilter = modelFilter.trim().toLowerCase();
+  const visibleModels = (() => {
+    if (!normalisedFilter) return models;
+    return models.filter((m) => {
+      const id = typeof m === 'string' ? m : (m.id || m.name || '');
+      return id.toLowerCase().includes(normalisedFilter);
+    });
+  })();
+  const showFilter = models.length > SEARCHABLE_THRESHOLD;
 
   return (
     <div className="v2-provider-form">
@@ -501,6 +531,17 @@ function ProviderForm({ provider, onCancel, onSaved }) {
 
       <div className="v2-identity-field">
         <span className="v2-identity-field-label">Model</span>
+        {showFilter && (
+          <input
+            className="v2-input"
+            type="search"
+            value={modelFilter}
+            onChange={(e) => setModelFilter(e.target.value)}
+            placeholder={`Filter ${models.length} models…`}
+            aria-label={`Filter ${provider.provider_id} models`}
+            data-testid={`model-filter-${provider.provider_id}`}
+          />
+        )}
         <div className="v2-provider-model-row">
           <input
             className="v2-input"
@@ -509,11 +550,16 @@ function ProviderForm({ provider, onCancel, onSaved }) {
             placeholder={provider.default_model || 'gpt-4o-mini'}
             list={`models-${provider.provider_id}`}
           />
-          <button type="button" className="v2-btn v2-btn--ghost" onClick={loadModels} disabled={loadingModels}>
+          <button
+            type="button"
+            className="v2-btn v2-btn--ghost"
+            onClick={() => loadModels({ force: true })}
+            disabled={loadingModels}
+          >
             {loadingModels ? 'Loading…' : 'Refresh models'}
           </button>
           <datalist id={`models-${provider.provider_id}`}>
-            {models.map((m, i) => {
+            {visibleModels.map((m, i) => {
               const id = typeof m === 'string' ? m : (m.id || m.name || '');
               return <option key={id || i} value={id}>{id}</option>;
             })}
@@ -521,10 +567,18 @@ function ProviderForm({ provider, onCancel, onSaved }) {
         </div>
         {loadingModels && <span className="v2-p v2-p--muted v2-p--tiny">Probing /models…</span>}
         {!loadingModels && models.length > 0 && (
-          <span className="v2-p v2-p--muted v2-p--tiny">{models.length} model{models.length === 1 ? '' : 's'} available</span>
+          <span className="v2-p v2-p--muted v2-p--tiny">
+            {showFilter ? `${visibleModels.length} of ${models.length}` : `${models.length} model${models.length === 1 ? '' : 's'}`}
+            {modelSource ? ` · ${modelSource}` : ''}
+          </span>
         )}
         {!loadingModels && models.length === 0 && !modelError && (
           <span className="v2-p v2-p--muted v2-p--tiny">No models returned — type any model id above to use.</span>
+        )}
+        {modelWarning && !modelError && (
+          <span className="v2-chip v2-chip--warn" data-testid={`model-warning-${provider.provider_id}`}>
+            {modelWarning}
+          </span>
         )}
         {modelError && (
           <span className="v2-chip v2-chip--warn">{modelError}</span>

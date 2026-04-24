@@ -50,15 +50,19 @@ class TestLMStudioProvider:
         assert p.list_models() == sorted(out)
 
     @pytest.mark.asyncio
-    async def test_refresh_models_failure_keeps_cache(self):
+    async def test_refresh_models_failure_propagates_to_catalog(self):
+        # Contract change in 2026.4.29: adapters MUST raise on transport
+        # / HTTP errors so the catalog can surface a "warning" on the
+        # cached or fallback list. The previous behaviour silently
+        # returned ``_models`` and made stale dropdowns invisible.
         p = LMStudioProvider()
         p._models = ["cached-model"]
 
         with patch("providers.lmstudio_provider.httpx.AsyncClient") as Client:
             client = Client.return_value.__aenter__.return_value
             client.get = AsyncMock(side_effect=RuntimeError("offline"))
-            out = await p.refresh_models()
-        assert out == ["cached-model"]
+            with pytest.raises(RuntimeError):
+                await p.refresh_models()
 
 
 class TestCatalogRegistersLMStudio:

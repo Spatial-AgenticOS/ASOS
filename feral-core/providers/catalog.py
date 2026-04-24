@@ -236,7 +236,11 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
 # ----------------------------------------------------------------------
 
 
-DEFAULT_CACHE_TTL_SECONDS = 24 * 3600
+# 6-hour TTL — short enough that a stale picker dies within a single
+# working day, long enough that the first model open after a reboot is
+# instant. Live fetch always wins over cache; `force=True` skips the
+# cache entirely (that's what the Refresh button hits).
+DEFAULT_CACHE_TTL_SECONDS = 6 * 3600
 
 
 @dataclass
@@ -244,6 +248,11 @@ class CachedModelList:
     models: list[str]
     last_refresh: float
     source: str  # "live" | "cache" | "fallback"
+    # Populated when a live refresh was attempted but failed (401, 5xx,
+    # network error, etc). Surfaced through the REST API so the v2
+    # picker can render a warning chip ("key rejected — showing last
+    # known good list") instead of silently lying about models.
+    warning: str = ""
 
 
 class ProviderCatalog:
@@ -262,6 +271,11 @@ class ProviderCatalog:
 
         self._adapters: dict[str, Provider] = {}
         self._models: dict[str, CachedModelList] = {}
+        # Per-provider warning from the most recent refresh attempt. Set
+        # when the live call failed (e.g. 401 after the user pasted the
+        # wrong key) so the API layer can surface it alongside the
+        # fallback list.
+        self._warnings: dict[str, str] = {}
         self._cache_path = cache_path
         self._cache_ttl = cache_ttl_seconds
         self._lock = asyncio.Lock()
@@ -335,6 +349,11 @@ class ProviderCatalog:
 
         Called by :class:`LLMProvider` when the user switches providers
         and by the REST config route when settings change at runtime.
+
+        Invalidates the cached model list for this provider so the next
+        ``list_models()`` call does a live fetch with the new credentials
+        — without this, the v2 Settings picker would keep rendering the
+        pre-key model list after the user pasted a working key.
         """
         desc = self._descriptors.get(provider_id)
         if desc is None:
@@ -342,6 +361,14 @@ class ProviderCatalog:
         adapter = self._build_adapter(desc, api_key=api_key, base_url=base_url, **extra)
         if adapter is not None:
             self._adapters[provider_id] = adapter
+        # Drop the stale cache — next list_models() will refetch live.
+        self._models.pop(provider_id, None)
+        self._warnings.pop(provider_id, None)
+
+    def invalidate_models(self, provider_id: str) -> None:
+        """Force the next ``list_models(provider_id)`` call to go live."""
+        self._models.pop(provider_id, None)
+        self._warnings.pop(provider_id, None)
 
     async def list_models(
         self,
@@ -353,25 +380,44 @@ class ProviderCatalog:
         """Return models for *provider_id*.
 
         ``live=False`` returns the cached value without touching the
-        network. ``force=True`` ignores the TTL and always refreshes.
+        network. ``force=True`` ignores the TTL and always refreshes —
+        that's what the "Refresh models" button in v2 Settings hits.
+        When a live attempt fails the cached / fallback list is still
+        returned, but ``CachedModelList.warning`` carries the error so
+        the client can render a visible "key rejected" chip instead of
+        silently lying about models.
         """
         if provider_id not in self._descriptors:
             raise KeyError(f"unknown provider_id: {provider_id!r}")
         cached = self._models.get(provider_id)
         now = time.time()
         if cached and not force and (now - cached.last_refresh) < self._cache_ttl:
+            # Still serve whatever warning rode along with the previous
+            # attempt — if the last live call 401'd, keep flagging it.
+            warning = self._warnings.get(provider_id, "")
+            if warning and not cached.warning:
+                cached.warning = warning
             return cached
         if not live and cached:
+            warning = self._warnings.get(provider_id, "")
+            if warning and not cached.warning:
+                cached.warning = warning
             return cached
         async with self._lock:
             fresh = await self._refresh_models(provider_id)
             if fresh is not None:
+                fresh.warning = ""
+                self._warnings.pop(provider_id, None)
                 self._models[provider_id] = fresh
                 self._save_cache()
                 return fresh
+            warning = self._warnings.get(provider_id, "")
         if cached:
+            cached.warning = warning
             return cached
-        return self._fallback_models(provider_id)
+        fallback = self._fallback_models(provider_id)
+        fallback.warning = warning
+        return fallback
 
     async def probe(self, provider_id: str) -> ProviderStatus:
         """Try to reach the provider; return a ready/not-ready snapshot.
@@ -526,7 +572,12 @@ class ProviderCatalog:
         try:
             models = await adapter.refresh_models()
         except Exception as exc:
+            # Capture the failure so list_models() can surface it as a
+            # warning on the cached / fallback list. Without this the
+            # picker silently falls back to a hardcoded list and looks
+            # stale to the user — the exact bug we're fixing.
             logger.debug("refresh_models(%s) raised: %s", provider_id, exc)
+            self._warnings[provider_id] = self._format_refresh_error(exc)
             return None
         cleaned = [m for m in (models or []) if m]
         if not cleaned:
@@ -542,6 +593,28 @@ class ProviderCatalog:
         return CachedModelList(
             models=cleaned, last_refresh=time.time(), source="live"
         )
+
+    @staticmethod
+    def _format_refresh_error(exc: Exception) -> str:
+        """Render *exc* as a single short line for the v2 picker chip."""
+        # httpx exposes status codes via response.status_code; we don't
+        # import httpx here to avoid a hard dependency at module load.
+        status = None
+        response = getattr(exc, "response", None)
+        if response is not None:
+            status = getattr(response, "status_code", None)
+        if status == 401 or status == 403:
+            return f"provider rejected the API key (HTTP {status})"
+        if status == 429:
+            return "provider rate-limited the request (HTTP 429)"
+        if isinstance(status, int) and status >= 500:
+            return f"provider returned HTTP {status}"
+        if isinstance(status, int):
+            return f"provider returned HTTP {status}"
+        msg = str(exc).strip() or exc.__class__.__name__
+        if len(msg) > 200:
+            msg = msg[:197] + "..."
+        return f"refresh failed: {msg}"
 
     def _fallback_models(self, provider_id: str) -> CachedModelList:
         adapter = self._adapters.get(provider_id)
@@ -579,6 +652,7 @@ class ProviderCatalog:
                     models=list(blob.get("models") or []),
                     last_refresh=float(blob.get("last_refresh") or 0),
                     source=str(blob.get("source") or "cache"),
+                    warning=str(blob.get("warning") or ""),
                 )
             except Exception:
                 continue

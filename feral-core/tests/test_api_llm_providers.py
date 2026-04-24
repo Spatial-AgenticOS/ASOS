@@ -189,6 +189,101 @@ def test_set_config_rejects_unknown_provider(client):
     assert r.status_code == 400
 
 
+def test_models_endpoint_exposes_warning_field(client):
+    """A 401-driven fallback must surface ``warning`` so the v2 picker
+    can render a "key rejected" chip instead of silently lying."""
+    c, catalog, _, _, _ = client
+    from providers.catalog import CachedModelList
+    import time as _time
+
+    catalog._models["openai"] = CachedModelList(
+        models=["gpt-fallback"],
+        last_refresh=_time.time(),
+        source="fallback",
+        warning="provider rejected the API key (HTTP 401)",
+    )
+    r = c.get("/api/llm/providers/openai/models?live=false")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["warning"] == "provider rejected the API key (HTTP 401)"
+    assert body["source"] == "fallback"
+
+
+def test_force_refresh_bypasses_cache(client):
+    """``?force=true`` (the Refresh button) must do a live fetch even
+    when the disk cache is fresh."""
+    c, catalog, _, _, _ = client
+    from providers.base import BaseProvider
+    from providers.catalog import CachedModelList
+    import time as _time
+
+    # Warm cache with stale-looking models that a regression-prone code
+    # path might erroneously serve.
+    catalog._models["openai"] = CachedModelList(
+        models=["stale-cached"], last_refresh=_time.time(), source="cache",
+    )
+
+    class _LiveAdapter(BaseProvider):
+        provider_id = "openai"
+        _models: list = []
+        refreshed = 0
+
+        async def chat(self, *a, **kw):
+            raise NotImplementedError
+
+        async def refresh_models(self):
+            type(self).refreshed += 1
+            return ["forced-fresh-model"]
+
+    catalog.register_adapter(_LiveAdapter())
+    r = c.get("/api/llm/providers/openai/models?force=true")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["models"] == ["forced-fresh-model"]
+    assert body["source"] == "live"
+    assert _LiveAdapter.refreshed == 1
+
+
+def test_configure_invalidates_cache_so_next_models_call_goes_live(client):
+    """After saving a key the next /models call must hit the wire.
+
+    Without invalidation the v2 picker keeps rendering the pre-key
+    model list even after the user pasted a working key — that's the
+    user-facing bug we're fixing.
+    """
+    c, catalog, _, _, _ = client
+    from providers.base import BaseProvider
+    from providers.catalog import CachedModelList
+    import time as _time
+
+    catalog._models["openai"] = CachedModelList(
+        models=["pre-key-model"], last_refresh=_time.time(), source="cache",
+    )
+
+    r = c.post("/api/llm/providers/openai/configure", json={"api_key": "sk-fresh"})
+    assert r.status_code == 200
+    # configure() must have wiped the warm cache.
+    assert "openai" not in catalog._models
+
+    # Re-bind a deterministic adapter so the next call produces a known
+    # live result instead of touching the real OpenAI API.
+    class _PostKeyAdapter(BaseProvider):
+        provider_id = "openai"
+        _models: list = []
+
+        async def chat(self, *a, **kw):
+            raise NotImplementedError
+
+        async def refresh_models(self):
+            return ["post-key-model"]
+
+    catalog.register_adapter(_PostKeyAdapter())
+    r = c.get("/api/llm/providers/openai/models?live=true")
+    body = r.json()
+    assert body["models"] == ["post-key-model"]
+    assert body["source"] == "live"
+
+
 def test_503_when_catalog_missing():
     mock = MagicMock()
     mock.provider_catalog = None

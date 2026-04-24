@@ -92,16 +92,13 @@ class OpenRouterProvider(BaseProvider):
         )
 
     async def refresh_models(self) -> list[str]:
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                # OpenRouter's /models endpoint is public — keyless refresh
-                # works, so the catalog stays up to date even without
-                # credentials.
-                r = await c.get(f"{self._base_url}/models")
-                r.raise_for_status()
-            ids = [m["id"] for m in r.json().get("data", []) if isinstance(m, dict) and "id" in m]
-            if ids:
-                self._models = sorted(ids)
-        except Exception as exc:
-            logger.debug("openrouter refresh_models failed: %s", exc)
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            # OpenRouter's /models endpoint is public — keyless refresh
+            # works, so the catalog stays up to date even without
+            # credentials.
+            r = await c.get(f"{self._base_url}/models")
+            r.raise_for_status()
+        ids = [m["id"] for m in r.json().get("data", []) if isinstance(m, dict) and "id" in m]
+        if ids:
+            self._models = sorted(ids)
         return list(self._models)

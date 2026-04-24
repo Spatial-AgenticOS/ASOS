@@ -143,9 +143,11 @@ async def list_llm_provider_models(provider_id: str, live: bool = True, force: b
     """Return the model list for a provider.
 
     ``live=true`` (default) refreshes from the upstream API when the
-    24-hour disk cache is stale. ``force=true`` ignores the TTL. The
-    response carries ``source: "live"|"cache"|"fallback"`` so clients
-    can render a "last refreshed Nm ago" hint.
+    6-hour disk cache is stale. ``force=true`` ignores the TTL — that's
+    what the "Refresh models" button hits. The response carries
+    ``source: "live"|"cache"|"fallback"`` and an optional ``warning``
+    string set when the live attempt failed (e.g. wrong API key) so the
+    v2 picker can render a chip explaining the stale list.
     """
     catalog = _require_catalog()
     if catalog.get_descriptor(provider_id) is None:
@@ -157,6 +159,7 @@ async def list_llm_provider_models(provider_id: str, live: bool = True, force: b
         "source": cached.source,
         "last_refresh": cached.last_refresh,
         "count": len(cached.models),
+        "warning": cached.warning or "",
     }
 
 

@@ -66,13 +66,10 @@ class OllamaProvider(BaseProvider):
         )
 
     async def refresh_models(self) -> list[str]:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as c:
-                r = await c.get(f"{self._base_url}/api/tags")
-                r.raise_for_status()
-            ids = [m["name"] for m in r.json().get("models", [])]
-            if ids:
-                self._models = sorted(ids)
-        except Exception as exc:
-            logger.debug("ollama refresh_models failed: %s", exc)
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(f"{self._base_url}/api/tags")
+            r.raise_for_status()
+        ids = [m["name"] for m in r.json().get("models", [])]
+        if ids:
+            self._models = sorted(ids)
         return list(self._models)

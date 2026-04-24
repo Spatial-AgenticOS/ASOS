@@ -85,21 +85,18 @@ class TogetherProvider(BaseProvider):
     async def refresh_models(self) -> list[str]:
         if not self._api_key:
             return list(self._models)
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                r = await c.get(
-                    f"{self._base_url}/models",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                )
-                r.raise_for_status()
-            payload = r.json()
-            ids = [
-                m["id"]
-                for m in (payload.get("data", payload) if isinstance(payload, dict) else payload)
-                if isinstance(m, dict) and "id" in m
-            ]
-            if ids:
-                self._models = sorted(ids)
-        except Exception as exc:
-            logger.debug("together refresh_models failed: %s", exc)
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
+            r.raise_for_status()
+        payload = r.json()
+        ids = [
+            m["id"]
+            for m in (payload.get("data", payload) if isinstance(payload, dict) else payload)
+            if isinstance(m, dict) and "id" in m
+        ]
+        if ids:
+            self._models = sorted(ids)
         return list(self._models)
