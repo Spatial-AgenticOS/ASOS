@@ -1410,22 +1410,33 @@ function McpSection() {
 
 // ── Twin & Delegation ─────────────────────────────────────────
 
-const TWIN_DOMAINS = [
-  { id: 'respond_imessage', label: 'Respond to iMessage' },
-  { id: 'draft_email', label: 'Draft email' },
-  { id: 'reply_slack', label: 'Reply on Slack' },
-  { id: 'reply_telegram', label: 'Reply on Telegram' },
-  { id: 'reply_whatsapp', label: 'Reply on WhatsApp' },
-  { id: 'schedule_meeting', label: 'Schedule meetings' },
-  { id: 'buy_groceries', label: 'Buy groceries' },
-  { id: 'summarise_reading', label: 'Summarise readings' },
-  { id: 'post_journal', label: 'Post to journal' },
-];
+// Pretty labels for domains the backend exposes as wired executors.
+// The backend payload itself can carry a label; this map is just the
+// fallback so a domain id like "reply_slack" still renders nicely if a
+// channel adapter forgot to register one.
+const TWIN_DOMAIN_LABELS = {
+  respond_imessage: 'Respond to iMessage',
+  draft_email: 'Draft email',
+  reply_slack: 'Reply on Slack',
+  reply_telegram: 'Reply on Telegram',
+  reply_whatsapp: 'Reply on WhatsApp',
+  schedule_meeting: 'Schedule meetings',
+  buy_groceries: 'Buy groceries',
+  summarise_reading: 'Summarise readings',
+  post_journal: 'Post to journal',
+};
+
+function _twinLabel(domain, fallback = '') {
+  return fallback || TWIN_DOMAIN_LABELS[domain] || domain;
+}
 
 function TwinSection() {
-  const [policies, setPolicies] = useState({});
+  const [policies, setPolicies] = useState([]);
+  const [disconnected, setDisconnected] = useState([]);
+  const [available, setAvailable] = useState([]);
   const [pending, setPending] = useState([]);
   const [paused, setPaused] = useState(false);
+  const [showAvailable, setShowAvailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -1433,10 +1444,10 @@ function TwinSection() {
     setBusy(true);
     setErr(null);
     try {
-      const pols = await apiJson('/api/twin/policies').catch(() => ({ policies: [] }));
-      const map = {};
-      for (const p of (pols.policies || [])) map[p.domain] = p;
-      setPolicies(map);
+      const pols = await apiJson('/api/twin/policies').catch(() => ({}));
+      setPolicies(Array.isArray(pols.policies) ? pols.policies : []);
+      setDisconnected(Array.isArray(pols.disconnected) ? pols.disconnected : []);
+      setAvailable(Array.isArray(pols.available) ? pols.available : []);
       const approvals = await apiJson('/api/twin/approvals?status=pending').catch(() => ({ approvals: [] }));
       setPending(approvals.approvals || []);
       const stats = await apiJson('/api/supervisor/stats').catch(() => null);
@@ -1450,8 +1461,15 @@ function TwinSection() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  const policyByDomain = (() => {
+    const map = {};
+    for (const p of policies) map[p.domain] = p;
+    for (const p of disconnected) map[p.domain] = p;
+    return map;
+  })();
+
   const upsert = async (domain, patch) => {
-    const current = policies[domain] || {
+    const current = policyByDomain[domain] || {
       domain,
       mode: 'draft_only',
       time_windows: [],
@@ -1484,6 +1502,13 @@ function TwinSection() {
     refresh();
   };
 
+  // Domains in `available` that don't yet have a stored policy — the
+  // discovery list. Lets the UI surface "you could wire this" without
+  // pretending the row is already configured.
+  const policyDomains = new Set(policies.map((p) => p.domain));
+  const availableUnconfigured = available.filter((a) => !policyDomains.has(a.domain));
+  const hasActive = policies.length > 0;
+
   return (
     <div className="v2-twin-section">
       <p className="v2-p v2-p--muted">
@@ -1502,38 +1527,131 @@ function TwinSection() {
           {paused ? 'Resume all actions' : 'Pause all actions'}
         </button>
         <span className="v2-p v2-p--muted v2-p--tiny">
-          Kill switch — routes through <code>/api/supervisor/pause</code>.
+          {hasActive
+            ? 'Kill switch — pauses every wired twin action at once.'
+            : 'Kill switch — nothing is currently active, but this will block any future wiring too.'}
         </span>
       </div>
 
       {err && <div className="v2-chip v2-chip--error" style={{ marginTop: 8 }}>{err}</div>}
 
-      <div className="v2-twin-domains">
-        {TWIN_DOMAINS.map(({ id, label }) => {
-          const p = policies[id];
-          const mode = p?.mode || 'off';
-          const windows = (p?.time_windows || []).join(', ');
-          const cap = p?.max_per_day ?? 10;
-          return (
-            <Glass key={id} level={0} radius="md" padding="sm" className="v2-twin-domain">
-              <div className="v2-twin-domain-head">
-                <div>
-                  <div className="v2-twin-domain-label">{label}</div>
-                  <div className="v2-p v2-p--tiny v2-p--muted">
-                    <code>{id}</code> · {mode === 'off' ? 'not configured' : `${mode} · cap ${cap}/day`}{windows ? ` · ${windows}` : ''}
+      {!hasActive && disconnected.length === 0 && (
+        <div
+          className="v2-twin-empty"
+          data-testid="twin-empty-state"
+          style={{ marginTop: 14 }}
+        >
+          <Glass level={0} radius="md" padding="md">
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>No twin actions wired yet.</div>
+            <p className="v2-p v2-p--muted" style={{ margin: 0 }}>
+              Connect a channel under Settings → Channels or wire an integration
+              under Settings → Integrations. Authorised twin actions will appear
+              here as soon as a real executor is ready — until then the twin
+              has nothing to act on.
+            </p>
+          </Glass>
+        </div>
+      )}
+
+      {hasActive && (
+        <div className="v2-twin-domains" data-testid="twin-active-domains">
+          {policies.map((p) => {
+            const id = p.domain;
+            const mode = p.mode || 'draft_only';
+            const windows = (p.time_windows || []).join(', ');
+            const cap = p.max_per_day ?? 10;
+            const label = _twinLabel(id, p.label);
+            return (
+              <Glass key={id} level={0} radius="md" padding="sm" className="v2-twin-domain">
+                <div className="v2-twin-domain-head">
+                  <div>
+                    <div className="v2-twin-domain-label">{label}</div>
+                    <div className="v2-p v2-p--tiny v2-p--muted">
+                      <code>{id}</code> · {mode} · cap {cap}/day{windows ? ` · ${windows}` : ''}
+                    </div>
+                  </div>
+                  <div className="v2-twin-domain-actions">
+                    <button type="button" className={`v2-btn ${mode === 'draft_only' ? 'v2-btn--primary' : ''}`} onClick={() => upsert(id, { mode: 'draft_only' })} disabled={busy}>Draft</button>
+                    <button type="button" className={`v2-btn ${mode === 'auto_send' ? 'v2-btn--primary' : ''}`} onClick={() => upsert(id, { mode: 'auto_send' })} disabled={busy}>Auto</button>
+                    <button type="button" className={`v2-btn ${mode === 'disabled' ? 'v2-btn--primary' : ''}`} onClick={() => upsert(id, { mode: 'disabled' })} disabled={busy}>Off</button>
+                    <button type="button" className="v2-btn v2-btn--ghost" onClick={() => revoke(id)} disabled={busy}>Clear</button>
                   </div>
                 </div>
-                <div className="v2-twin-domain-actions">
-                  <button type="button" className={`v2-btn ${mode === 'draft_only' ? 'v2-btn--primary' : ''}`} onClick={() => upsert(id, { mode: 'draft_only' })} disabled={busy}>Draft</button>
-                  <button type="button" className={`v2-btn ${mode === 'auto_send' ? 'v2-btn--primary' : ''}`} onClick={() => upsert(id, { mode: 'auto_send' })} disabled={busy}>Auto</button>
-                  <button type="button" className={`v2-btn ${mode === 'disabled' ? 'v2-btn--primary' : ''}`} onClick={() => upsert(id, { mode: 'disabled' })} disabled={busy}>Off</button>
-                  {p && <button type="button" className="v2-btn v2-btn--ghost" onClick={() => revoke(id)} disabled={busy}>Clear</button>}
+              </Glass>
+            );
+          })}
+        </div>
+      )}
+
+      {disconnected.length > 0 && (
+        <div className="v2-twin-domains" data-testid="twin-disconnected" style={{ marginTop: 12 }}>
+          <div className="v2-p v2-p--muted v2-p--tiny" style={{ marginBottom: 6 }}>
+            Disconnected — the channel that backed these is no longer wired.
+          </div>
+          {disconnected.map((p) => {
+            const id = p.domain;
+            const label = _twinLabel(id, p.label);
+            return (
+              <Glass
+                key={id}
+                level={0}
+                radius="md"
+                padding="sm"
+                className="v2-twin-domain v2-twin-domain--disconnected"
+                style={{ opacity: 0.6 }}
+              >
+                <div className="v2-twin-domain-head">
+                  <div>
+                    <div className="v2-twin-domain-label">{label}</div>
+                    <div className="v2-p v2-p--tiny v2-p--muted">
+                      <code>{id}</code> · disconnected · last mode: {p.mode}
+                    </div>
+                  </div>
+                  <div className="v2-twin-domain-actions">
+                    <span className="v2-chip v2-chip--warn">Disconnected</span>
+                    <button type="button" className="v2-btn v2-btn--ghost" onClick={() => revoke(id)} disabled={busy}>Clear</button>
+                  </div>
                 </div>
-              </div>
-            </Glass>
-          );
-        })}
-      </div>
+              </Glass>
+            );
+          })}
+        </div>
+      )}
+
+      {availableUnconfigured.length > 0 && (
+        <div style={{ marginTop: 16 }} data-testid="twin-available-section">
+          <button
+            type="button"
+            className="v2-btn v2-btn--ghost"
+            onClick={() => setShowAvailable((v) => !v)}
+          >
+            {showAvailable ? 'Hide' : 'Show'} available executors ({availableUnconfigured.length})
+          </button>
+          {showAvailable && (
+            <div className="v2-twin-domains" style={{ marginTop: 8 }}>
+              {availableUnconfigured.map((a) => {
+                const id = a.domain;
+                const label = _twinLabel(id, a.label);
+                return (
+                  <Glass key={id} level={0} radius="md" padding="sm" className="v2-twin-domain">
+                    <div className="v2-twin-domain-head">
+                      <div>
+                        <div className="v2-twin-domain-label">{label}</div>
+                        <div className="v2-p v2-p--tiny v2-p--muted">
+                          <code>{id}</code> · executor wired, no policy yet
+                        </div>
+                      </div>
+                      <div className="v2-twin-domain-actions">
+                        <button type="button" className="v2-btn v2-btn--primary" onClick={() => upsert(id, { mode: 'draft_only' })} disabled={busy}>Set draft policy</button>
+                      </div>
+                    </div>
+                  </Glass>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ marginTop: 18 }}>
         <h3 style={{ margin: 0, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--v2-text-secondary)' }}>

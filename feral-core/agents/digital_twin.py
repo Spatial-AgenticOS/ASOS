@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 if TYPE_CHECKING:
     from memory.store import MemoryStore
@@ -22,6 +22,16 @@ if TYPE_CHECKING:
     from agents.llm_provider import LLMProvider
 
 logger = logging.getLogger("feral.digital_twin")
+
+
+# A twin executor is a coroutine that knows how to actually carry out
+# an action for a given domain (e.g. "send the iMessage", "post to
+# Slack"). The Settings → Twin section uses the *registered* executor
+# set as its source of truth so it never lists domains that nothing can
+# actually act on. Without this registry the v2 UI was rendering nine
+# canned domains regardless of whether any wiring existed — Settings
+# theatre. See `feral-core/tests/test_twin_honesty.py`.
+TwinExecutor = Callable[[dict], Awaitable[dict]]
 
 
 class DigitalTwin:
@@ -40,9 +50,59 @@ class DigitalTwin:
         # Optional TwinPolicyEngine — when wired, execute() gates every
         # action through per-domain policy + kill-switch + approval queue.
         self._policy = policy_engine
+        # Per-domain executor registry. Empty by default — only domains
+        # the user has actually wired (channels/integrations) end up
+        # here. ``GET /api/twin/policies`` filters its response through
+        # this set so the picker can't lie.
+        self._executors: dict[str, TwinExecutor] = {}
+        # Optional human-readable label per domain (e.g. "iMessage" for
+        # ``respond_imessage``). Pure UI affordance — the catalog still
+        # works without it.
+        self._domain_labels: dict[str, str] = {}
 
     def set_policy_engine(self, policy_engine) -> None:
         self._policy = policy_engine
+
+    # ── executor registry ────────────────────────────────────────
+
+    def register_executor(
+        self,
+        domain: str,
+        executor: TwinExecutor,
+        *,
+        label: str = "",
+    ) -> None:
+        """Wire *executor* as the live handler for *domain*.
+
+        Called when a channel/integration finishes connecting (e.g. the
+        Slack adapter wires ``reply_slack`` once the workspace token is
+        validated). Must be paired with :meth:`unregister_executor` if
+        the channel is later disconnected so the v2 picker stops
+        showing the row.
+        """
+        if not domain:
+            raise ValueError("domain is required")
+        self._executors[domain] = executor
+        if label:
+            self._domain_labels[domain] = label
+
+    def unregister_executor(self, domain: str) -> bool:
+        existed = self._executors.pop(domain, None) is not None
+        self._domain_labels.pop(domain, None)
+        return existed
+
+    def has_executor(self, domain: str) -> bool:
+        return domain in self._executors
+
+    def list_executors(self) -> list[dict]:
+        """Return every wired domain as ``{domain, label}`` dicts."""
+        return [
+            {"domain": d, "label": self._domain_labels.get(d, "")}
+            for d in sorted(self._executors)
+        ]
+
+    def get_executor(self, domain: str) -> Optional[TwinExecutor]:
+        return self._executors.get(domain)
 
     async def execute(
         self,
@@ -103,6 +163,12 @@ class DigitalTwin:
                 "policy": decision.get("policy"),
             }
 
+        # Fall back to the registered executor when the caller didn't
+        # pass one explicitly — this is what the new executor registry
+        # is for (Settings → Twin only renders domains that resolve
+        # here).
+        if executor is None:
+            executor = self._executors.get(domain)
         if executor is None:
             # auto_send authorised but there's nothing to execute —
             # treat as queued so the user can see what was drafted.

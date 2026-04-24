@@ -16,23 +16,100 @@ def _require_engine():
     return engine
 
 
+def _resolve_twin():
+    """Return the bound :class:`DigitalTwin` instance, or ``None``.
+
+    Lightweight test boots use a ``MagicMock`` for ``state``, which
+    means a bare ``getattr(state, "digital_twin", None)`` returns an
+    auto-generated mock (truthy but useless). We detect that by
+    requiring the ``list_executors`` method to actually exist on the
+    real DigitalTwin class — anything else is treated as "no twin
+    wired" and the route falls back to the pre-honesty behaviour
+    (every persisted policy is returned).
+    """
+    twin = getattr(state, "digital_twin", None)
+    if twin is None:
+        return None
+    list_fn = getattr(twin, "list_executors", None)
+    if not callable(list_fn):
+        return None
+    try:
+        from agents.digital_twin import DigitalTwin
+    except Exception:
+        return None
+    if not isinstance(twin, DigitalTwin):
+        return None
+    return twin
+
+
+def _wired_domains(twin) -> set[str]:
+    if twin is None:
+        return set()
+    try:
+        return {entry["domain"] for entry in twin.list_executors()}
+    except Exception:
+        return set()
+
+
+def _domain_label(twin, domain: str) -> str:
+    if twin is None:
+        return ""
+    try:
+        return twin._domain_labels.get(domain, "")  # noqa: SLF001
+    except Exception:
+        return ""
+
+
 # ── policies ─────────────────────────────────────────────────────
 
 
 @router.get("/api/twin/policies")
 async def list_policies():
+    """Return only policies whose executor is wired right now.
+
+    Two-bucket payload:
+      * ``policies``: domains that have BOTH a stored policy AND a
+        wired executor — these get the live Draft / Auto / Off toggles.
+      * ``disconnected``: domains the user previously configured but
+        whose backing channel/integration has since been removed —
+        rendered as a dimmed row with a Reconnect hint and no toggles
+        active.
+
+    A separate ``available`` list (every wired executor regardless of
+    whether the user has a policy yet) lets the v2 UI render an
+    "Available executors" section for honest discovery.
+    """
     engine = _require_engine()
+    twin = _resolve_twin()
+    wired = _wired_domains(twin)
+    available_entries: list[dict] = []
+    if twin is not None:
+        try:
+            available_entries = list(twin.list_executors())
+        except Exception:
+            available_entries = []
+
+    active: list[dict] = []
+    disconnected: list[dict] = []
+    for p in engine.store.list_policies():
+        row = {
+            "domain": p.domain,
+            "mode": p.mode,
+            "time_windows": p.time_windows,
+            "max_per_day": p.max_per_day,
+            "requires_user_online": p.requires_user_online,
+            "label": _domain_label(twin, p.domain),
+            "wired": twin is None or p.domain in wired,
+        }
+        if twin is None or p.domain in wired:
+            active.append(row)
+        else:
+            disconnected.append(row)
+
     return {
-        "policies": [
-            {
-                "domain": p.domain,
-                "mode": p.mode,
-                "time_windows": p.time_windows,
-                "max_per_day": p.max_per_day,
-                "requires_user_online": p.requires_user_online,
-            }
-            for p in engine.store.list_policies()
-        ]
+        "policies": active,
+        "disconnected": disconnected,
+        "available": available_entries,
     }
 
 

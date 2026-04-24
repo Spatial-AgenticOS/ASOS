@@ -137,4 +137,99 @@ describe('Settings', () => {
     // The MemorySection renders the backend name somewhere.
     expect(await findByText(/sqlite_vec/i)).toBeInTheDocument();
   });
+
+  // ── Twin honesty (no executor wired → no theatre) ────────────
+  // Pre-2026.4.29 the Twin section rendered nine canned domains
+  // regardless of whether a backing executor existed. These tests pin
+  // the new contract: empty payload → empty-state, wired executor →
+  // toggles.
+
+  it('Twin section renders the empty-state when /api/twin/policies returns empty', async () => {
+    const fetcher = (url) => {
+      if (url.includes('/api/twin/policies')) {
+        return { policies: [], disconnected: [], available: [] };
+      }
+      if (url.includes('/api/twin/approvals')) return { approvals: [] };
+      if (url.includes('/api/supervisor/stats')) return { paused: false };
+      return providersResponder(url);
+    };
+    const { getByText, findByTestId, queryByText } = renderV2(<Settings />, {
+      fetch: fetcher,
+    });
+    fireEvent.click(getByText(/^Twin$/));
+    expect(await findByTestId('twin-empty-state')).toBeInTheDocument();
+    // None of the canned domain labels should appear when nothing is wired.
+    await waitFor(() => {
+      expect(queryByText(/Respond to iMessage/i)).toBeNull();
+      expect(queryByText(/Reply on Slack/i)).toBeNull();
+    });
+  });
+
+  it('Twin section renders rows + toggles when a real executor exists', async () => {
+    const fetcher = (url) => {
+      if (url.includes('/api/twin/policies')) {
+        return {
+          policies: [
+            {
+              domain: 'reply_slack',
+              mode: 'draft_only',
+              time_windows: [],
+              max_per_day: 10,
+              requires_user_online: false,
+              wired: true,
+              label: '',
+            },
+          ],
+          disconnected: [],
+          available: [{ domain: 'reply_slack', label: '' }],
+        };
+      }
+      if (url.includes('/api/twin/approvals')) return { approvals: [] };
+      if (url.includes('/api/supervisor/stats')) return { paused: false };
+      return providersResponder(url);
+    };
+    const { getByText, findAllByText, findByText, queryByTestId } = renderV2(
+      <Settings />,
+      { fetch: fetcher },
+    );
+    fireEvent.click(getByText(/^Twin$/));
+    // The row label must render and the empty-state must NOT.
+    expect((await findAllByText(/Reply on Slack/i)).length).toBeGreaterThan(0);
+    expect(queryByTestId('twin-empty-state')).toBeNull();
+    // Draft / Auto / Off toggles render against the wired row.
+    expect(await findByText('Draft')).toBeInTheDocument();
+    expect(await findByText('Auto')).toBeInTheDocument();
+    expect(await findByText('Off')).toBeInTheDocument();
+  });
+
+  it('Twin section dims a row that lost its executor (disconnected bucket)', async () => {
+    const fetcher = (url) => {
+      if (url.includes('/api/twin/policies')) {
+        return {
+          policies: [],
+          disconnected: [
+            {
+              domain: 'reply_slack',
+              mode: 'auto_send',
+              time_windows: [],
+              max_per_day: 10,
+              requires_user_online: false,
+              wired: false,
+              label: '',
+            },
+          ],
+          available: [],
+        };
+      }
+      if (url.includes('/api/twin/approvals')) return { approvals: [] };
+      if (url.includes('/api/supervisor/stats')) return { paused: false };
+      return providersResponder(url);
+    };
+    const { getByText, findByTestId, findAllByText } = renderV2(<Settings />, {
+      fetch: fetcher,
+    });
+    fireEvent.click(getByText(/^Twin$/));
+    expect(await findByTestId('twin-disconnected')).toBeInTheDocument();
+    expect((await findAllByText(/Disconnected/i)).length).toBeGreaterThan(0);
+  });
 });
