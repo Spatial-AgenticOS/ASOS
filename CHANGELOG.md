@@ -1,10 +1,17 @@
 # Changelog
 
-<!-- feral-version: 2026.4.29 -->
+<!-- feral-version: 2026.4.30 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.4.30] - 2026-04-24
+
+### Fixed
+
+- **Provider model picker was stale and incomplete.** [`feral-core/providers/catalog.py`](feral-core/providers/catalog.py) + every live adapter under [`feral-core/providers/`](feral-core/providers/). `ProviderCatalog` now treats the hardcoded `_models` constants as a last-resort fallback for providers without a `/models` endpoint (Anthropic, Bedrock). For OpenAI / Gemini / Groq / DeepSeek / Together / Fireworks / OpenRouter / Ollama / LMStudio the `refresh_models()` adapters stopped swallowing errors — `httpx` exceptions now propagate to the catalog which records a per-provider `warning` on `CachedModelList` (e.g. `"provider rejected the API key (HTTP 401)"`) so the v2 picker can honestly flag a rejected key instead of silently rendering a stale dropdown. Disk-cache TTL dropped from 24h → 6h; `catalog.configure()` invalidates the cached row so the next `list_models()` call after a key save goes live. `GET /api/llm/providers/{id}/models` now carries `warning` + `source`; the v2 "Refresh models" button hits `?force=true` to bypass the cache. `ProviderForm` in [`feral-client-v2/src/pages/Settings.jsx`](feral-client-v2/src/pages/Settings.jsx) re-fetches automatically after an API key is saved and drops in a typeahead filter when the model list exceeds 20. New tests: [`feral-core/tests/test_llm_catalog_live.py`](feral-core/tests/test_llm_catalog_live.py) (9 cases: live fetch, 401 fallback with warning, 6h TTL, configure invalidation, warning persistence). [`feral-core/tests/test_api_llm_providers.py`](feral-core/tests/test_api_llm_providers.py) gains 3 cases for the warning field, force-refresh bypass, and the refresh-after-key-save flow.
+- **Settings → Twin showed nine canned actions regardless of whether anything was wired.** [`feral-client-v2/src/pages/Settings.jsx`](feral-client-v2/src/pages/Settings.jsx) used to iterate over a hard-coded `TWIN_DOMAINS` array, so the UI rendered `respond_imessage`, `reply_slack`, `buy_groceries`, etc. with Draft/Auto/Off toggles even on a brand-new install with zero channels + zero executors. The toggles flipped SQLite state that nothing listened to — theatre. [`feral-core/agents/digital_twin.py`](feral-core/agents/digital_twin.py) now owns a `register_executor`/`unregister_executor` registry so channel/integration adapters declare "this domain is live right now"; `execute()` falls back to the registered executor when the caller doesn't pass one. [`feral-core/api/routes/twin.py`](feral-core/api/routes/twin.py) `GET /api/twin/policies` now filters through that registry and splits its payload into `policies` (wired + configured), `disconnected` (configured but the channel is gone), and `available` (wired executors the user hasn't written a policy for yet). `TwinSection` renders an explicit empty-state when zero executors exist, dims disconnected rows with a "Disconnected" chip + disabled toggles, and surfaces the `available` list behind a collapsed "Show available executors" disclosure for honest discovery. The "Pause all actions" kill-switch stays visible but its helper text is honest about whether anything is active. New tests: [`feral-core/tests/test_twin_honesty.py`](feral-core/tests/test_twin_honesty.py) (7 cases: empty payload with zero wiring, wiring + policy surfaces a row, unwiring demotes to `disconnected`, executor registry drives `execute()`). [`feral-client-v2/src/__tests__/pages/Settings.test.jsx`](feral-client-v2/src/__tests__/pages/Settings.test.jsx) gains 3 cases for empty state, wired row, and disconnected bucket.
 
 ## [2026.4.29] - 2026-04-24
 
