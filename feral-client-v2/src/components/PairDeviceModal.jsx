@@ -38,7 +38,7 @@ export default function PairDeviceModal({ open, onClose, onPaired }) {
         ]}
       />
       <div className="v2-pair-body">
-        {tab === 'web_phone' && <WebPhoneTab onPaired={onPaired} />}
+        {tab === 'web_phone' && <WebPhoneTab />}
         {tab === 'daemon' && <DaemonTokenTab onPaired={onPaired} />}
         {tab === 'app_qr' && <AppQRTab />}
         {tab === 'ble' && <BLETab onPaired={onPaired} />}
@@ -59,7 +59,12 @@ function useCopy() {
   return [copied, copy];
 }
 
-function WebPhoneTab({ onPaired }) {
+function WebPhoneTab() {
+  // Token issuance happens INSIDE the active tab so a user who only
+  // wanted to peek at the modal (e.g. opened it from the dock) doesn't
+  // leave behind a stray pairing row. The handshake-completion event
+  // arrives over the WebSocket — `onPaired` is fired by the parent on
+  // modal close so the Paired list refreshes either way.
   const [pair, setPair] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -71,13 +76,12 @@ function WebPhoneTab({ onPaired }) {
     try {
       const body = await apiJson('/api/devices/pair/url?name=web-phone');
       setPair(body);
-      if (onPaired) onPaired({ source: 'web_phone', token: body.token });
     } catch (err) {
       setError(err?.message || 'failed to generate token');
     } finally {
       setBusy(false);
     }
-  }, [onPaired]);
+  }, []);
 
   useEffect(() => { generate(); }, [generate]);
 
@@ -116,7 +120,10 @@ function WebPhoneTab({ onPaired }) {
           </div>
         </>
       )}
-      <p className="v2-p v2-p--tiny v2-p--muted" style={{ marginTop: 10 }}>
+      <p className="v2-p v2-p--tiny v2-p--muted" style={{ marginTop: 10 }} data-testid="pair-web-phone-hint">
+        Scan with your phone camera. Tap Pair when the page opens.
+      </p>
+      <p className="v2-p v2-p--tiny v2-p--muted" style={{ marginTop: 4 }}>
         Privacy: sensor streams start only after the user taps "Allow".
         Tab-hidden more than 60 s auto-pauses them. Closing the tab tears
         down the WebSocket.

@@ -175,7 +175,11 @@ export default function Devices() {
         </Pane>
       )}
 
-      <PairDeviceModal open={showPair} onClose={() => setShowPair(false)} onPaired={() => { setShowPair(false); refresh(); }} />
+      <PairDeviceModal
+        open={showPair}
+        onClose={() => { setShowPair(false); refresh(); }}
+        onPaired={() => { setShowPair(false); refresh(); }}
+      />
       {selected && <DeviceDetailModal device={selected} onClose={() => setSelected(null)} onForget={forget} />}
     </div>
   );
