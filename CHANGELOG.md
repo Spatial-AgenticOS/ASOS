@@ -1,10 +1,20 @@
 # Changelog
 
-<!-- feral-version: 2026.4.30 -->
+<!-- feral-version: 2026.4.31 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.4.31] - 2026-04-24
+
+### Fixed
+
+- **Pair modal still left phantom rows in the Paired list.** Reported by the user after upgrading to `v2026.4.30`: clicking "+ Pair new device" opened the modal (the v2026.4.29 fix), but if the user closed the modal without ever scanning the QR — or React StrictMode (dev) double-invoked the auto-generate effect — the brain still held the issued tokens and rendered them as `web-phone` rows under "Historical / Paired". Two changes in [`feral-client-v2/src/components/PairDeviceModal.jsx`](feral-client-v2/src/components/PairDeviceModal.jsx):
+  1. **Dedupe auto-generate.** `WebPhoneTab` now guards `generate()` with a `useRef(false)` flag so the auto-fire on tab activation runs exactly once per mount, regardless of StrictMode or rapid re-mount. The explicit Refresh button still works for manual rotation.
+  2. **Auto-prune on close.** `PairDeviceModal` now collects every `device_id` returned by `/api/devices/pair/url` and `/api/devices/pair` during the session (and awaits any in-flight requests). On `onClose` it fetches `/api/devices/paired`, and for every tracked id whose row has `claimed_at == null`, it issues `DELETE /api/devices/{id}`. Claimed rows are kept untouched. The freshly-cleaned state is what the parent's `refresh()` sees, so the user can never see a ghost row.
+- Test coverage in [`feral-client-v2/src/__tests__/pages/Devices.test.jsx`](feral-client-v2/src/__tests__/pages/Devices.test.jsx): 3 new cases (8 total) — auto-generate fires exactly once, unclaimed token is revoked on close, claimed token is preserved on close.
+- vitest: 133/133 green. v2 client coverage holds above the 25/18/19/27 stmts/branches/funcs/lines floor.
 
 ## [2026.4.30] - 2026-04-24
 
