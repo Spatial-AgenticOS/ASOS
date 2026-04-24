@@ -15,6 +15,7 @@ import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import EmptyState from '../ui/EmptyState';
 import StatusDot from '../ui/StatusDot';
+import BackButton from '../ui/BackButton';
 import { useFeralSocket } from '../hooks/useFeralSocket';
 import { apiJson, apiFetch } from '../lib/api';
 
@@ -102,6 +103,7 @@ export default function Oversight() {
     <div className="v2-page v2-page--stack v2-oversight" data-testid="v2-marker">
       <Pane
         title="Oversight"
+        leading={<BackButton />}
         actions={(
           <>
             <button

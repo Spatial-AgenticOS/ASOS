@@ -45,6 +45,9 @@
   letter-spacing: -0.01em;
 }
 .v2-pane-actions { display: flex; gap: 8px; }
+.v2-pane-leading { display: flex; align-items: center; gap: 8px; margin-right: 4px; }
+.v2-pane-leading + .v2-pane-title { flex: 1; }
+.v2-back-btn { padding: 4px 10px 4px 6px; }
 .v2-pane-body { min-height: 0; }
 
 /* ── Shell ───────────────────────────────────────────────────── */

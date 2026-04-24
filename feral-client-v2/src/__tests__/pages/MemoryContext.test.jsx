@@ -8,9 +8,35 @@
  *   3. Tiered `## Heading`-split rendering of the memory_context body.
  *   4. Error state when the API throws.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fireEvent, render } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { installFetchMock, StubWebSocket } from '../_helpers/renderV2';
 import { renderV2 } from '../_helpers/renderV2';
 import MemoryContext from '../../pages/MemoryContext';
+
+const navigateMock = vi.fn();
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom');
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+  };
+});
+
+beforeEach(() => {
+  navigateMock.mockClear();
+});
+
+function renderWithHistory(ui, { entries = ['/glass-brain', '/memory/context'], index = 1, fetch } = {}) {
+  installFetchMock(fetch);
+  vi.stubGlobal('WebSocket', StubWebSocket);
+  return render(
+    <MemoryRouter initialEntries={entries} initialIndex={index}>
+      {ui}
+    </MemoryRouter>,
+  );
+}
 
 function makeSnapshot(overrides = {}) {
   return {
@@ -68,5 +94,30 @@ describe('MemoryContext inspector', () => {
       fetch: () => ({ count: 1, snapshots: [snap] }),
     });
     expect(await findByText(/working memory empty/i)).toBeInTheDocument();
+  });
+
+  it('renders a leading Back button in the page header', () => {
+    const { getByRole } = renderV2(<MemoryContext />, {
+      fetch: () => ({ count: 0, snapshots: [] }),
+    });
+    expect(getByRole('button', { name: /Back/i })).toBeInTheDocument();
+  });
+
+  it('clicking Back calls navigate(-1) when there is in-app history', () => {
+    const { getByRole } = renderWithHistory(<MemoryContext />, {
+      fetch: () => ({ count: 0, snapshots: [] }),
+    });
+    fireEvent.click(getByRole('button', { name: /Back/i }));
+    expect(navigateMock).toHaveBeenCalledWith(-1);
+  });
+
+  it('clicking Back falls back to /glass-brain on a deep-linked open', () => {
+    const { getByRole } = renderWithHistory(<MemoryContext />, {
+      entries: ['/memory/context'],
+      index: 0,
+      fetch: () => ({ count: 0, snapshots: [] }),
+    });
+    fireEvent.click(getByRole('button', { name: /Back/i }));
+    expect(navigateMock).toHaveBeenCalledWith('/glass-brain');
   });
 });

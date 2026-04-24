@@ -15,6 +15,7 @@ import { RefreshCw, Clock, Tag, Brain } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import EmptyState from '../ui/EmptyState';
+import BackButton from '../ui/BackButton';
 import { apiJson } from '../lib/api';
 
 function relativeTime(ts) {
@@ -87,6 +88,7 @@ export default function MemoryContext() {
     <div className="v2-page v2-page--stack v2-memctx" data-testid="v2-marker">
       <Pane
         title="Memory context"
+        leading={<BackButton />}
         actions={(
           <button type="button" className="v2-btn v2-btn--ghost" onClick={refresh} aria-label="Refresh">
             <RefreshCw size={13} />

@@ -9,9 +9,30 @@
  * These tests exercise all three with honest fetch mocks — no shortcuts.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, waitFor } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { installFetchMock, StubWebSocket } from '../_helpers/renderV2';
 import { renderV2 } from '../_helpers/renderV2';
 import Oversight from '../../pages/Oversight';
+
+const navigateMock = vi.fn();
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom');
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+  };
+});
+
+function renderWithHistory(ui, { entries = ['/glass-brain', '/oversight'], index = 1, fetch } = {}) {
+  installFetchMock(fetch);
+  vi.stubGlobal('WebSocket', StubWebSocket);
+  return render(
+    <MemoryRouter initialEntries={entries} initialIndex={index}>
+      {ui}
+    </MemoryRouter>,
+  );
+}
 
 const baseEvents = [
   {
@@ -60,6 +81,7 @@ const baseStats = {
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
+  navigateMock.mockClear();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -118,5 +140,28 @@ describe('Oversight page', () => {
     });
     // "No events match this filter" is the empty state title.
     expect(await findByText(/No events match this filter/i)).toBeInTheDocument();
+  });
+
+  it('renders a leading Back button in the page header', () => {
+    const { getByRole } = renderV2(<Oversight />, { fetch: makeResponder() });
+    expect(getByRole('button', { name: /Back/i })).toBeInTheDocument();
+  });
+
+  it('clicking Back calls navigate(-1) when there is in-app history', () => {
+    const { getByRole } = renderWithHistory(<Oversight />, {
+      fetch: makeResponder(),
+    });
+    fireEvent.click(getByRole('button', { name: /Back/i }));
+    expect(navigateMock).toHaveBeenCalledWith(-1);
+  });
+
+  it('clicking Back falls back to /glass-brain on a deep-linked open', () => {
+    const { getByRole } = renderWithHistory(<Oversight />, {
+      entries: ['/oversight'],
+      index: 0,
+      fetch: makeResponder(),
+    });
+    fireEvent.click(getByRole('button', { name: /Back/i }));
+    expect(navigateMock).toHaveBeenCalledWith('/glass-brain');
   });
 });
