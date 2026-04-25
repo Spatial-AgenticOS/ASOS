@@ -362,15 +362,26 @@ class FeralMCPServer:
     # ─────────────────────────────────────────
 
     def get_http_routes(self):
-        """Return FastAPI routes for MCP HTTP transport."""
-        from fastapi import APIRouter, Request
+        """Return FastAPI routes for MCP HTTP transport.
+
+        The route handlers intentionally use built-in annotations (``dict``)
+        for the request body rather than ``fastapi.Request``. The module
+        uses ``from __future__ import annotations``, which turns every
+        annotation into a string. FastAPI / pydantic resolve those strings
+        against the *module* globals at route-registration time. ``Request``
+        was previously imported inside this function, so it lived only in
+        the local scope and the resolver raised
+        ``PydanticUndefinedAnnotation: name 'Request' is not defined``.
+        Using ``body: dict`` avoids the forward-reference dance and matches
+        the JSON-RPC contract used by ``api/routes/mcp.py``.
+        """
+        from fastapi import APIRouter
         from fastapi.responses import JSONResponse
 
         router = APIRouter(prefix="/mcp", tags=["MCP"])
 
         @router.post("/")
-        async def mcp_endpoint(request: Request):
-            body = await request.json()
+        async def mcp_endpoint(body: dict):
             response = await self.handle_jsonrpc(body)
             return JSONResponse(content=response)
 
