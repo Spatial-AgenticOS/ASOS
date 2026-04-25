@@ -86,7 +86,7 @@ def test_503_when_registry_missing():
 def test_install_from_local_dir(client):
     c, registry, tmp = client
     src = _write_manifest(tmp)
-    r = c.post("/api/apps/install", json={"path": str(src)})
+    r = c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] is True
@@ -117,14 +117,14 @@ def test_install_invalid_manifest_returns_400(client, tmp_path):
     bad = tmp_path / "bad-src"
     bad.mkdir()
     (bad / "manifest.json").write_text(json.dumps({"app_id": "nope"}))
-    r = c.post("/api/apps/install", json={"path": str(bad)})
+    r = c.post("/api/apps/install", json={"path": str(bad), "unsigned": True})
     assert r.status_code == 400
 
 
 def test_get_manifest(client):
     c, registry, tmp = client
     src = _write_manifest(tmp)
-    c.post("/api/apps/install", json={"path": str(src)})
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
     r = c.get("/api/apps/demo-app/manifest")
     assert r.status_code == 200
     assert r.json()["app_id"] == "demo-app"
@@ -139,7 +139,7 @@ def test_get_manifest_unknown_404(client):
 def test_uninstall(client):
     c, registry, tmp = client
     src = _write_manifest(tmp)
-    c.post("/api/apps/install", json={"path": str(src)})
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
     r = c.delete("/api/apps/demo-app")
     assert r.status_code == 200
     assert registry.get("demo-app") is None
@@ -154,7 +154,7 @@ def test_uninstall_unknown_404(client):
 def test_open_returns_hydrated_surface(client):
     c, registry, tmp = client
     src = _write_manifest(tmp)
-    c.post("/api/apps/install", json={"path": str(src)})
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
     r = c.post("/api/apps/demo-app/open", json={"data": {"msg": "hi"}})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -172,7 +172,7 @@ def test_open_unknown_app_404(client):
 def test_render_surface(client):
     c, registry, tmp = client
     src = _write_manifest(tmp)
-    c.post("/api/apps/install", json={"path": str(src)})
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
     r = c.post("/api/apps/demo-app/surfaces/home/render", json={"data": {"msg": "render!"}})
     assert r.status_code == 200
     assert r.json()["root"]["children"][0]["value"] == "render!"
@@ -181,7 +181,7 @@ def test_render_surface(client):
 def test_render_unknown_surface_returns_400(client):
     c, registry, tmp = client
     src = _write_manifest(tmp)
-    c.post("/api/apps/install", json={"path": str(src)})
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
     r = c.post("/api/apps/demo-app/surfaces/ghost/render", json={})
     assert r.status_code == 400
 
@@ -189,7 +189,7 @@ def test_render_unknown_surface_returns_400(client):
 def test_dispatch_valid_action(client):
     c, registry, tmp = client
     src = _write_manifest(tmp)
-    c.post("/api/apps/install", json={"path": str(src)})
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
     r = c.post(
         "/api/apps/demo-app/dispatch",
         json={"surface_id": "home", "action_id": "hello", "value": None},
@@ -203,7 +203,7 @@ def test_dispatch_valid_action(client):
 def test_dispatch_unknown_action_returns_400(client):
     c, registry, tmp = client
     src = _write_manifest(tmp)
-    c.post("/api/apps/install", json={"path": str(src)})
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
     r = c.post(
         "/api/apps/demo-app/dispatch",
         json={"surface_id": "home", "action_id": "evil"},

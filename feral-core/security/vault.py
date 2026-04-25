@@ -137,6 +137,81 @@ class BlindVault:
             for name in self._cache
         }
 
+    # ------------------------------------------------------------------
+    # Namespaced put/get (W8 addition; W9 should adopt as the canonical
+    # interface, then we can deprecate the flat store/retrieve helpers).
+    # The namespace is encoded as a single key prefix so on-disk layout
+    # stays a flat dict (one JSON file). Reserved separator: "::".
+    # ------------------------------------------------------------------
+
+    _NS_SEP = "::"
+
+    @classmethod
+    def _ns_key(cls, namespace: str, key: str) -> str:
+        if not namespace or not isinstance(namespace, str):
+            raise ValueError("namespace must be a non-empty string")
+        if cls._NS_SEP in namespace:
+            raise ValueError(
+                f"namespace must not contain {cls._NS_SEP!r} (reserved separator)"
+            )
+        if not key or not isinstance(key, str):
+            raise ValueError("key must be a non-empty string")
+        return f"{namespace}{cls._NS_SEP}{key}"
+
+    def put_namespace(
+        self,
+        namespace: str,
+        key: str,
+        value: str,
+        *,
+        stored_by: str = "user",
+    ) -> None:
+        """Store *value* under (namespace, key). Audit-logged like store()."""
+        full_key = self._ns_key(namespace, key)
+        self._cache[full_key] = value
+        self._persist()
+        self._audit("store", full_key, stored_by, namespace=namespace)
+        logger.info("Credential stored: ns=%s key=%s", namespace, key)
+
+    def get_namespace(
+        self,
+        namespace: str,
+        key: str,
+        *,
+        requester: str = "executor",
+    ) -> Optional[str]:
+        """Retrieve a value previously written via put_namespace."""
+        full_key = self._ns_key(namespace, key)
+        value = self._cache.get(full_key)
+        self._audit(
+            "retrieve",
+            full_key,
+            requester,
+            found=value is not None,
+            namespace=namespace,
+        )
+        return value
+
+    def list_namespace(self, namespace: str) -> list[str]:
+        """List the keys (without values) registered under *namespace*."""
+        prefix = f"{namespace}{self._NS_SEP}"
+        return [k[len(prefix):] for k in self._cache if k.startswith(prefix)]
+
+    def remove_namespace(
+        self,
+        namespace: str,
+        key: str,
+        *,
+        removed_by: str = "user",
+    ) -> bool:
+        full_key = self._ns_key(namespace, key)
+        if full_key in self._cache:
+            del self._cache[full_key]
+            self._persist()
+            self._audit("remove", full_key, removed_by, namespace=namespace)
+            return True
+        return False
+
 
 class PermissionTier:
     """

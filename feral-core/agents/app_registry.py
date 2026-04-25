@@ -41,13 +41,16 @@ import logging
 import os
 import shutil
 import sqlite3
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from pydantic import ValidationError
 
+from genui.manifest_signing import SignedManifest, verify as verify_signed_manifest
+from genui.permissions_policy import PolicyViolation, enforce_install_policy
 from models.app_manifest import ActionSpec, AppManifest, SurfaceSpec
 
 logger = logging.getLogger("feral.app_registry")
@@ -55,6 +58,8 @@ logger = logging.getLogger("feral.app_registry")
 
 DEFAULT_APPS_DIR_NAME = "apps"
 DEFAULT_APPS_DB_NAME = "apps.db"
+
+SIGNED_MANIFEST_FILENAMES = ("manifest.signed.json",)
 
 
 @dataclass
@@ -68,6 +73,15 @@ class InstalledApp:
 
 class AppRegistryError(RuntimeError):
     """Raised when install/open fails in a way the caller should see."""
+
+
+class UnverifiedManifestError(AppRegistryError):
+    """Raised when ``install_app`` refuses to install an unsigned/invalid bundle.
+
+    The exception message is meant to be surfaced verbatim to the
+    publisher / installer so they understand why the install was
+    refused (e.g. missing signature, tampered manifest, key mismatch).
+    """
 
 
 class AppRegistry:
@@ -156,6 +170,208 @@ class AppRegistry:
             install_dir=dest,
             installed_at=now,
         )
+
+    def install_app(
+        self,
+        source_dir: str | Path,
+        *,
+        allow_unsigned: bool = False,
+        user_high_trust: bool = False,
+        overwrite: bool = True,
+        vault: Optional[Any] = None,
+        supervisor: Optional[Any] = None,
+        audit_callback: Optional[Callable[[dict], None]] = None,
+    ) -> InstalledApp:
+        """Install with manifest signing + permissions policy enforced.
+
+        This is the path the brain's ``/api/apps/install`` REST handler
+        and the ``feral app install`` CLI both go through. It wraps
+        :meth:`install_from_dir` with three guards:
+
+        1. Looks for ``manifest.signed.json`` next to the manifest.
+        2. Verifies the Ed25519 signature via
+           :func:`genui.manifest_signing.verify`. A vault, when
+           provided, pins the public key to the publisher's known
+           ``key_id`` (so a perfectly valid signature from the *wrong*
+           publisher key is still rejected with ``key_mismatch``).
+        3. Runs :func:`genui.permissions_policy.enforce_install_policy`
+           — most notably refuses ``permissions.network=["*"]`` unless
+           the manifest is signed AND the user opted in via
+           ``user_high_trust=True`` AND the publisher supplied a
+           justification.
+
+        Audit:
+          Every decision (verified install, unsigned install, refused
+          install) is forwarded to the supervisor (when one is wired)
+          and to ``audit_callback`` (used by tests). The
+          :data:`logger` always receives a structured ``"unsigned_install"``
+          / ``"verified_install"`` / ``"signature_invalid"`` line so
+          the audit trail survives even when no supervisor is wired
+          at install time.
+        """
+        source = Path(source_dir).expanduser().resolve()
+        if not source.is_dir():
+            raise AppRegistryError(f"not a directory: {source}")
+
+        signed_path = _find_signed_manifest(source)
+        signed: Optional[SignedManifest] = None
+        verification_reason: Optional[str] = None
+
+        if signed_path is not None:
+            try:
+                signed = _load_signed_manifest(signed_path)
+            except Exception as exc:
+                self._audit_install(
+                    "signature_invalid",
+                    source=source,
+                    detail={"reason": f"envelope_unreadable:{exc}"},
+                    supervisor=supervisor,
+                    callback=audit_callback,
+                )
+                if not allow_unsigned:
+                    raise UnverifiedManifestError(
+                        f"signed manifest envelope unreadable: {exc}"
+                    ) from exc
+            else:
+                expected_pk = None
+                if vault is not None:
+                    expected_pk = _vault_lookup_key(vault, signed.key_id)
+                ok, reason = verify_signed_manifest(
+                    signed, expected_public_key_b64=expected_pk
+                )
+                if not ok:
+                    verification_reason = reason
+                    self._audit_install(
+                        "signature_invalid",
+                        source=source,
+                        detail={"reason": reason, "key_id": signed.key_id},
+                        supervisor=supervisor,
+                        callback=audit_callback,
+                    )
+                    if not allow_unsigned:
+                        raise UnverifiedManifestError(
+                            f"signature verification failed: {reason}"
+                        )
+
+        if signed is None:
+            if not allow_unsigned:
+                self._audit_install(
+                    "unsigned_install_refused",
+                    source=source,
+                    detail={"reason": "no_signed_manifest"},
+                    supervisor=supervisor,
+                    callback=audit_callback,
+                )
+                raise UnverifiedManifestError(
+                    "manifest is unsigned (no manifest.signed.json found) "
+                    "and allow_unsigned=False"
+                )
+            self._audit_install(
+                "unsigned_install",
+                source=source,
+                detail={"reason": "allow_unsigned=True"},
+                supervisor=supervisor,
+                callback=audit_callback,
+            )
+
+        # Resolve the manifest dict the policy gate + install both see.
+        if signed is not None:
+            manifest_dict = dict(signed.manifest)
+        else:
+            manifest_dict = _load_manifest_dict(source)
+
+        try:
+            enforce_install_policy(
+                manifest_dict,
+                allow_unsigned=allow_unsigned,
+                user_high_trust=user_high_trust,
+            )
+        except PolicyViolation as exc:
+            self._audit_install(
+                "policy_refused",
+                source=source,
+                detail={"reason": str(exc)},
+                supervisor=supervisor,
+                callback=audit_callback,
+            )
+            raise
+
+        # Stage to a temp dir whose manifest.json IS the verified one,
+        # then delegate to install_from_dir for the actual disk copy +
+        # SQLite row write.
+        with tempfile.TemporaryDirectory(prefix="feral-app-stage-") as staging:
+            staging_path = Path(staging)
+            for entry in source.iterdir():
+                if entry.name in SIGNED_MANIFEST_FILENAMES:
+                    continue
+                if entry.is_dir():
+                    shutil.copytree(entry, staging_path / entry.name)
+                else:
+                    shutil.copy2(entry, staging_path / entry.name)
+            (staging_path / "manifest.json").write_text(
+                json.dumps(manifest_dict)
+            )
+            for legacy in ("manifest.yaml", "manifest.yml"):
+                stale = staging_path / legacy
+                if stale.exists():
+                    stale.unlink()
+            installed = self.install_from_dir(staging_path, overwrite=overwrite)
+
+        if signed is not None:
+            try:
+                shutil.copy2(signed_path, installed.install_dir / signed_path.name)
+            except OSError:
+                pass
+
+        self._audit_install(
+            "verified_install" if signed is not None and verification_reason is None
+            else "unsigned_install",
+            source=source,
+            detail={
+                "app_id": installed.app_id,
+                "version": installed.version,
+                "key_id": signed.key_id if signed is not None else None,
+                "signature_reason": verification_reason,
+            },
+            supervisor=supervisor,
+            callback=audit_callback,
+        )
+        return installed
+
+    @staticmethod
+    def _audit_install(
+        event: str,
+        *,
+        source: Path,
+        detail: dict[str, Any],
+        supervisor: Optional[Any] = None,
+        callback: Optional[Callable[[dict], None]] = None,
+    ) -> None:
+        record = {
+            "event": event,
+            "source": str(source),
+            **detail,
+        }
+        logger.info("app_install %s %s", event, json.dumps(detail))
+        if supervisor is not None and hasattr(supervisor, "record"):
+            try:
+                supervisor.record(
+                    source="app_install",
+                    kind=event,
+                    actor="installer",
+                    payload=record,
+                    decision="allowed" if event in (
+                        "verified_install", "unsigned_install"
+                    ) else "denied",
+                    detail=detail,
+                )
+            except Exception as exc:
+                logger.debug("supervisor.record failed: %s", exc)
+        if callback is not None:
+            try:
+                callback(record)
+            except Exception as exc:
+                logger.debug("audit_callback failed: %s", exc)
 
     def uninstall(self, app_id: str, *, purge_cache: bool = True) -> bool:
         existing = self.get(app_id)
@@ -339,6 +555,66 @@ def _copy_tree(src: Path, dst: Path) -> None:
             shutil.copytree(entry, target)
         else:
             shutil.copy2(entry, target)
+
+
+def _find_signed_manifest(source: Path) -> Optional[Path]:
+    for name in SIGNED_MANIFEST_FILENAMES:
+        candidate = source / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _load_signed_manifest(path: Path) -> SignedManifest:
+    raw = json.loads(path.read_text())
+    return SignedManifest.model_validate(raw)
+
+
+def _load_manifest_dict(source: Path) -> dict[str, Any]:
+    """Load the raw manifest dict (yaml or json) without pydantic-coercing.
+
+    Used by install_app's policy gate so the unverified manifest is
+    treated as opaque data — we only enforce the ``permissions``
+    block at install time and let the publisher / consumer of the
+    manifest do their own structural validation downstream.
+    """
+    yaml_path = source / "manifest.yaml"
+    json_path = source / "manifest.json"
+    if yaml_path.exists():
+        try:
+            import yaml  # type: ignore
+        except ImportError as exc:
+            raise AppRegistryError(
+                "pyyaml is required to parse manifest.yaml"
+            ) from exc
+        return yaml.safe_load(yaml_path.read_text()) or {}
+    if json_path.exists():
+        return json.loads(json_path.read_text())
+    raise AppRegistryError(
+        f"no manifest.yaml or manifest.json found in {source}"
+    )
+
+
+def _vault_lookup_key(vault: Any, key_id: str) -> Optional[str]:
+    """Return the stored public key for ``key_id`` if the vault has one.
+
+    Tries the new namespaced API first (``vault.get_namespace``) and
+    falls back to the flat ``retrieve`` shape so this helper works
+    against both the W8 additive interface and any earlier vault
+    fixture used in tests.
+    """
+    try:
+        get_ns = getattr(vault, "get_namespace", None)
+        if callable(get_ns):
+            value = get_ns("publisher_keys", key_id)
+            if value:
+                return value
+        retrieve = getattr(vault, "retrieve", None)
+        if callable(retrieve):
+            return retrieve(f"publisher_keys::{key_id}")
+    except Exception as exc:
+        logger.debug("vault publisher_keys lookup failed: %s", exc)
+    return None
 
 
 # ----------------------------------------------------------------------
