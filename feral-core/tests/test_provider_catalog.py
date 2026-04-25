@@ -282,3 +282,180 @@ class TestSharedSingleton:
         second = get_shared_catalog()
         assert first is second
         reset_shared_catalog()
+
+
+# ----------------------------------------------------------------------
+# Bundled model_catalog.json freshness — Roadmap §3.5 P0 (W1)
+# ----------------------------------------------------------------------
+#
+# These assertions pin the verified-current frontier model IDs as of
+# 2026-04-24 (the day GPT-5.5 shipped) to the bundled
+# ``feral-core/providers/model_catalog.json`` file. They fail loudly
+# the moment a known-deprecated literal sneaks back in via a botched
+# refresh / merge — the exact failure mode that produced the
+# "Settings → Providers shows GPT-4o-mini" bug from Appendix A.1.
+
+
+# Verified current as of 2026-04-24. Source: openai.com,
+# platform.claude.com, ai.google.dev (cited in
+# docs/AGENT_PROMPTS.md §A and §D.W1).
+_VERIFIED_OPENAI_IDS = {
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+}
+_VERIFIED_ANTHROPIC_IDS = {
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+}
+_VERIFIED_GEMINI_IDS = {
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+}
+
+# Anything older than the 2026-04 frontier rollover. If one of these
+# names appears in the bundled catalog, the picker will show stale
+# defaults to the user — refuse the build.
+_DEPRECATED_OPENAI_IDS = {"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4"}
+_DEPRECATED_ANTHROPIC_IDS = {
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+    "claude-3-opus-20240229",
+}
+_DEPRECATED_GEMINI_IDS = {
+    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash-lite",
+}
+
+
+def _bundled_catalog() -> dict:
+    catalog_path = (
+        Path(__file__).resolve().parent.parent
+        / "providers"
+        / "model_catalog.json"
+    )
+    return json.loads(catalog_path.read_text())
+
+
+class TestBundledCatalogFreshness:
+    def test_last_fetched_marker_present(self):
+        raw = _bundled_catalog()
+        assert raw.get("last_fetched"), (
+            "model_catalog.json must carry a non-empty top-level "
+            "'last_fetched' so the v2 picker can render an age badge"
+        )
+
+    def test_anthropic_carries_curated_at(self):
+        raw = _bundled_catalog()
+        anthropic = raw["providers"]["anthropic"]
+        assert anthropic.get("endpoint") is None, (
+            "Anthropic has no public /v1/models — endpoint must be null"
+        )
+        assert anthropic.get("curated_at"), (
+            "Anthropic entry must carry a 'curated_at' date so the UI "
+            "can display 'list age = N days'"
+        )
+
+    def test_openai_contains_every_verified_frontier_id(self):
+        models = set(_bundled_catalog()["providers"]["openai"]["models"])
+        missing = _VERIFIED_OPENAI_IDS - models
+        assert not missing, (
+            f"openai.models is missing verified 2026-04 frontier IDs: "
+            f"{sorted(missing)}"
+        )
+
+    def test_anthropic_contains_every_verified_frontier_id(self):
+        models = set(_bundled_catalog()["providers"]["anthropic"]["models"])
+        missing = _VERIFIED_ANTHROPIC_IDS - models
+        assert not missing, (
+            f"anthropic.models is missing verified 2026-04 frontier IDs: "
+            f"{sorted(missing)}"
+        )
+
+    def test_gemini_contains_every_verified_frontier_id(self):
+        models = set(_bundled_catalog()["providers"]["gemini"]["models"])
+        missing = _VERIFIED_GEMINI_IDS - models
+        assert not missing, (
+            f"gemini.models is missing verified 2026-04 frontier IDs: "
+            f"{sorted(missing)}"
+        )
+
+    def test_openai_drops_known_deprecated_ids(self):
+        models = set(_bundled_catalog()["providers"]["openai"]["models"])
+        leaked = _DEPRECATED_OPENAI_IDS & models
+        assert not leaked, (
+            f"openai.models still contains deprecated IDs that drove "
+            f"the Settings → Providers stale-dropdown bug: {sorted(leaked)}"
+        )
+
+    def test_anthropic_drops_known_deprecated_ids(self):
+        models = set(_bundled_catalog()["providers"]["anthropic"]["models"])
+        leaked = _DEPRECATED_ANTHROPIC_IDS & models
+        assert not leaked, (
+            f"anthropic.models still contains deprecated 3.5/3 IDs: "
+            f"{sorted(leaked)}"
+        )
+
+    def test_gemini_drops_known_deprecated_ids(self):
+        models = set(_bundled_catalog()["providers"]["gemini"]["models"])
+        leaked = _DEPRECATED_GEMINI_IDS & models
+        assert not leaked, (
+            f"gemini.models still contains deprecated 2.x IDs: "
+            f"{sorted(leaked)}"
+        )
+
+    def test_openai_first_entry_is_a_frontier_id(self):
+        # The catalog's lazy default_model_for() returns models[0].
+        # Pinning the head ensures fresh installs land on a current
+        # frontier name (gpt-5.5 family) instead of a previous-gen ID.
+        models = _bundled_catalog()["providers"]["openai"]["models"]
+        assert models, "openai.models must not be empty"
+        assert models[0].startswith("gpt-5"), (
+            f"openai.models[0]={models[0]!r} should be a current "
+            "GPT-5 frontier id"
+        )
+
+
+# ----------------------------------------------------------------------
+# Lazy default_model_for — Roadmap §3.5 P0 (W1)
+# ----------------------------------------------------------------------
+
+
+class TestDefaultModelLazyResolve:
+    def test_descriptor_no_longer_carries_hardcoded_default(self, catalog):
+        # The literal ``gpt-4o-mini`` etc. lived on the descriptor for
+        # a long time and went stale every quarter. The current
+        # contract: descriptors expose an empty default_model and
+        # callers ask the catalog to resolve it lazily.
+        for pid in ("openai", "anthropic", "gemini", "groq", "deepseek"):
+            desc = catalog.get_descriptor(pid)
+            assert desc is not None
+            assert desc.default_model == "", (
+                f"descriptor for {pid} still carries hardcoded "
+                f"default_model={desc.default_model!r} — that's the "
+                "exact pattern §3.5 P0 bans"
+            )
+
+    def test_default_model_for_unknown_returns_empty(self, catalog):
+        assert catalog.default_model_for("not-a-provider") == ""
+
+    def test_default_model_for_returns_first_cached_model(self, catalog):
+        catalog.register_adapter(FakeAdapter(models=["pinned-default", "second"]))
+        # Seed the cache.
+        import asyncio as _aio
+        _aio.run(catalog.list_models("openai", force=True))
+        assert catalog.default_model_for("openai") == "pinned-default"
+
+    def test_default_model_for_falls_back_to_adapter_list_models(self, catalog):
+        # No cache yet — default_model_for should reach into the
+        # adapter's bundled list (BaseProvider.list_models() returns
+        # the class-level _models attribute) rather than returning
+        # empty. FakeAdapter._models = ["fallback-model"].
+        catalog.register_adapter(FakeAdapter(models=[]))
+        assert catalog.default_model_for("openai") == "fallback-model"

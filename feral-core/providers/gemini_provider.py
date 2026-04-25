@@ -16,16 +16,22 @@ class GeminiProvider(BaseProvider):
     provider_id = "gemini"
     display_name = "Google Gemini"
 
+    # Verified 2026-04-24 frontier IDs. The 2.x lineage was retired
+    # March 2026 (gemini-3-pro-preview also shut down that month) and
+    # /v1beta/models now lists only the 3.x preview series until the
+    # GA flip. Mirrors gemini.models in
+    # feral-core/providers/model_catalog.json.
     _models = [
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash",
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-image-preview",
+        "gemini-3-pro-image-preview",
     ]
     _pricing = {
-        "gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
-        "gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
-        "gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
+        "gemini-3.1-pro-preview": {"input": 0.00175, "output": 0.014},
+        "gemini-3-flash-preview": {"input": 0.0004, "output": 0.003},
+        "gemini-3.1-flash-lite-preview": {"input": 0.00012, "output": 0.0005},
     }
     _capabilities = {"tool_calling", "vision", "streaming", "audio_in"}
 
