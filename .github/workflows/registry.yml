@@ -1,0 +1,95 @@
+name: Registry — pytest
+
+# Per-PR CI gate for `feral-registry/`. Roadmap §3.2 #3 calls this out as a
+# P0 gap: the registry is the marketplace backend (FastAPI + SQLAlchemy +
+# Alembic + Postgres in prod), but it had no per-PR test gate, so a
+# breaking schema or routing change could land on `main` unnoticed.
+#
+# The existing in-tree tests (`feral-registry/tests/test_*.py`) use SQLite
+# via `sqlite+aiosqlite` (see `test_publish_flow.py` `monkeypatch.setenv`
+# of `FERAL_REGISTRY_DB_URL`), so they do NOT require Postgres at runtime.
+# We still spin a Postgres service container as a hot spare so future
+# tests that exercise asyncpg can opt into it by overriding the env in a
+# fixture — this matches the prod database backend documented in
+# `feral-registry/feral_registry/db.py`.
+
+on:
+  pull_request:
+    paths:
+      - "feral-registry/**"
+      - ".github/workflows/registry.yml"
+  push:
+    branches: [main]
+    paths:
+      - "feral-registry/**"
+      - ".github/workflows/registry.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: registry-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: feral-registry pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: feral
+          POSTGRES_PASSWORD: feral
+          POSTGRES_DB: feral_registry
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U feral"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Default DB URL for tests that don't override it. Existing tests
+      # explicitly set their own SQLite DB URL via monkeypatch, so this
+      # is a reference for tests that want a real Postgres.
+      FERAL_REGISTRY_PG_URL: "postgresql+asyncpg://feral:feral@localhost:5432/feral_registry"
+      JWT_SECRET: "ci-secret-do-not-commit"
+      FEATURED_PUBLISHERS: "feral"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: feral-registry/pyproject.toml
+
+      - name: Install registry + dev deps
+        working-directory: feral-registry
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            pg_isready -h localhost -U feral && exit 0
+            sleep 1
+          done
+          echo "Postgres did not become ready" >&2
+          exit 1
+
+      - name: pytest
+        working-directory: feral-registry
+        run: pytest tests/ -q --tb=short
+
+      - name: Upload pytest cache on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-pytest-cache
+          path: feral-registry/.pytest_cache/
+          if-no-files-found: ignore

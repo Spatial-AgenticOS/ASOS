@@ -6,6 +6,12 @@ All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **CI gates for mobile / desktop / registry / SDKs (W10, Roadmap §3.2 P0).** Five new GitHub Actions workflows land per-PR coverage on the trees that previously had none: [`.github/workflows/mobile-ios.yml`](.github/workflows/mobile-ios.yml) (`swift test` on `feral-nodes/ios-app` + `feral-nodes/ios-node-sdk`, plus weekly `0 6 * * 1` cron), [`.github/workflows/mobile-android.yml`](.github/workflows/mobile-android.yml) (Java 17 + `./gradlew test` on every PR, `connectedCheck` under an emulator on push-to-main + weekly cron), [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml) (PR trigger restored, cargo test smoke + `npm run tauri build --debug` matrix on ubuntu/macos/windows), [`.github/workflows/registry.yml`](.github/workflows/registry.yml) (Postgres service container + `pytest feral-registry/tests/`), and [`.github/workflows/sdk.yml`](.github/workflows/sdk.yml) (`pip install -e . && pytest && mypy` for `sdk/python`, `npx vitest run` for `sdk/node`).
+- **Smoke tests so the new workflows have something to run.** `sdk/python/tests/test_smoke.py` (12 cases), `sdk/node/tests/smoke.test.ts` (6 cases), `feral-nodes/python-node-sdk/tests/test_smoke.py` (9 cases), and `desktop/src-tauri/{src/lib.rs (5 unit tests),tests/smoke.rs (3 integration tests)}` exercise the documented public surface of each package and assert the bundled config / version strings are present.
+- **Follow-up tracker** at [`docs/AGENT_PROMPTS_FOLLOWUPS.md`](docs/AGENT_PROMPTS_FOLLOWUPS.md) per `docs/AGENT_PROMPTS.md` §G; W10 filed five entries (README badge patch, `sdk/node/package.json` lockfile + test script, two pre-existing mypy errors in `sdk/python/feral_sdk/`, missing `desktop/package-lock.json`, future asyncpg-backed registry test).
+
 ## [2026.4.32] - 2026-04-24
 
 ### Fixed

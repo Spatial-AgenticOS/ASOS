@@ -1,4 +1,5 @@
 name: Desktop Build
+
 # The desktop app (Tauri + Rust + WebView2/WebKit/GTK) is an experimental
 # distribution path. It is NOT part of the install-from-PyPI story and is
 # not uploaded as a release asset yet (needs Apple Developer ID + Windows
@@ -6,31 +7,136 @@ name: Desktop Build
 # TAURI_SIGNING_PRIVATE_KEY_PASSWORD, APPLE_CERT_P12, APPLE_CERT_PW,
 # WINDOWS_CERT_P12, WINDOWS_CERT_PW).
 #
-# Previously this workflow also ran on every PR touching desktop/**. That
-# burned ~30 runner-min per desktop-adjacent PR for a build whose artifacts
-# we never ship, so the pull_request trigger was removed in 2026.4.18-dev.
-# Re-add the `pull_request: paths: ['desktop/**']` trigger the day Apple
-# Developer ID + Windows Authenticode certs land in repo secrets.
+# 2026.4.18-dev: pull_request trigger removed because every desktop-adjacent
+# PR burned ~30 runner-min on a build whose artifacts we never shipped.
+# 2026.4.32 (W10, Roadmap §3.2 #5): pull_request trigger restored on
+# `desktop/**` paths only and a `cargo test` job added so the smoke harness
+# in `desktop/src-tauri/tests/smoke.rs` actually runs per-PR. The full
+# cross-platform release build still runs on push-to-main and manual
+# dispatch, so PRs only pay for an Ubuntu debug build + the smoke tests.
+
 on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
   workflow_dispatch:
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    strategy:
-      matrix:
-        platform: [macos-latest, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.platform }}
+  test:
+    name: src-tauri — cargo test (lib + integration smoke)
+    # Smoke-run on every PR. The Tauri Rust crate has no platform-specific
+    # logic for its config-loader smoke harness, so a single Ubuntu runner
+    # is enough to catch regressions cheaply. We restrict to `--lib --tests`
+    # so the test job does NOT need to build the full Tauri binary (which
+    # would link gtk + webkit2gtk and triple the test minutes).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux deps for tauri build script
+        # `tauri_build::build()` runs in the package's build.rs even when
+        # we're only compiling the lib + tests. The build script peeks at
+        # the local pkg-config so we install the gtk/webkit dev packages
+        # to keep it happy.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: cargo-desktop-test-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.toml', 'desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-desktop-test-${{ runner.os }}-
+
+      - name: cargo test (lib + integration smoke only)
+        working-directory: desktop/src-tauri
+        # `--lib` runs the `#[cfg(test)] mod tests` block in src/lib.rs.
+        # `--tests` runs the integration test crate at tests/smoke.rs.
+        # Together they exercise the entire smoke harness without
+        # requiring the full Tauri binary build.
+        run: cargo test --lib --tests --no-fail-fast
+
+  build:
+    name: pnpm/npm tauri build --debug (${{ matrix.platform }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: cargo-desktop-${{ matrix.platform }}-${{ hashFiles('desktop/src-tauri/Cargo.toml', 'desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-desktop-${{ matrix.platform }}-
+
       - name: Install Linux deps
         if: matrix.platform == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
-      - working-directory: desktop
-        run: npm ci
-      - working-directory: desktop
-        run: npm run tauri build -- --debug
+          sudo apt-get install -y pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev
+
+      - name: npm install
+        working-directory: desktop
+        # `npm ci` is the right call when a lockfile is present; fall back
+        # to `npm install` so the workflow is not blocked the first time
+        # `desktop/package-lock.json` is regenerated.
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+        shell: bash
+
+      - name: tauri build --debug (smoke)
+        working-directory: desktop
+        # `--debug` skips signing and shrinks build time by ~3x vs release.
+        # We are intentionally NOT producing a signed installer here; this
+        # job exists to catch Rust/Tauri regressions, not to ship binaries.
+        run: npm run tauri -- build --debug
+
+      - name: Upload debug bundle (best-effort)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feral-desktop-${{ matrix.platform }}-debug
+          path: |
+            desktop/src-tauri/target/debug/feral-desktop*
+            desktop/src-tauri/target/debug/bundle/**
+          if-no-files-found: ignore

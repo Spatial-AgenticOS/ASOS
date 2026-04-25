@@ -1,0 +1,154 @@
+name: Mobile — Android
+
+# Per-PR CI gate for the Android app (`feral-nodes/android-app`) and the
+# Android bridge daemon (`feral-nodes/android-bridge`). Both trees were not
+# on any CI workflow (Roadmap §3.2 #1), so a Kotlin/Gradle regression could
+# only be caught locally. This workflow runs `./gradlew test` on every PR
+# that touches the Android trees, plus an instrumented `connectedCheck`
+# under an emulator on the `main` push and the weekly cron — instrumented
+# tests are slow enough that running them on every PR would gum up review.
+#
+# Why Java 17: Android Gradle Plugin 8.x (the current default) requires
+# JDK 17. The Android app declares compose 1.6.0 + AGP-friendly Kotlin.
+#
+# The android-bridge tree ships its own `gradlew` wrapper at
+# `feral-nodes/android-bridge/gradlew`. The android-app tree, today, does
+# NOT have its own wrapper — its `build.gradle.kts` is the module-level
+# build config that the bridge wrapper consumes (verify by inspection:
+# `feral-nodes/android-bridge/settings.gradle.kts` includes the app
+# project). So both jobs run from `feral-nodes/android-bridge`.
+
+on:
+  pull_request:
+    paths:
+      - "feral-nodes/android-app/**"
+      - "feral-nodes/android-bridge/**"
+      - ".github/workflows/mobile-android.yml"
+  push:
+    branches: [main]
+    paths:
+      - "feral-nodes/android-app/**"
+      - "feral-nodes/android-bridge/**"
+      - ".github/workflows/mobile-android.yml"
+  schedule:
+    # Mondays 06:00 UTC — same window as the iOS workflow so any
+    # cross-mobile API drift surfaces in one daily ops review.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: "-Xmx4g -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
+
+jobs:
+  unit-tests:
+    name: gradlew test (unit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-android-${{ hashFiles('feral-nodes/android-bridge/**/*.gradle*', 'feral-nodes/android-bridge/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-android-
+
+      - name: Make gradlew executable
+        run: chmod +x feral-nodes/android-bridge/gradlew
+
+      - name: gradlew test (all subprojects)
+        # `:bridge:test` covers the daemon library; `:app:test` covers the
+        # consumer Android app — both are wired into the bridge settings.
+        # If a subproject doesn't define unit tests yet, gradle treats it
+        # as a no-op success; the day a subproject adds tests they're
+        # picked up automatically.
+        working-directory: feral-nodes/android-bridge
+        run: ./gradlew test --stacktrace --no-daemon
+
+      - name: Upload Gradle reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-reports
+          path: |
+            feral-nodes/android-bridge/**/build/reports/
+            feral-nodes/android-bridge/**/build/test-results/
+
+  instrumented-tests:
+    name: gradlew connectedCheck (emulator)
+    # Instrumented tests require KVM / hardware acceleration which only the
+    # `ubuntu-latest` runners with `/dev/kvm` permission expose. We only
+    # run them on push-to-main and the weekly cron; per-PR runs would
+    # quintuple Android CI minutes for a marginal signal.
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-android-${{ hashFiles('feral-nodes/android-bridge/**/*.gradle*', 'feral-nodes/android-bridge/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-android-
+
+      - name: Cache AVD
+        id: avd-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-api-30
+
+      - name: Make gradlew executable
+        run: chmod +x feral-nodes/android-bridge/gradlew
+
+      - name: connectedCheck on Android 11 (API 30)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: default
+          arch: x86_64
+          profile: Nexus 6
+          working-directory: feral-nodes/android-bridge
+          script: ./gradlew connectedCheck --stacktrace --no-daemon
+
+      - name: Upload Gradle reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-instrumented-reports
+          path: |
+            feral-nodes/android-bridge/**/build/reports/
+            feral-nodes/android-bridge/**/build/outputs/androidTest-results/
