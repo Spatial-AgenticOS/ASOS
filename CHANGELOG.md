@@ -1,10 +1,29 @@
 # Changelog
 
-<!-- feral-version: 2026.4.31 -->
+<!-- feral-version: 2026.4.32 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.4.32] - 2026-04-24
+
+### Fixed
+
+- **Clicking a button in the dashboard appeared to "kill the entire system".** Reported by the user after upgrading to `v2026.4.31`. Root cause was a long-latent foot-gun in [`feral-core/cli/main.py`](feral-core/cli/main.py): `cmd_start` spawned the brain in a `daemon=True` thread and ran `asyncio.run(repl())` in the foreground; the REPL used the historical `_ws = await websockets.connect(uri)` + `async with _ws as ws:` pattern which raises `TypeError: 'WebSocketClientProtocol' object does not support the asynchronous context manager protocol` on every `websockets >= 11` release (we ship `websockets >= 13`). The REPL caught the error with `sys.exit(1)`, raising `SystemExit`, which propagated out of `asyncio.run`. Python interpreter teardown began. The daemon thread holding the brain was killed mid-flight. Teardown took ~10s of asyncio executor + uvicorn drain, so the user only noticed when their next browser click hit a refused connection.
+- Three-fold fix:
+  1. **`websockets` v13 compat at all three call sites** that had this anti-pattern. The documented form is `async with websockets.connect(uri) as ws:` — `connect()` itself is the async context manager. Sites: [`feral-core/cli/main.py`](feral-core/cli/main.py) `repl()` + `one_shot()`, and [`feral-core/channels/base.py`](feral-core/channels/base.py) `SlackChannel._socket_mode` (any user with Slack wired in was one connect away from the same `TypeError`).
+  2. **Brain lifecycle decoupling** in [`feral-core/cli/main.py`](feral-core/cli/main.py) `cmd_start`: brain thread is now `daemon=False`, named `feral-brain`, with the `uvicorn.Server` reference held in `server_holder` so the main thread can flip `should_exit` for graceful shutdown. SIGTERM handler installed in the main thread; SIGINT continues to use Python's default `KeyboardInterrupt`. `asyncio.run(repl())` is wrapped in `try/except` (with a defensive `except SystemExit:`) so any future reach for `sys.exit` from inside `repl()` can never take the brain down again. On clean REPL exit prints `Brain still running on http://localhost:{port} — Press Ctrl+C to stop the brain.` and joins the brain thread.
+  3. **REPL hardening** in [`feral-core/cli/main.py`](feral-core/cli/main.py) `repl`: refactored into outer reconnect loop + inner `_repl_session`; transient WS hiccups (mDNS warmup, brain still booting) trigger exponential backoff up to 30s instead of dropping the user to the shell; all terminal failure paths now `return` instead of `sys.exit`, with a friendly catch-all hint `Brain is still running. Reconnect with \`feral\` (no args).`.
+- Test coverage:
+  - New [`feral-core/tests/test_cli_repl_websockets.py`](feral-core/tests/test_cli_repl_websockets.py) (8 cases): REPL uses `async with` on a v13-compliant fake `Connect` and returns cleanly on `/quit`; REPL routes typed text through `ws.send`; REPL does NOT raise `SystemExit` when `connect()` returns a non-context-manager (the historical bug shape); REPL does NOT raise `SystemExit` when the brain is unreachable (backs off with sleep, breaks on `KeyboardInterrupt`); `cmd_start` cleanly stops the brain on `KeyboardInterrupt` (`server.should_exit` set + thread joined); `cmd_start` keeps the brain alive when the REPL returns cleanly; `cmd_start` spawns the brain thread with `daemon=False` (REGRESSION PIN — re-introducing `daemon=True` re-introduces the whole bug class); canary test asserts `websockets >= 13` AND that `connect()` returns an object with `__aenter__`/`__aexit__`.
+  - [`feral-core/tests/test_channels_deep.py`](feral-core/tests/test_channels_deep.py): refactored Slack Socket Mode test to the `@asynccontextmanager` pattern (matching the existing Discord test). The previous fake `AsyncMock(return_value=fake_ws)` only ever exercised the historical broken `await connect(...)` form — masking the production `TypeError`. New `test_slack_socket_mode_uses_async_with_connect_directly` pins that the Slack reader uses `async with` on the connect object directly.
+
+### Coverage
+
+- pytest (feral-core): 1952 passed, 11 skipped (1 pre-existing pydantic-ForwardRef failure in `test_mcp_full` is unrelated and verified present on plain `main` without this change).
+- New tests: 10 passed (8 CLI + 2 Slack).
+- vitest (feral-client-v2): 133/133 passed (no v2 client changes in this release).
 
 ## [2026.4.31] - 2026-04-24
 
