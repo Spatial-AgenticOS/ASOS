@@ -41,11 +41,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GRADLE_OPTS: "-Xmx4g -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
 
 jobs:
   unit-tests:
-    name: gradlew test (unit)
+    name: gradle test (unit)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -57,27 +57,26 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
+      - name: Set up Gradle (bypass broken in-repo wrapper)
+        # `feral-nodes/android-bridge/gradlew` is a hand-rolled wrapper
+        # script that emits literal `"-Xmx64m"` (with embedded quotes)
+        # via `DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'` and `exec` without
+        # `eval`, so Java tries to load `"-Xmx64m"` as a class. Filed as
+        # follow-up F-W10-006 in docs/AGENT_PROMPTS_FOLLOWUPS.md (the
+        # bridge tree is W10 read-only, so we work around it here by
+        # using `gradle` directly via the setup action).
+        uses: gradle/actions/setup-gradle@v3
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-android-${{ hashFiles('feral-nodes/android-bridge/**/*.gradle*', 'feral-nodes/android-bridge/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-android-
+          gradle-version: "8.5"
 
-      - name: Make gradlew executable
-        run: chmod +x feral-nodes/android-bridge/gradlew
-
-      - name: gradlew test (all subprojects)
-        # `:bridge:test` covers the daemon library; `:app:test` covers the
-        # consumer Android app — both are wired into the bridge settings.
-        # If a subproject doesn't define unit tests yet, gradle treats it
-        # as a no-op success; the day a subproject adds tests they're
-        # picked up automatically.
+      - name: gradle test (all subprojects)
+        # `:bridge:test` covers the daemon library; `:app:test` covers
+        # the consumer Android app — both are wired into the bridge
+        # settings. If a subproject doesn't define unit tests yet,
+        # gradle treats it as a no-op success; the day a subproject
+        # adds tests they're picked up automatically.
         working-directory: feral-nodes/android-bridge
-        run: ./gradlew test --stacktrace --no-daemon
+        run: gradle test --stacktrace --no-daemon
 
       - name: Upload Gradle reports on failure
         if: failure()
@@ -89,7 +88,7 @@ jobs:
             feral-nodes/android-bridge/**/build/test-results/
 
   instrumented-tests:
-    name: gradlew connectedCheck (emulator)
+    name: gradle connectedCheck (emulator)
     # Instrumented tests require KVM / hardware acceleration which only the
     # `ubuntu-latest` runners with `/dev/kvm` permission expose. We only
     # run them on push-to-main and the weekly cron; per-PR runs would
@@ -131,8 +130,10 @@ jobs:
             ~/.android/adb*
           key: avd-api-30
 
-      - name: Make gradlew executable
-        run: chmod +x feral-nodes/android-bridge/gradlew
+      - name: Set up Gradle (bypass broken in-repo wrapper, see F-W10-006)
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.5"
 
       - name: connectedCheck on Android 11 (API 30)
         uses: reactivecircus/android-emulator-runner@v2
@@ -142,7 +143,7 @@ jobs:
           arch: x86_64
           profile: Nexus 6
           working-directory: feral-nodes/android-bridge
-          script: ./gradlew connectedCheck --stacktrace --no-daemon
+          script: gradle connectedCheck --stacktrace --no-daemon
 
       - name: Upload Gradle reports on failure
         if: failure()
