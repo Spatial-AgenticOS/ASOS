@@ -1,0 +1,102 @@
+name: SDK — Python + Node smoke
+
+# Per-PR CI gate for the public SDK packages (`sdk/python` and `sdk/node`).
+# Roadmap §3.2 #4 calls this out as a P0 gap: both SDKs were not in CI, so
+# import-level regressions or missing dependency declarations could ship
+# silently. This workflow runs a minimal `pytest` (Python) and `vitest`
+# (Node) per-PR; deeper integration tests can layer on as either tree
+# grows real test coverage.
+#
+# Gate: any PR touching `sdk/**` runs both jobs.
+#
+# Note on `npm ci` vs `npm install`: `sdk/node/` does not commit a
+# `package-lock.json` today, so `npm ci` would fail. The workflow uses
+# `npm install` and pins the test runner via `--no-save` so we do NOT
+# mutate `sdk/node/package.json` from inside CI (that file is not in the
+# W10 owned set — see docs/AGENT_PROMPTS.md §C.2). Once the SDK owners
+# commit a lockfile and a `test` script, swap to `npm ci && npm test`.
+
+on:
+  pull_request:
+    paths:
+      - "sdk/**"
+      - ".github/workflows/sdk.yml"
+  push:
+    branches: [main]
+    paths:
+      - "sdk/**"
+      - ".github/workflows/sdk.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: sdk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: sdk/python — pytest + mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+
+      - name: Install sdk + test runners
+        # `pyproject.toml` does not yet declare a `[project.optional-dependencies] dev`
+        # group, so install pytest + mypy explicitly. Pinning these in CI
+        # rather than in pyproject keeps end-user installs minimal.
+        working-directory: sdk/python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest mypy
+
+      - name: pytest sdk/python/tests
+        working-directory: sdk/python
+        run: pytest tests/ -q --tb=short
+
+      - name: mypy feral_sdk (warning-only)
+        working-directory: sdk/python
+        # `--ignore-missing-imports` keeps optional-dep gaps (e.g. typing
+        # stubs for httpx in older releases) from blocking the smoke gate.
+        # `continue-on-error: true` makes mypy advisory until the SDK
+        # owners adopt strict typing; today there are 2 pre-existing
+        # errors in feral_sdk/tool.py and feral_sdk/client.py that are
+        # outside W10's owned paths (filed as a §G follow-up).
+        continue-on-error: true
+        run: |
+          mypy --ignore-missing-imports feral_sdk 2>&1 | tee mypy.log
+          echo "::warning::mypy errors above are advisory until follow-up F-W10-001 lands."
+
+  node:
+    name: sdk/node — vitest smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: npm install (resolve runtime deps)
+        # `npm install` is intentional — see header comment about lockfile.
+        working-directory: sdk/node
+        run: npm install --no-audit --no-fund
+
+      - name: Install vitest test runner (no-save)
+        # Pin via `--no-save` so this never mutates `sdk/node/package.json`
+        # (out of W10 ownership). See header comment.
+        working-directory: sdk/node
+        run: npm install --no-save --no-audit --no-fund vitest@^1.6 typescript@^5.4
+
+      - name: vitest run sdk/node/tests
+        working-directory: sdk/node
+        # `--config ./tests/vitest.config.ts` so the runner finds tests
+        # under `tests/` even though the package has no top-level config.
+        run: npx vitest run --config tests/vitest.config.ts

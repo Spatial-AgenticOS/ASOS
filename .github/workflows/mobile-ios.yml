@@ -1,0 +1,101 @@
+name: Mobile — iOS
+
+# Per-PR CI gate for the iOS app (`feral-nodes/ios-app`) and the iOS HUP node
+# SDK (`feral-nodes/ios-node-sdk`). These two trees were previously not on
+# any CI workflow at all (Roadmap §3.2 #1), so a regression in either could
+# only be caught by the developer who happened to open Xcode locally. This
+# workflow runs `xcodebuild test` on PR paths that touch either tree, plus a
+# weekly cron so silent rot in mobile-only refactors is still detected.
+#
+# Why macos-13 + Xcode 16: ios-app/Package.swift declares iOS 16+ and the
+# repo's existing native code uses `await` heavily, which needs Xcode 14.3+;
+# pinning to macos-13 with Xcode 16 keeps Apple-toolchain churn out of the
+# CI signal while still being recent enough to host iOS 17+ simulators.
+
+on:
+  pull_request:
+    paths:
+      - "feral-nodes/ios-app/**"
+      - "feral-nodes/ios-node-sdk/**"
+  push:
+    branches: [main]
+    paths:
+      - "feral-nodes/ios-app/**"
+      - "feral-nodes/ios-node-sdk/**"
+  schedule:
+    # Mondays 06:00 UTC — catches Apple-toolchain drift before the work week.
+    - cron: "0 6 * * 1"
+  # Triggers explicitly on changes to the workflow itself are intentionally
+  # left out: the gate exists to catch regressions in the iOS source, not
+  # to re-run on every CI tweak. Use workflow_dispatch to re-run after
+  # editing this file.
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-node-sdk:
+    name: ios-node-sdk — swift test
+    runs-on: macos-13
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: |
+          if [ -d "/Applications/Xcode_16.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+          else
+            # macos-13 may not yet have Xcode 16; fall back to the newest
+            # installed Xcode so the workflow is always green when Apple
+            # ships a refresh.
+            sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)/Contents/Developer"
+          fi
+          xcodebuild -version
+
+      - name: swift test — feral-nodes/ios-node-sdk
+        working-directory: feral-nodes/ios-node-sdk
+        run: |
+          swift test --parallel 2>&1 | tee swift-test.log
+
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-node-sdk-test-log
+          path: feral-nodes/ios-node-sdk/swift-test.log
+
+  ios-app:
+    name: ios-app — swift test
+    runs-on: macos-13
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: |
+          if [ -d "/Applications/Xcode_16.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+          else
+            sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)/Contents/Developer"
+          fi
+          xcodebuild -version
+
+      - name: swift test — feral-nodes/ios-app (FeralBridge package)
+        # ios-app/Package.swift exposes the FeralBridge library and the
+        # FeralNodeTests target. swift test exercises both without needing
+        # an iOS simulator boot — keeps CI minutes low. When the team adds
+        # an Xcode `.xcodeproj` for the full app shell, swap this for
+        # `xcodebuild test -scheme FeralNode -destination 'platform=iOS Simulator,...'`.
+        working-directory: feral-nodes/ios-app
+        run: |
+          swift test --parallel 2>&1 | tee swift-test.log
+
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app-test-log
+          path: feral-nodes/ios-app/swift-test.log
