@@ -84,11 +84,20 @@ export default function GlassBrain() {
     ];
   }, [dashboard, summary]);
 
+  const hasNodes = summary.total > 0;
+  // Legend rows: when at least one entity is in flight we anchor the
+  // baseline kinds (intent/flow) so the colour key stays stable while
+  // the graph fills in. With zero entities there is nothing to legend,
+  // and rendering the dots used to bleed coloured `border-radius: 50%`
+  // pills into the centred empty-state prompt — see Appendix A.3 in
+  // FEATURE_STABILITY_ROADMAP.md and GlassBrain.empty-state.test.jsx.
   const kindRows = useMemo(
-    () => Object.keys(KIND_LABELS)
-      .map((k) => ({ kind: k, label: KIND_LABELS[k], count: summary.byKind[k] || 0 }))
-      .filter((r) => r.count > 0 || r.kind === 'intent' || r.kind === 'flow'),
-    [summary],
+    () => (hasNodes
+      ? Object.keys(KIND_LABELS)
+        .map((k) => ({ kind: k, label: KIND_LABELS[k], count: summary.byKind[k] || 0 }))
+        .filter((r) => r.count > 0 || r.kind === 'intent' || r.kind === 'flow')
+      : []),
+    [summary, hasNodes],
   );
 
   return (
@@ -137,7 +146,7 @@ export default function GlassBrain() {
 
       <Pane
         title="Consciousness mind-map"
-        actions={(
+        actions={hasNodes ? (
           <div className="v2-glass-brain-legend" aria-label="Entity legend">
             {kindRows.map(({ kind, label, count }) => (
               <span key={kind} className="v2-glass-brain-legend-row" title={`${count} ${label.toLowerCase()} in flight`}>
@@ -151,7 +160,7 @@ export default function GlassBrain() {
               </span>
             ))}
           </div>
-        )}
+        ) : null}
       >
         <ConsciousnessMindMap />
       </Pane>

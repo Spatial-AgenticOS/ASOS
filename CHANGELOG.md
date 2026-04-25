@@ -6,6 +6,10 @@ All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **W5: Glass Brain — coloured legend dots overlapped the empty-state prompt.** [`feral-client-v2/src/pages/GlassBrain.jsx`](feral-client-v2/src/pages/GlassBrain.jsx) used to render the `Pane` `actions` legend (intent + flow `border-radius: 50%` dots) unconditionally, even when `summary.total === 0`. The 2026.4.29 fix in `ConsciousnessMindMap.jsx` removed the SVG centre anchor for empty graphs, but the legend kept bleeding two coloured pills into the pane header that — on narrower viewports — visually overlapped the centred `.v2-mindmap-empty` text the user had reported as "a blue ball overlapping the empty-state text" (see `FEATURE_STABILITY_ROADMAP.md` Appendix A.3). The page now derives `hasNodes = summary.total > 0` and returns `actions={null}` while the graph is empty; once at least one entity is in flight the legend reappears. Test coverage: new [`feral-client-v2/src/__tests__/pages/GlassBrain.empty-state.test.jsx`](feral-client-v2/src/__tests__/pages/GlassBrain.empty-state.test.jsx) (3 cases) mocks `Element.prototype.getBoundingClientRect` to simulate the user-reported geometry and asserts no `border-radius: 50%` element with non-zero rendered size intersects the empty-state bounding box. New [`feral-client-v2/e2e/glass_brain_empty.spec.ts`](feral-client-v2/e2e/glass_brain_empty.spec.ts) ships the runtime contract; it runs once the W14 / W4 `playwright.config.ts` lands. vitest: 136/136 green (was 133/133; +3 new cases, 0 regressions).
+
 ## [2026.4.32] - 2026-04-24
 
 ### Fixed
