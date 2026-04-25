@@ -23,7 +23,7 @@ import { apiFetch, apiJson } from '../lib/api';
  * paired row) is revoked via DELETE /api/devices/{id}. That kills the
  * "open the modal, never scan, leave a phantom row in Paired" bug.
  */
-export default function PairDeviceModal({ open, onClose, onPaired }) {
+export default function PairDeviceModal({ open, onClose, onPaired, onTokenIssued }) {
   const [tab, setTab] = useState('web_phone');
   // Tokens issued during this modal session, plus any in-flight
   // /pair/url requests we must await before pruning.
@@ -33,10 +33,20 @@ export default function PairDeviceModal({ open, onClose, onPaired }) {
   const trackIssue = useCallback((promise) => {
     inFlight.current.add(promise);
     promise
-      .then((body) => { if (body?.device_id) issued.current.add(body.device_id); })
+      .then((body) => {
+        if (body?.device_id) {
+          issued.current.add(body.device_id);
+          // Notify the parent so it can hide this row from the
+          // historical Paired list until pairing actually completes
+          // (or the modal closes and the row is revoked). This is
+          // what removes the "ghost row appears the moment I click
+          // Pair a device" effect users complained about.
+          onTokenIssued?.(body.device_id);
+        }
+      })
       .catch(() => {})
       .finally(() => { inFlight.current.delete(promise); });
-  }, []);
+  }, [onTokenIssued]);
 
   // Reset session bookkeeping every time the modal re-opens so a
   // previous session's tracked ids can't leak into a later prune.

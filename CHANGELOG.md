@@ -6,6 +6,10 @@ All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **W4: Pair-a-device modal opens reliably; no more phantom rows in the Paired list.** Roadmap §A.2. Three pieces: (1) [`feral-client-v2/src/ui/Modal.jsx`](feral-client-v2/src/ui/Modal.jsx) now mounts via `createPortal(node, document.body)` so it escapes `.v2-shell-main`'s positive-z stacking context (which was trapping the modal behind the dock + menubar even though `.v2-modal-backdrop` had `z-index: 100`). (2) New [`feral-client-v2/src/styles/_z.css`](feral-client-v2/src/styles/_z.css) defines named stacking constants `--z-base / --z-dock / --z-orb / --z-overlay / --z-modal / --z-toast` (1, 50, 60, 90, 100, 110); [`feral-client-v2/src/styles/pages.css`](feral-client-v2/src/styles/pages.css) re-declares `.v2-modal-backdrop` to read from `var(--z-modal)` so the cascade lands on the named token. (3) [`feral-client-v2/src/pages/Devices.jsx`](feral-client-v2/src/pages/Devices.jsx) hides any device IDs the active `PairDeviceModal` session created from the historical Paired list until pairing actually completes (`claimed_at` flips truthy) — the existing modal-close prune already revokes unclaimed tokens, so the user no longer sees a row materialise the moment they click "+ Pair new device". [`feral-client-v2/src/components/PairDeviceModal.jsx`](feral-client-v2/src/components/PairDeviceModal.jsx) gains an `onTokenIssued(deviceId)` callback to thread issued IDs to the parent. Test coverage: 5 new vitest assertions in [`feral-client-v2/src/__tests__/Devices.modal-z.test.jsx`](feral-client-v2/src/__tests__/Devices.modal-z.test.jsx) (named-constant ordering, modal portal placement, `.v2-modal-card` class wiring) + 1 new Playwright spec [`feral-client-v2/e2e/pair_device.spec.ts`](feral-client-v2/e2e/pair_device.spec.ts) (asserts dialog visibility / QR placeholder / privacy hint / no phantom row in Paired). Total vitest after change: 138 passed (was 133).
+
 ## [2026.4.32] - 2026-04-24
 
 ### Fixed
