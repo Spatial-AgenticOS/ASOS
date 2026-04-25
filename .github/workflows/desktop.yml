@@ -66,13 +66,24 @@ jobs:
           restore-keys: |
             cargo-desktop-test-${{ runner.os }}-
 
+      - name: Stub frontend dist (so tauri::generate_context! has a target)
+        # `desktop/src-tauri/tauri.conf.json` declares
+        # `"frontendDist": "../dist"`. In CI we are not building the
+        # web bundle (`npm run build`) for the test job, so the macro
+        # would otherwise panic with "frontendDist path doesn't exist".
+        # A bare `index.html` is enough to satisfy the macro at compile
+        # time; we never load the bundle from this job.
+        run: |
+          mkdir -p desktop/dist
+          echo "<!doctype html><html></html>" > desktop/dist/index.html
+
       - name: cargo test (lib + integration smoke only)
         working-directory: desktop/src-tauri
         # `--lib` runs the `#[cfg(test)] mod tests` block in src/lib.rs.
-        # `--tests` runs the integration test crate at tests/smoke.rs.
-        # Together they exercise the entire smoke harness without
-        # requiring the full Tauri binary build.
-        run: cargo test --lib --tests --no-fail-fast
+        # `--test smoke` runs the integration test crate at tests/smoke.rs.
+        # Together they exercise the entire smoke harness without running
+        # any unit tests inside the binary target (main.rs has none).
+        run: cargo test --lib --test smoke --no-fail-fast
 
   build:
     name: pnpm/npm tauri build --debug (${{ matrix.platform }})
