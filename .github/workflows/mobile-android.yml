@@ -23,17 +23,17 @@ on:
     paths:
       - "feral-nodes/android-app/**"
       - "feral-nodes/android-bridge/**"
-      - ".github/workflows/mobile-android.yml"
   push:
     branches: [main]
     paths:
       - "feral-nodes/android-app/**"
       - "feral-nodes/android-bridge/**"
-      - ".github/workflows/mobile-android.yml"
   schedule:
     # Mondays 06:00 UTC — same window as the iOS workflow so any
     # cross-mobile API drift surfaces in one daily ops review.
     - cron: "0 6 * * 1"
+  # See note in mobile-ios.yml about not self-triggering on workflow
+  # edits. Use workflow_dispatch to re-run after editing this file.
   workflow_dispatch:
 
 concurrency:

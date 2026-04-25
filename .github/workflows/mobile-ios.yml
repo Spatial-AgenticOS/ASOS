@@ -17,16 +17,18 @@ on:
     paths:
       - "feral-nodes/ios-app/**"
       - "feral-nodes/ios-node-sdk/**"
-      - ".github/workflows/mobile-ios.yml"
   push:
     branches: [main]
     paths:
       - "feral-nodes/ios-app/**"
       - "feral-nodes/ios-node-sdk/**"
-      - ".github/workflows/mobile-ios.yml"
   schedule:
     # Mondays 06:00 UTC — catches Apple-toolchain drift before the work week.
     - cron: "0 6 * * 1"
+  # Triggers explicitly on changes to the workflow itself are intentionally
+  # left out: the gate exists to catch regressions in the iOS source, not
+  # to re-run on every CI tweak. Use workflow_dispatch to re-run after
+  # editing this file.
   workflow_dispatch:
 
 concurrency:
