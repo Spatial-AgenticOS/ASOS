@@ -18,7 +18,9 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import sys
+import threading
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from urllib.parse import urlparse
@@ -207,148 +209,212 @@ def cmd_identity():
 
 
 async def repl():
-    """Interactive REPL that chats with the Brain."""
+    """Interactive REPL that chats with the Brain.
+
+    Lifecycle contract: the REPL NEVER calls ``sys.exit``. When the brain
+    process is colocated (``feral start``) it lives in a non-daemon
+    thread sibling of this coroutine; an exit here used to bring the
+    interpreter down with it (issue: clicking a button in the browser
+    appeared to "kill the system" because the brain thread was actually
+    being shut down by Python interpreter teardown that started when
+    ``repl`` raised ``SystemExit``). The REPL now ``return``s on any
+    terminal error so the caller (``cmd_start``) can keep the brain
+    running.
+
+    Connection contract: uses ``async with websockets.connect(uri) as ws:``
+    which is the documented form for ``websockets>=11`` (we require
+    ``>=13``). The previous pattern — ``ws = await websockets.connect(uri)``
+    followed by ``async with ws as conn:`` — raises ``TypeError`` on
+    every modern websockets release because the awaited result is a
+    ``WebSocketClientProtocol`` and not an async context manager.
+    """
     print(BANNER)
     uri = WS_URL
-    try:
-        _ws = None
-        for _attempt in range(3):
-            try:
-                _ws = await websockets.connect(uri)
-                break
-            except Exception:
-                if _attempt == 2:
-                    raise
-                print(f"  Connection failed (attempt {_attempt + 1}/3) — retrying...")
-                await asyncio.sleep(2 ** _attempt)
 
-        async with _ws as ws:
-            greeting = await asyncio.wait_for(ws.recv(), timeout=5)
-            msg = json.loads(greeting)
-            if msg.get("payload", {}).get("text"):
-                print(f"  FERAL: {msg['payload']['text']}\n")
+    backoff = 1.0
+    max_backoff = 30.0
 
-            while True:
+    while True:
+        try:
+            async with websockets.connect(uri) as ws:
+                # Reset backoff once we're actually connected.
+                backoff = 1.0
                 try:
-                    user_input = await asyncio.get_event_loop().run_in_executor(None, lambda: input("you > "))
-                except (EOFError, KeyboardInterrupt):
-                    print("\n  Goodbye!")
-                    break
+                    greeting = await asyncio.wait_for(ws.recv(), timeout=5)
+                    msg = json.loads(greeting)
+                    if msg.get("payload", {}).get("text"):
+                        print(f"  FERAL: {msg['payload']['text']}\n")
+                except (asyncio.TimeoutError, json.JSONDecodeError):
+                    # Brain didn't send a greeting — that's fine, just
+                    # drop into the prompt without one.
+                    pass
 
-                text = user_input.strip()
-                if not text:
-                    continue
+                if not await _repl_session(ws):
+                    return
+                # Inner session ended due to disconnect — fall through
+                # to outer loop which will reconnect.
+                print("  Connection lost — reconnecting...")
 
-                if text.startswith("/"):
-                    cmd = text.lower().split()[0]
-                    if cmd in ("/quit", "/exit", "/q"):
-                        print("  Goodbye!")
-                        break
-                    elif cmd == "/status":
-                        cmd_status()
-                    elif cmd == "/devices":
-                        cmd_devices()
-                    elif cmd == "/skills":
-                        cmd_skills()
-                    elif cmd == "/identity":
-                        cmd_identity()
-                    else:
-                        print(f"  Unknown command: {cmd}")
-                    continue
-
-                await ws.send(json.dumps({
-                    "type": "text_command",
-                    "payload": {"text": text},
-                }))
-
-                full_response = ""
-                while True:
-                    try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=30)
-                    except asyncio.TimeoutError:
-                        if full_response:
-                            break
-                        print("  (timeout waiting for response)")
-                        break
-
-                    msg = json.loads(raw)
-                    mtype = msg.get("type", "")
-
-                    if mtype == "stream_delta":
-                        delta = msg.get("payload", {}).get("delta", "")
-                        print(delta, end="", flush=True)
-                        full_response += delta
-                    elif mtype == "stream_end":
-                        if full_response:
-                            print()
-                        break
-                    elif mtype == "text_response":
-                        text_resp = msg.get("payload", {}).get("text", "")
-                        if text_resp:
-                            print(f"  FERAL: {text_resp}")
-                        break
-                    elif mtype == "sdui":
-                        print(f"  [UI Component: {msg.get('payload', {}).get('component', '?')}]")
-                        break
-                    elif mtype == "error":
-                        print(f"  Error: {msg.get('payload', {}).get('message', '?')}")
-                        break
-
-                print()
-
-    except ConnectionRefusedError:
-        print(f"  Cannot connect to FERAL Brain at {uri}")
-        print("  Make sure the Brain is running: feral serve")
-        sys.exit(1)
-    except Exception as e:
-        print(f"  Connection error: {e}")
-        sys.exit(1)
-
-
-async def one_shot(text: str):
-    """Send a single command and print the response."""
-    try:
-        _ws = None
-        for _attempt in range(3):
+        except (ConnectionRefusedError, OSError) as exc:
+            print(
+                f"  Brain unreachable at {uri} ({exc.__class__.__name__}) "
+                f"— retrying in {backoff:.0f}s. Press Ctrl+C to give up."
+            )
             try:
-                _ws = await websockets.connect(WS_URL)
-                break
-            except Exception:
-                if _attempt == 2:
-                    raise
-                await asyncio.sleep(2 ** _attempt)
+                await asyncio.sleep(backoff)
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                print("\n  Goodbye!")
+                return
+            backoff = min(backoff * 2, max_backoff)
+            continue
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            print("\n  Goodbye!")
+            return
+        except Exception as exc:
+            # Catch-all for unexpected errors — including the
+            # historical websockets-API mismatch. Print a friendly
+            # message and return cleanly so the brain stays alive.
+            print(f"  REPL error ({exc.__class__.__name__}): {exc}")
+            print("  Brain is still running. Reconnect with `feral` (no args).")
+            return
 
-        async with _ws as ws:
-            _ = await asyncio.wait_for(ws.recv(), timeout=5)
 
+async def _repl_session(ws) -> bool:
+    """Run one connected REPL session against ``ws``.
+
+    Returns ``True`` if the session ended due to disconnect (caller
+    should reconnect), ``False`` if the user asked to quit (caller
+    should exit cleanly).
+    """
+    while True:
+        try:
+            user_input = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: input("you > ")
+            )
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Goodbye!")
+            return False
+
+        text = user_input.strip()
+        if not text:
+            continue
+
+        if text.startswith("/"):
+            cmd = text.lower().split()[0]
+            if cmd in ("/quit", "/exit", "/q"):
+                print("  Goodbye!")
+                return False
+            elif cmd == "/status":
+                cmd_status()
+            elif cmd == "/devices":
+                cmd_devices()
+            elif cmd == "/skills":
+                cmd_skills()
+            elif cmd == "/identity":
+                cmd_identity()
+            else:
+                print(f"  Unknown command: {cmd}")
+            continue
+
+        try:
             await ws.send(json.dumps({
                 "type": "text_command",
                 "payload": {"text": text},
             }))
+        except Exception:
+            return True
 
-            while True:
-                try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=30)
-                except asyncio.TimeoutError:
+        full_response = ""
+        while True:
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=30)
+            except asyncio.TimeoutError:
+                if full_response:
                     break
+                print("  (timeout waiting for response)")
+                break
+            except Exception:
+                return True
 
-                msg = json.loads(raw)
-                mtype = msg.get("type", "")
+            msg = json.loads(raw)
+            mtype = msg.get("type", "")
 
-                if mtype == "stream_delta":
-                    print(msg.get("payload", {}).get("delta", ""), end="", flush=True)
-                elif mtype == "stream_end":
+            if mtype == "stream_delta":
+                delta = msg.get("payload", {}).get("delta", "")
+                print(delta, end="", flush=True)
+                full_response += delta
+            elif mtype == "stream_end":
+                if full_response:
                     print()
-                    break
-                elif mtype == "text_response":
-                    print(msg.get("payload", {}).get("text", ""))
-                    break
-                elif mtype == "error":
-                    print(f"Error: {msg.get('payload', {}).get('message', '?')}", file=sys.stderr)
-                    break
+                break
+            elif mtype == "text_response":
+                text_resp = msg.get("payload", {}).get("text", "")
+                if text_resp:
+                    print(f"  FERAL: {text_resp}")
+                break
+            elif mtype == "sdui":
+                print(f"  [UI Component: {msg.get('payload', {}).get('component', '?')}]")
+                break
+            elif mtype == "error":
+                print(f"  Error: {msg.get('payload', {}).get('message', '?')}")
+                break
+
+        print()
+
+
+async def one_shot(text: str):
+    """Send a single command and print the response.
+
+    Uses ``async with websockets.connect(uri) as ws:`` for compatibility
+    with ``websockets>=11`` (we require ``>=13``). Unlike ``repl``, a
+    one-shot call has no colocated brain to protect — exit codes are the
+    contract for shell scripting, so we keep ``sys.exit(1)`` here.
+    """
+    try:
+        last_err: Exception | None = None
+        for _attempt in range(3):
+            try:
+                async with websockets.connect(WS_URL) as ws:
+                    _ = await asyncio.wait_for(ws.recv(), timeout=5)
+
+                    await ws.send(json.dumps({
+                        "type": "text_command",
+                        "payload": {"text": text},
+                    }))
+
+                    while True:
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=30)
+                        except asyncio.TimeoutError:
+                            break
+
+                        msg = json.loads(raw)
+                        mtype = msg.get("type", "")
+
+                        if mtype == "stream_delta":
+                            print(msg.get("payload", {}).get("delta", ""), end="", flush=True)
+                        elif mtype == "stream_end":
+                            print()
+                            break
+                        elif mtype == "text_response":
+                            print(msg.get("payload", {}).get("text", ""))
+                            break
+                        elif mtype == "error":
+                            print(f"Error: {msg.get('payload', {}).get('message', '?')}", file=sys.stderr)
+                            break
+                return
+            except (ConnectionRefusedError, OSError) as exc:
+                last_err = exc
+                if _attempt < 2:
+                    await asyncio.sleep(2 ** _attempt)
+        if last_err is not None:
+            raise last_err
 
     except ConnectionRefusedError:
         print(f"Cannot connect to FERAL Brain at {WS_URL}", file=sys.stderr)
+        sys.exit(1)
+    except OSError as exc:
+        print(f"Cannot connect to FERAL Brain at {WS_URL}: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -492,16 +558,35 @@ def _is_first_run() -> bool:
 
 
 def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = False):
-    """
-    One command to rule them all.
-    Starts the brain, checks health, opens browser, and drops into chat.
-    If first run, launches setup wizard first.
+    """One command to rule them all.
+
+    Starts the brain in a non-daemon thread, waits for health, opens
+    the browser, drops into the interactive REPL — and *keeps the brain
+    alive when the REPL exits or crashes*.
+
+    Lifecycle invariant (the bug this docstring is here to prevent from
+    ever shipping again): the brain is the long-lived service in this
+    process; the REPL is a transient companion. Previously the brain
+    ran in a ``daemon=True`` thread, so any ``sys.exit`` from the REPL
+    (e.g. ``websockets`` API mismatch, transient WS hiccup) raised
+    ``SystemExit``, which started Python interpreter teardown, which
+    killed the daemon thread mid-flight. From the user's perspective
+    the entire system "died" the next time they clicked a button.
+
+    The fix is two-fold:
+      1. The brain thread is ``daemon=False``. Interpreter teardown can
+         no longer kill it — only an explicit ``server.should_exit``.
+      2. We hold a reference to the ``uvicorn.Server`` in
+         ``server_holder`` so SIGINT / SIGTERM / "REPL closed cleanly"
+         paths can flip ``should_exit`` and join the thread.
+
+    The only ways to stop the brain are now: explicit Ctrl+C / SIGTERM,
+    or ``uvicorn.Server`` itself crashing.
     """
     import time
-    import threading
 
     try:
-        import uvicorn
+        import uvicorn  # noqa: F401  (we only need the dep check here)
     except ImportError:
         print("  Missing dependencies. Run: pip install 'feral-ai[llm]'")
         sys.exit(1)
@@ -525,7 +610,8 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
         cmd_setup()
         print()
 
-    # Check if already running
+    # Check if already running. In this branch there is no local server
+    # for us to manage, so a clean REPL exit is enough.
     try:
         scheme = "https" if ssl_kwargs else "http"
         health_url = os.getenv("FERAL_HEALTH_URL", f"{scheme}://127.0.0.1:{port}/health")
@@ -535,7 +621,10 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
                 print(f"  FERAL is already running on port {port}")
                 if not no_browser:
                     _open_browser(port)
-                asyncio.run(repl())
+                try:
+                    asyncio.run(repl())
+                except KeyboardInterrupt:
+                    pass
                 return
     except Exception:
         pass
@@ -548,21 +637,30 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
   ╚══════════════════════════════════════╝
 """)
 
-    # Start server in background thread
+    # Start server in a NON-daemon background thread so the brain can
+    # outlive any REPL crash or clean exit. We keep a handle to the
+    # uvicorn.Server in server_holder so the main thread can flip
+    # ``should_exit`` for graceful shutdown.
     server_ready = threading.Event()
+    server_holder: dict = {"server": None, "exc": None}
 
     def _run_server():
-        import uvicorn
-        config = uvicorn.Config(
-            "api.server:app", host=brain_bind_host(), port=port,
-            log_level="warning", access_log=False,
-            **ssl_kwargs,
-        )
-        server = uvicorn.Server(config)
-        server_ready.set()
-        server.run()
+        import uvicorn as _uvicorn
+        try:
+            config = _uvicorn.Config(
+                "api.server:app", host=brain_bind_host(), port=port,
+                log_level="warning", access_log=False,
+                **ssl_kwargs,
+            )
+            server = _uvicorn.Server(config)
+            server_holder["server"] = server
+            server_ready.set()
+            server.run()
+        except Exception as exc:
+            server_holder["exc"] = exc
+            server_ready.set()
 
-    server_thread = threading.Thread(target=_run_server, daemon=True)
+    server_thread = threading.Thread(target=_run_server, daemon=False, name="feral-brain")
     server_thread.start()
 
     # Wait for server to be healthy.
@@ -611,6 +709,12 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
     if not healthy:
         print(f"\n  Failed to start after {timeout_s}s. Check logs or run: feral doctor")
         print("  Tip: FERAL_BOOT_TIMEOUT=180 feral start   # for slow first runs")
+        # Try to stop the brain we spawned, then exit with non-zero so
+        # the user sees the failure.
+        srv = server_holder.get("server")
+        if srv is not None:
+            srv.should_exit = True
+        server_thread.join(timeout=5)
         sys.exit(1)
 
     # Print status
@@ -626,8 +730,62 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
         _open_browser(port)
 
     print()
-    # Drop into interactive chat
-    asyncio.run(repl())
+
+    # Install a SIGTERM handler so ``kill <pid>`` shuts the brain down
+    # cleanly. SIGINT (Ctrl+C) is already handled by Python's default
+    # KeyboardInterrupt mechanism inside ``asyncio.run(repl())`` and the
+    # join loop below.
+    shutdown_requested = threading.Event()
+
+    def _on_sigterm(signum, frame):  # pragma: no cover — exercised in real signal flow
+        shutdown_requested.set()
+        srv = server_holder.get("server")
+        if srv is not None:
+            srv.should_exit = True
+
+    try:
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except (ValueError, OSError):
+        # signal.signal() requires the main thread; some embedded
+        # environments don't allow it. SIGINT still works via the
+        # default Python handler.
+        pass
+
+    # Drop into interactive REPL. The brain stays alive even if the
+    # REPL crashes, exits cleanly, or returns early. SystemExit is
+    # caught defensively in case some code path inside repl() ever
+    # reaches for sys.exit again.
+    try:
+        asyncio.run(repl())
+    except KeyboardInterrupt:
+        shutdown_requested.set()
+    except SystemExit:
+        # Defensive: prior versions of repl() called sys.exit on
+        # connection errors and took the daemon brain down with them.
+        # Modern repl() never raises SystemExit — this is belt + braces
+        # against future regressions.
+        pass
+    except Exception as exc:
+        print(f"\n  REPL crashed unexpectedly: {exc}")
+        print("  Brain is still running.")
+
+    if not shutdown_requested.is_set():
+        print()
+        print(f"  REPL closed. Brain still running on http://localhost:{port}")
+        print("  Press Ctrl+C to stop the brain.")
+        try:
+            while server_thread.is_alive() and not shutdown_requested.is_set():
+                server_thread.join(timeout=1.0)
+        except KeyboardInterrupt:
+            shutdown_requested.set()
+
+    # Tell uvicorn to stop and wait for it to drain.
+    print("\n  Shutting down brain...")
+    srv = server_holder.get("server")
+    if srv is not None:
+        srv.should_exit = True
+    server_thread.join(timeout=15)
+    print("  Goodbye!")
 
 
 def _open_browser(port: int):

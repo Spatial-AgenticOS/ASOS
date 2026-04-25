@@ -227,8 +227,38 @@ async def test_discord_handle_message_skips_bot_authors():
 # ── Slack — Socket Mode websockets ──────────────────────────────────────────
 
 
+class _FakeSlackWS:
+    """Fake WebSocketClientProtocol for Slack Socket Mode tests.
+
+    Yields one canned frame, then raises ``StopAsyncIteration`` so the
+    ``async for raw in ws:`` loop in
+    ``SlackChannel._socket_mode`` exits cleanly. Tracks ``send`` calls
+    for ack assertions.
+    """
+
+    def __init__(self, raw):
+        self._raw = raw
+        self.send = AsyncMock()
+
+    def __aiter__(self):
+        self._gone = False
+        return self
+
+    async def __anext__(self):
+        if self._gone:
+            raise StopAsyncIteration
+        self._gone = True
+        return self._raw
+
+
 @pytest.mark.asyncio
 async def test_slack_socket_mode_events_api_acknowledges_and_handles_message():
+    """Pins the v13-compatible ``async with websockets.connect(...) as ws:``
+    pattern in ``SlackChannel._socket_mode``. The previous test used
+    ``AsyncMock(return_value=fake_ws)`` which only ever exercised the
+    historical (broken) ``await connect(...)`` form — masking the
+    ``TypeError`` users hit in production with ``websockets>=11``.
+    """
     ev = {
         "type": "events_api",
         "envelope_id": "env-42",
@@ -242,29 +272,11 @@ async def test_slack_socket_mode_events_api_acknowledges_and_handles_message():
         },
     }
     raw = json.dumps(ev)
+    fake_ws = _FakeSlackWS(raw)
 
-    class FakeSlackWS:
-        def __init__(self):
-            self.send = AsyncMock()
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            pass
-
-        def __aiter__(self):
-            self._gone = False
-            return self
-
-        async def __anext__(self):
-            if self._gone:
-                raise StopAsyncIteration
-            self._gone = True
-            return raw
-
-    fake_ws = FakeSlackWS()
-    fake_connect = AsyncMock(return_value=fake_ws)
+    @asynccontextmanager
+    async def fake_connect(*_a, **_kw):
+        yield fake_ws
 
     socket_client = MagicMock()
     socket_client.post = AsyncMock(
@@ -299,6 +311,64 @@ async def test_slack_socket_mode_events_api_acknowledges_and_handles_message():
     fake_ws.send.assert_called()
     ack = json.loads(fake_ws.send.call_args[0][0])
     assert ack.get("envelope_id") == "env-42"
+
+
+@pytest.mark.asyncio
+async def test_slack_socket_mode_uses_async_with_connect_directly():
+    """Regression pin: ``websockets.connect`` MUST be used as an async
+    context manager directly (no ``await`` first). If a future change
+    re-introduces ``ws = await websockets.connect(...)`` followed by
+    ``async with ws as conn:`` this test will fail because the
+    ``@asynccontextmanager`` factory returns an ``_AsyncGeneratorContextManager``
+    that is NOT awaitable.
+    """
+    raw = json.dumps({
+        "type": "events_api",
+        "envelope_id": "env-1",
+        "payload": {"event": {"type": "message", "channel": "C1", "user": "U1", "text": "hi"}},
+    })
+    fake_ws = _FakeSlackWS(raw)
+
+    awaited = {"on_connect": False}
+
+    @asynccontextmanager
+    async def strict_connect(*_a, **_kw):
+        # If anyone tries ``await websockets.connect(...)`` instead of
+        # ``async with websockets.connect(...) as ws:``, the awaited
+        # result will be this generator-context-manager — which is NOT
+        # awaitable, and Python will raise TypeError BEFORE entering
+        # the body. The test would then fail.
+        awaited["on_connect"] = True
+        yield fake_ws
+
+    socket_client = MagicMock()
+    socket_client.post = AsyncMock(
+        return_value=MagicMock(json=lambda: {"url": "wss://slack.test/socket"}),
+    )
+    socket_cm = MagicMock()
+    socket_cm.__aenter__ = AsyncMock(return_value=socket_client)
+    socket_cm.__aexit__ = AsyncMock(return_value=None)
+
+    main_http = MagicMock()
+    main_http.post = AsyncMock()
+    main_http.aclose = AsyncMock()
+
+    handler = AsyncMock(return_value=ChannelResponse(text="ok"))
+
+    with patch("httpx.AsyncClient", side_effect=[main_http, socket_cm]), patch(
+        "websockets.connect", strict_connect,
+    ):
+        ch = SlackChannel(
+            {"bot_token": "xoxb-test", "app_token": "xapp-test", "enabled": True},
+        )
+        ch.set_handler(handler)
+        await ch.start()
+        await asyncio.sleep(0.12)
+        ch._running = False
+        await ch.stop()
+
+    assert awaited["on_connect"], "Slack socket mode never entered the connect context"
+    handler.assert_called()
 
 
 # ── WhatsApp ────────────────────────────────────────────────────────────────

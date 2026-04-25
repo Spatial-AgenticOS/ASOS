@@ -637,29 +637,32 @@ class SlackChannel(Channel):
                     return
 
             import websockets
-            _ws = None
+            # ``websockets>=11`` returns a Connect object that is itself
+            # the async context manager; the awaited result of
+            # ``connect()`` is a WebSocketClientProtocol that does NOT
+            # support ``__aenter__``. The previous pattern raised
+            # TypeError on every modern websockets release. Retry/backoff
+            # now wraps the ``async with`` directly.
             for _attempt in range(3):
                 try:
-                    _ws = await websockets.connect(ws_url)
+                    async with websockets.connect(ws_url) as ws:
+                        async for raw in ws:
+                            if not self._running:
+                                break
+                            event = json.loads(raw)
+
+                            if event.get("type") == "events_api":
+                                await ws.send(json.dumps({
+                                    "envelope_id": event.get("envelope_id", ""),
+                                }))
+                                payload = event.get("payload", {}).get("event", {})
+                                if payload.get("type") == "message" and not payload.get("bot_id"):
+                                    await self._handle_slack_message(payload)
                     break
                 except Exception:
                     if _attempt == 2:
                         raise
                     await asyncio.sleep(2 ** _attempt)
-
-            async with _ws as ws:
-                async for raw in ws:
-                    if not self._running:
-                        break
-                    event = json.loads(raw)
-
-                    if event.get("type") == "events_api":
-                        await ws.send(json.dumps({
-                            "envelope_id": event.get("envelope_id", ""),
-                        }))
-                        payload = event.get("payload", {}).get("event", {})
-                        if payload.get("type") == "message" and not payload.get("bot_id"):
-                            await self._handle_slack_message(payload)
 
         except Exception as e:
             if self._running:
