@@ -1,8 +1,8 @@
 """
 W16 — credential shape definitions for the per-agent auth profile store.
 
-Mirrors openclaw's ``auth-profiles/types.ts`` (`OPENCLAW_LESSONS.md` §1).
-A profile is one of three credential shapes:
+See ``docs/OPENCLAW_LESSONS.md`` §1 for the internal comparative
+analysis. A profile is one of three credential shapes:
 
 * :class:`ApiKeyCredential` — the classic provider-issued static key
   (``sk-...``, ``AIza...`` etc.). No refresh lifecycle.
@@ -11,7 +11,7 @@ A profile is one of three credential shapes:
   refreshes via :mod:`security.auth_profiles.oauth_refresh_lock` or
   the canonical OAuth provider will revoke the refresh token after a
   reuse-detection event (``refresh_token_reused`` storms; see
-  ``OPENCLAW_LESSONS.md`` §1 + §10 W16).
+  ``docs/OPENCLAW_LESSONS.md`` §1 + §10 W16).
 * :class:`TokenCredential` — opaque bearer/PAT-style token with
   optional expiry but **no** locally-known refresh path.
 
@@ -100,15 +100,14 @@ class OAuthCredential:
 
     ``access`` is the short-lived bearer; ``refresh`` is the precious
     long-lived token used to mint new ``access`` values. ``expires`` is
-    the unix epoch in **milliseconds** — match openclaw's
-    ``OAuthCredentials.expires`` so downstream tooling and the W19
-    cooldown FSM can compare timestamps without a unit conversion.
+    the unix epoch in **milliseconds** — a fixed unit across the store
+    so downstream tooling and the W19 cooldown FSM can compare
+    timestamps without a unit conversion.
 
     ``client_id`` is the OAuth app the credential was issued to (NOT a
     secret; identifies the requesting app). ``account_id`` and ``email``
     are identity bindings — they MUST match across mirror/adopt paths
-    so we never overwrite one user's profile with another's tokens
-    (see openclaw ``isSafeToCopyOAuthIdentity``).
+    so we never overwrite one user's profile with another's tokens.
     """
 
     provider: str
@@ -218,7 +217,7 @@ class ProfileUsageStats:
     file format is forward-compatible: success/failure totals and the
     last-used timestamp (unix epoch milliseconds).
 
-    See ``OPENCLAW_LESSONS.md`` §10 W19 for the canonical FSM contract.
+    See ``docs/OPENCLAW_LESSONS.md`` §10 W19 for the canonical FSM contract.
     """
 
     success_count: int = 0

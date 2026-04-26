@@ -1,6 +1,6 @@
 """W18: no-output (silent-hang) timeout kills the child within budget.
 
-Mirrors openclaw's ``no-output-timeout`` contract. Spec: ``sleep 10``
+Contract: "no-output timeout". Spec: ``sleep 10``
 emits nothing on stdout/stderr; with no_output_timeout=1, must die
 within 1.2s with kill_reason=``no_output_timeout``.
 
@@ -45,7 +45,7 @@ async def test_no_output_timeout_kills_within_budget() -> None:
 
 
 async def test_no_output_timeout_resets_on_output() -> None:
-    """Output activity resets the silence timer (parity with openclaw).
+    """Output activity resets the silence timer (rolling-gap semantics).
 
     A child that emits a line every 0.3s with no_output_timeout=0.8s
     must NOT be killed — the touch-output-on-line semantics require

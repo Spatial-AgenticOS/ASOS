@@ -1,8 +1,9 @@
 """
 W16 — per-agent auth profile store + multi-shape credentials.
 
-See ``OPENCLAW_LESSONS.md`` §1 + §10 W16 for the architectural
-rationale. Public surface re-exported below; submodule documentation
+See ``docs/OPENCLAW_LESSONS.md`` §1 + §10 W16 for the architectural
+rationale (internal comparative analysis). Public surface re-exported
+below; submodule documentation
 is intentionally verbose so you can read each file in isolation.
 """
 

@@ -20,9 +20,9 @@ Until then this tracker:
   :meth:`should_skip` always returns ``False`` because no W16 caller
   has authority to disable a profile.
 
-W19 will replace ``record_failure`` with the failure-classification +
-cooldown logic from openclaw's ``auth-profiles/usage.ts`` while
-preserving this signature.
+W19 will replace ``record_failure`` with the canonical
+failure-classification + cooldown logic while preserving this
+signature.
 """
 
 from __future__ import annotations

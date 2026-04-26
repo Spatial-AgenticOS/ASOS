@@ -1,8 +1,8 @@
 """W17: subagent policy allowlist + supervisor audit on deny.
 
-Mirrors openclaw-tools.subagents.sessions-spawn.allowlist.test.ts:
-default-deny, explicit allow, supervisor row recorded with
-``decision="denied"``.
+Contract: default-deny, explicit allow, supervisor row recorded with
+``decision="denied"``. Part of the canonical lifecycle test set:
+allowlist / cron-note / lifecycle / model / scope.
 """
 
 from __future__ import annotations

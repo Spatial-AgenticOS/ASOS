@@ -1,7 +1,7 @@
 """W18: scope_cancel kills every matching child within 200ms.
 
-Mirrors openclaw's ``cancelScope`` contract — composes with W17's
-scope_key concept. Spec: spawn 5 children with scope_key="batch-A",
+Contract: scope-cancel composes with W17's scope_key concept. Spec:
+spawn 5 children with scope_key="batch-A",
 1 child with scope_key="batch-B"; call scope_cancel("batch-A");
 assert all 5 dead within 200ms; assert the survivor still running.
 
@@ -71,7 +71,7 @@ async def test_scope_cancel_kills_matching_children_under_200ms() -> None:
     assert active_after[0].scope_key == "batch-B"
 
     # list_by_scope reflects the cancellation but still returns the
-    # finalized records (mirrors openclaw's listByScope semantics).
+    # finalized records.
     by_scope_a = await supervisor.registry.list_by_scope("batch-A")
     assert len(by_scope_a) == 5
     assert all(r.finished_at is not None for r in by_scope_a)

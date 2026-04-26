@@ -1,10 +1,9 @@
 """W18: child-process adapter built on ``asyncio.create_subprocess_exec``.
 
-Mirrors openclaw's ``src/process/supervisor/adapters/child.ts``. The
-Python equivalent is materially smaller because asyncio gives us the
-TERM/KILL/wait primitives natively — openclaw needs ~300 lines because
-they support detached + Windows tree-kill + verbatim args; FERAL ships
-the POSIX-first, asyncio-native cut.
+FERAL ships the POSIX-first, asyncio-native cut: asyncio gives us the
+TERM/KILL/wait primitives natively, so the adapter stays small.
+Detached runs, Windows tree-kill, and verbatim-args are explicitly
+out of scope.
 
 Contract (consumed by ``supervisor.RunHandle``):
 

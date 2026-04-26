@@ -1,8 +1,8 @@
 """W17: Subagent spawner — gated, scoped, cancellable child sessions.
 
-Cites docs/OPENCLAW_LESSONS.md §2 and §10 W17. Mirrors the openclaw
-``sessions_spawn`` shape — allowlist gate first, registry second,
-asyncio cancellation third.
+Cites docs/OPENCLAW_LESSONS.md §2 and §10 W17 (internal comparative
+analysis). The spawn contract runs three gates in order: allowlist
+first, registry second, asyncio cancellation third.
 
 Public surface::
 
@@ -155,8 +155,8 @@ class SubagentRegistry:
 
         The child stays alive (awaiting *cancel_event*) until either the
         parent's session-lock teardown cancels it or the task is
-        explicitly cancelled. This mirrors openclaw's "child runs in the
-        background until reaped" lifecycle.
+        explicitly cancelled — a "runs in the background until reaped"
+        lifecycle.
         """
         provider = self._llm_provider
         if provider is not None and hasattr(provider, "chat"):
@@ -265,7 +265,7 @@ class SubagentRegistry:
         else:
             self._by_parent.pop(parent_id, None)
 
-    # ── Steer (mirrors openclaw's announce-suppression contract) ─
+    # ── Steer (announce-suppression contract) ─
 
     def is_suppressed(self, parent_id: str, child_id: str) -> bool:
         return bool(self._suppression.get(parent_id, {}).get(child_id))

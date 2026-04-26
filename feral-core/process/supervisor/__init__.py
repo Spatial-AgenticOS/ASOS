@@ -1,8 +1,8 @@
 """W18: process supervisor (overall + no-output timeouts, scope-cancel).
 
-The Python port of openclaw's ``src/process/supervisor/`` (TypeScript).
-Mirrors the canonical reference at
-``openclaw-main 2/src/process/supervisor/supervisor.ts:41-291``.
+The supervisor is FERAL's canonical POSIX-subprocess lifecycle manager:
+a run has an overall wall-clock timeout, a no-output inactivity timeout,
+and belongs to a scope that can cancel every in-flight run atomically.
 
 Public surface::
 

@@ -214,5 +214,7 @@ upgrade can never produce a brain talking to a stale sandbox recipe.
 
 References:
 
-- `docs/OPENCLAW_LESSONS.md` §6 — sandboxing + security audit.
-- `docs/OPENCLAW_LESSONS.md` §10 W22 — this workstream's mission.
+- Internal comparative architecture analysis — sandboxing + security
+  audit notes live in the `docs/` private analysis tree.
+- Workstream W22 mission statement: single-trusted-operator threat
+  model (this document).

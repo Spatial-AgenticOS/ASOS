@@ -1,7 +1,7 @@
 """W18: overall (wall-clock) timeout kills the child within budget.
 
-Mirrors the openclaw ``supervisor.test.ts`` "enforces overall timeout"
-contract. Spec: ``sleep 10`` with overall_timeout=1 must die within
+Contract: "enforces overall timeout". Spec: ``sleep 10`` with
+overall_timeout=1 must die within
 1.2s, the exit_code must show SIGTERM/SIGKILL (negative returncode
 under asyncio convention), and the registry's kill_reason must be
 ``overall_timeout``.
