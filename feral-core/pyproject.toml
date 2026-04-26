@@ -105,6 +105,11 @@ mqtt = [
 observability = [
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-http>=1.20",
+    # W13: Prometheus exposition for /metrics + named registry. The
+    # OTel SDK pulls prometheus_client transitively in some installs but
+    # not all wheels, so it's pinned here so `pip install feral-ai[observability]`
+    # always provides the registry the dashboard + alerts target.
+    "prometheus-client>=0.20",
 ]
 # Track A provider + channel extras (added in 2026.4.18).
 # Together, OpenRouter, Fireworks all speak OpenAI-compatible JSON — the
@@ -158,6 +163,7 @@ all = [
     "aiomqtt>=2.0.0",
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-http>=1.20",
+    "prometheus-client>=0.20",
 ]
 dev = [
     "pytest>=8.0.0",
