@@ -35,34 +35,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      # We use plain `docker build` instead of `docker buildx`. With
+      # buildx + `--load` the first image lands in the daemon's
+      # registry, but the *next* buildx invocation runs inside an
+      # isolated builder context that does NOT see the daemon's local
+      # images — so `FROM feral-sandbox-common:latest` in
+      # Dockerfile.sandbox triggers a registry pull against an image
+      # that exists only locally, which fails with "pull access
+      # denied". Plain `docker build` reuses the daemon image cache
+      # for the whole job, so the dependent FROM resolves locally.
 
       - name: Build feral-sandbox-common (base)
-        run: |
-          docker buildx build \
-            --file Dockerfile.sandbox-common \
-            --tag feral-sandbox-common:latest \
-            --load \
-            .
+        run: docker build --file Dockerfile.sandbox-common --tag feral-sandbox-common:latest .
 
       - name: Build feral-sandbox (Dockerfile.sandbox)
         run: |
-          docker buildx build \
-            --file Dockerfile.sandbox \
-            --tag feral-sandbox:test \
+          docker build --file Dockerfile.sandbox \
             --build-arg SANDBOX_COMMON_TAG=latest \
-            --load \
-            .
+            --tag feral-sandbox:test .
 
       - name: Build feral-sandbox-browser (Dockerfile.sandbox-browser)
         run: |
-          docker buildx build \
-            --file Dockerfile.sandbox-browser \
-            --tag feral-sandbox-browser:test \
+          docker build --file Dockerfile.sandbox-browser \
             --build-arg SANDBOX_COMMON_TAG=latest \
-            --load \
-            .
+            --tag feral-sandbox-browser:test .
 
       - name: Inspect built images
         run: docker images "feral-sandbox*"
