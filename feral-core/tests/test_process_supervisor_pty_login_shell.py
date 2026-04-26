@@ -1,7 +1,6 @@
 """W18: PTY adapter spawns the child under a real login shell.
 
-Mirrors openclaw's ``supervisor.pty-command.test.ts`` "command runs
-under interactive shell" contract. Spec:
+Contract verified: "command runs under an interactive login shell". Spec:
 
 * spawn ``tty`` via the PTY adapter; assert exit 0 + a ``/dev/`` path
   on stdout (proves the child has a real controlling terminal).
@@ -99,8 +98,8 @@ async def test_pty_adapter_rejects_windows() -> None:
 
     This test runs only on POSIX (the module-level skipif keeps it off
     Windows), so we exercise the rejection by importing the adapter
-    function and patching ``sys.platform``. Mirrors openclaw's
-    "ConPTY-not-implemented" guard.
+    function and patching ``sys.platform`` — a "ConPTY-not-implemented"
+    guard with a clear error instead of a crash.
     """
     import process.supervisor.adapters.pty as pty_mod
 

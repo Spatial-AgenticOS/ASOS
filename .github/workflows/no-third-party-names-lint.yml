@@ -1,0 +1,17 @@
+name: no-third-party-names-lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    name: forbid third-party project names in shipped artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run forbidden-name linter
+        run: python3 scripts/check_no_third_party_names.py
+        shell: bash
+        continue-on-error: false

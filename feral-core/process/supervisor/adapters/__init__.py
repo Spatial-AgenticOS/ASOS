@@ -1,6 +1,7 @@
 """W18: spawn-adapter implementations for the process supervisor.
 
-Two adapters mirror openclaw's split:
+Two adapters, picked per-run via the ``adapter`` argument to
+:meth:`ProcessSupervisor.run`:
 
 * :mod:`process.supervisor.adapters.child` — plain
   ``asyncio.create_subprocess_exec`` (stdout + stderr piped, no TTY).

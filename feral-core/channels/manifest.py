@@ -2,9 +2,10 @@
 
 Why this module exists
 ----------------------
-openclaw's `extensions/*/openclaw.plugin.json` is the architectural rule
-that makes 140+ extensions sustainable (`docs/OPENCLAW_LESSONS.md` §5).
-W21 brings the same rule to FERAL **channels**: a single declarative
+A declarative per-extension manifest is the architectural rule that
+makes a large extension surface sustainable (see
+`docs/OPENCLAW_LESSONS.md` §5 for the internal comparative analysis).
+W21 brings that rule to FERAL **channels**: a single declarative
 ``feral-channel.manifest.json`` per channel describing the providers it
 speaks to, the env vars its auth needs, and the capabilities it
 advertises (messaging / voice / file / webhook / ...).
