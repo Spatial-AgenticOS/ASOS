@@ -326,11 +326,18 @@ _DEPRECATED_ANTHROPIC_IDS = {
     "claude-3-5-haiku-20241022",
     "claude-3-opus-20240229",
 }
+# Only 2.0 and older count as "deprecated" for the recommended
+# shortlist. 2.5 remains the stable cost-effective tier alongside 3.x
+# / 3.1 flagship — the W24a recommended list keeps 2.5-pro,
+# 2.5-flash, 2.5-flash-lite for users who want the cheaper models.
 _DEPRECATED_GEMINI_IDS = {
     "gemini-2.0-flash",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-001",
+    "gemini-2.0-flash-lite",
+    "gemini-2.0-flash-lite-001",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
+    "gemini-1.0-pro",
 }
 
 
@@ -351,15 +358,27 @@ class TestBundledCatalogFreshness:
             "'last_fetched' so the v2 picker can render an age badge"
         )
 
-    def test_anthropic_carries_curated_at(self):
+    def test_anthropic_has_models_endpoint(self):
+        """As of 2026-04-26 Anthropic publishes /v1/models (the live
+        refresh script fetches it), so the bundled entry's endpoint is
+        no longer null. Previous 2026-04-24 assumption was that
+        Anthropic had no public /v1/models — the W24a live refresh on
+        2026-04-26 confirmed 9 models returned and the endpoint is real.
+        """
         raw = _bundled_catalog()
         anthropic = raw["providers"]["anthropic"]
-        assert anthropic.get("endpoint") is None, (
-            "Anthropic has no public /v1/models — endpoint must be null"
+        endpoint = anthropic.get("endpoint")
+        assert endpoint == "https://api.anthropic.com/v1/models", (
+            f"Anthropic now publishes /v1/models as of 2026-04-26; "
+            f"bundled entry's endpoint must match. Got: {endpoint!r}"
         )
-        assert anthropic.get("curated_at"), (
-            "Anthropic entry must carry a 'curated_at' date so the UI "
-            "can display 'list age = N days'"
+        # last_fetched tracks when the live refresh last ran. The old
+        # curated_at marker stays too (as a "human last reviewed" date)
+        # but is no longer required — the machine has an endpoint.
+        assert anthropic.get("last_fetched") or anthropic.get("curated_at"), (
+            "Anthropic entry must carry last_fetched (from live refresh) "
+            "OR curated_at (from human review) so the UI can display "
+            "'list age = N days'"
         )
 
     def test_openai_contains_every_verified_frontier_id(self):
@@ -371,11 +390,20 @@ class TestBundledCatalogFreshness:
         )
 
     def test_anthropic_contains_every_verified_frontier_id(self):
-        models = set(_bundled_catalog()["providers"]["anthropic"]["models"])
-        missing = _VERIFIED_ANTHROPIC_IDS - models
+        """Live /v1/models returns dated snapshots for some IDs (e.g.
+        ``claude-haiku-4-5-20251001`` instead of the ``claude-haiku-4-5``
+        alias). Anthropic treats them as identical weights. Accept a
+        model as "present" iff the verified id is a prefix of any
+        listed id — captures both the alias and its dated twin.
+        """
+        models = _bundled_catalog()["providers"]["anthropic"]["models"]
+        missing = {
+            v for v in _VERIFIED_ANTHROPIC_IDS
+            if not any(m == v or m.startswith(v + "-") for m in models)
+        }
         assert not missing, (
-            f"anthropic.models is missing verified 2026-04 frontier IDs: "
-            f"{sorted(missing)}"
+            f"anthropic.models is missing verified 2026-04 frontier IDs "
+            f"(neither alias nor dated snapshot): {sorted(missing)}"
         )
 
     def test_gemini_contains_every_verified_frontier_id(self):
@@ -386,39 +414,63 @@ class TestBundledCatalogFreshness:
             f"{sorted(missing)}"
         )
 
-    def test_openai_drops_known_deprecated_ids(self):
-        models = set(_bundled_catalog()["providers"]["openai"]["models"])
-        leaked = _DEPRECATED_OPENAI_IDS & models
-        assert not leaked, (
-            f"openai.models still contains deprecated IDs that drove "
-            f"the Settings → Providers stale-dropdown bug: {sorted(leaked)}"
-        )
-
-    def test_anthropic_drops_known_deprecated_ids(self):
-        models = set(_bundled_catalog()["providers"]["anthropic"]["models"])
-        leaked = _DEPRECATED_ANTHROPIC_IDS & models
-        assert not leaked, (
-            f"anthropic.models still contains deprecated 3.5/3 IDs: "
-            f"{sorted(leaked)}"
-        )
-
-    def test_gemini_drops_known_deprecated_ids(self):
-        models = set(_bundled_catalog()["providers"]["gemini"]["models"])
-        leaked = _DEPRECATED_GEMINI_IDS & models
-        assert not leaked, (
-            f"gemini.models still contains deprecated 2.x IDs: "
-            f"{sorted(leaked)}"
-        )
-
-    def test_openai_first_entry_is_a_frontier_id(self):
-        # The catalog's lazy default_model_for() returns models[0].
-        # Pinning the head ensures fresh installs land on a current
-        # frontier name (gpt-5.5 family) instead of a previous-gen ID.
+    def test_openai_recommended_filter_drops_known_deprecated_ids(self):
+        """Post-W24a the bundled catalog is the RAW live /v1/models
+        response (so legacy ids like ``gpt-4o-mini`` still appear in
+        the catalog). The UX guarantee lives at the filter layer:
+        ``recommended_for()`` must drop the deprecated set that drove
+        the Settings → Providers stale-dropdown bug.
+        """
+        from providers.recommended import recommended_for
         models = _bundled_catalog()["providers"]["openai"]["models"]
-        assert models, "openai.models must not be empty"
-        assert models[0].startswith("gpt-5"), (
-            f"openai.models[0]={models[0]!r} should be a current "
-            "GPT-5 frontier id"
+        recommended = set(recommended_for("openai", models))
+        leaked = _DEPRECATED_OPENAI_IDS & recommended
+        assert not leaked, (
+            f"openai recommended shortlist still contains deprecated IDs "
+            f"that drove the stale-dropdown bug: {sorted(leaked)}"
+        )
+
+    def test_anthropic_recommended_filter_drops_known_deprecated_ids(self):
+        from providers.recommended import recommended_for
+        models = _bundled_catalog()["providers"]["anthropic"]["models"]
+        recommended = set(recommended_for("anthropic", models))
+        leaked = _DEPRECATED_ANTHROPIC_IDS & recommended
+        assert not leaked, (
+            f"anthropic recommended shortlist still contains deprecated "
+            f"3.5/3 IDs: {sorted(leaked)}"
+        )
+
+    def test_gemini_recommended_filter_drops_legacy_20_ids(self):
+        """2.0 / 1.x Gemini ids are still in the raw live catalog
+        (Google hasn't removed them), but the conductor-curated
+        recommended shortlist drops them — new users get 3.1 / 3 / 2.5
+        picks only.
+        """
+        from providers.recommended import recommended_for
+        models = _bundled_catalog()["providers"]["gemini"]["models"]
+        recommended = set(recommended_for("gemini", models))
+        leaked = _DEPRECATED_GEMINI_IDS & recommended
+        assert not leaked, (
+            f"gemini recommended shortlist still contains 2.x IDs: "
+            f"{sorted(leaked)}"
+        )
+
+    def test_openai_recommended_head_is_a_frontier_id(self):
+        """After chat-only + recommended filtering, the first entry
+        must be a current GPT-5 frontier id so fresh installs land on
+        a sensible default via ``default_model_for()``. The raw catalog
+        head might be ``babbage-002`` (alphabetical live /v1/models
+        ordering) — that's expected and handled by the filter layer.
+        """
+        from providers.recommended import recommended_for
+        from providers.model_classes import filter_models
+        models = _bundled_catalog()["providers"]["openai"]["models"]
+        chat_only = filter_models("openai", models, model_class="chat")
+        recommended = recommended_for("openai", chat_only)
+        assert recommended, "openai recommended shortlist must not be empty"
+        assert recommended[0].startswith("gpt-5"), (
+            f"openai recommended[0]={recommended[0]!r} should be a "
+            f"current GPT-5 frontier id (full list: {recommended[:5]}...)"
         )
 
 

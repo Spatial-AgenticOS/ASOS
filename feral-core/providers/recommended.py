@@ -178,12 +178,81 @@ def is_recommended(provider_id: str, model_id: str) -> bool:
     return mid in shortlist
 
 
+# Per-provider tier priority: regex prefix → rank (lower = higher
+# priority). When ``recommended_for`` returns its shortlist, it sorts
+# by (tier_rank, original_index) so the v2 picker's first entry is
+# the flagship, not the alphabetically-first listing. Providers without
+# a priority entry keep caller order.
+_TIER_RANK: dict[str, list[tuple[str, int]]] = {
+    "openai": [
+        ("gpt-5.5-pro", 0),
+        ("gpt-5.5", 1),
+        ("gpt-5.4", 2),
+        ("gpt-5-mini", 3),
+        ("gpt-5", 3),  # tied with mini; stable order preserved
+        ("o4-", 4),
+        ("o3", 5),
+        ("gpt-4.1", 6),  # previous-gen; still recommended but below current
+    ],
+    "anthropic": [
+        ("claude-opus-4-7", 0),
+        ("claude-opus-4-6", 1),
+        ("claude-sonnet-4-6", 2),
+        ("claude-haiku-4-5", 3),
+    ],
+    "gemini": [
+        ("gemini-3.1-pro", 0),
+        ("gemini-3.1-flash", 1),
+        ("gemini-3-pro", 2),
+        ("gemini-3-flash", 3),
+        ("gemini-2.5-pro", 4),
+        ("gemini-2.5-flash", 5),
+        ("gemini-pro-latest", 6),
+        ("gemini-flash-latest", 7),
+    ],
+    "deepseek": [
+        ("deepseek-v4-pro", 0),
+        ("deepseek-v4-flash", 1),
+    ],
+    "groq": [
+        ("llama-3.3-70b", 0),
+        ("meta-llama/llama-4", 1),
+        ("openai/gpt-oss-120b", 2),
+        ("qwen/qwen3-32b", 3),
+        ("llama-3.1-8b", 4),
+        ("groq/compound", 5),
+        ("openai/gpt-oss-20b", 6),
+    ],
+}
+
+
+def _tier_rank(provider_id: str, model_id: str) -> int:
+    rules = _TIER_RANK.get((provider_id or "").lower())
+    if not rules:
+        return 999  # providers without a ladder keep caller order
+    for prefix, rank in rules:
+        if model_id == prefix or model_id.startswith(prefix):
+            return rank
+    return 100  # recommended but outside the explicit ladder
+
+
 def recommended_for(provider_id: str, all_models: list[str]) -> list[str]:
     """Filter ``all_models`` down to the recommended shortlist for
-    ``provider_id``. Preserves caller-supplied order.
+    ``provider_id`` and sort by tier priority.
 
-    Callers that want the raw chat-class list keep using
-    ``BaseProvider.list_models(model_class="chat")`` without passing
+    The first element of the returned list is the conductor's current
+    "best pick" for the provider (gpt-5.5-pro for OpenAI,
+    claude-opus-4-7 for Anthropic, deepseek-v4-pro for DeepSeek, etc.).
+    Ties within a tier keep caller order so live-refresh ordering
+    quirks don't churn the picker.
+
+    Callers that want the raw chat-class list (unsorted, full) keep
+    using ``BaseProvider.list_models(model_class="chat")`` without
     ``recommended=True``.
     """
-    return [m for m in all_models if is_recommended(provider_id, m)]
+    kept = [
+        (i, m) for i, m in enumerate(all_models)
+        if is_recommended(provider_id, m)
+    ]
+    kept.sort(key=lambda pair: (_tier_rank(provider_id, pair[1]), pair[0]))
+    return [m for _, m in kept]
