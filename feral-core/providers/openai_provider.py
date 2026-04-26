@@ -23,26 +23,33 @@ class OpenAIProvider(BaseProvider):
     provider_id = "openai"
     display_name = "OpenAI"
 
-    # Populated from model_catalog.json on load; seed with commonly
-    # available models so a fresh install works before the first
-    # catalog refresh.
+    # Populated from model_catalog.json on load; seed with the verified
+    # 2026-04-24 frontier names so a fresh install lists current models
+    # even before the first live catalog refresh. Keep this list in sync
+    # with feral-core/providers/model_catalog.json (the canonical bundled
+    # source of truth).
     _models = [
+        "gpt-5.5",
+        "gpt-5.5-pro",
+        "gpt-5.5-2026-04-23",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
         "gpt-5",
         "gpt-5-mini",
-        "gpt-4o",
-        "gpt-4o-mini",
-        "o1",
-        "o1-mini",
         "text-embedding-3-small",
         "text-embedding-3-large",
     ]
     _pricing = {
         # USD per 1k tokens — source of truth is model_catalog.json; these
         # are backstops.
+        "gpt-5.5": {"input": 0.006, "output": 0.018},
+        "gpt-5.5-pro": {"input": 0.012, "output": 0.036},
+        "gpt-5.4": {"input": 0.005, "output": 0.015},
+        "gpt-5.4-mini": {"input": 0.0008, "output": 0.0024},
+        "gpt-5.4-nano": {"input": 0.0002, "output": 0.0008},
         "gpt-5": {"input": 0.005, "output": 0.015},
         "gpt-5-mini": {"input": 0.0003, "output": 0.0012},
-        "gpt-4o": {"input": 0.0025, "output": 0.01},
-        "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
     }
     _capabilities = {"tool_calling", "json_mode", "vision", "streaming", "audio_in", "audio_out"}
 
