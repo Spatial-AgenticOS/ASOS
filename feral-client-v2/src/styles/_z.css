@@ -1,0 +1,32 @@
+/*
+ * Stacking-context order constants for the v2 client.
+ *
+ * Why a single source of truth?
+ * Multiple stacking layers (shell, dock, orb, overlays, modals,
+ * toasts) used to live in different .css files with bare numeric
+ * literals. That made the "modal opens but nothing appears" bug at
+ * /devices possible: the PairDeviceModal rendered inside
+ * .v2-shell-main (which itself has a positive z-index) and so its
+ * own z-index resolved inside that stacking context — strictly below
+ * the dock + menubar even though the literal value was higher.
+ *
+ * Names mirror FEATURE_STABILITY_ROADMAP.md Appendix A.2 fix shape:
+ *   z-base    1   — page content (.v2-shell-main, generic page surfaces)
+ *   z-dock   50   — bottom dock + top menubar
+ *   z-orb    60   — persona orb anchor + floating chips
+ *   z-overlay 90  — page-level overlays (e.g. command palette dim)
+ *   z-modal  100  — modal dialogs (Modal.jsx backdrop + Glass card)
+ *   z-toast  110  — toasts/proactive notifications above modals
+ *
+ * Anything above z-toast (e.g. .v2-voice-overlay at 200) is reserved
+ * for full-screen takeovers and stays a numeric literal until W14
+ * unifies the rest of the layers — see docs/AGENT_PROMPTS_FOLLOWUPS.md.
+ */
+:root {
+  --z-base: 1;
+  --z-dock: 50;
+  --z-orb: 60;
+  --z-overlay: 90;
+  --z-modal: 100;
+  --z-toast: 110;
+}

@@ -45,6 +45,19 @@ export default function Devices() {
   const [showPair, setShowPair] = useState(false);
   const [selected, setSelected] = useState(null);
   const [error, setError] = useState(null);
+  // Device IDs that the currently-open PairDeviceModal session has
+  // requested via /api/devices/pair{,/url}. The Brain creates the row
+  // immediately so the next /api/devices/paired poll picks it up,
+  // which is what made a "phantom row" appear the moment the user
+  // clicked "+ Pair new device" — the modal was visually trapped
+  // below the dock (z-index regression, see styles/_z.css) so all the
+  // user perceived was a row materializing without explanation.
+  //
+  // We hold these IDs out of the displayed list until either:
+  //   - the row's claimed_at flips truthy (= pair flow completed), or
+  //   - the modal closes (= the modal revokes the unclaimed token, so
+  //     the next refresh poll won't return it anyway).
+  const [pendingPairIds, setPendingPairIds] = useState(() => new Set());
 
   const refresh = useCallback(async () => {
     try {
@@ -70,6 +83,74 @@ export default function Devices() {
     return () => clearInterval(t);
   }, [refresh]);
 
+  // Drop any pending IDs that the Brain now reports as claimed —
+  // those rows must show up in the historical list so the user sees
+  // the freshly-paired device land. Unclaimed pending IDs stay
+  // hidden until handlePairClose triggers a revoke + refresh.
+  useEffect(() => {
+    setPendingPairIds((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Set(prev);
+      for (const row of paired) {
+        const id = row.device_id || row.id;
+        if (id && next.has(id) && (row.claimed_at || row.last_seen)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [paired]);
+
+  const visiblePaired = useMemo(
+    () => paired.filter((row) => {
+      const id = row.device_id || row.id;
+      if (!id) return true;
+      if (!pendingPairIds.has(id)) return true;
+      // A pending row only stays in the list once pairing completed.
+      return !!(row.claimed_at || row.last_seen);
+    }),
+    [paired, pendingPairIds],
+  );
+
+  const handleTokenIssued = useCallback((deviceId) => {
+    if (!deviceId) return;
+    setPendingPairIds((prev) => {
+      if (prev.has(deviceId)) return prev;
+      const next = new Set(prev);
+      next.add(deviceId);
+      return next;
+    });
+  }, []);
+
+  const handlePairClose = useCallback(() => {
+    setShowPair(false);
+    // Drop any IDs the modal session created — the modal already
+    // revokes unclaimed tokens before invoking onClose, so the next
+    // refresh poll will reflect the truth from the Brain.
+    setPendingPairIds(new Set());
+    refresh();
+  }, [refresh]);
+
+  const handlePaired = useCallback((row) => {
+    // Successful pair: the row should show up in the historical
+    // list. Clear the suppression so the next render picks it up,
+    // close the modal, and trigger a refresh.
+    if (row?.device_id) {
+      setPendingPairIds((prev) => {
+        if (!prev.has(row.device_id)) return prev;
+        const next = new Set(prev);
+        next.delete(row.device_id);
+        return next;
+      });
+    } else {
+      setPendingPairIds(new Set());
+    }
+    setShowPair(false);
+    refresh();
+  }, [refresh]);
+
   const forget = async (id) => {
     if (!window.confirm(`Forget device ${id}? This removes the pairing.`)) return;
     await apiFetch(`/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -92,7 +173,7 @@ export default function Devices() {
         {error && <div className="v2-chip v2-chip--error">{error}</div>}
         {loading && <EmptyState title="Scanning…" />}
 
-        {!loading && connected.length === 0 && paired.length === 0 && mesh.length === 0 && (
+        {!loading && connected.length === 0 && visiblePaired.length === 0 && mesh.length === 0 && (
           <EmptyState
             title="No devices paired yet"
             hint="Pair an iPhone, wristband, smart glasses, or any HUP daemon. FERAL sees their sensors + fires their actuators."
@@ -140,9 +221,9 @@ export default function Devices() {
         </Pane>
       )}
 
-      {paired.length > 0 && (
+      {visiblePaired.length > 0 && (
         <PairedPane
-          paired={paired}
+          paired={visiblePaired}
           onSelect={(d) => setSelected({ ...d, _source: 'paired' })}
           onForget={forget}
           onRefresh={refresh}
@@ -177,8 +258,9 @@ export default function Devices() {
 
       <PairDeviceModal
         open={showPair}
-        onClose={() => { setShowPair(false); refresh(); }}
-        onPaired={() => { setShowPair(false); refresh(); }}
+        onClose={handlePairClose}
+        onPaired={handlePaired}
+        onTokenIssued={handleTokenIssued}
       />
       {selected && <DeviceDetailModal device={selected} onClose={() => setSelected(null)} onForget={forget} />}
     </div>

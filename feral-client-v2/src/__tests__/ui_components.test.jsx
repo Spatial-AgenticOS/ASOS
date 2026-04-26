@@ -49,10 +49,18 @@ describe('Modal', () => {
   });
 
   it('accepts size prop without crashing', () => {
-    const { container } = render(
+    // Modal mounts via React Portal onto document.body to escape the
+    // .v2-shell-main stacking context (W4 fix; see styles/_z.css and
+    // ui/Modal.jsx). Therefore `container.firstChild` is null even
+    // when the modal is open — the rendered nodes live on body. We
+    // assert against the role-named dialog instead, which Testing
+    // Library queries from baseElement (= document.body by default).
+    const { getByRole } = render(
       <Modal open onClose={() => {}} title="T" size="lg">x</Modal>,
     );
-    expect(container.firstChild).toBeInTheDocument();
+    const dlg = getByRole('dialog');
+    expect(dlg).toBeInTheDocument();
+    expect(dlg.className).toContain('v2-modal--lg');
   });
 });
 
