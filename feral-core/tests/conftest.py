@@ -10,6 +10,27 @@ import os
 os.environ.setdefault("FERAL_RATE_LIMIT_RPM", "10000")
 
 
+# W12 (FEATURE_STABILITY_ROADMAP §3.4 #3-4): soak tests are gated behind
+# `--runsoak`. Without the flag every test marked `@pytest.mark.soak` is
+# skipped so the regular CI run stays fast and deterministic.
+def pytest_addoption(parser):
+    parser.addoption(
+        "--runsoak",
+        action="store_true",
+        default=False,
+        help="run @pytest.mark.soak tests (long-duration voice/channel soak)",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--runsoak"):
+        return
+    skip_soak = pytest.mark.skip(reason="needs --runsoak option to run")
+    for item in items:
+        if "soak" in item.keywords:
+            item.add_marker(skip_soak)
+
+
 @pytest.fixture(autouse=True)
 def _disable_api_key_middleware_for_tests(monkeypatch):
     """Starlette TestClient reports client host as 'testclient'; accept that as localhost
