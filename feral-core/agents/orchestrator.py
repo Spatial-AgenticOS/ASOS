@@ -280,6 +280,54 @@ class Orchestrator:
         }
 
     # ─────────────────────────────────────────────
+    # W17 — Subagent spawn (additive)
+    # See docs/OPENCLAW_LESSONS.md §10 W17. Single additive method;
+    # behaviour of every existing handler is unchanged. Spawning is
+    # gated by ``agents.subagent_policy`` and audited via the supervisor.
+    # ─────────────────────────────────────────────
+
+    async def spawn_subsession(
+        self,
+        parent_session_id: str,
+        kind: str,
+        *,
+        scope_key: str,
+        model_override: Optional[str] = None,
+    ) -> str:
+        """Spawn a child subsession of *parent_session_id* (W17).
+
+        Delegates to :func:`agents.subagent_spawner.spawn_subsession`.
+        Raises :class:`agents.subagent_spawner.SubagentNotAllowed` when
+        the policy denies this (parent_kind, child_kind) pair; the deny
+        is logged to the supervisor with ``decision="denied"``.
+        """
+        from agents.subagent_spawner import (
+            register_parent_kind,
+            spawn_subsession as _spawn,
+        )
+        register_parent_kind(parent_session_id, "orchestrator")
+        return await _spawn(
+            parent_session_id,
+            kind,
+            scope_key=scope_key,
+            model_override=model_override,
+        )
+
+    def _w17_cancel_subsessions_nowait(self, parent_session_id: str) -> None:
+        """Sync hook called from the session-lock teardown path (W17).
+
+        All-children-tied by default — every subagent registered under
+        *parent_session_id* is cancelled. Call sites that need to keep
+        a sibling alive must spawn it under a different parent_id or
+        cancel a specific scope before the teardown fires.
+        """
+        try:
+            from agents.subagent_spawner import get_registry
+            get_registry().cancel_all_children_nowait(parent_session_id)
+        except Exception as exc:
+            logger.debug("W17 subagent teardown skipped: %s", exc)
+
+    # ─────────────────────────────────────────────
     # Backward-compat delegation methods
     # (tests / internal code may call these directly)
     # ─────────────────────────────────────────────
@@ -528,8 +576,13 @@ class Orchestrator:
         or interleave tool_call ordering. Different sessions proceed
         fully in parallel.
         """
-        async with self._get_session_lock(session_id):
-            return await self._handle_command_impl(session_id, text, context)
+        try:
+            async with self._get_session_lock(session_id):
+                return await self._handle_command_impl(session_id, text, context)
+        finally:
+            # W17: tear down subagents tied to this parent session.
+            # Lock release stays synchronous; cancellation is fire-and-forget.
+            self._w17_cancel_subsessions_nowait(session_id)
 
     async def _handle_command_impl(self, session_id: str, text: str, context: Optional[dict] = None):
         """Real body of handle_command. Guarded by the session lock above."""
@@ -846,8 +899,12 @@ class Orchestrator:
 
     async def handle_command_stream(self, session_id: str, text: str, context: Optional[dict] = None):
         """Streaming variant of handle_command with a per-session lock."""
-        async with self._get_session_lock(session_id):
-            return await self._handle_command_stream_impl(session_id, text, context)
+        try:
+            async with self._get_session_lock(session_id):
+                return await self._handle_command_stream_impl(session_id, text, context)
+        finally:
+            # W17: tear down subagents tied to this parent session.
+            self._w17_cancel_subsessions_nowait(session_id)
 
     async def _handle_command_stream_impl(self, session_id: str, text: str, context: Optional[dict] = None):
         """

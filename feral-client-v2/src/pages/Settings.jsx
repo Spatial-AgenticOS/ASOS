@@ -1577,6 +1577,37 @@ function TwinSection() {
   const availableUnconfigured = available.filter((a) => !policyDomains.has(a.domain));
   const hasActive = policies.length > 0;
 
+  // A "configured executor" is anything the backend reports as wired
+  // right now — a stored policy whose executor is still bound, or any
+  // discovery entry in `available`. Disconnected entries are stale and
+  // do NOT count, which is what removes the kill-switch theatre on a
+  // brand-new install (Roadmap §A.5 / W2).
+  const hasConfiguredExecutor = policies.length > 0 || available.length > 0;
+
+  // Workaround: TwinSection cannot edit Settings.jsx lines outside its
+  // own range (W2 contract), so it cannot take a real `setSection`
+  // prop yet. The Connect button on each "Available executors" row
+  // therefore clicks the matching settings nav button via the DOM.
+  // Tracked in docs/AGENT_PROMPTS_FOLLOWUPS.md for lifting into props.
+  const navigateToSettingsSection = (target) => {
+    if (typeof document === 'undefined') return;
+    const buttons = document.querySelectorAll('.v2-settings-btn');
+    for (const b of buttons) {
+      if ((b.textContent || '').trim() === target) {
+        b.click();
+        return;
+      }
+    }
+  };
+
+  // Channels-driven domains live under Settings → Channels; the
+  // productivity-flavoured ones (mail, calendar, meetings, readings,
+  // journal) live under Settings → Integrations. Anything else
+  // defaults to Channels.
+  const targetSectionForDomain = (domain) => (
+    /email|calendar|meeting|reading|journal/i.test(domain) ? 'Integrations' : 'Channels'
+  );
+
   return (
     <div className="v2-twin-section">
       <p className="v2-p v2-p--muted">
@@ -1586,36 +1617,43 @@ function TwinSection() {
         and every orchestrator dispatch at once.
       </p>
 
-      <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button
-          type="button"
-          className={`v2-btn ${paused ? 'v2-btn--primary' : ''}`}
-          onClick={togglePause}
+      {hasConfiguredExecutor && (
+        <div
+          style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}
+          data-testid="twin-kill-switch"
         >
-          {paused ? 'Resume all actions' : 'Pause all actions'}
-        </button>
-        <span className="v2-p v2-p--muted v2-p--tiny">
-          {hasActive
-            ? 'Kill switch — pauses every wired twin action at once.'
-            : 'Kill switch — nothing is currently active, but this will block any future wiring too.'}
-        </span>
-      </div>
+          <button
+            type="button"
+            className={`v2-btn ${paused ? 'v2-btn--primary' : ''}`}
+            onClick={togglePause}
+          >
+            {paused ? 'Resume all actions' : 'Pause all actions'}
+          </button>
+          <span className="v2-p v2-p--muted v2-p--tiny">
+            {hasActive
+              ? 'Kill switch — pauses every wired twin action at once.'
+              : 'Kill switch — pauses every executor below the moment you enable a policy.'}
+          </span>
+        </div>
+      )}
 
       {err && <div className="v2-chip v2-chip--error" style={{ marginTop: 8 }}>{err}</div>}
 
-      {!hasActive && disconnected.length === 0 && (
+      {!hasConfiguredExecutor && disconnected.length === 0 && (
         <div
           className="v2-twin-empty"
           data-testid="twin-empty-state"
           style={{ marginTop: 14 }}
         >
           <Glass level={0} radius="md" padding="md">
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>No twin actions wired yet.</div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              No twin executors configured.
+            </div>
             <p className="v2-p v2-p--muted" style={{ margin: 0 }}>
-              Connect a channel under Settings → Channels or wire an integration
-              under Settings → Integrations. Authorised twin actions will appear
-              here as soon as a real executor is ready — until then the twin
-              has nothing to act on.
+              Connect iMessage / email / calendar in the Channels and
+              Integrations sections to enable. Authorised twin actions will
+              appear here as soon as a real executor is ready — until then
+              the twin has nothing to act on.
             </p>
           </Glass>
         </div>
@@ -1692,25 +1730,46 @@ function TwinSection() {
             type="button"
             className="v2-btn v2-btn--ghost"
             onClick={() => setShowAvailable((v) => !v)}
+            aria-expanded={showAvailable}
           >
-            {showAvailable ? 'Hide' : 'Show'} available executors ({availableUnconfigured.length})
+            Available executors ({availableUnconfigured.length}) {showAvailable ? '▾' : '▸'}
           </button>
           {showAvailable && (
-            <div className="v2-twin-domains" style={{ marginTop: 8 }}>
+            <div
+              className="v2-twin-domains"
+              style={{ marginTop: 8 }}
+              data-testid="twin-available-list"
+            >
               {availableUnconfigured.map((a) => {
                 const id = a.domain;
                 const label = _twinLabel(id, a.label);
+                const target = targetSectionForDomain(id);
                 return (
-                  <Glass key={id} level={0} radius="md" padding="sm" className="v2-twin-domain">
+                  <Glass
+                    key={id}
+                    level={0}
+                    radius="md"
+                    padding="sm"
+                    className="v2-twin-domain v2-twin-domain--available"
+                    data-testid={`twin-available-row-${id}`}
+                  >
                     <div className="v2-twin-domain-head">
                       <div>
                         <div className="v2-twin-domain-label">{label}</div>
                         <div className="v2-p v2-p--tiny v2-p--muted">
-                          <code>{id}</code> · executor wired, no policy yet
+                          <code>{id}</code> · off · not connected
                         </div>
                       </div>
                       <div className="v2-twin-domain-actions">
-                        <button type="button" className="v2-btn v2-btn--primary" onClick={() => upsert(id, { mode: 'draft_only' })} disabled={busy}>Set draft policy</button>
+                        <button
+                          type="button"
+                          className="v2-btn v2-btn--primary"
+                          onClick={() => navigateToSettingsSection(target)}
+                          disabled={busy}
+                          aria-label={`Connect ${label} in ${target}`}
+                        >
+                          Connect
+                        </button>
                       </div>
                     </div>
                   </Glass>

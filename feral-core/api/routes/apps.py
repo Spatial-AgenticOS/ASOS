@@ -28,7 +28,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from agents.app_registry import UnverifiedManifestError
 from api.state import state
+from genui.permissions_policy import PolicyViolation
 
 logger = logging.getLogger("feral.api.apps")
 
@@ -152,10 +154,61 @@ class InstallRequest(BaseModel):
     git_url: Optional[str] = None
     registry_id: Optional[str] = None
     overwrite: bool = True
+    # Trust gates wired through to AppRegistry.install_app(). Default
+    # behaviour: refuse unsigned bundles (signing is mandatory). Set
+    # `unsigned=True` to opt into the local-dev flow that emits an
+    # audit "unsigned_install" event without verification.
+    unsigned: bool = False
+    user_high_trust: bool = False
+
+
+def _verified_install_kwargs(req: InstallRequest) -> dict:
+    return {
+        "allow_unsigned": bool(req.unsigned),
+        "user_high_trust": bool(req.user_high_trust),
+        "overwrite": req.overwrite,
+        "vault": getattr(state, "vault", None),
+        "supervisor": getattr(state, "supervisor", None),
+    }
+
+
+def _install_with_signing(registry, source: str, *, req: InstallRequest):
+    """Run install_app and translate exceptions into HTTP envelopes.
+
+    422 — verification refused (UnverifiedManifestError or PolicyViolation).
+    400 — anything else from the install path.
+    """
+    try:
+        return registry.install_app(source, **_verified_install_kwargs(req))
+    except UnverifiedManifestError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "unverified_manifest",
+                "message": str(exc),
+                "remediation": (
+                    "Sign the manifest with `feral app sign <manifest_path>` "
+                    "or pass `unsigned=true` to opt into an unsigned install."
+                ),
+            },
+        )
+    except PolicyViolation as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "permissions_policy_violation",
+                "message": str(exc),
+                "remediation": (
+                    "Narrow `permissions.network` to specific origins, or "
+                    "supply `permissions.justification` AND set "
+                    "`user_high_trust=true` on a signed install."
+                ),
+            },
+        )
 
 
 @router.post("/api/apps/install")
-async def install_app(req: InstallRequest):
+async def install_app(req: InstallRequest, unsigned: Optional[bool] = None):
     registry = _require_registry()
     sources_set = sum(1 for v in (req.path, req.git_url, req.registry_id) if v)
     if sources_set == 0:
@@ -163,9 +216,16 @@ async def install_app(req: InstallRequest):
     if sources_set > 1:
         raise HTTPException(status_code=400, detail="provide exactly one of: path, git_url, registry_id")
 
+    # Query-string `?unsigned=true` shadows the body field so curl-y
+    # callers don't have to re-encode JSON to opt in.
+    if unsigned is not None:
+        req = req.model_copy(update={"unsigned": bool(unsigned)})
+
     if req.path:
         try:
-            app = registry.install_from_dir(req.path, overwrite=req.overwrite)
+            app = _install_with_signing(registry, req.path, req=req)
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return {"success": True, "app": _manifest_summary(app)}
@@ -183,7 +243,9 @@ async def install_app(req: InstallRequest):
                     detail=f"git clone failed: {result.stderr.strip()[:400]}",
                 )
             try:
-                app = registry.install_from_dir(tmp, overwrite=req.overwrite)
+                app = _install_with_signing(registry, str(tmp), req=req)
+            except HTTPException:
+                raise
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
             return {"success": True, "app": _manifest_summary(app)}

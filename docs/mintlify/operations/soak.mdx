@@ -1,0 +1,108 @@
+---
+title: "Soak tests"
+description: "Long-duration voice + channel soak harnesses for catching slow leaks, reconnect storms, and rate-limit cascades."
+---
+
+The soak harness covers two failure modes that the regular CI suite is
+too short to catch:
+
+- **Voice realtime sessions** — the OpenAI Realtime and Gemini Live
+  WebSocket clients run for hours per session in production. A slow
+  task / socket leak will not show up in a 30-second unit test, but
+  pegs RSS within an hour of real traffic.
+- **Channel adapters** — Telegram, Slack, and Discord all have rate
+  limits that only bite once you have been chatting for a while. A
+  back-off bug that re-tries too aggressively will cascade into 429s.
+
+Both harnesses are gated behind the `--runsoak` pytest flag and the
+`@pytest.mark.soak` marker, registered in `feral-core/pyproject.toml`
+and `feral-core/tests/conftest.py`.
+
+## When to run
+
+| Trigger                                  | What runs                                  |
+| ---------------------------------------- | ------------------------------------------ |
+| Nightly cron (`.github/workflows/soak-nightly.yml`) | Voice soak (60 min, fake peers) + channel soak (24 h, env-gated) |
+| Before cutting a release that touches `feral-core/voice/**` or `feral-core/channels/**` | `python scripts/soak/voice.py --provider openai --duration-min 60` and `--provider gemini --duration-min 60`  |
+| Investigating a "voice cuts out after N minutes" bug | Run the voice harness with `--reconnect-interval-sec` matching the suspected churn cadence |
+| Investigating "channel posts silently dropped" | Run the channel harness against the affected provider with the staging bot token |
+
+## Local smoke check
+
+The harnesses respect a `FERAL_SOAK_DURATION_MIN` env var so you do not
+need to wait an hour to know they import cleanly:
+
+```bash
+cd feral-core
+FERAL_SOAK_DURATION_MIN=1 FERAL_SOAK_RECONNECT_SEC=15 \
+    pytest tests/test_voice_soak.py --runsoak --no-cov -s
+
+FERAL_SOAK_DURATION_MIN=1 FERAL_SOAK_INTERVAL_SEC=5 \
+    FERAL_SOAK_DISCORD_WEBHOOK="https://discord.com/api/webhooks/..." \
+    pytest tests/test_channels_soak.py::test_discord_channel_soak \
+        --runsoak --no-cov -s
+```
+
+A clean run prints a single summary line per test (`[VOICE SOAK / openai] PASS: ...`).
+
+## Expected metrics
+
+### Voice (`tests/test_voice_soak.py` / `scripts/soak/voice.py`)
+
+| Metric                | Pass condition                                 |
+| --------------------- | ---------------------------------------------- |
+| Reconnect cycles      | `>= 1` (and matches `duration / reconnect_interval` within ±1) |
+| Audio frames sent     | `> 0` and grows linearly with duration         |
+| RSS growth            | `< 50 MB` over the run (configurable via `FERAL_SOAK_RSS_BUDGET_KB`) |
+
+### Channels (`tests/test_channels_soak.py` / `scripts/soak/channels.py`)
+
+| Metric                | Pass condition                                 |
+| --------------------- | ---------------------------------------------- |
+| Success rate          | `>= 99%`                                       |
+| Auth failures         | `0` (no 401 / 403 mid-run)                     |
+| Rate-limit rate       | `<= 1%` of attempts come back 429              |
+| Consecutive 429s      | `<= 1` (any back-to-back 429 = cascade)        |
+
+## Required env / secrets
+
+Voice soak needs nothing — both peers are in-process fakes.
+
+Channel soak skips cleanly unless its env vars are set. In the nightly
+workflow these come from repo secrets:
+
+| Channel  | Env vars                                                    |
+| -------- | ----------------------------------------------------------- |
+| Telegram | `FERAL_SOAK_TELEGRAM_TOKEN`, `FERAL_SOAK_TELEGRAM_CHAT_ID`  |
+| Slack    | `FERAL_SOAK_SLACK_TOKEN`, `FERAL_SOAK_SLACK_CHANNEL`        |
+| Discord  | `FERAL_SOAK_DISCORD_WEBHOOK`                                |
+
+Use **personal staging bots** in dedicated channels — never point the
+soak at a production workspace, the 24-hour heartbeat will be very
+visible.
+
+## Escalation path
+
+The nightly workflow runs with `continue-on-error: true` so a single
+red soak never blocks the morning's regular CI on `main`. Triage steps:
+
+1. Pull the per-job artifact (`voice-soak-logs` or `channels-soak-logs`)
+   from the failed run; the log contains the full pytest output and the
+   one-line PASS/FAIL summary per test.
+2. **Voice failures** — if `rss_growth_kb` is the trigger, suspect a
+   leaked task or unclosed WebSocket in the relevant client module
+   (`feral-core/voice/realtime_proxy.py` or `gemini_realtime.py`). Check
+   recent commits to those files first.
+3. **Channel failures** — if `auth_failures > 0`, the staging bot token
+   was rotated or revoked; re-issue and update the secret. If
+   `rate_limited` is the trigger, audit the adapter's back-off logic in
+   `feral-core/channels/`.
+4. Open a roadmap-impact issue tagged `release-impact:behavior` and
+   page the W12 owner.
+
+## Roadmap
+
+This harness closes **§3.4 #3-4** of `FEATURE_STABILITY_ROADMAP.md`
+(voice + channel soak). The roadmap entry stays open as a maintenance
+gate: any future change to the watched modules must keep these tests
+green.

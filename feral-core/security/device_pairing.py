@@ -5,10 +5,46 @@ SQLite-backed registry of paired edge-node devices.
 
 Each paired device gets a unique token that replaces the old
 single ``NODE_API_KEY`` for authenticating ``/v1/node`` connections.
+
+W9 — hashing + TTL
+------------------
+Tokens are no longer stored in plaintext. The on-disk schema keeps:
+
+  - ``token_lookup`` — SHA-256 of the plaintext token, used as a
+    deterministic O(1) lookup index. Pairing tokens are 256-bit random
+    so SHA-256 alone provides ample preimage resistance for the lookup
+    role; the hash is NOT the password verifier.
+  - ``token_hash``   — Argon2id (or bcrypt cost=12 fallback) verifier
+    of the same plaintext. Both must match for a verify to succeed.
+  - ``ttl_seconds``  — re-pair window; default 86400s (24h).
+  - ``expires_at``   — wall-clock epoch seconds; ``verify_device``
+    rejects rows where ``expires_at <= now``.
+
+Plaintext is returned to the client EXACTLY ONCE at issue time
+(``pair_device`` return value). After that the brain has no way to
+recover it; that is the security property we want.
+
+Migration
+---------
+Pre-W9 rows had a plaintext ``token`` column. On first boot under W9:
+  1. The schema gains the new columns.
+  2. A sibling table ``needs_rotation_log`` is created.
+  3. Every legacy row (rows where ``token`` is non-null AND
+     ``token_hash`` is null) is copied into ``needs_rotation_log``
+     (device_id, name, paired_at, logged_at, reason).
+  4. Their ``token`` and ``token_lookup`` columns are nulled out so the
+     plaintext never survives on disk.
+  5. ``token`` column is then DROPPED via SQLite ``ALTER TABLE``.
+     If the runtime is on SQLite < 3.35 (no DROP COLUMN), we fall back
+     to leaving the column in place but permanently NULL — operators
+     are told via the brain log to upgrade SQLite at their convenience.
+  6. The brain prints a one-time line per migrated device on the next
+     daemon connection so the user knows to re-pair.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import secrets
@@ -20,6 +56,142 @@ from typing import Optional
 from uuid import uuid4
 
 logger = logging.getLogger("feral.device_pairing")
+
+# Argon2id parameters — these match the defaults of argon2-cffi's
+# ``PasswordHasher`` as of 23.x. We pin them so a future upstream
+# default-tuning change doesn't silently invalidate stored hashes
+# (Argon2 verifiers carry their parameters in the encoded string, so
+# verify still works, but new hashes would no longer be byte-identical
+# to old ones — which is fine; we never compare hashes by string).
+ARGON2_TIME_COST = 3
+ARGON2_MEMORY_COST = 65536  # 64 MiB
+ARGON2_PARALLELISM = 4
+ARGON2_HASH_LEN = 32
+ARGON2_SALT_LEN = 16
+
+# bcrypt fallback cost — only used when argon2-cffi import genuinely
+# fails (per the W9 charter). Logged at WARNING so operators see the
+# downgrade.
+BCRYPT_COST = 12
+
+# Default TTL for issued pair tokens. 24h is the W9 default; callers
+# may override per-pair via ``pair_device(ttl_seconds=...)``.
+DEFAULT_TTL_SECONDS = 86_400
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Hash backend (argon2id primary, bcrypt fallback)
+# ─────────────────────────────────────────────────────────────────────
+
+
+class _Argon2Backend:
+    """argon2-cffi-backed hasher. Encoded strings start with ``$argon2id$``."""
+
+    name = "argon2id"
+
+    def __init__(self):
+        from argon2 import PasswordHasher
+        from argon2.exceptions import VerifyMismatchError, InvalidHashError
+
+        self._ph = PasswordHasher(
+            time_cost=ARGON2_TIME_COST,
+            memory_cost=ARGON2_MEMORY_COST,
+            parallelism=ARGON2_PARALLELISM,
+            hash_len=ARGON2_HASH_LEN,
+            salt_len=ARGON2_SALT_LEN,
+        )
+        self._VerifyMismatchError = VerifyMismatchError
+        self._InvalidHashError = InvalidHashError
+
+    def hash(self, plaintext: str) -> str:
+        return self._ph.hash(plaintext)
+
+    def verify(self, encoded: str, plaintext: str) -> bool:
+        if not encoded:
+            return False
+        try:
+            return self._ph.verify(encoded, plaintext)
+        except (
+            self._VerifyMismatchError,
+            self._InvalidHashError,
+        ):
+            return False
+        except Exception as exc:
+            # Anything else (corrupt encoded blob, OS-level argon2 bug)
+            # is logged so the operator sees it; we treat it as a
+            # verification failure rather than crashing the daemon.
+            logger.warning("argon2.verify_unexpected_error: %s", exc)
+            return False
+
+
+class _BcryptBackend:
+    """bcrypt cost=12 fallback. Used only when argon2-cffi is missing."""
+
+    name = "bcrypt"
+
+    def __init__(self):
+        import bcrypt
+        self._bcrypt = bcrypt
+
+    def hash(self, plaintext: str) -> str:
+        salt = self._bcrypt.gensalt(rounds=BCRYPT_COST)
+        return self._bcrypt.hashpw(plaintext.encode(), salt).decode()
+
+    def verify(self, encoded: str, plaintext: str) -> bool:
+        if not encoded:
+            return False
+        try:
+            return self._bcrypt.checkpw(plaintext.encode(), encoded.encode())
+        except Exception as exc:
+            logger.warning("bcrypt.verify_unexpected_error: %s", exc)
+            return False
+
+
+def _choose_backend():
+    """Pick argon2id; fall back to bcrypt with a WARNING (no silent swap)."""
+    try:
+        return _Argon2Backend()
+    except ImportError as exc:
+        try:
+            backend = _BcryptBackend()
+        except ImportError as bcrypt_exc:
+            raise RuntimeError(
+                "Neither argon2-cffi nor bcrypt is available. Pairing "
+                "tokens cannot be hashed at rest. Install one of them: "
+                "`pip install argon2-cffi` (preferred) or "
+                "`pip install bcrypt`."
+            ) from bcrypt_exc
+        logger.warning(
+            "device_pairing.argon2_unavailable: %s — falling back to "
+            "bcrypt (cost=%d). Install argon2-cffi for the W9-recommended "
+            "hashing parameters.",
+            exc, BCRYPT_COST,
+        )
+        return backend
+
+
+_backend = None
+
+
+def _get_backend():
+    global _backend
+    if _backend is None:
+        _backend = _choose_backend()
+    return _backend
+
+
+def _token_lookup(token: str) -> str:
+    """Deterministic, fast lookup index for the plaintext token.
+
+    Pairing tokens are 256-bit random; a SHA-256 over them is preimage-
+    resistant in the strongest practical sense. We use this purely as
+    an O(1) row index — actual verification is the argon2 hash."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# DevicePairingStore
+# ─────────────────────────────────────────────────────────────────────
 
 
 class DevicePairingStore:
@@ -35,6 +207,7 @@ class DevicePairingStore:
             db_path = str(Path(home) / "paired_devices.db")
         self._db_path = db_path
         self._lock = threading.Lock()
+        self._migration_summary: dict = {"migrated": [], "kept_token_column": False}
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
@@ -43,39 +216,238 @@ class DevicePairingStore:
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
+    # ── Schema setup + migration ───────────────────────────────────
+
     def _init_db(self) -> None:
         with self._lock:
             conn = self._conn()
             try:
+                # Base table — fresh installs land here directly.
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS paired_devices (
                         device_id  TEXT PRIMARY KEY,
-                        token      TEXT NOT NULL UNIQUE,
                         name       TEXT NOT NULL,
                         paired_at  REAL NOT NULL,
                         last_seen  REAL
                     )
                 """)
+                # needs_rotation_log — populated during migration; stays
+                # around so the brain can show "these devices need re-pair"
+                # in the UI long after the migration boot.
                 conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_pd_token
-                    ON paired_devices(token)
+                    CREATE TABLE IF NOT EXISTS needs_rotation_log (
+                        device_id   TEXT PRIMARY KEY,
+                        name        TEXT,
+                        paired_at   REAL,
+                        logged_at   REAL NOT NULL,
+                        reason      TEXT NOT NULL,
+                        announced   INTEGER NOT NULL DEFAULT 0
+                    )
                 """)
-                # Additive migrations. Silent-skip when already present so
-                # re-running on an existing DB is safe.
-                for col, decl in (
-                    ("kind", "TEXT"),             # "browser" / "hup" / "name"
-                    ("node_id", "TEXT"),          # free-form daemon id (optional)
-                    ("claimed_at", "REAL"),       # set when /v1/node authed with this token
-                    ("platform", "TEXT"),         # ua / os for browser clients
-                    ("capabilities", "TEXT"),     # JSON-encoded list
-                ):
-                    try:
-                        conn.execute(f"ALTER TABLE paired_devices ADD COLUMN {col} {decl}")
-                    except sqlite3.OperationalError:
-                        pass
+
+                # Additive column migrations. Silent-skip when already
+                # present so re-running on an existing DB is safe.
+                self._add_column_if_missing(conn, "paired_devices", "kind", "TEXT")
+                self._add_column_if_missing(conn, "paired_devices", "node_id", "TEXT")
+                self._add_column_if_missing(conn, "paired_devices", "claimed_at", "REAL")
+                self._add_column_if_missing(conn, "paired_devices", "platform", "TEXT")
+                self._add_column_if_missing(conn, "paired_devices", "capabilities", "TEXT")
+
+                # W9 columns.
+                self._add_column_if_missing(
+                    conn, "paired_devices", "token_lookup", "TEXT",
+                )
+                self._add_column_if_missing(
+                    conn, "paired_devices", "token_hash", "TEXT",
+                )
+                self._add_column_if_missing(
+                    conn, "paired_devices", "hash_algo", "TEXT",
+                )
+                self._add_column_if_missing(
+                    conn, "paired_devices", "ttl_seconds", "INTEGER",
+                    default=str(DEFAULT_TTL_SECONDS),
+                )
+                self._add_column_if_missing(
+                    conn, "paired_devices", "expires_at", "INTEGER",
+                )
+
+                # Add the legacy `token` column so old DBs upgrade
+                # cleanly even when they pre-date that column. Fresh
+                # installs don't have it (see CREATE TABLE above) so
+                # this is a no-op for them — _add_column_if_missing
+                # quietly skips when the column exists.
+                self._add_column_if_missing(conn, "paired_devices", "token", "TEXT")
+
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pd_token_lookup "
+                    "ON paired_devices(token_lookup)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pd_expires_at "
+                    "ON paired_devices(expires_at)"
+                )
+                conn.commit()
+
+                # Migrate any pre-W9 rows: copy to needs_rotation_log,
+                # null out the plaintext token, drop the column.
+                self._migrate_legacy_plaintext_rows(conn)
+
                 conn.commit()
             finally:
                 conn.close()
+
+    @staticmethod
+    def _add_column_if_missing(
+        conn: sqlite3.Connection,
+        table: str,
+        column: str,
+        decl: str,
+        *,
+        default: Optional[str] = None,
+    ) -> None:
+        cols = {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column in cols:
+            return
+        suffix = f" DEFAULT {default}" if default is not None else ""
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}{suffix}")
+
+    def _migrate_legacy_plaintext_rows(self, conn: sqlite3.Connection) -> dict:
+        """One-shot migration: log every legacy plaintext row to
+        needs_rotation_log, then nuke the plaintext token. Returns a
+        summary the caller can surface in tests / boot logs.
+
+        Idempotent: rows that have already been logged + nulled are
+        skipped.
+        """
+        cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(paired_devices)").fetchall()
+        }
+        if "token" not in cols:
+            # Already on the post-migration schema (e.g. fresh install).
+            return {"migrated": [], "dropped_token_column": True}
+
+        rows = conn.execute(
+            "SELECT device_id, name, paired_at, token "
+            "FROM paired_devices "
+            "WHERE token IS NOT NULL AND token != '' "
+            "AND (token_hash IS NULL OR token_hash = '')"
+        ).fetchall()
+
+        now = time.time()
+        migrated: list[str] = []
+        for row in rows:
+            device_id = row["device_id"]
+            conn.execute(
+                "INSERT OR REPLACE INTO needs_rotation_log "
+                "(device_id, name, paired_at, logged_at, reason, announced) "
+                "VALUES (?, ?, ?, ?, ?, 0)",
+                (
+                    device_id,
+                    row["name"],
+                    row["paired_at"],
+                    now,
+                    "w9_plaintext_to_hash_migration",
+                ),
+            )
+            migrated.append(device_id)
+
+        # Try to DROP COLUMN token (SQLite >= 3.35.0). On older SQLite
+        # this raises OperationalError; we then NULL/empty the column
+        # in place. Doing the drop FIRST avoids the NOT NULL constraint
+        # that the legacy schema enforced on the `token` column.
+        dropped = False
+        try:
+            conn.execute("ALTER TABLE paired_devices DROP COLUMN token")
+            dropped = True
+        except sqlite3.OperationalError as exc:
+            logger.warning(
+                "device_pairing.drop_column_unsupported: %s — leaving "
+                "the legacy `token` column in place; it will be set to "
+                "empty string for the migrated rows. Upgrade to SQLite "
+                ">= 3.35 for full schema cleanup.",
+                exc,
+            )
+
+        # Now scrub the auxiliary state on every migrated row. If the
+        # column was dropped we just need to clear lookup/hash; if not
+        # (older SQLite), set token to '' to preserve the NOT NULL
+        # constraint while keeping plaintext off disk.
+        for device_id in migrated:
+            if dropped:
+                conn.execute(
+                    "UPDATE paired_devices "
+                    "SET token_lookup = NULL, token_hash = NULL, "
+                    "    hash_algo = NULL, expires_at = ? "
+                    "WHERE device_id = ?",
+                    (int(now), device_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE paired_devices "
+                    "SET token = '', token_lookup = NULL, "
+                    "    token_hash = NULL, hash_algo = NULL, "
+                    "    expires_at = ? "
+                    "WHERE device_id = ?",
+                    (int(now), device_id),
+                )
+
+        if migrated:
+            logger.info(
+                "device_pairing.migrated_to_hashed: %d legacy device(s) "
+                "logged to needs_rotation_log and invalidated. The user "
+                "must re-pair each device on its next daemon connection.",
+                len(migrated),
+            )
+        self._migration_summary = {
+            "migrated": migrated,
+            "dropped_token_column": dropped,
+        }
+        return self._migration_summary
+
+    @property
+    def migration_summary(self) -> dict:
+        """Return the result of the most recent _init_db migration step.
+
+        Tests use this to assert "every legacy row landed in
+        needs_rotation_log"; the brain boot path uses it to print the
+        one-time per-device announcement."""
+        return dict(self._migration_summary)
+
+    def needs_rotation(self) -> list[dict]:
+        """Return all devices flagged as needing re-pair."""
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT device_id, name, paired_at, logged_at, reason, "
+                "       announced "
+                "FROM needs_rotation_log "
+                "ORDER BY logged_at DESC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def acknowledge_rotation(self, device_id: str) -> bool:
+        """Mark a needs-rotation entry as announced (so the brain
+        doesn't spam the same warning on every daemon connection)."""
+        with self._lock:
+            conn = self._conn()
+            try:
+                cur = conn.execute(
+                    "UPDATE needs_rotation_log SET announced = 1 "
+                    "WHERE device_id = ?",
+                    (device_id,),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    # ── pair / verify / mark_claimed ───────────────────────────────
 
     def pair_device(
         self,
@@ -85,46 +457,79 @@ class DevicePairingStore:
         node_id: str = "",
         platform: str = "",
         capabilities: Optional[list[str]] = None,
+        ttl_seconds: int = DEFAULT_TTL_SECONDS,
     ) -> dict:
         """Register a new device.
 
         Args:
             name: human-readable label the user sees in Devices.
-            kind: ``"name"`` (default pair-modal label), ``"browser"`` (a
-                browser-node attach), ``"hup"`` (daemon registering with
-                explicit node_id + capabilities). This is the "typed body"
-                the v2 PairDeviceModal needed for its HUP tab.
+            kind: ``"name"`` (default pair-modal label), ``"browser"``
+                (a browser-node attach), ``"hup"`` (daemon registering
+                with explicit node_id + capabilities). This is the
+                "typed body" the v2 PairDeviceModal needed for its HUP
+                tab.
             node_id: optional authoritative id the daemon will register
                 with on /v1/node (only used by kind="hup").
             platform: user-agent / platform hint for browser clients.
-            capabilities: declared capabilities (camera / mic / location /
-                heart_rate / …), JSON-encoded in storage.
+            capabilities: declared capabilities (camera / mic / location
+                / heart_rate / …), JSON-encoded in storage.
+            ttl_seconds: how long this pairing is valid for. Default
+                24h. Overridable per-pair (e.g. setup-wizard short-lived
+                tokens use 600s).
 
-        Returns ``{device_id, token, name, paired_at, kind, node_id?, …}``.
+        Returns ``{device_id, token, name, paired_at, expires_at,
+        ttl_seconds, kind, node_id?, …}``. The plaintext ``token`` is
+        included EXACTLY ONCE here; subsequent reads via
+        :meth:`list_devices` will not contain it.
         """
         import json as _json
+
+        if ttl_seconds <= 0:
+            raise ValueError(
+                f"ttl_seconds must be positive (got {ttl_seconds})"
+            )
+
         device_id = str(uuid4())
         token = secrets.token_hex(32)
         now = time.time()
+        expires_at = int(now) + int(ttl_seconds)
         caps_text = _json.dumps(list(capabilities or []))
+
+        backend = _get_backend()
+        token_hash = backend.hash(token)
+        token_lookup = _token_lookup(token)
+
         with self._lock:
             conn = self._conn()
             try:
                 conn.execute(
                     """INSERT INTO paired_devices
-                       (device_id, token, name, paired_at, kind, node_id, platform, capabilities)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (device_id, token, name, now, kind, node_id or "", platform or "", caps_text),
+                       (device_id, name, paired_at, kind, node_id,
+                        platform, capabilities, token_lookup, token_hash,
+                        hash_algo, ttl_seconds, expires_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        device_id, name, now, kind, node_id or "",
+                        platform or "", caps_text,
+                        token_lookup, token_hash, backend.name,
+                        int(ttl_seconds), expires_at,
+                    ),
                 )
                 conn.commit()
             finally:
                 conn.close()
-        logger.info("Paired device %s (%s, kind=%s, node=%s)", device_id, name, kind, node_id or "-")
+
+        logger.info(
+            "Paired device %s (%s, kind=%s, node=%s, ttl=%ss)",
+            device_id, name, kind, node_id or "-", ttl_seconds,
+        )
         return {
             "device_id": device_id,
             "token": token,
             "name": name,
             "paired_at": now,
+            "expires_at": expires_at,
+            "ttl_seconds": int(ttl_seconds),
             "kind": kind,
             "node_id": node_id or "",
             "platform": platform or "",
@@ -138,18 +543,31 @@ class DevicePairingStore:
         tokens that were issued-but-never-used from live paired devices.
         Returns the device_id on success.
         """
+        if not token:
+            return None
+        lookup = _token_lookup(token)
         now = time.time()
         with self._lock:
             conn = self._conn()
             try:
                 row = conn.execute(
-                    "SELECT device_id FROM paired_devices WHERE token = ?", (token,),
+                    "SELECT device_id, token_hash, expires_at "
+                    "FROM paired_devices WHERE token_lookup = ?",
+                    (lookup,),
                 ).fetchone()
                 if row is None:
                     return None
+                if not _get_backend().verify(row["token_hash"], token):
+                    # Hash mismatch on a SHA-256 lookup hit is
+                    # vanishingly unlikely (256-bit random tokens), but
+                    # we still gate on argon2-verify for safety.
+                    return None
+                if row["expires_at"] is not None and row["expires_at"] <= int(now):
+                    return None
                 conn.execute(
-                    "UPDATE paired_devices SET claimed_at = ?, last_seen = ? WHERE token = ?",
-                    (now, now, token),
+                    "UPDATE paired_devices SET claimed_at = ?, last_seen = ? "
+                    "WHERE device_id = ?",
+                    (now, now, row["device_id"]),
                 )
                 conn.commit()
                 return row["device_id"]
@@ -157,40 +575,75 @@ class DevicePairingStore:
                 conn.close()
 
     def verify_device(self, token: str) -> Optional[str]:
-        """Return the ``device_id`` for *token*, or ``None`` if invalid.
+        """Return the ``device_id`` for *token*, or ``None`` if the
+        token is unknown, expired, or fails hash verification.
 
-        Also bumps ``last_seen`` on a valid lookup.
+        Successful verifications also extend ``expires_at`` by
+        ``ttl_seconds`` (sliding window) and bump ``last_seen``.
+        Failures do NOT increment any retry counter — the existing
+        rate-limit logic at the HTTP layer handles brute-force
+        protection (see api/server.py + tests/test_session_auth.py).
         """
+        if not token:
+            return None
+        lookup = _token_lookup(token)
         conn = self._conn()
         try:
             row = conn.execute(
-                "SELECT device_id FROM paired_devices WHERE token = ?", (token,)
+                "SELECT device_id, token_hash, expires_at, ttl_seconds "
+                "FROM paired_devices WHERE token_lookup = ?",
+                (lookup,),
             ).fetchone()
-            if row is None:
-                return None
-            device_id = row["device_id"]
         finally:
             conn.close()
+
+        if row is None:
+            return None
+        if not _get_backend().verify(row["token_hash"], token):
+            return None
+        now = int(time.time())
+        if row["expires_at"] is not None and row["expires_at"] <= now:
+            logger.info(
+                "device_pairing.token_expired: device_id=%s expires_at=%s "
+                "(now=%s)",
+                row["device_id"], row["expires_at"], now,
+            )
+            return None
+
+        device_id = row["device_id"]
+        new_expiry = now + int(row["ttl_seconds"] or DEFAULT_TTL_SECONDS)
         with self._lock:
             conn = self._conn()
             try:
                 conn.execute(
-                    "UPDATE paired_devices SET last_seen = ? WHERE device_id = ?",
-                    (time.time(), device_id),
+                    "UPDATE paired_devices SET last_seen = ?, expires_at = ? "
+                    "WHERE device_id = ?",
+                    (time.time(), new_expiry, device_id),
                 )
                 conn.commit()
             finally:
                 conn.close()
         return device_id
 
+    # ── Listing / revocation ───────────────────────────────────────
+
     def list_devices(self) -> list[dict]:
-        """Return all paired devices with the typed metadata."""
+        """Return all paired devices with the typed metadata.
+
+        Note: post-W9, ``token`` is NEVER included — the plaintext
+        cannot be recovered from storage. Callers that need to identify
+        a row should use ``device_id`` (from the ``pair_device`` return
+        value) or ``token_lookup`` (deterministic SHA-256 of the
+        plaintext token, useful for "did the row I issued just now
+        survive?" assertions).
+        """
         import json as _json
         conn = self._conn()
         try:
             rows = conn.execute(
-                """SELECT device_id, token, name, paired_at, last_seen,
-                          kind, node_id, claimed_at, platform, capabilities
+                """SELECT device_id, name, paired_at, last_seen,
+                          kind, node_id, claimed_at, platform, capabilities,
+                          token_lookup, ttl_seconds, expires_at, hash_algo
                    FROM paired_devices
                    ORDER BY paired_at DESC"""
             ).fetchall()
@@ -203,7 +656,6 @@ class DevicePairingStore:
                     caps = []
                 out.append({
                     "device_id": r["device_id"],
-                    "token": r["token"],
                     "name": r["name"],
                     "paired_at": r["paired_at"],
                     "last_seen": r["last_seen"],
@@ -212,6 +664,10 @@ class DevicePairingStore:
                     "claimed_at": r["claimed_at"] if "claimed_at" in r.keys() else None,
                     "platform": r["platform"] if "platform" in r.keys() else "",
                     "capabilities": caps,
+                    "token_lookup": r["token_lookup"],
+                    "ttl_seconds": r["ttl_seconds"],
+                    "expires_at": r["expires_at"],
+                    "hash_algo": r["hash_algo"],
                 })
             return out
         finally:

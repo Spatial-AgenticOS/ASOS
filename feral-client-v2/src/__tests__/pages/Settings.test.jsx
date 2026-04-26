@@ -232,4 +232,133 @@ describe('Settings', () => {
     expect(await findByTestId('twin-disconnected')).toBeInTheDocument();
     expect((await findAllByText(/Disconnected/i)).length).toBeGreaterThan(0);
   });
+
+  // ── Twin no-theatre contract (W2 / Roadmap §A.5) ─────────────
+  // The three tests below pin the no-theatre contract: when the
+  // backend has zero configured executors the Settings → Twin block
+  // is allowed to render copy + a CTA, but it MUST NOT render the
+  // Pause/Resume kill switch (there is nothing to pause), and
+  // available-but-not-yet-connected executors render a Connect
+  // affordance with zero toggles. When at least one executor is
+  // configured the kill switch must be present and clicking it
+  // must hit the supervisor pause endpoint (the kill switch covers
+  // the whole supervisor — twin + orchestrator — there is no
+  // narrower /api/twin/pause route by design).
+
+  it('twin-empty-state contract: empty policies AND empty available hides the Pause/Resume kill switch', async () => {
+    const fetcher = (url) => {
+      if (url.includes('/api/twin/policies')) {
+        // Mirrors the integrations/twin/status `{ configured: [] }`
+        // contract spec'd in docs/AGENT_PROMPTS.md §D.W2: when the
+        // backend has no wired executors at all, both `policies`
+        // and `available` come back empty.
+        return { policies: [], disconnected: [], available: [] };
+      }
+      if (url.includes('/api/twin/approvals')) return { approvals: [] };
+      if (url.includes('/api/supervisor/stats')) return { paused: false };
+      return providersResponder(url);
+    };
+    const {
+      getByText,
+      findByTestId,
+      queryByTestId,
+      queryByRole,
+    } = renderV2(<Settings />, { fetch: fetcher });
+    fireEvent.click(getByText(/^Twin$/));
+    expect(await findByTestId('twin-empty-state')).toBeInTheDocument();
+    // No kill-switch container.
+    expect(queryByTestId('twin-kill-switch')).toBeNull();
+    // No Pause / Resume button accessible by role.
+    expect(queryByRole('button', { name: /Pause all actions/i })).toBeNull();
+    expect(queryByRole('button', { name: /Resume all actions/i })).toBeNull();
+  });
+
+  it('twin-non-configured-toggle-absent contract: an "available" row offers a single Connect button and zero checkboxes', async () => {
+    const fetcher = (url) => {
+      if (url.includes('/api/twin/policies')) {
+        // `available` lists a wired executor that the user has not
+        // turned into a stored policy yet. This bucket must NEVER
+        // render a toggle / checkbox — only a Connect affordance
+        // that points the user at Channels / Integrations.
+        return {
+          policies: [],
+          disconnected: [],
+          available: [{ domain: 'reply_slack', label: '' }],
+        };
+      }
+      if (url.includes('/api/twin/approvals')) return { approvals: [] };
+      if (url.includes('/api/supervisor/stats')) return { paused: false };
+      return providersResponder(url);
+    };
+    const {
+      getByText,
+      findByRole,
+      findByTestId,
+      container,
+    } = renderV2(<Settings />, { fetch: fetcher });
+    fireEvent.click(getByText(/^Twin$/));
+    // Expand the default-collapsed Available executors panel.
+    const expander = await findByRole('button', {
+      name: /Available executors/i,
+    });
+    fireEvent.click(expander);
+    const row = await findByTestId('twin-available-row-reply_slack');
+    expect(row).toBeInTheDocument();
+    // Exactly one Connect button on the row.
+    const connectBtns = row.querySelectorAll('button');
+    const connectMatches = Array.from(connectBtns).filter(
+      (b) => /^Connect/i.test((b.textContent || '').trim()),
+    );
+    expect(connectMatches.length).toBe(1);
+    // Zero <input type="checkbox" /> in the entire Twin block — the
+    // contract bans toggles on non-configured rows and there should
+    // be none anywhere else in the section either.
+    expect(container.querySelectorAll('input[type="checkbox"]').length).toBe(0);
+  });
+
+  it('twin-kill-switch-conditional contract: a configured executor renders the kill switch and clicking it pauses the supervisor', async () => {
+    // The contract bullet says "POST /api/twin/pause" but no such
+    // narrower route exists by design — the kill switch covers the
+    // whole supervisor (twin + orchestrator dispatch), so the v2
+    // client posts to /api/supervisor/pause. We assert the actual
+    // canonical endpoint instead of weakening the test.
+    const calls = [];
+    const fetcher = (url, init) => {
+      calls.push({ url, method: init?.method || 'GET' });
+      if (url.includes('/api/twin/policies')) {
+        return {
+          policies: [
+            {
+              domain: 'reply_slack',
+              mode: 'draft_only',
+              time_windows: [],
+              max_per_day: 10,
+              requires_user_online: false,
+              wired: true,
+              label: '',
+            },
+          ],
+          disconnected: [],
+          available: [{ domain: 'reply_slack', label: '' }],
+        };
+      }
+      if (url.includes('/api/twin/approvals')) return { approvals: [] };
+      if (url.includes('/api/supervisor/stats')) return { paused: false };
+      if (url.includes('/api/supervisor/pause')) return { paused: true };
+      return providersResponder(url);
+    };
+    const { getByText, findByRole } = renderV2(<Settings />, {
+      fetch: fetcher,
+    });
+    fireEvent.click(getByText(/^Twin$/));
+    const pauseBtn = await findByRole('button', { name: /Pause all actions/i });
+    expect(pauseBtn).toBeInTheDocument();
+    fireEvent.click(pauseBtn);
+    await waitFor(() => {
+      const hit = calls.find(
+        (c) => c.url.includes('/api/supervisor/pause') && c.method === 'POST',
+      );
+      expect(hit).toBeTruthy();
+    });
+  });
 });

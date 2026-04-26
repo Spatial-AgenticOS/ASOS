@@ -102,7 +102,7 @@ def test_demo_step_2_install_from_manifest(brain, tmp_path):
     src.mkdir()
     (src / "manifest.yaml").write_text(DEMO_MANIFEST)
 
-    r = c.post("/api/apps/install", json={"path": str(src), "overwrite": True})
+    r = c.post("/api/apps/install", json={"path": str(src), "overwrite": True, "unsigned": True})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] is True
@@ -115,7 +115,7 @@ def test_demo_step_3_fetch_manifest(brain, tmp_path):
     src = tmp_path / "src-demo"
     src.mkdir()
     (src / "manifest.yaml").write_text(DEMO_MANIFEST)
-    c.post("/api/apps/install", json={"path": str(src)})
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
 
     r = c.get("/api/apps/demo-weather/manifest")
     assert r.status_code == 200
@@ -129,7 +129,7 @@ def test_demo_step_4_open_home_surface(brain, tmp_path):
     src = tmp_path / "src-demo"
     src.mkdir()
     (src / "manifest.yaml").write_text(DEMO_MANIFEST)
-    c.post("/api/apps/install", json={"path": str(src)})
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
 
     r = c.post("/api/apps/demo-weather/open", json={"data": {"location": "Brooklyn"}})
     assert r.status_code == 200, r.text
@@ -149,7 +149,7 @@ def test_demo_step_5_uninstall(brain, tmp_path):
     src = tmp_path / "src-demo"
     src.mkdir()
     (src / "manifest.yaml").write_text(DEMO_MANIFEST)
-    c.post("/api/apps/install", json={"path": str(src)})
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
     assert registry.get("demo-weather") is not None
 
     r = c.delete("/api/apps/demo-weather")

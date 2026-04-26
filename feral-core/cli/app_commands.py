@@ -297,6 +297,119 @@ def cmd_app_install(path: str, host: Optional[str] = None, port: Optional[str] =
 
 
 # ---------------------------------------------------------------------
+# sign / verify (manifest-level Ed25519, see roadmap §3.3 #1)
+# ---------------------------------------------------------------------
+
+
+def _resolve_manifest_path(manifest_path: str) -> Path:
+    target = Path(manifest_path).expanduser().resolve()
+    if target.is_dir():
+        for name in ("manifest.json", "manifest.yaml", "manifest.yml"):
+            candidate = target / name
+            if candidate.is_file():
+                return candidate
+        _print(f"  No manifest.json/.yaml found under {target}.")
+        sys.exit(2)
+    if not target.is_file():
+        _print(f"  Manifest not found: {target}")
+        sys.exit(2)
+    return target
+
+
+def _read_manifest_dict(manifest_path: Path) -> dict:
+    text = manifest_path.read_text()
+    if manifest_path.suffix.lower() in (".yaml", ".yml"):
+        try:
+            import yaml  # type: ignore
+        except ImportError:
+            _print("  pyyaml is required to read YAML manifests.")
+            sys.exit(2)
+        data = yaml.safe_load(text) or {}
+    else:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            _print(f"  Manifest is not valid JSON: {exc}")
+            sys.exit(2)
+    if not isinstance(data, dict):
+        _print("  Manifest must be a JSON/YAML object at the top level.")
+        sys.exit(2)
+    return data
+
+
+def cmd_app_sign(manifest_path: str, key_id: str) -> None:
+    """Sign a manifest in place and write ``<name>.signed.json`` next to it.
+
+    Uses the publisher's existing ``~/.feral/publisher.key`` (created
+    on demand by ``cli.publish.load_or_create_signing_key``). This is
+    the same key the registry uses to authenticate publishes — a
+    single keypair per publisher, not one per signing surface.
+    """
+    target = _resolve_manifest_path(manifest_path)
+    if not key_id:
+        _print("  --key-id is required (use a stable identifier per publisher key).")
+        sys.exit(2)
+
+    try:
+        from cli.publish import load_or_create_signing_key
+    except Exception as exc:
+        _print(f"  Publisher signing key tooling unavailable: {exc}")
+        sys.exit(1)
+    try:
+        from genui.manifest_signing import sign as sign_manifest
+    except Exception as exc:
+        _print(f"  Manifest signing module unavailable: {exc}")
+        sys.exit(1)
+
+    manifest_dict = _read_manifest_dict(target)
+    sk = load_or_create_signing_key(verbose=False)
+    private_bytes = bytes(sk)
+    signed = sign_manifest(manifest_dict, private_bytes, key_id=key_id)
+
+    out_name = target.stem.replace(".signed", "") + ".signed.json"
+    out_path = target.with_name(out_name)
+    out_path.write_text(signed.model_dump_json(indent=2))
+    _print(f"  Signed manifest written to {out_path}.")
+    _print(f"  key_id={key_id}  alg={signed.alg}  signed_at={signed.signed_at.isoformat()}")
+
+
+def cmd_app_verify(manifest_path: str) -> None:
+    """Verify a ``*.signed.json`` envelope and exit non-zero on failure."""
+    target = Path(manifest_path).expanduser().resolve()
+    if target.is_dir():
+        for name in ("manifest.signed.json",):
+            candidate = target / name
+            if candidate.is_file():
+                target = candidate
+                break
+    if not target.is_file():
+        _print(f"  Signed manifest not found: {target}")
+        sys.exit(2)
+
+    try:
+        from genui.manifest_signing import SignedManifest, verify as verify_manifest
+    except Exception as exc:
+        _print(f"  Manifest signing module unavailable: {exc}")
+        sys.exit(1)
+
+    try:
+        envelope = SignedManifest.model_validate_json(target.read_text())
+    except Exception as exc:
+        _print(f"  Signed envelope invalid: {exc}")
+        sys.exit(1)
+
+    ok, reason = verify_manifest(envelope)
+    if ok:
+        _print(
+            f"  OK. key_id={envelope.key_id} alg={envelope.alg} "
+            f"signed_at={envelope.signed_at.isoformat()}"
+        )
+        sys.exit(0)
+    _print(f"  FAILED: {reason}")
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------
 # publish (signed network)
 # ---------------------------------------------------------------------
 
@@ -458,6 +571,31 @@ def register_app_subparser(sub) -> None:
     pub_p.add_argument("path", nargs="?", default=".")
     pub_p.add_argument("--registry", default=None)
 
+    sign_p = app_sub.add_parser(
+        "sign",
+        help="Sign a manifest in place; writes <name>.signed.json next to it.",
+    )
+    sign_p.add_argument(
+        "manifest_path",
+        help="Path to manifest.json/.yaml or to a folder containing one.",
+    )
+    sign_p.add_argument(
+        "--key-id",
+        required=True,
+        help="Stable identifier for this publisher key (e.g. 'feral-team:2026-04').",
+    )
+
+    verify_p = app_sub.add_parser(
+        "verify",
+        help="Verify a *.signed.json envelope; exits non-zero on failure.",
+    )
+    verify_p.add_argument(
+        "manifest_path",
+        help=(
+            "Path to a *.signed.json file (or folder containing manifest.signed.json)."
+        ),
+    )
+
 
 def dispatch_app_subcommand(args: argparse.Namespace) -> None:
     sub = getattr(args, "app_subcommand", "")
@@ -471,6 +609,10 @@ def dispatch_app_subcommand(args: argparse.Namespace) -> None:
         cmd_app_install(args.path, host=args.host, port=args.port)
     elif sub == "publish":
         cmd_app_publish(args.path, registry=args.registry)
+    elif sub == "sign":
+        cmd_app_sign(args.manifest_path, args.key_id)
+    elif sub == "verify":
+        cmd_app_verify(args.manifest_path)
     else:
         _print("  Unknown `feral app` subcommand.")
         sys.exit(2)

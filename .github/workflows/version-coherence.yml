@@ -1,0 +1,158 @@
+name: Version coherence
+
+# W7 (docs/AGENT_PROMPTS.md §D.W7 / FEATURE_STABILITY_ROADMAP.md §3.1 #2-3)
+# release-block CI gate. Two checks, both fatal:
+#   1. version drift — every declared location must match
+#      feral-core/pyproject.toml's [project] version. Implementation:
+#      `python3 scripts/sync_versions.py --check --no-metadata`.
+#   2. README test-count drift — the marker
+#      `<!-- sync-versions:test-counts pytest=N vitest=M -->` in README.md
+#      must equal the live `pytest --collect-only` and `vitest list`
+#      counts on this PR. If a PR adds/removes tests it MUST update the
+#      marker. This is the W4.4 #1 release-block check.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  version-drift:
+    name: sync_versions --check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The check mode is read-only and does not require feral-ai to be
+      # installed; --no-metadata reads the source from
+      # feral-core/pyproject.toml directly. This keeps the gate fast (~1s).
+      - name: Run version drift check
+        run: python3 scripts/sync_versions.py --check --no-metadata
+
+  test-count-drift:
+    name: README test-count vs live counts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: feral-client-v2/package-lock.json
+
+      - name: Install feral-core (for pytest collection)
+        working-directory: feral-core
+        run: pip install -e ".[all,dev]"
+
+      - name: Install feral-client-v2 deps (for vitest list)
+        working-directory: feral-client-v2
+        run: npm ci
+
+      - name: Compute live pytest count
+        id: pytest_count
+        working-directory: feral-core
+        # `pytest --collect-only -q` ends with a line like
+        # "1964 tests collected in 4.56s". We grep for that and emit the
+        # integer to GITHUB_OUTPUT so the assert step can read it.
+        run: |
+          set -euo pipefail
+          line=$(python3 -m pytest --collect-only -q --no-cov 2>&1 | tail -3 | grep -E "^[0-9]+ tests? collected" || true)
+          if [ -z "$line" ]; then
+            echo "::error::could not parse pytest --collect-only output"
+            python3 -m pytest --collect-only -q --no-cov 2>&1 | tail -30
+            exit 1
+          fi
+          n=$(echo "$line" | grep -oE "^[0-9]+")
+          echo "live_pytest=$n" >> "$GITHUB_OUTPUT"
+          echo "pytest live count: $n"
+
+      - name: Compute live vitest count
+        id: vitest_count
+        working-directory: feral-client-v2
+        # `vitest list` prints one test per line (no JSON despite the
+        # --reporter flag — this is upstream behaviour). We count the
+        # lines that look like a test path ("file > suite > name").
+        run: |
+          set -euo pipefail
+          n=$(npx vitest list 2>/dev/null | grep -cE " > " || true)
+          if [ "$n" = "0" ] || [ -z "$n" ]; then
+            echo "::error::vitest list returned zero tests — refusing to proceed"
+            npx vitest list 2>&1 | head -30
+            exit 1
+          fi
+          echo "live_vitest=$n" >> "$GITHUB_OUTPUT"
+          echo "vitest live count: $n"
+
+      - name: Compare to README marker
+        env:
+          LIVE_PYTEST: ${{ steps.pytest_count.outputs.live_pytest }}
+          LIVE_VITEST: ${{ steps.vitest_count.outputs.live_vitest }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          live_pytest = int(os.environ["LIVE_PYTEST"])
+          live_vitest = int(os.environ["LIVE_VITEST"])
+
+          readme = Path("README.md").read_text(encoding="utf-8")
+          marker = re.search(
+              r"<!--\s*sync-versions:test-counts\s+"
+              r"pytest=(?P<py>\d+)\s+vitest=(?P<vi>\d+)\s*-->",
+              readme,
+          )
+          if marker is None:
+              print(
+                  "::error::README.md is missing the "
+                  "`<!-- sync-versions:test-counts pytest=N vitest=M -->` "
+                  "marker. Add it above the test-count line."
+              )
+              sys.exit(1)
+
+          declared_pytest = int(marker.group("py"))
+          declared_vitest = int(marker.group("vi"))
+
+          drift = []
+          if declared_pytest != live_pytest:
+              drift.append(
+                  f"pytest: README says {declared_pytest}, live says "
+                  f"{live_pytest} (delta {live_pytest - declared_pytest:+d})"
+              )
+          if declared_vitest != live_vitest:
+              drift.append(
+                  f"vitest: README says {declared_vitest}, live says "
+                  f"{live_vitest} (delta {live_vitest - declared_vitest:+d})"
+              )
+
+          if drift:
+              print(
+                  "::error::README test-count marker is out of sync with "
+                  "live counts. Update the marker AND the human-readable "
+                  "sentence above it (e.g. `**N backend + M frontend "
+                  "tests pass**`) in the same PR.\n  - " + "\n  - ".join(drift)
+              )
+              sys.exit(1)
+
+          print(
+              f"OK — pytest={live_pytest}, vitest={live_vitest} "
+              "match README marker."
+          )
+          PY
