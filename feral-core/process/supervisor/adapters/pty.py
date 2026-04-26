@@ -241,7 +241,15 @@ async def create_pty_adapter(
             except OSError:
                 os._exit(126)
         shell = _login_shell()
-        argv = [shell, "-l", "-c", cmd]
+        # Standard login(8)/getty convention: argv[0] gets a leading
+        # dash so the shell sees itself as a login shell. This is in
+        # addition to the explicit -l flag because on Linux bash the
+        # -l flag DOES enter login mode but $0 stays "/bin/bash" —
+        # the dash convention is what lets `[[ $0 == -* ]]`
+        # (and `shopt -q login_shell` indirectly) detect it
+        # consistently across macOS zsh and Linux bash.
+        shell_basename = os.path.basename(shell)
+        argv = [f"-{shell_basename}", "-l", "-c", cmd]
         child_env = dict(env) if env is not None else os.environ.copy()
         try:
             os.execvpe(shell, argv, child_env)
