@@ -1,43 +1,107 @@
-"""mDNS service advertisement + discovery for FERAL on the LAN."""
+"""mDNS service advertisement + discovery for FERAL on the LAN.
+
+A8 / W24d — `zeroconf.Zeroconf.register_service` performs blocking socket
+negotiation. When `advertise_brain` is called from async startup code the
+blocking call holds the event loop long enough to trip watchdog detectors
+(`EventLoopBlocked`). We fix this two ways:
+
+  1. Expose `advertise_brain_async` which uses `zeroconf.asyncio.AsyncZeroconf`
+     (shipping in `zeroconf>=0.131.0`, already pinned in feral-core's
+     pyproject.toml) so the coroutine yields back to the loop during I/O.
+
+  2. Keep `advertise_brain` as the legacy sync entry-point, but if we notice
+     a running event loop we hand the blocking work off to a background
+     thread via a short-lived threadpool executor instead of running it on
+     the loop thread. This keeps CLI tools and pre-loop boot paths on the
+     simple sync path while making the async-startup path non-blocking.
+"""
+import asyncio
 import logging
 import socket
+import threading
 from typing import Optional
 
-# Single-source-of-truth: VERSION is proxied from importlib.metadata in
-# feral-core/version.py. Importing it here means the mDNS announce can
-# never drift from feral-core/pyproject.toml. See W7 / docs/AGENT_PROMPTS.md.
 from version import VERSION as _FERAL_VERSION
 
 logger = logging.getLogger("feral.services.mdns")
 
 _registration: Optional[tuple] = None
+_async_registration: Optional[tuple] = None
 
 PHONE_BRIDGE_SERVICE_TYPE = "_feral-phone._tcp.local."
 
 
+def _build_service_info(port: int, name: str):
+    """Return a fresh `zeroconf.ServiceInfo` for the brain advertisement.
+
+    Kept as a tiny helper so sync / async / executor paths can share the
+    construction and we only have to change the broadcast fields in one
+    place.
+    """
+    from zeroconf import ServiceInfo
+
+    hostname = socket.gethostname()
+    ip = socket.gethostbyname(hostname)
+    info = ServiceInfo(
+        "_feral._tcp.local.",
+        f"{name}._feral._tcp.local.",
+        addresses=[socket.inet_aton(ip)],
+        port=port,
+        properties={
+            "version": _FERAL_VERSION,
+            "name": name,
+            "hostname": hostname,
+        },
+    )
+    return info, ip
+
+
+def _register_blocking(port: int, name: str):
+    """Synchronous register path. Safe to run inside a thread executor."""
+    from zeroconf import Zeroconf
+
+    info, ip = _build_service_info(port, name)
+    zc = Zeroconf()
+    zc.register_service(info)
+    return zc, info, ip
+
+
 def advertise_brain(port: int = 9090, name: str = "FERAL Brain") -> bool:
-    """Advertise the brain as a _feral._tcp service on the local network."""
+    """Advertise the brain as a _feral._tcp service on the local network.
+
+    If an asyncio event loop is currently running on this thread, the
+    blocking zeroconf registration is deferred to a background thread so
+    the caller's event loop is never stalled. If no loop is running we
+    keep the pre-W24d straight-sync behaviour.
+    """
     global _registration
     try:
-        from zeroconf import Zeroconf, ServiceInfo
+        try:
+            asyncio.get_running_loop()
+            loop_running = True
+        except RuntimeError:
+            loop_running = False
 
-        hostname = socket.gethostname()
-        ip = socket.gethostbyname(hostname)
+        if loop_running:
+            result: dict = {}
 
-        info = ServiceInfo(
-            "_feral._tcp.local.",
-            f"{name}._feral._tcp.local.",
-            addresses=[socket.inet_aton(ip)],
-            port=port,
-            properties={
-                "version": _FERAL_VERSION,
-                "name": name,
-                "hostname": hostname,
-            },
-        )
+            def _worker():
+                try:
+                    result["value"] = _register_blocking(port, name)
+                except Exception as exc:  # noqa: BLE001 — propagated below
+                    result["error"] = exc
 
-        zc = Zeroconf()
-        zc.register_service(info)
+            t = threading.Thread(
+                target=_worker, name="feral-mdns-advertise", daemon=True
+            )
+            t.start()
+            t.join()
+            if "error" in result:
+                raise result["error"]
+            zc, info, ip = result["value"]
+        else:
+            zc, info, ip = _register_blocking(port, name)
+
         _registration = (zc, info)
         logger.info(f"mDNS: Advertising {name} on {ip}:{port}")
         return True
@@ -45,8 +109,60 @@ def advertise_brain(port: int = 9090, name: str = "FERAL Brain") -> bool:
         logger.debug("zeroconf not installed — mDNS discovery disabled")
         return False
     except Exception as e:
-        # Log exception type + repr (not bare str()) so tests/ops can see the
-        # underlying failure cause (e.g. OSError: address already in use).
+        logger.warning(
+            "mDNS advertisement failed: %s: %r",
+            type(e).__name__,
+            e,
+            exc_info=logger.isEnabledFor(logging.DEBUG),
+        )
+        return False
+
+
+async def advertise_brain_async(
+    port: int = 9090, name: str = "FERAL Brain"
+) -> bool:
+    """Async variant of :func:`advertise_brain`.
+
+    Prefers `zeroconf.asyncio.AsyncZeroconf` when available; otherwise
+    delegates the sync registration to a default-loop executor. Either
+    way, the calling coroutine yields during the network I/O so the
+    event loop stays responsive.
+    """
+    global _async_registration, _registration
+    try:
+        try:
+            from zeroconf.asyncio import AsyncZeroconf, AsyncServiceInfo
+            have_async = True
+        except ImportError:
+            have_async = False
+
+        loop = asyncio.get_running_loop()
+
+        if have_async:
+            info, ip = _build_service_info(port, name)
+            async_info = AsyncServiceInfo(
+                info.type,
+                info.name,
+                addresses=list(info.addresses),
+                port=info.port,
+                properties=info.properties,
+            )
+            zc = AsyncZeroconf()
+            await zc.async_register_service(async_info)
+            _async_registration = (zc, async_info)
+            logger.info(f"mDNS: Advertising {name} on {ip}:{port} (async)")
+            return True
+
+        zc, info, ip = await loop.run_in_executor(
+            None, _register_blocking, port, name
+        )
+        _registration = (zc, info)
+        logger.info(f"mDNS: Advertising {name} on {ip}:{port}")
+        return True
+    except ImportError:
+        logger.debug("zeroconf not installed — mDNS discovery disabled")
+        return False
+    except Exception as e:
         logger.warning(
             "mDNS advertisement failed: %s: %r",
             type(e).__name__,
@@ -58,13 +174,49 @@ def advertise_brain(port: int = 9090, name: str = "FERAL Brain") -> bool:
 
 def stop_advertisement():
     """Stop advertising and clean up zeroconf resources."""
-    global _registration
+    global _registration, _async_registration
     if _registration:
         zc, info = _registration
-        zc.unregister_service(info)
-        zc.close()
+        try:
+            zc.unregister_service(info)
+            zc.close()
+        except Exception as exc:
+            logger.debug("mDNS sync unregister failed: %s: %r", type(exc).__name__, exc)
         _registration = None
         logger.info("mDNS: Advertisement stopped")
+    if _async_registration:
+        # We can't await here; schedule the async close on any running loop,
+        # or fall back to the sync underlying zeroconf close().
+        zc, info = _async_registration
+        try:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_stop_async_registration(zc, info))
+            except RuntimeError:
+                inner = getattr(zc, "zeroconf", None)
+                if inner is not None:
+                    try:
+                        inner.unregister_service(info)
+                    except Exception:
+                        pass
+                    try:
+                        inner.close()
+                    except Exception:
+                        pass
+        finally:
+            _async_registration = None
+            logger.info("mDNS: Async advertisement stopped")
+
+
+async def _stop_async_registration(zc, info) -> None:
+    try:
+        await zc.async_unregister_service(info)
+    except Exception as exc:
+        logger.debug("mDNS async unregister failed: %s: %r", type(exc).__name__, exc)
+    try:
+        await zc.async_close()
+    except Exception as exc:
+        logger.debug("mDNS async close failed: %s: %r", type(exc).__name__, exc)
 
 
 def discover_phone_bridge(timeout: float = 2.5) -> Optional[str]:

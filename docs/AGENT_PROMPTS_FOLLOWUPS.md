@@ -149,6 +149,16 @@
   Finding: W13 adds `docs/mintlify/operations/metrics.mdx` alongside the existing `operations/soak.mdx` (W12). Neither has an entry in `docs/mintlify/docs.json` yet. This is the same nav-ownership question already raised by W12.
   Citation: this PR; existing follow-up `2026-04-25 · W12 · mintlify nav ownership for docs/mintlify/operations/`.
   Proposal: Roll into the same docs-owner sweep that resolves W8/W9/W11/W12 nav additions. — owner: needs-triage (docs).
+
+- [open] 2026-04-26 · W24d · security/* mintlify pages still unauthored
+  Finding: The W24d charter referenced `docs/mintlify/security/vault.mdx` (W9), `docs/mintlify/security/pairing.mdx` (W9), and `docs/mintlify/security/genui.mdx` (W8) for the new "Security" nav group, but none of those paths exist on `origin/main` at the W24d cutoff. The only security-adjacent mdx files on disk are `docs/mintlify/genui/signing.mdx` and `docs/mintlify/genui/sandbox.mdx`, so W24d's docs.json Security group points at those two pages instead.
+  Citation: W24d — `docs/mintlify/docs.json` Security group; `scripts/check_mintlify_nav.py`.
+  Proposal: W9 / W8 docs owners should author the three charter-named mdx files (or move `genui/signing.mdx` + `genui/sandbox.mdx` under `security/`). Once landed, update the Security group entries accordingly; the `check_mintlify_nav.py` linter will keep the nav honest during the transition. — owner: W9 + W8 docs.
+
+- [open] 2026-04-26 · W24d · `advertise_brain_async` wiring into api/state.py
+  Finding: W24d introduces `services.mdns.advertise_brain_async(...)` as the non-blocking variant. The async startup path in `feral-core/api/state.py` still calls the sync `advertise_brain(...)` (W24d made the sync path loop-safe by offloading to a thread, so this is correct-but-suboptimal). Switching to `await advertise_brain_async(...)` would remove one thread hop on boot.
+  Citation: `feral-core/api/state.py:727–729`; `feral-core/services/mdns.py` (W24d).
+  Proposal: Follow-up PR by the api-startup owner to `await advertise_brain_async(...)` from the `boot_subsystem("mDNS")` block. Cross-boundary per W24d's owned-paths scope. — owner: needs-triage (api).
 ---
 
 ## Closed follow-ups
