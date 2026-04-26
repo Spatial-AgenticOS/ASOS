@@ -314,6 +314,97 @@ class DevicePairingStore:
         suffix = f" DEFAULT {default}" if default is not None else ""
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}{suffix}")
 
+    @staticmethod
+    def _rebuild_paired_devices_without_token(
+        conn: sqlite3.Connection,
+    ) -> None:
+        """Drop the legacy plaintext ``token`` column via the SQLite
+        table-rebuild pattern.
+
+        SQLite's ``ALTER TABLE … DROP COLUMN`` (3.35+) refuses to drop
+        columns that participate in a UNIQUE constraint (legacy pre-W9
+        schemas commonly declared ``token TEXT UNIQUE NOT NULL``). In
+        that case we rebuild the table in a single transaction:
+
+            1. Read the current column list + foreign-key list from
+               ``PRAGMA`` so we preserve any operator-added columns.
+            2. Create ``paired_devices_new`` with every current column
+               EXCEPT ``token``, keeping ``device_id`` as PRIMARY KEY.
+            3. Copy every row (again, excluding ``token``) from the old
+               table to the new one.
+            4. Drop the old table and rename the new one into place.
+            5. Recreate the two indexes that ``_init_db`` itself owns
+               (``idx_pd_token_lookup``, ``idx_pd_expires_at``).
+
+        The whole thing runs inside ``BEGIN … COMMIT`` so partial
+        rebuilds can't survive a crash. The caller already owns the
+        module-level write lock.
+        """
+        info_rows = conn.execute(
+            "PRAGMA table_info(paired_devices)"
+        ).fetchall()
+        keep_cols: list[tuple[str, str, int, object, int]] = []
+        for r in info_rows:
+            col_name = r["name"] if isinstance(r, sqlite3.Row) else r[1]
+            col_type = r["type"] if isinstance(r, sqlite3.Row) else r[2]
+            col_notnull = r["notnull"] if isinstance(r, sqlite3.Row) else r[3]
+            col_default = r["dflt_value"] if isinstance(r, sqlite3.Row) else r[4]
+            col_pk = r["pk"] if isinstance(r, sqlite3.Row) else r[5]
+            if col_name == "token":
+                continue
+            keep_cols.append(
+                (col_name, col_type or "", int(col_notnull or 0),
+                 col_default, int(col_pk or 0))
+            )
+        if not keep_cols:
+            raise RuntimeError(
+                "paired_devices rebuild aborted — no columns left after "
+                "filtering out `token`; refusing to destroy the table."
+            )
+        col_names_kept = [c[0] for c in keep_cols]
+
+        column_defs: list[str] = []
+        for name, col_type, notnull, default, pk in keep_cols:
+            piece = f'"{name}" {col_type}'.rstrip()
+            if pk:
+                piece += " PRIMARY KEY"
+            if notnull and not pk:
+                piece += " NOT NULL"
+            if default is not None:
+                piece += f" DEFAULT {default}"
+            column_defs.append(piece)
+
+        in_tx = conn.in_transaction
+        if not in_tx:
+            conn.execute("BEGIN")
+        try:
+            conn.execute(
+                f"CREATE TABLE paired_devices_new ({', '.join(column_defs)})"
+            )
+            col_list_sql = ", ".join(f'"{c}"' for c in col_names_kept)
+            conn.execute(
+                f"INSERT INTO paired_devices_new ({col_list_sql}) "
+                f"SELECT {col_list_sql} FROM paired_devices"
+            )
+            conn.execute("DROP TABLE paired_devices")
+            conn.execute(
+                "ALTER TABLE paired_devices_new RENAME TO paired_devices"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pd_token_lookup "
+                "ON paired_devices(token_lookup)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pd_expires_at "
+                "ON paired_devices(expires_at)"
+            )
+            if not in_tx:
+                conn.commit()
+        except Exception:
+            if not in_tx:
+                conn.rollback()
+            raise
+
     def _migrate_legacy_plaintext_rows(self, conn: sqlite3.Connection) -> dict:
         """One-shot migration: log every legacy plaintext row to
         needs_rotation_log, then nuke the plaintext token. Returns a
@@ -355,22 +446,40 @@ class DevicePairingStore:
             )
             migrated.append(device_id)
 
-        # Try to DROP COLUMN token (SQLite >= 3.35.0). On older SQLite
-        # this raises OperationalError; we then NULL/empty the column
-        # in place. Doing the drop FIRST avoids the NOT NULL constraint
-        # that the legacy schema enforced on the `token` column.
+        # Try to DROP COLUMN token (SQLite >= 3.35.0). SQLite refuses
+        # DROP COLUMN on columns that carry a UNIQUE constraint even on
+        # 3.35+, so the first attempt can raise; in that case we fall
+        # back to the table-rebuild pattern (A10 / W24d). Only if *that*
+        # also fails do we resort to NULL-in-place. Doing the drop FIRST
+        # avoids the NOT NULL constraint that the legacy schema enforced
+        # on the `token` column.
         dropped = False
         try:
             conn.execute("ALTER TABLE paired_devices DROP COLUMN token")
             dropped = True
         except sqlite3.OperationalError as exc:
             logger.warning(
-                "device_pairing.drop_column_unsupported: %s — leaving "
-                "the legacy `token` column in place; it will be set to "
-                "empty string for the migrated rows. Upgrade to SQLite "
-                ">= 3.35 for full schema cleanup.",
+                "device_pairing.drop_column_unsupported: %s — attempting "
+                "table rebuild to remove the legacy `token` column.",
                 exc,
             )
+            try:
+                self._rebuild_paired_devices_without_token(conn)
+                dropped = True
+                logger.info(
+                    "device_pairing.migration.unique_rebuild_ok: rebuilt "
+                    "paired_devices without the legacy `token` column "
+                    "(%d migrated row(s)).",
+                    len(migrated),
+                )
+            except Exception as rebuild_exc:
+                logger.warning(
+                    "device_pairing.migration.unique_rebuild_failed: %s "
+                    "— leaving the legacy `token` column in place; it "
+                    "will be set to empty string for the migrated rows. "
+                    "Upgrade to SQLite >= 3.35 for full schema cleanup.",
+                    rebuild_exc,
+                )
 
         # Now scrub the auxiliary state on every migrated row. If the
         # column was dropped we just need to clear lookup/hash; if not
