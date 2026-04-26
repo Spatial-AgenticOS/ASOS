@@ -15,7 +15,7 @@ import collections
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, HTMLResponse, FileResponse
@@ -152,6 +152,23 @@ _RATE_LIMIT_EXEMPT_PREFIXES: tuple[str, ...] = (
 )
 
 
+def _route_template_for(request) -> str:
+    """Return the FastAPI route template for *request* (e.g. ``/api/jobs/{id}``).
+
+    Falls back to the literal path when the matcher hasn't run yet
+    (rare — only happens for routes resolved by the catch-all SPA
+    handler). Using the template instead of the raw path keeps
+    ``feral_http_requests_total`` cardinality bounded.
+    """
+    route = request.scope.get("route")
+    path_template = getattr(route, "path", None)
+    return path_template or request.url.path
+
+
+def _status_class(code: int) -> str:
+    return f"{code // 100}xx" if 100 <= code < 600 else "unknown"
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         global _rate_limit_last_cleanup
@@ -160,9 +177,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Skip loopback + well-known read-only polling endpoints entirely.
         if client_ip in _LOOPBACK_IPS:
-            return await call_next(request)
+            response = await call_next(request)
+            _emit_http_metrics(request, response, time.time())
+            return response
         if any(path == p or path.startswith(p) for p in _RATE_LIMIT_EXEMPT_PREFIXES):
-            return await call_next(request)
+            response = await call_next(request)
+            _emit_http_metrics(request, response, time.time())
+            return response
 
         now = time.time()
 
@@ -179,13 +200,41 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         while window and window[0] < now - 60:
             window.popleft()
         if len(window) >= RATE_LIMIT_RPM:
-            return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+            response = JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+            _emit_http_metrics(request, response, now)
+            return response
         window.append(now)
 
         while len(_rate_limit_store) > _RATE_LIMIT_MAX_KEYS:
             _rate_limit_store.popitem(last=False)
 
-        return await call_next(request)
+        response = await call_next(request)
+        _emit_http_metrics(request, response, now)
+        return response
+
+
+def _emit_http_metrics(request, response, started_at: float) -> None:
+    """W13 proof-of-concept: emit feral_http_requests_total + duration.
+
+    This is the ONLY emit() call site this PR ships — every other
+    module's emit() wiring is deferred to W13.1 so each owning
+    workstream lands its own changes inside its own owned-paths set.
+    """
+    from observability.metrics import emit  # local import — keeps the
+    # cold-import cost off the boot path when metrics are killed.
+
+    status = getattr(response, "status_code", 0)
+    labels = {
+        "method": request.method,
+        "route": _route_template_for(request),
+        "status": _status_class(status),
+    }
+    emit("feral_http_requests_total", labels=labels)
+    emit(
+        "feral_http_request_duration_seconds",
+        value=max(0.0, time.time() - started_at),
+        labels={"method": labels["method"], "route": labels["route"]},
+    )
 
 
 app.add_middleware(RateLimitMiddleware)
@@ -324,7 +373,10 @@ app.include_router(sessions_router)  # W17
 # Prometheus-compatible /metrics endpoint
 # ─────────────────────────────────────────────
 
-from observability.metrics import in_memory_snapshot as _metrics_snapshot
+from observability.metrics import (
+    in_memory_snapshot as _metrics_snapshot,
+    render_prometheus as _render_prometheus,
+)
 
 
 @app.get("/install-phone-bridge.sh")
@@ -352,21 +404,66 @@ async def install_phone_bridge_script():
     )
 
 
+# /metrics ownership notes
+# ─────────────────────────
+# W13 (roadmap §3.1 #4) flipped this endpoint from default-OFF to
+# default-ON-on-loopback. Two switches gate it:
+#
+#   FERAL_METRICS_ENDPOINT  — kill switch. Set to "0"/"false" to silence
+#                              both the endpoint and every emit() write.
+#                              Defaults to "1" (on).
+#   FERAL_METRICS_PUBLIC    — exposure switch. Off-loopback callers get
+#                              404 unless this is set to "1"/"true".
+#                              Defaults to "0".
+#
+# Off-loopback default is 404 (NOT 401/403) so the response is
+# indistinguishable from "endpoint not mounted" — preserving the
+# pre-W13 public-internet behaviour for unconfigured installs.
+#
+# The body concatenates the W13 prometheus_client REGISTRY (Grafana /
+# alert-rule surface) with the legacy in-memory snapshot lines so
+# pre-W13 ``increment()``/``observe()`` call sites stay scrapeable
+# during the cross-module emit() rollout (W13.1 follow-up).
+
+_METRICS_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+
+
+def _metrics_endpoint_killed() -> bool:
+    val = os.getenv("FERAL_METRICS_ENDPOINT", "1").strip().lower()
+    return val in ("0", "false", "off", "no")
+
+
+def _metrics_public_enabled() -> bool:
+    val = os.getenv("FERAL_METRICS_PUBLIC", "0").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
 @app.get("/metrics")
-async def metrics_endpoint():
-    if os.getenv("FERAL_METRICS_ENDPOINT", "").strip() not in ("1", "true"):
+async def metrics_endpoint(request: Request):
+    if _metrics_endpoint_killed():
         return JSONResponse({"error": "Metrics endpoint disabled. Set FERAL_METRICS_ENDPOINT=1"}, status_code=404)
+    client_host = request.client.host if request.client else None
+    if client_host not in _METRICS_LOOPBACK_HOSTS and not _metrics_public_enabled():
+        return JSONResponse({"error": "Not Found"}, status_code=404)
+
     from starlette.responses import PlainTextResponse
+    body, content_type = _render_prometheus()
+
+    # Append legacy in-memory snapshot lines so pre-W13 increment()/observe()
+    # callers remain scrapeable until W13.1 migrates them to emit().
     snap = _metrics_snapshot()
-    lines = []
+    legacy_lines: list[str] = []
     for name, v in snap["counters"].items():
-        lines.append(f"# TYPE {name} counter")
-        lines.append(f"{name} {v}")
+        legacy_lines.append(f"# TYPE {name} counter")
+        legacy_lines.append(f"{name} {v}")
     for name, h in snap["histograms"].items():
-        lines.append(f"# TYPE {name} histogram")
-        lines.append(f"{name}_count {h['count']}")
-        lines.append(f"{name}_mean {h['mean']}")
-    return PlainTextResponse("\n".join(lines))
+        legacy_lines.append(f"# TYPE {name} histogram")
+        legacy_lines.append(f"{name}_count {h['count']}")
+        legacy_lines.append(f"{name}_mean {h['mean']}")
+    if legacy_lines:
+        body = body + "\n".join(legacy_lines) + "\n"
+
+    return PlainTextResponse(body, media_type=content_type)
 
 
 # ─────────────────────────────────────────────

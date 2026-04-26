@@ -97,6 +97,33 @@
   Citation: PRs #27, #28, #30, #31; `docs/mintlify/docs.json`.
   Proposal: Single small PR by the docs owner that adds nav entries for "Memory", "Operations", and "Security" groups in one shot once W8/W9/W11/W12 land. — owner: needs-triage (docs).
 
+- [open] 2026-04-25 · W13 · `feral-core/api/server.py` orange zone (W13 touch)
+  Finding: W13 modifies the existing `FERAL_METRICS_ENDPOINT` block in `feral-core/api/server.py` (default-flip from off to on, adds `FERAL_METRICS_PUBLIC` switch, off-loopback returns 404) and adds two `_emit_http_metrics()` calls inside the existing `RateLimitMiddleware.dispatch`. `server.py` is the same orange-zone file already shared with W1 (startup hook) and W17 (router include).
+  Citation: this PR; `feral-core/api/server.py` `metrics_endpoint` and `RateLimitMiddleware`.
+  Proposal: Conductor sign-off — the changes are confined to the existing `/metrics` block and a single emit call site in the existing middleware, no overlap with W1's startup hook or W17's `app.include_router(sessions_router)`. — owner: conductor.
+
+- [open] 2026-04-25 · W13 → W19 / W11 / W17 / W4 / W9 · cross-module emit() wiring (W13.1)
+  Finding: W13 ships the metric REGISTRY + `emit()` helper but only wires ONE call site (HTTP middleware in `api/server.py`) to keep the PR strictly inside owned paths. The dashboard + alert rules reference metrics that will stay at 0 until each owning workstream lands its own `emit()` calls.
+  Citation: `feral-core/observability/metrics.py` (`_METRICS` docstrings name the owners); `ops/grafana/feral-overview.json`; `ops/prometheus/alerts.yml`.
+  Proposal: Track as W13.1. Owners and call sites:
+    - W19 — `feral-core/agents/llm_provider.py` → `feral_llm_429_total{provider}`, `feral_llm_failover_chain_exhausted_total`.
+    - W11 — `feral-core/memory/sync.py` → `feral_sync_active_peers`, `feral_sync_failures_total{reason}`, `feral_sync_was_active_recent`.
+    - W17 — `feral-core/agents/supervisor.py` → `feral_supervisor_approval_queue`.
+    - W4 — `feral-core/security/sandbox_policy.py` + sandbox runner → `feral_tool_denials_total{tool}`, `feral_sandbox_kills_total{reason}`.
+    - W9 — `feral-core/security/vault.py` → `feral_vault_decrypt_errors_total`.
+    - W13 sweep — `feral-core/api/server.py` WS endpoints → `feral_ws_active_sessions`.
+    Each is one `emit()` call inside an already-owned module; can land in the next routine PR for that workstream. — owner: needs-triage (per-workstream).
+
+- [open] 2026-04-25 · W13 · `feral-core/pyproject.toml` observability extra
+  Finding: W13 adds `prometheus-client>=0.20` to the `[project.optional-dependencies].observability` and `all` extras in `feral-core/pyproject.toml`. `pyproject.toml` is not in W13's nominal owned paths; flagged for visibility.
+  Citation: this PR; `feral-core/pyproject.toml`.
+  Proposal: Allowed (matches the §C.2 precedent set by W11's `chaos` marker addition and W12's soak conftest extension; both were single-line additive dependency / config changes inside the file's existing keys). — owner: conductor sign-off.
+
+- [open] 2026-04-25 · W13 · mintlify nav for `docs/mintlify/operations/metrics.mdx`
+  Finding: W13 adds `docs/mintlify/operations/metrics.mdx` alongside the existing `operations/soak.mdx` (W12). Neither has an entry in `docs/mintlify/docs.json` yet. This is the same nav-ownership question already raised by W12.
+  Citation: this PR; existing follow-up `2026-04-25 · W12 · mintlify nav ownership for docs/mintlify/operations/`.
+  Proposal: Roll into the same docs-owner sweep that resolves W8/W9/W11/W12 nav additions. — owner: needs-triage (docs).
+
 ---
 
 ## Closed follow-ups
