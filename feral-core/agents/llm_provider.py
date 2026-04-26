@@ -54,6 +54,178 @@ VISION_READY_OLLAMA_MODELS = (
     "gemma3",
 )
 
+
+def _apply_openai_reasoning_fork(model: str, body: dict) -> dict:
+    """Rewrite *body* for OpenAI's reasoning-family contract.
+
+    gpt-5, gpt-5.4*, gpt-5.5*, o1/o3/o4: Chat Completions rejects
+    ``max_tokens`` and non-1 ``temperature`` / ``top_p`` / penalty
+    params with a 400 (this is the exact shape of the v2026.5.0 shipped
+    400s). The fix: rename to ``max_completion_tokens`` and strip.
+    Non-reasoning models (gpt-4o, gpt-4.1) pass through untouched.
+
+    Imported locally to keep module-load order simple — providers.model_classes
+    has no side-effects beyond regex compilation.
+    """
+    from providers.model_classes import classify
+    if classify("openai", model) != "reasoning":
+        return body
+    if "max_tokens" in body and "max_completion_tokens" not in body:
+        body["max_completion_tokens"] = body.pop("max_tokens")
+    else:
+        body.pop("max_tokens", None)
+    temp = body.get("temperature")
+    if temp is not None and temp != 1 and temp != 1.0:
+        body.pop("temperature", None)
+    for key in ("top_p", "presence_penalty", "frequency_penalty"):
+        body.pop(key, None)
+    body.setdefault("reasoning_effort", "medium")
+    return body
+
+
+def _apply_deepseek_reasoning_fork(model: str, body: dict) -> dict:
+    """Rewrite *body* for DeepSeek's thinking-mode contract.
+
+    v4-pro / deepseek-reasoner demand ``extra_body.thinking`` enabled
+    and reject sampling params in strict mode. v4-flash / deepseek-chat
+    are pass-through.
+    """
+    from providers.model_classes import classify
+    if classify("deepseek", model) != "reasoning":
+        return body
+    extra = body.setdefault("extra_body", {})
+    if not isinstance(extra, dict):
+        extra = {}
+        body["extra_body"] = extra
+    extra.setdefault("thinking", {"type": "enabled"})
+    body.setdefault("reasoning_effort", "high")
+    for key in ("temperature", "top_p", "presence_penalty", "frequency_penalty"):
+        body.pop(key, None)
+    return body
+
+
+def _apply_gemini_reasoning_fork(model: str, body: dict) -> dict:
+    """Rewrite *body* for Gemini's thinkingConfig contract.
+
+    ``-thinking`` variants accept ``generationConfig.thinkingConfig.enabled=true``.
+    Non-thinking Gemini 3.x rejects the block with a 400.
+    """
+    from providers.model_classes import classify
+    if classify("gemini", model) != "reasoning":
+        return body
+    gen_cfg = body.setdefault("generationConfig", {})
+    thinking_cfg = gen_cfg.setdefault("thinkingConfig", {})
+    thinking_cfg.setdefault("enabled", True)
+    return body
+
+
+def _apply_anthropic_reasoning_fork(model: str, body: dict) -> dict:
+    """Rewrite *body* for Anthropic's thinking contract.
+
+    Extended-thinking models (Sonnet 4.6, Haiku 4.5, Sonnet / Opus 4.5)
+    accept ``thinking={"type":"enabled","budget_tokens":N}`` and require
+    ``temperature=1``. Adaptive-thinking models (Opus 4.7) decline the
+    explicit block — the model chooses its own depth.
+    """
+    from providers.model_classes import classify
+    if classify("anthropic", model) != "reasoning":
+        return body
+    # Import lazily to avoid circular import at module load.
+    from providers.anthropic_provider import (
+        AnthropicProvider,
+        _default_budget_tokens,
+    )
+    probe = AnthropicProvider(api_key="_probe_")
+    if probe.supports_extended_thinking(model):
+        budget = _default_budget_tokens(model)
+        if budget:
+            body.setdefault("thinking", {
+                "type": "enabled",
+                "budget_tokens": int(budget),
+            })
+            body.pop("temperature", None)
+    elif probe.supports_adaptive_thinking(model):
+        body.pop("thinking", None)
+    return body
+
+
+def _apply_groq_reasoning_fork(model: str, body: dict) -> dict:
+    """Mirror the OpenAI fork for Groq-hosted reasoning models."""
+    from providers.model_classes import classify
+    if classify("groq", model) != "reasoning":
+        return body
+    if "max_tokens" in body and "max_completion_tokens" not in body:
+        body["max_completion_tokens"] = body.pop("max_tokens")
+    temp = body.get("temperature")
+    if temp is not None and temp != 1 and temp != 1.0:
+        body.pop("temperature", None)
+    for key in ("top_p", "presence_penalty", "frequency_penalty"):
+        body.pop(key, None)
+    body.setdefault("reasoning_effort", "medium")
+    return body
+
+
+def apply_reasoning_fork(provider: str, model: str, body: dict) -> dict:
+    """Provider-router wrapper around the per-provider reasoning forks.
+
+    Called at every chat-body assembly site in this module so the
+    outbound wire-shape matches the selected model's reasoning contract.
+    Non-reasoning models pass through untouched. ``body`` is mutated
+    in-place AND returned for caller convenience. See
+    ``docs/mintlify/providers/reasoning-models.mdx`` for the full
+    per-provider param table.
+    """
+    pid = (provider or "").lower()
+    if pid == "openai":
+        return _apply_openai_reasoning_fork(model, body)
+    if pid == "deepseek":
+        return _apply_deepseek_reasoning_fork(model, body)
+    if pid == "gemini":
+        return _apply_gemini_reasoning_fork(model, body)
+    if pid == "anthropic":
+        return _apply_anthropic_reasoning_fork(model, body)
+    if pid == "groq":
+        return _apply_groq_reasoning_fork(model, body)
+    return body
+
+
+# DeepSeek's streaming SSE keeps the connection open by sending
+# ``: keep-alive`` comment lines (per the 2026-04-26 spec, the
+# connection may stay open up to 10 minutes during thinking). The
+# streaming path must treat these as liveness signals, not terminators.
+_SSE_KEEPALIVE_PREFIXES = (": ", ":", ": keep-alive", ":OPENROUTER PROCESSING")
+
+
+def _openrouter_route_supports_vision(model: str) -> tuple[bool, str]:
+    """Check whether the selected OpenRouter route handles vision.
+
+    When the router catalog has a capability snapshot for *model* we
+    consult it. Otherwise we trust the router-level superset (which
+    now includes vision) and return True — sending an image to a
+    non-vision route will still 400 upstream, but that's a targeted
+    error instead of our old "openrouter does not support vision"
+    blanket ban.
+    """
+    try:
+        from providers.catalog import get_shared_catalog
+        catalog = get_shared_catalog()
+        adapter = catalog.get_adapter("openrouter")
+    except Exception:
+        adapter = None
+    if adapter is None:
+        return True, ""
+    caps_for = getattr(adapter, "_capabilities_for_model", None)
+    if callable(caps_for) and model:
+        caps = set(caps_for(model) or ())
+        if caps and "vision" not in caps:
+            return False, (
+                f"Selected OpenRouter route {model!r} does not accept image "
+                "inputs. Pick a vision-capable route (e.g. "
+                "'anthropic/claude-opus-4-7', 'openai/gpt-5.5', "
+                "'google/gemini-3.1-pro')."
+            )
+    return True, ""
+
 # Empty ``model`` strings tell ``apply_preset`` → ``switch_provider``
 # to resolve the default via the shared catalog (Roadmap §3.5 P0).
 # Hardcoding a frontier name here drifts every quarter — the catalog
@@ -464,6 +636,13 @@ class LLMProvider:
             body["tools"] = clean_tools
             body["tool_choice"] = "auto"
 
+        # Reasoning-family param fork: ``/v1/chat/completions`` rejects
+        # ``max_tokens`` + free-form ``temperature`` on gpt-5* / o1 /
+        # DeepSeek v4-pro / thinking-capable Claude / Gemini -thinking.
+        # This is the exact shape of the v2026.5.0 400s in the shipped
+        # terminal log (§A5 of docs/WAVE5_HARDENING_PROMPT.md).
+        apply_reasoning_fork(self.provider, self.model, body)
+
         from observability.metrics import increment, measure
         increment("feral.llm.calls_total", attributes={"provider": self.provider, "model": self.model})
         try:
@@ -536,6 +715,27 @@ class LLMProvider:
         if self.provider in ("openai", "gemini"):
             return True, ""
 
+        # OpenRouter is a router — vision capability is per-route, not
+        # per-provider. The v2026.5.0 terminal log showed this call
+        # early-returning "does not support vision" on every image send
+        # because the adapter's _capabilities omitted "vision". The
+        # adapter fix adds vision to the superset; here we consult the
+        # narrower ``_capabilities_for_model`` when the catalog knows
+        # the route's modality, and otherwise trust the superset.
+        if self.provider == "openrouter":
+            ok, narrow_reason = _openrouter_route_supports_vision(self.model)
+            if ok:
+                return True, ""
+            return False, narrow_reason
+
+        # Anthropic, DeepSeek, Groq all support vision on their
+        # frontier chat models; the provider registry already carries
+        # that signal in the bundled ``_capabilities`` set. If we
+        # ever ship a text-only Anthropic build the per-model hook
+        # ``_capabilities_for_model`` narrows this.
+        if self.provider in ("anthropic", "deepseek", "groq"):
+            return True, ""
+
         if self.provider == "ollama":
             model_lower = (self.model or "").lower()
             if any(hint in model_lower for hint in VISION_READY_OLLAMA_MODELS):
@@ -591,6 +791,9 @@ class LLMProvider:
                     })
             if anthropic_tools:
                 body["tools"] = anthropic_tools
+
+        # Reasoning-family fork for Claude thinking-capable models.
+        apply_reasoning_fork("anthropic", self.model, body)
 
         try:
             async def _do_anthropic():
@@ -709,6 +912,8 @@ class LLMProvider:
             body["tools"] = clean_tools
             body["tool_choice"] = "auto"
 
+        apply_reasoning_fork(self.provider, self.model, body)
+
         stream_cm = None
         try:
             for _attempt in range(MAX_RETRIES):
@@ -734,6 +939,15 @@ class LLMProvider:
 
             accumulated_tool_calls: dict[int, dict] = {}
             async for line in resp.aiter_lines():
+                # Tolerate SSE keep-alive comment lines ("keep-alive"
+                # ``: ...`` comments and empty lines). DeepSeek's
+                # thinking-mode stream, OpenRouter's queue, and some
+                # Anthropic variants send these during long reasoning
+                # windows; treating them as termination kills the
+                # stream prematurely. Per DeepSeek's 2026-04-26 docs
+                # the keep-alive can run up to 10 minutes.
+                if line is None or line == "" or line.startswith(":"):
+                    continue
                 if not line.startswith("data: "):
                     continue
                 data_str = line[6:].strip()
@@ -813,6 +1027,10 @@ class LLMProvider:
         }
         if system_prompt:
             body["system"] = system_prompt
+        # Thinking-capable Claude models demand ``thinking`` + drop
+        # ``temperature`` when streaming; adaptive (Opus 4.7) passes
+        # through unchanged.
+        apply_reasoning_fork("anthropic", self.model, body)
         if tools:
             body["tools"] = [
                 {
@@ -1173,6 +1391,7 @@ class LLMProvider:
                     })
             if anthropic_tools:
                 body["tools"] = anthropic_tools
+        apply_reasoning_fork("anthropic", model, body)
         return body
 
     async def _call_provider(
@@ -1211,6 +1430,8 @@ class LLMProvider:
             if tools:
                 body["tools"] = [{k: v for k, v in t.items() if k != "_feral_meta"} for t in tools]
                 body["tool_choice"] = "auto"
+
+            apply_reasoning_fork(self.provider, self.model, body)
 
             async def _do_primary():
                 resp = await self.client.post("/chat/completions", json=body)
@@ -1256,6 +1477,8 @@ class LLMProvider:
             if tools:
                 body["tools"] = [{k: v for k, v in t.items() if k != "_feral_meta"} for t in tools]
                 body["tool_choice"] = "auto"
+
+            apply_reasoning_fork(provider_name, model, body)
 
             async def _do_fb():
                 resp = await tmp.post("/chat/completions", json=body)

@@ -8,6 +8,7 @@ from typing import Any, Optional
 import httpx
 
 from .base import BaseProvider, ChatMessage, ChatResponse
+from .model_classes import classify
 
 logger = logging.getLogger("feral.providers.gemini")
 
@@ -21,10 +22,17 @@ class GeminiProvider(BaseProvider):
     # /v1beta/models now lists only the 3.x preview series until the
     # GA flip. Mirrors gemini.models in
     # feral-core/providers/model_catalog.json.
+    # Verified 2026-04-26 against /v1beta/models. The ``-preview``
+    # suffix is retained until the 3.x pro/flash/flash-lite families
+    # flip to GA; ``-thinking`` variants are research builds. The
+    # bundled ``model_catalog.json`` pins the same set so the v2
+    # picker's "Refresh models" button sees zero drift against the
+    # bundled seed on a keyless host.
     _models = [
         "gemini-3.1-pro-preview",
         "gemini-3-flash-preview",
         "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-pro-thinking",
         "gemini-3.1-flash-image-preview",
         "gemini-3-pro-image-preview",
     ]
@@ -32,6 +40,7 @@ class GeminiProvider(BaseProvider):
         "gemini-3.1-pro-preview": {"input": 0.00175, "output": 0.014},
         "gemini-3-flash-preview": {"input": 0.0004, "output": 0.003},
         "gemini-3.1-flash-lite-preview": {"input": 0.00012, "output": 0.0005},
+        "gemini-3.1-pro-thinking": {"input": 0.00175, "output": 0.014},
     }
     _capabilities = {"tool_calling", "vision", "streaming", "audio_in"}
 
@@ -69,6 +78,16 @@ class GeminiProvider(BaseProvider):
             gen_cfg["maxOutputTokens"] = max_tokens
         if temperature is not None:
             gen_cfg["temperature"] = temperature
+        # Thinking-variant fork: ``-thinking`` models accept a
+        # ``thinkingConfig`` block inside ``generationConfig``. Non-
+        # thinking Gemini 3.x models reject the block with a 400, so
+        # only send it when the classifier says reasoning.
+        if classify("gemini", model) == "reasoning":
+            thinking_cfg = gen_cfg.setdefault("thinkingConfig", {})
+            thinking_cfg.setdefault("enabled", True)
+            budget = kwargs.get("thinking_budget")
+            if budget:
+                thinking_cfg["thinkingBudget"] = int(budget)
         if gen_cfg:
             payload["generationConfig"] = gen_cfg
         if tools:

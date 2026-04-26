@@ -1,0 +1,41 @@
+{
+  "data": [
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "type": "model"
+    },
+    {
+      "id": "claude-opus-4-1-20250805",
+      "type": "model"
+    },
+    {
+      "id": "claude-opus-4-20250514",
+      "type": "model"
+    },
+    {
+      "id": "claude-opus-4-5-20251101",
+      "type": "model"
+    },
+    {
+      "id": "claude-opus-4-6",
+      "type": "model"
+    },
+    {
+      "id": "claude-opus-4-7",
+      "type": "model"
+    },
+    {
+      "id": "claude-sonnet-4-20250514",
+      "type": "model"
+    },
+    {
+      "id": "claude-sonnet-4-5-20250929",
+      "type": "model"
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "type": "model"
+    }
+  ],
+  "has_more": false
+}
