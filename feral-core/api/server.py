@@ -450,6 +450,29 @@ async def startup():
                 pass
     asyncio.create_task(_state_heartbeat())
 
+    async def _provider_catalog_refresher():
+        """Refresh the ProviderCatalog every 6h while the Brain is up.
+
+        Owned by W1 (Roadmap §3.5 P0 / Appendix A.1): the daily
+        provider-research.yml cron keeps the bundled `model_catalog.json`
+        current for fresh clones, but a brain that's been running for
+        days would otherwise serve a 24h+ stale model list to the v2
+        Settings picker. ProviderCatalog.refresh_async() skips providers
+        without a configured key so this is a no-op for adapters the
+        user hasn't set up.
+        """
+        # Initial nudge so Settings sees fresh data shortly after boot
+        # without waiting six hours.
+        await asyncio.sleep(60)
+        while True:
+            try:
+                if state.provider_catalog is not None:
+                    await state.provider_catalog.refresh_async()
+            except Exception as exc:
+                logger.debug("provider catalog refresh failed: %s", exc)
+            await asyncio.sleep(6 * 3600)
+    asyncio.create_task(_provider_catalog_refresher())
+
 
 @app.on_event("shutdown")
 async def shutdown_event():

@@ -1,53 +1,67 @@
 {
-  "schema_version": 1,
-  "last_fetched": null,
+  "schema_version": 2,
+  "last_fetched": "2026-04-24T00:00:00Z",
   "providers": {
     "openai": {
       "endpoint": "https://api.openai.com/v1/models",
       "models": [
+        "gpt-5.5",
+        "gpt-5.5-pro",
+        "gpt-5.5-2026-04-23",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
         "gpt-5",
         "gpt-5-mini",
-        "gpt-4o",
-        "gpt-4o-mini",
-        "o1",
-        "o1-mini",
         "text-embedding-3-small",
         "text-embedding-3-large"
       ],
       "pricing": {
+        "gpt-5.5": {"input": 0.006, "output": 0.018},
+        "gpt-5.5-pro": {"input": 0.012, "output": 0.036},
+        "gpt-5.5-2026-04-23": {"input": 0.006, "output": 0.018},
+        "gpt-5.4": {"input": 0.005, "output": 0.015},
+        "gpt-5.4-mini": {"input": 0.0008, "output": 0.0024},
+        "gpt-5.4-nano": {"input": 0.0002, "output": 0.0008},
         "gpt-5": {"input": 0.005, "output": 0.015},
         "gpt-5-mini": {"input": 0.0003, "output": 0.0012},
-        "gpt-4o": {"input": 0.0025, "output": 0.01},
-        "gpt-4o-mini": {"input": 0.00015, "output": 0.0006}
+        "text-embedding-3-small": {"input": 0.00002, "output": 0.0},
+        "text-embedding-3-large": {"input": 0.00013, "output": 0.0}
       }
     },
     "anthropic": {
       "endpoint": null,
+      "curated_at": "2026-04-24",
       "models": [
-        "claude-sonnet-4-5",
-        "claude-opus-4-5",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
         "claude-haiku-4-5",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022"
+        "claude-opus-4-6",
+        "claude-opus-4-5",
+        "claude-sonnet-4-5"
       ],
       "pricing": {
-        "claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-7": {"input": 0.018, "output": 0.09},
+        "claude-sonnet-4-6": {"input": 0.0035, "output": 0.018},
+        "claude-haiku-4-5": {"input": 0.0008, "output": 0.004},
+        "claude-opus-4-6": {"input": 0.015, "output": 0.075},
         "claude-opus-4-5": {"input": 0.015, "output": 0.075},
-        "claude-haiku-4-5": {"input": 0.0008, "output": 0.004}
+        "claude-sonnet-4-5": {"input": 0.003, "output": 0.015}
       }
     },
     "gemini": {
       "endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
       "models": [
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash"
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-image-preview",
+        "gemini-3-pro-image-preview"
       ],
       "pricing": {
-        "gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
-        "gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
-        "gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004}
+        "gemini-3.1-pro-preview": {"input": 0.00175, "output": 0.014},
+        "gemini-3-flash-preview": {"input": 0.0004, "output": 0.003},
+        "gemini-3.1-flash-lite-preview": {"input": 0.00012, "output": 0.0005}
       }
     },
     "ollama": {
