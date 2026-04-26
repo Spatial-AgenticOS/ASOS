@@ -19,11 +19,13 @@ Conflict resolution:
 
 from __future__ import annotations
 import asyncio
+import errno
 import json
 import logging
 import os
 import ssl
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -137,11 +139,28 @@ class VectorClock:
         return VectorClock(clocks=dict(d))
 
 
+class SyncDiskFullError(OSError):
+    """Raised when a WAL write fails because the underlying disk is full.
+
+    Subclasses OSError so existing OSError handlers still match, while
+    callers that want to react specifically (pause sync, surface a
+    recoverable banner in the UI) can isinstance-check this type.
+    """
+
+    def __init__(self, message: str = "WAL write failed: no space left on device"):
+        super().__init__(errno.ENOSPC, message)
+
+
 class SyncWAL:
     """Write-Ahead Log for sync operations — stored in SQLite."""
 
     def __init__(self, db_path: str):
         self._db_path = db_path
+        # Serialize WAL writes within a process. SQLite already serializes
+        # at the file level, but holding a Python-level lock means a
+        # crashing thread can't leak a half-finished append to a peer
+        # observer: append() is atomic from our callers' perspective.
+        self._write_lock = threading.RLock()
         self._init_wal()
 
     def _init_wal(self):
@@ -165,13 +184,58 @@ class SyncWAL:
         conn.close()
 
     def append(self, op: SyncOperation):
-        conn = sqlite3.connect(self._db_path)
+        with self._write_lock:
+            conn = sqlite3.connect(self._db_path)
+            try:
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO sync_wal (op_id, table_name, op_type, row_id, data, hlc, origin_node, timestamp) VALUES (?,?,?,?,?,?,?,?)",
+                        (op.op_id, op.table, op.op_type, op.row_id, json.dumps(op.data), op.hlc, op.origin_node, op.timestamp),
+                    )
+                    conn.commit()
+                except (OSError, sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
+                    # Disk-full / read-only fs / corrupted WAL all surface here.
+                    # Translate ENOSPC to a SyncDiskFullError so callers can
+                    # pause sync without sniffing errno strings, and let other
+                    # disk errors propagate as-is (they're not recoverable
+                    # by retry alone).
+                    if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+                        raise SyncDiskFullError(str(exc)) from exc
+                    msg = str(exc).lower()
+                    if "no space" in msg or "disk full" in msg or "disk i/o" in msg:
+                        raise SyncDiskFullError(str(exc)) from exc
+                    raise
+            finally:
+                conn.close()
+
+    def integrity_check(self) -> dict:
+        """Run SQLite integrity_check on the WAL file.
+
+        Returns a dict shaped like:
+            {"ok": True}                     # healthy
+            {"ok": False, "error": "...",    # corruption / IO / open failure
+             "detail": "..."}
+
+        Never raises — the caller (store.refresh / sync engine) is the one
+        that decides how to surface a recoverable error to the user.
+        """
         try:
-            conn.execute(
-                "INSERT OR REPLACE INTO sync_wal (op_id, table_name, op_type, row_id, data, hlc, origin_node, timestamp) VALUES (?,?,?,?,?,?,?,?)",
-                (op.op_id, op.table, op.op_type, op.row_id, json.dumps(op.data), op.hlc, op.origin_node, op.timestamp),
-            )
-            conn.commit()
+            conn = sqlite3.connect(self._db_path)
+        except sqlite3.Error as exc:
+            return {"ok": False, "error": "wal_open_failed", "detail": str(exc)}
+        try:
+            try:
+                rows = conn.execute("PRAGMA integrity_check").fetchall()
+            except (sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
+                return {"ok": False, "error": "wal_corruption", "detail": str(exc)}
+            statuses = [r[0] for r in rows] if rows else []
+            if statuses == ["ok"]:
+                return {"ok": True}
+            return {
+                "ok": False,
+                "error": "wal_corruption",
+                "detail": "; ".join(statuses) or "integrity_check returned no rows",
+            }
         finally:
             conn.close()
 
@@ -245,10 +309,50 @@ class SyncEngine:
         self._zeroconf = None
         self._service_info = None
 
+        # Per-peer asyncio locks so a chaos-killed handshake retry can't
+        # interleave with a fresh outbound sync against the same peer.
+        # Lazy-allocated in sync_with_peer because asyncio.Lock() in 3.11
+        # binds to the running loop on first await.
+        self._peer_locks: dict[str, asyncio.Lock] = {}
+        # Pause flag flipped when a WAL write returns ENOSPC. Sync stays
+        # quiet until resume() is called (typically after the operator
+        # frees disk space and the next log_operation succeeds).
+        self._io_paused = False
+        self._io_pause_reason = ""
+
         logger.info(f"SyncEngine initialized: node={node_id}, wal={wal_path}")
 
+    @property
+    def io_paused(self) -> bool:
+        return self._io_paused
+
+    def resume(self) -> bool:
+        """Clear the IO-pause flag after the operator confirms disk recovery.
+
+        Returns True if a probe write to the WAL succeeds. The probe is a
+        single integrity_check (read-only) — appending a probe op would
+        pollute the CRDT log.
+        """
+        check = self._wal.integrity_check()
+        if not check.get("ok"):
+            logger.warning("resume() denied: WAL integrity check failed: %s", check)
+            return False
+        self._io_paused = False
+        self._io_pause_reason = ""
+        logger.info("SyncEngine resumed after IO pause (node=%s)", self.node_id)
+        return True
+
     def log_operation(self, table: str, op_type: str, row_id: str, data: dict):
-        """Called by MemoryStore on every write to log to WAL."""
+        """Called by MemoryStore on every write to log to WAL.
+
+        Raises SyncDiskFullError when the WAL filesystem is full; callers
+        upstream (MemoryStore._log_sync) intentionally swallow the error
+        so a full sync_wal.db never breaks a local note save.
+        """
+        if self._io_paused:
+            raise SyncDiskFullError(
+                f"sync paused (reason={self._io_pause_reason or 'unknown'})"
+            )
         hlc_ts = self._hlc.now()
         op = SyncOperation(
             op_id=str(uuid4()),
@@ -259,7 +363,30 @@ class SyncEngine:
             hlc=hlc_ts.to_string(),
             origin_node=self.node_id,
         )
-        self._wal.append(op)
+        try:
+            self._wal.append(op)
+        except SyncDiskFullError as exc:
+            self._io_paused = True
+            self._io_pause_reason = "disk_full"
+            logger.warning(
+                "WAL disk full, sync paused (node=%s op=%s/%s): %s",
+                self.node_id, table, op_type, exc,
+            )
+            raise
+        except OSError as exc:
+            # Catch raw ENOSPC that didn't go through SyncWAL's translator
+            # (e.g. a deeper-layer monkeypatch in tests, or a future
+            # backend that bypasses append()). Same pause + re-raise as
+            # the wrapped path so behavior is identical end-to-end.
+            if exc.errno == errno.ENOSPC:
+                self._io_paused = True
+                self._io_pause_reason = "disk_full"
+                logger.warning(
+                    "WAL disk full (raw OSError), sync paused (node=%s op=%s/%s): %s",
+                    self.node_id, table, op_type, exc,
+                )
+                raise SyncDiskFullError(str(exc)) from exc
+            raise
         self._vector_clock.update(self.node_id, op.hlc)
 
     def get_changes_since(self, hlc: str) -> list[dict]:
@@ -469,78 +596,171 @@ class SyncEngine:
             self._zeroconf = None
         self._running = False
 
-    async def sync_with_peer(self, peer_id: str) -> dict:
-        """Initiate a sync session with a discovered peer."""
+    async def sync_with_peer(
+        self,
+        peer_id: str,
+        *,
+        max_attempts: int = 3,
+        connect_timeout: float = 5.0,
+        handshake_timeout: float = 5.0,
+        backoff_base: float = 1.0,
+    ) -> dict:
+        """Initiate a sync session with a discovered peer.
+
+        Wraps the handshake + exchange in retry-with-backoff. Each attempt
+        is bounded by connect_timeout + handshake_timeout so a peer that
+        accepts the TCP connection then drops the websocket mid-handshake
+        cannot stall the engine indefinitely.
+
+        Returns:
+            On success: {"success": True, "sent": N, "received": M, "peer": ..., "attempts": k}
+            On disk full: {"success": False, "error": "disk_full", "io_paused": True}
+            On exhausted retries: {"success": False, "error": str, "attempts": max_attempts}
+        """
         peer = self._peers.get(peer_id)
         if not peer:
             return {"success": False, "error": f"Peer {peer_id} not found"}
 
+        if self._io_paused:
+            return {
+                "success": False,
+                "error": "io_paused",
+                "io_paused": True,
+                "reason": self._io_pause_reason,
+            }
+
+        lock = self._peer_locks.setdefault(peer_id, asyncio.Lock())
+
         t0 = time.time()
-        try:
-            import websockets
+        last_err: Optional[BaseException] = None
 
-            addr = peer["address"]
-            port = peer["port"]
-            client_ssl = build_client_ssl_context()
-            scheme = "wss" if client_ssl else "ws"
-            uri = f"{scheme}://{addr}:{port}/sync"
-
-            ws = None
-            for _attempt in range(3):
+        async with lock:
+            for attempt in range(1, max_attempts + 1):
                 try:
-                    ws = await websockets.connect(uri, ssl=client_ssl)
-                    break
-                except Exception:
-                    if _attempt == 2:
-                        raise
-                    await asyncio.sleep(2 ** _attempt)
+                    return await self._handshake_and_exchange(
+                        peer_id, peer,
+                        connect_timeout=connect_timeout,
+                        handshake_timeout=handshake_timeout,
+                        attempt=attempt,
+                        started_at=t0,
+                    )
+                except SyncDiskFullError as exc:
+                    self._io_paused = True
+                    self._io_pause_reason = "disk_full"
+                    logger.warning(
+                        "Sync aborted by disk_full: peer=%s attempt=%d err=%s",
+                        peer_id, attempt, exc,
+                    )
+                    return {
+                        "success": False,
+                        "error": "disk_full",
+                        "io_paused": True,
+                        "attempts": attempt,
+                    }
+                except ImportError:
+                    return {"success": False, "error": "websockets not installed"}
+                except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+                    last_err = exc
+                    logger.warning(
+                        "Sync timeout: peer=%s attempt=%d/%d", peer_id, attempt, max_attempts,
+                    )
+                except Exception as exc:
+                    last_err = exc
+                    logger.warning(
+                        "Sync handshake failed: peer=%s attempt=%d/%d err=%s",
+                        peer_id, attempt, max_attempts, exc,
+                    )
 
-            async with ws:
-                await ws.send(json.dumps({
+                if attempt < max_attempts:
+                    await asyncio.sleep(backoff_base * (2 ** (attempt - 1)))
+
+        elapsed_ms = (time.time() - t0) * 1000
+        logger.warning(
+            "Sync failed after %d attempts: peer=%s err=%s elapsed_ms=%.1f",
+            max_attempts, peer_id, last_err, elapsed_ms,
+        )
+        return {
+            "success": False,
+            "error": str(last_err) if last_err is not None else "unknown",
+            "attempts": max_attempts,
+        }
+
+    async def _handshake_and_exchange(
+        self,
+        peer_id: str,
+        peer: dict,
+        *,
+        connect_timeout: float,
+        handshake_timeout: float,
+        attempt: int,
+        started_at: float,
+    ) -> dict:
+        """One attempt: connect, exchange vector clocks, swap changes.
+
+        Always closes the websocket via `async with ws:` so a kill at any
+        point in the handshake leaves no orphaned task and no lingering
+        socket handle.
+        """
+        import websockets
+
+        addr = peer["address"]
+        port = peer["port"]
+        client_ssl = build_client_ssl_context()
+        scheme = "wss" if client_ssl else "ws"
+        uri = f"{scheme}://{addr}:{port}/sync"
+
+        ws = await asyncio.wait_for(
+            websockets.connect(uri, ssl=client_ssl),
+            timeout=connect_timeout,
+        )
+
+        async with ws:
+            await asyncio.wait_for(
+                ws.send(json.dumps({
                     "type": "sync_request",
                     "node_id": self.node_id,
                     "vector_clock": self.get_vector_clock(),
                     "passphrase": SYNC_PASSPHRASE,
-                }))
+                })),
+                timeout=handshake_timeout,
+            )
 
-                resp = json.loads(await ws.recv())
+            resp_raw = await asyncio.wait_for(ws.recv(), timeout=handshake_timeout)
+            resp = json.loads(resp_raw)
 
-                if resp.get("type") == "sync_error":
-                    return {"success": False, "error": resp.get("message", "rejected")}
+            if resp.get("type") == "sync_error":
+                return {"success": False, "error": resp.get("message", "rejected")}
 
-                remote_vc = resp.get("vector_clock", {})
+            remote_vc = resp.get("vector_clock", {})
+            peer_has = remote_vc.get(self.node_id, "0:0:")
+            changes_for_peer = self._wal.get_changes_since(peer_has, exclude_node=peer_id)
 
-                peer_has = remote_vc.get(self.node_id, "0:0:")
-                changes_for_peer = self._wal.get_changes_since(peer_has, exclude_node=peer_id)
-
-                await ws.send(json.dumps({
+            await asyncio.wait_for(
+                ws.send(json.dumps({
                     "type": "sync_data",
                     "changes": [op.to_dict() for op in changes_for_peer],
-                }))
+                })),
+                timeout=handshake_timeout,
+            )
 
-                remote_changes_msg = json.loads(await ws.recv())
-                remote_changes = remote_changes_msg.get("changes", [])
-                applied = self.apply_remote_changes(remote_changes)
+            remote_raw = await asyncio.wait_for(ws.recv(), timeout=handshake_timeout)
+            remote_changes_msg = json.loads(remote_raw)
+            remote_changes = remote_changes_msg.get("changes", [])
+            applied = self.apply_remote_changes(remote_changes)
 
-                elapsed_ms = (time.time() - t0) * 1000
-                logger.info(
-                    "Sync complete: peer=%s ops_sent=%d ops_received=%d elapsed_ms=%.1f tls=%s",
-                    peer_id, len(changes_for_peer), applied, elapsed_ms, bool(client_ssl),
-                )
+            elapsed_ms = (time.time() - started_at) * 1000
+            logger.info(
+                "Sync complete: peer=%s ops_sent=%d ops_received=%d elapsed_ms=%.1f attempt=%d tls=%s",
+                peer_id, len(changes_for_peer), applied, elapsed_ms, attempt, bool(client_ssl),
+            )
 
-                return {
-                    "success": True,
-                    "sent": len(changes_for_peer),
-                    "received": applied,
-                    "peer": peer_id,
-                }
-
-        except ImportError:
-            return {"success": False, "error": "websockets not installed"}
-        except Exception as e:
-            elapsed_ms = (time.time() - t0) * 1000
-            logger.warning("Sync failed: peer=%s error=%s elapsed_ms=%.1f", peer_id, e, elapsed_ms)
-            return {"success": False, "error": str(e)}
+            return {
+                "success": True,
+                "sent": len(changes_for_peer),
+                "received": applied,
+                "peer": peer_id,
+                "attempts": attempt,
+            }
 
     def export_to_bundle(self) -> dict:
         """Export all memory for manual sync (USB, AirDrop)."""

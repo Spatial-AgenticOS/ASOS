@@ -152,6 +152,63 @@ class MemoryStore:
         except Exception:
             pass
 
+    def refresh(self) -> dict:
+        """Re-validate the on-disk memory + sync WAL after suspected corruption.
+
+        Returns a dict shaped like:
+            {"ok": True, "memory_db": "ok", "sync_wal": "ok"}                       # healthy
+            {"ok": False, "error": "wal_corruption", "memory_db": "...", "sync_wal": "..."}  # recoverable
+
+        The caller (UI banner, sync_with_peer pre-flight, chaos test) is
+        expected to refuse to apply remote changes until refresh() returns
+        ok=True. The function never raises — it always returns a dict so
+        the failure mode is "surface the error", never "crash the brain".
+        """
+        result: dict = {"ok": True}
+
+        # Memory DB integrity check. We open a dedicated connection so a
+        # corruption error doesn't poison the long-lived store connections.
+        memory_status = "ok"
+        memory_detail = ""
+        try:
+            conn = sqlite3.connect(self.db_path)
+        except sqlite3.Error as exc:
+            memory_status = "open_failed"
+            memory_detail = str(exc)
+        else:
+            try:
+                rows = conn.execute("PRAGMA integrity_check").fetchall()
+                statuses = [r[0] for r in rows] if rows else []
+                if statuses != ["ok"]:
+                    memory_status = "corruption"
+                    memory_detail = "; ".join(statuses) or "integrity_check returned no rows"
+            except (sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
+                memory_status = "corruption"
+                memory_detail = str(exc)
+            finally:
+                conn.close()
+        result["memory_db"] = memory_status
+        if memory_status != "ok":
+            result["memory_db_detail"] = memory_detail
+            result["ok"] = False
+            result["error"] = "memory_db_corruption"
+
+        # Sync WAL integrity check, only if a SyncEngine is attached.
+        if self._sync_engine is not None:
+            try:
+                wal_check = self._sync_engine._wal.integrity_check()
+            except Exception as exc:
+                wal_check = {"ok": False, "error": "wal_check_raised", "detail": str(exc)}
+            if wal_check.get("ok"):
+                result["sync_wal"] = "ok"
+            else:
+                result["sync_wal"] = wal_check.get("error", "wal_corruption")
+                result["sync_wal_detail"] = wal_check.get("detail", "")
+                result["ok"] = False
+                result["error"] = wal_check.get("error", "wal_corruption")
+
+        return result
+
     def _init_db(self):
         conn = sqlite3.connect(self.db_path)
         try:

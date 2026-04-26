@@ -1,0 +1,87 @@
+name: Sync chaos (nightly)
+
+on:
+  schedule:
+    # 05:00 UTC daily — runs after the regular CI window has settled
+    # so a flaky chaos run never blocks an in-flight PR.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  chaos:
+    name: Memory sync chaos + recovery
+    runs-on: ubuntu-latest
+    # Allow this job to fail without blocking anything else; the point
+    # is to surface regressions, not gate releases. Logs always upload.
+    continue-on-error: true
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: feral-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[all,dev]"
+
+      - name: Run chaos pytest suite
+        id: pytest
+        run: |
+          mkdir -p artifacts
+          pytest -m chaos -v --no-cov \
+            --tb=short \
+            tests/test_memory_sync_chaos.py \
+            tests/test_memory_recovery.py \
+            2>&1 | tee artifacts/pytest-chaos.log
+        continue-on-error: true
+
+      - name: Run sync_kill chaos script (5 iterations)
+        id: sync_kill
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p feral-core/artifacts
+          python scripts/chaos/sync_kill.py \
+            --iterations 5 \
+            --ops-per-cycle 20 \
+            --kill-grace 0.5 \
+            --seed 1 \
+            2>&1 | tee feral-core/artifacts/sync-kill.log
+        continue-on-error: true
+
+      - name: Collect /tmp/feral-chaos-* run dirs (forensics)
+        if: always()
+        run: |
+          mkdir -p feral-core/artifacts/runs
+          # Best-effort copy of any chaos tmpdirs the runner left behind.
+          for d in /tmp/feral-chaos-*; do
+            if [ -d "$d" ]; then
+              cp -R "$d" feral-core/artifacts/runs/ || true
+            fi
+          done
+          ls -la feral-core/artifacts/ || true
+        continue-on-error: true
+
+      - name: Upload chaos artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-logs-${{ github.run_id }}
+          path: feral-core/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Summarize results
+        if: always()
+        run: |
+          echo "## Sync chaos summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- pytest -m chaos: ${{ steps.pytest.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- sync_kill.py:    ${{ steps.sync_kill.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Artifacts uploaded as 'chaos-logs-${{ github.run_id }}'." \
+            >> "$GITHUB_STEP_SUMMARY"
