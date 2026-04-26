@@ -1,0 +1,100 @@
+name: Soak — nightly
+
+# W12 (FEATURE_STABILITY_ROADMAP §3.4 #3-4). The voice soak runs against
+# in-process fake WS peers and is fully self-contained. The channel soak
+# tests skip cleanly when their FERAL_SOAK_*_TOKEN env vars are absent —
+# wire them in via repo secrets to flip them on for a real provider.
+#
+# This workflow uses continue-on-error so a flaky overnight run never
+# blocks the morning's main CI; failures still surface in the workflow
+# summary and uploaded artifacts.
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      duration-min:
+        description: "Soak duration in minutes (overrides default)"
+        required: false
+        default: "60"
+
+jobs:
+  voice-soak:
+    name: Voice soak (fake WS peers)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: feral-core
+    env:
+      FERAL_SOAK_DURATION_MIN: ${{ github.event.inputs.duration-min || '60' }}
+      FERAL_SOAK_RECONNECT_SEC: "90"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[all,dev]"
+
+      - name: Run voice soak (--runsoak)
+        run: |
+          set -o pipefail
+          mkdir -p ../soak-artifacts
+          pytest tests/test_voice_soak.py -k soak --runsoak --no-cov -s -v \
+            2>&1 | tee ../soak-artifacts/voice-soak.log
+
+      - name: Upload voice soak logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-soak-logs
+          path: soak-artifacts/voice-soak.log
+          if-no-files-found: warn
+
+  channels-soak:
+    name: Channels soak (env-gated)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 1500
+    defaults:
+      run:
+        working-directory: feral-core
+    env:
+      FERAL_SOAK_DURATION_MIN: ${{ github.event.inputs.duration-min || '1440' }}
+      FERAL_SOAK_INTERVAL_SEC: "30"
+      FERAL_SOAK_TELEGRAM_TOKEN: ${{ secrets.FERAL_SOAK_TELEGRAM_TOKEN }}
+      FERAL_SOAK_TELEGRAM_CHAT_ID: ${{ secrets.FERAL_SOAK_TELEGRAM_CHAT_ID }}
+      FERAL_SOAK_SLACK_TOKEN: ${{ secrets.FERAL_SOAK_SLACK_TOKEN }}
+      FERAL_SOAK_SLACK_CHANNEL: ${{ secrets.FERAL_SOAK_SLACK_CHANNEL }}
+      FERAL_SOAK_DISCORD_WEBHOOK: ${{ secrets.FERAL_SOAK_DISCORD_WEBHOOK }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[all,dev]"
+
+      - name: Run channels soak (--runsoak)
+        run: |
+          set -o pipefail
+          mkdir -p ../soak-artifacts
+          pytest tests/test_channels_soak.py -k soak --runsoak --no-cov -s -v \
+            2>&1 | tee ../soak-artifacts/channels-soak.log
+
+      - name: Upload channels soak logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: channels-soak-logs
+          path: soak-artifacts/channels-soak.log
+          if-no-files-found: warn
