@@ -23,6 +23,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
+from .model_classes import ModelClass, classify, filter_models
+from .recommended import recommended_for
+
 logger = logging.getLogger("feral.providers")
 
 
@@ -71,6 +74,15 @@ class Provider(Protocol):
 
     def list_models(self) -> list[str]:
         ...
+
+    # NOTE: ``list_models`` is intentionally kept zero-arg on the
+    # Protocol to preserve structural compatibility with legacy adapters
+    # (community-installed providers written against the v1 surface).
+    # The chat-only filter in W24a lives on :class:`BaseProvider` as an
+    # optional extension: ``BaseProvider.list_models(model_class="chat")``
+    # filters via :mod:`providers.model_classes`. The ``ProviderCatalog``
+    # detects the capability via ``inspect.signature`` so mixed fleets
+    # (some adapters extended, some not) still work.
 
     def pricing_per_1k(self, model: str) -> dict[str, float]:
         ...
@@ -136,14 +148,79 @@ class BaseProvider:
     _pricing: dict[str, dict[str, float]] = {}
     _capabilities: set[str] = set()
 
-    def list_models(self) -> list[str]:
-        return list(self._models)
+    def list_models(
+        self,
+        model_class: Optional[ModelClass] = None,
+        *,
+        recommended: bool = False,
+    ) -> list[str]:
+        """Return adapter-known model ids, optionally filtered.
+
+        Legacy callers pass no argument → behaviour is unchanged (the
+        full, raw ``_models`` list, in the same order the adapter
+        populated it).
+
+        Callers that want the chat-only subset (the v2 Settings picker
+        dropdown, the composer model-switcher) pass
+        ``model_class="chat"`` and get a filtered view through
+        :func:`providers.model_classes.filter_models`. The filter is
+        transparent about unknown ids — a freshly-released model that
+        hasn't reached the classifier yet still appears in the
+        chat-class result so the user can still pick it. See the
+        classifier module for the rules.
+
+        Callers that want the conductor-curated "latest relevant"
+        shortlist (the default v2 picker view for most users) pass
+        ``recommended=True`` and get a second filter pass through
+        :func:`providers.recommended.recommended_for`. The two filters
+        compose: ``list_models(model_class="chat", recommended=True)``
+        returns the intersection.
+
+        Providers that want richer per-model narrowing (OpenRouter's
+        modality-aware lookup) override :meth:`_capabilities_for_model`;
+        the base implementation does not pre-filter by vision / audio /
+        etc — those are additive capabilities, not model classes.
+        """
+        out = filter_models(
+            self.provider_id, list(self._models), model_class=model_class
+        )
+        if recommended:
+            out = recommended_for(self.provider_id, out)
+        return out
 
     def pricing_per_1k(self, model: str) -> dict[str, float]:
         return dict(self._pricing.get(model, {"input": 0.0, "output": 0.0}))
 
     def supports(self, capability: str) -> bool:
         return capability in self._capabilities
+
+    def classify_model(self, model_id: str) -> ModelClass:
+        """Classify ``model_id`` against this adapter's provider rules.
+
+        Thin wrapper around :func:`providers.model_classes.classify` so
+        callers holding an adapter instance don't have to import the
+        classifier module separately.
+        """
+        return classify(self.provider_id, model_id)
+
+    def _capabilities_for_model(self, model_id: str) -> set[str]:
+        """Return the capabilities advertised for ``model_id``.
+
+        The base implementation returns the provider-wide
+        ``_capabilities`` set — i.e. "any capability the adapter
+        advertises at all, advertise it for every id". That's the
+        correct answer for single-backend providers (Anthropic,
+        DeepSeek, Gemini, Groq, OpenAI) where every listed model
+        supports the same surface.
+
+        OpenRouter overrides this hook to do per-route narrowing: it's
+        a router, so its ``_capabilities`` advertises the SUPERSET
+        (including ``"vision"``) and ``_capabilities_for_model`` drops
+        the caps the routed target doesn't support. The orchestrator
+        consults this hook before deciding whether to early-return a
+        ``does not support vision input`` error.
+        """
+        return set(self._capabilities)
 
     async def refresh_models(self) -> list[str]:
         return list(self._models)

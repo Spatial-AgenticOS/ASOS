@@ -1,0 +1,154 @@
+{
+  "models": [
+    {
+      "name": "models/aqa"
+    },
+    {
+      "name": "models/deep-research-max-preview-04-2026"
+    },
+    {
+      "name": "models/deep-research-preview-04-2026"
+    },
+    {
+      "name": "models/deep-research-pro-preview-12-2025"
+    },
+    {
+      "name": "models/gemini-2.0-flash"
+    },
+    {
+      "name": "models/gemini-2.0-flash-001"
+    },
+    {
+      "name": "models/gemini-2.0-flash-lite"
+    },
+    {
+      "name": "models/gemini-2.0-flash-lite-001"
+    },
+    {
+      "name": "models/gemini-2.5-computer-use-preview-10-2025"
+    },
+    {
+      "name": "models/gemini-2.5-flash"
+    },
+    {
+      "name": "models/gemini-2.5-flash-image"
+    },
+    {
+      "name": "models/gemini-2.5-flash-lite"
+    },
+    {
+      "name": "models/gemini-2.5-flash-preview-tts"
+    },
+    {
+      "name": "models/gemini-2.5-pro"
+    },
+    {
+      "name": "models/gemini-2.5-pro-preview-tts"
+    },
+    {
+      "name": "models/gemini-3-flash-preview"
+    },
+    {
+      "name": "models/gemini-3-pro-image-preview"
+    },
+    {
+      "name": "models/gemini-3-pro-preview"
+    },
+    {
+      "name": "models/gemini-3.1-flash-image-preview"
+    },
+    {
+      "name": "models/gemini-3.1-flash-lite-preview"
+    },
+    {
+      "name": "models/gemini-3.1-flash-tts-preview"
+    },
+    {
+      "name": "models/gemini-3.1-pro-preview"
+    },
+    {
+      "name": "models/gemini-3.1-pro-preview-customtools"
+    },
+    {
+      "name": "models/gemini-embedding-001"
+    },
+    {
+      "name": "models/gemini-embedding-2"
+    },
+    {
+      "name": "models/gemini-embedding-2-preview"
+    },
+    {
+      "name": "models/gemini-flash-latest"
+    },
+    {
+      "name": "models/gemini-flash-lite-latest"
+    },
+    {
+      "name": "models/gemini-pro-latest"
+    },
+    {
+      "name": "models/gemini-robotics-er-1.5-preview"
+    },
+    {
+      "name": "models/gemini-robotics-er-1.6-preview"
+    },
+    {
+      "name": "models/gemma-3-12b-it"
+    },
+    {
+      "name": "models/gemma-3-1b-it"
+    },
+    {
+      "name": "models/gemma-3-27b-it"
+    },
+    {
+      "name": "models/gemma-3-4b-it"
+    },
+    {
+      "name": "models/gemma-3n-e2b-it"
+    },
+    {
+      "name": "models/gemma-3n-e4b-it"
+    },
+    {
+      "name": "models/gemma-4-26b-a4b-it"
+    },
+    {
+      "name": "models/gemma-4-31b-it"
+    },
+    {
+      "name": "models/imagen-4.0-fast-generate-001"
+    },
+    {
+      "name": "models/imagen-4.0-generate-001"
+    },
+    {
+      "name": "models/imagen-4.0-ultra-generate-001"
+    },
+    {
+      "name": "models/lyria-3-clip-preview"
+    },
+    {
+      "name": "models/lyria-3-pro-preview"
+    },
+    {
+      "name": "models/nano-banana-pro-preview"
+    },
+    {
+      "name": "models/veo-2.0-generate-001"
+    },
+    {
+      "name": "models/veo-3.0-fast-generate-001"
+    },
+    {
+      "name": "models/veo-3.0-generate-001"
+    },
+    {
+      "name": "models/veo-3.1-fast-generate-preview"
+    },
+    {
+      "name": "models/veo-3.1-generate-preview"
+    }
+  ]
+}
