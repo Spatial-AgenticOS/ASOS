@@ -62,6 +62,21 @@
   Citation: PR #26 (this PR); PR #29 body anchor links.
   Proposal: Merge PR #26 first (or at minimum before any W## PR that cites these docs is reviewed externally). — owner: conductor (already top of recommended merge order).
 
+- [open] 2026-04-25 · W12 · mintlify nav ownership for `docs/mintlify/operations/`
+  Finding: W12 PR #30 created `docs/mintlify/operations/soak.mdx` as a brand-new sub-tree under the mintlify docs. There is no current §C.2 owner for this path and no entry in the mintlify `mint.json` nav.
+  Citation: PR #30 (`feral/W12-soak`).
+  Proposal: Confirm `docs/mintlify/operations/` is the intended home and add a nav entry, or move the file to the canonical location once chosen. Same question applies to W8's `docs/mintlify/genui/*` and W9's `docs/mintlify/security/*` if/when those land. — owner: needs-triage (small, one-line nav change).
+
+- [open] 2026-04-25 · W12 · real-provider soak coverage
+  Finding: W12 PR #30 ships a fake-WS-peer soak harness only. Real provider regressions (OpenAI Realtime auth churn, Gemini Live half-open sockets, channel adapter rate-limit cascades) are NOT exercised because no long-lived test accounts exist.
+  Citation: PR #30 conductor-questions block; `feral-core/tests/test_voice_soak.py`.
+  Proposal: Optional follow-up workstream once we have dedicated long-lived test accounts; gate behind a separate `--runsoak-real` flag and a CI secret. — owner: needs-triage.
+
+- [open] 2026-04-25 · W12 · soak-nightly silent failures
+  Finding: `.github/workflows/soak-nightly.yml` uses `continue-on-error: true` per the W12 charter (so a flaky soak doesn't break the green CI history). Net effect: failures are visible only to whoever opens the workflow run page.
+  Citation: PR #30 (`.github/workflows/soak-nightly.yml`).
+  Proposal: Wire a Slack/PagerDuty/issue-creator notifier on non-success so canary regressions get active eyes. Belongs in a small ops-tooling follow-up, not a new W##. — owner: needs-triage.
+
 ---
 
 ## Closed follow-ups
