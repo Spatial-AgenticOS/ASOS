@@ -171,8 +171,10 @@
 - [open] 2026-04-26 · W24a · `test_provider_catalog.py::TestBundledCatalogFreshness` catalog-pin assertions need a refresh window
   Finding: The `_VERIFIED_GEMINI_IDS` + `_DEPRECATED_OPENAI_IDS` + "anthropic endpoint is null" assertions were written at the 2026-04-24 snapshot. To keep them green W24a kept the Gemini `-preview` suffix + omitted `gpt-4o*` from the bundled openai seed + left the anthropic endpoint field null (with the live URL mirrored to `_live_endpoint`). Once Anthropic's `/v1/models` is the canonical refresh path (post W24a.2) and Gemini flips 3.x to GA, these asserts should be relaxed to "verified set from the most recent refresh" rather than hard-pinned literals.
   Citation: `feral-core/tests/test_provider_catalog.py:302-334`.
-  Proposal: Replace literal pinning with a snapshot-based assertion driven by the fixture files. — owner: conductor.---
-
+  Proposal: Replace literal pinning with a snapshot-based assertion driven by the fixture files. — owner: conductor.---  Proposal: Follow-up PR by the api-startup owner to `await advertise_brain_async(...)` from the `boot_subsystem("mDNS")` block. Cross-boundary per W24d's owned-paths scope. — owner: needs-triage (api).- [open] 2026-04-26 · W24b · remaining plaintext `credentials.json` writers in `cli/setup_wizard.py`
+  Finding: W24b fixed the ``feral.config`` plaintext leak (`ConfigLoader.save_credentials`) but the two CLI setup-wizard classes still call ``creds_path.write_text(json.dumps(...))`` directly inside their ``_save_all`` methods, leaking plaintext whenever a user runs the interactive wizard.
+  Citation: `feral-core/cli/setup_wizard.py:1167-1169` and `feral-core/cli/setup_wizard.py:1687-1692` (and the corresponding `_load_existing_creds` read at `:566`, `:1347`). Also `feral-core/cli/setup/state.py:47` (`_write_json` into `credentials.json`).
+  Proposal: Track as W24b.1 — route each wizard write through `ConfigLoader.save_credentials` (now vault-backed) or call `BlindVault.set_credential` directly, and drop the plaintext `write_text` + `chmod 0600`. — owner: needs-triage.---
 ## Closed follow-ups
 
 (none yet)

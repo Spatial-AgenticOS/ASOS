@@ -228,10 +228,12 @@ async def configure_llm_provider(provider_id: str, req: ConfigureRequest):
     """Re-bind an adapter with a fresh key / base URL without restarting.
 
     The API key is:
-      1. written to the BlindVault (primary store).
-      2. persisted to ``~/.feral/credentials.json`` via
-         ``ConfigLoader.save_credentials`` (secondary store so a corrupt
-         vault doesn't lose the key).
+      1. written to the BlindVault (primary, encrypted-at-rest store).
+      2. routed through ``ConfigLoader.save_credentials`` which, post-W24b,
+         also writes to the BlindVault (and NEVER to plaintext
+         ``credentials.json``) — this second call keeps the in-memory
+         ``ConfigLoader._credentials`` dict in sync for boot-time env
+         export and is otherwise idempotent with step 1.
       3. exported to ``os.environ`` so the running ``LLMProvider`` sees
          it without waiting for a reboot.
 
