@@ -163,6 +163,11 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=5.0.0",
+    # W9: freezegun is used by tests/test_pairing_hash.py
+    # (TestVerify.test_freezegun_simulates_ttl_passage and
+    # TestVerify.test_successful_verify_slides_window) to drive the
+    # sliding-TTL window deterministically without sleeping.
+    "freezegun>=1.4.0",
 ]
 
 [project.scripts]
