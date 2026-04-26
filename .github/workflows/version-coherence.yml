@@ -39,6 +39,12 @@ jobs:
   test-count-drift:
     name: README test-count vs live counts
     runs-on: ubuntu-latest
+    # Dependabot PRs only touch package.json / lockfiles / pyproject deps — they
+    # never add or remove tests. Forcing every dep bump to also bump the
+    # README marker is pure friction, so we skip this job for dependabot.
+    # The actual pytest/vitest jobs in ci.yml still run and will catch any
+    # genuine test-count regression a dep bump could cause.
+    if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v4
 
