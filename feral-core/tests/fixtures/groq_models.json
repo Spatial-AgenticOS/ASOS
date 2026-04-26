@@ -1,14 +1,69 @@
 {
-  "_source": "GET https://api.groq.com/openai/v1/models 2026-04-26. Shape: {object:'list', data: [{id, object:'model', owned_by}]}",
   "object": "list",
   "data": [
-    {"id": "llama-3.3-70b-versatile", "object": "model", "owned_by": "meta"},
-    {"id": "llama-3.1-8b-instant", "object": "model", "owned_by": "meta"},
-    {"id": "mixtral-8x7b-32768", "object": "model", "owned_by": "mistralai"},
-    {"id": "gemma2-9b-it", "object": "model", "owned_by": "google"},
-    {"id": "deepseek-r1-distill-llama-70b", "object": "model", "owned_by": "deepseek"},
-    {"id": "qwen-qwq-32b", "object": "model", "owned_by": "alibaba"},
-    {"id": "whisper-large-v3", "object": "model", "owned_by": "openai"},
-    {"id": "distil-whisper-large-v3-en", "object": "model", "owned_by": "huggingface"}
+    {
+      "id": "allam-2-7b",
+      "object": "model"
+    },
+    {
+      "id": "canopylabs/orpheus-arabic-saudi",
+      "object": "model"
+    },
+    {
+      "id": "canopylabs/orpheus-v1-english",
+      "object": "model"
+    },
+    {
+      "id": "groq/compound",
+      "object": "model"
+    },
+    {
+      "id": "groq/compound-mini",
+      "object": "model"
+    },
+    {
+      "id": "llama-3.1-8b-instant",
+      "object": "model"
+    },
+    {
+      "id": "llama-3.3-70b-versatile",
+      "object": "model"
+    },
+    {
+      "id": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "object": "model"
+    },
+    {
+      "id": "meta-llama/llama-prompt-guard-2-22m",
+      "object": "model"
+    },
+    {
+      "id": "meta-llama/llama-prompt-guard-2-86m",
+      "object": "model"
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "object": "model"
+    },
+    {
+      "id": "openai/gpt-oss-20b",
+      "object": "model"
+    },
+    {
+      "id": "openai/gpt-oss-safeguard-20b",
+      "object": "model"
+    },
+    {
+      "id": "qwen/qwen3-32b",
+      "object": "model"
+    },
+    {
+      "id": "whisper-large-v3",
+      "object": "model"
+    },
+    {
+      "id": "whisper-large-v3-turbo",
+      "object": "model"
+    }
   ]
 }

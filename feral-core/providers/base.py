@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
 from .model_classes import ModelClass, classify, filter_models
+from .recommended import recommended_for
 
 logger = logging.getLogger("feral.providers")
 
@@ -147,8 +148,13 @@ class BaseProvider:
     _pricing: dict[str, dict[str, float]] = {}
     _capabilities: set[str] = set()
 
-    def list_models(self, model_class: Optional[ModelClass] = None) -> list[str]:
-        """Return adapter-known model ids, optionally filtered by class.
+    def list_models(
+        self,
+        model_class: Optional[ModelClass] = None,
+        *,
+        recommended: bool = False,
+    ) -> list[str]:
+        """Return adapter-known model ids, optionally filtered.
 
         Legacy callers pass no argument → behaviour is unchanged (the
         full, raw ``_models`` list, in the same order the adapter
@@ -163,14 +169,24 @@ class BaseProvider:
         chat-class result so the user can still pick it. See the
         classifier module for the rules.
 
+        Callers that want the conductor-curated "latest relevant"
+        shortlist (the default v2 picker view for most users) pass
+        ``recommended=True`` and get a second filter pass through
+        :func:`providers.recommended.recommended_for`. The two filters
+        compose: ``list_models(model_class="chat", recommended=True)``
+        returns the intersection.
+
         Providers that want richer per-model narrowing (OpenRouter's
         modality-aware lookup) override :meth:`_capabilities_for_model`;
         the base implementation does not pre-filter by vision / audio /
         etc — those are additive capabilities, not model classes.
         """
-        return filter_models(
+        out = filter_models(
             self.provider_id, list(self._models), model_class=model_class
         )
+        if recommended:
+            out = recommended_for(self.provider_id, out)
+        return out
 
     def pricing_per_1k(self, model: str) -> dict[str, float]:
         return dict(self._pricing.get(model, {"input": 0.0, "output": 0.0}))

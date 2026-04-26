@@ -186,6 +186,18 @@ class AnthropicProvider(BaseProvider):
                     "type": "enabled",
                     "budget_tokens": int(budget),
                 }
+                # Anthropic invariant: max_tokens must be strictly
+                # greater than thinking.budget_tokens, otherwise the
+                # API returns 400 ("`max_tokens` must be greater than
+                # `thinking.budget_tokens`"). Callers that passed a
+                # tiny max_tokens (e.g. smoke tests passing 20) would
+                # crash here. Bump max_tokens to leave at least
+                # _RESPONSE_ROOM_TOKENS for the post-thinking response.
+                _RESPONSE_ROOM_TOKENS = 1024
+                required = int(budget) + _RESPONSE_ROOM_TOKENS
+                existing = payload.get("max_tokens") or 0
+                if existing < required:
+                    payload["max_tokens"] = required
                 # Temperature on extended-thinking messages must be
                 # either 1 or omitted; sending a different value is
                 # a 400. Drop the caller-supplied value silently.
