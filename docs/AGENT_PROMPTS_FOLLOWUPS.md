@@ -77,6 +77,26 @@
   Citation: PR #30 (`.github/workflows/soak-nightly.yml`).
   Proposal: Wire a Slack/PagerDuty/issue-creator notifier on non-success so canary regressions get active eyes. Belongs in a small ops-tooling follow-up, not a new W##. — owner: needs-triage.
 
+- [open] 2026-04-25 · W11 · roadmap section number drift
+  Finding: The W11 brief in `docs/AGENT_PROMPTS.md` cites "§3.4 #1" for chaos drills, but the actual row in `FEATURE_STABILITY_ROADMAP.md` lives at §3.3 #1 ("Memory & federated sync — P0", row 1). W11 PR #31's commit message follows the brief while the docs/PR body follows the roadmap.
+  Citation: PR #31 (`feral/W11-sync-chaos`); `FEATURE_STABILITY_ROADMAP.md` §3.3 row 1.
+  Proposal: Reconcile to §3.3 #1 in the roadmap post-merge sweep; fix the W11 entry in `docs/AGENT_PROMPTS.md` (this PR) to match. — owner: conductor.
+
+- [open] 2026-04-25 · W11 · pytest `chaos` marker registration
+  Finding: W11 registered a new `chaos` pytest marker in `feral-core/pyproject.toml` (single-line additive change to `[tool.pytest.ini_options].markers`). pyproject.toml is not in W11's owned-paths; flagged for visibility.
+  Citation: PR #31 (`feral-core/pyproject.toml`).
+  Proposal: Allowed (matches the §C.2 precedent set by W12's `--runsoak` conftest extension; both are test-infra additions inside the file's existing markers list). — owner: conductor sign-off.
+
+- [open] 2026-04-25 · W11 · pyfakefs vs monkeypatch for disk-full tests
+  Finding: The W11 brief suggested `pyfakefs` for the ENOSPC simulation. W11 PR #31 used monkeypatch instead to avoid adding a new dev dependency.
+  Citation: PR #31 conductor-questions block; `feral-core/tests/test_memory_sync_chaos.py` (`TestDiskFull`).
+  Proposal: Either (a) accept monkeypatch as the W11-canonical pattern for ENOSPC sims, or (b) add `pyfakefs` to the dev extras and refactor in a focused follow-up. The current monkeypatch impl is honest and self-contained, so (a) is the cheaper path. — owner: needs-triage.
+
+- [open] 2026-04-25 · W11 + W12 + W17 · mintlify nav consolidation
+  Finding: W8 (`security/genui.mdx`), W9 (`security/vault.mdx` + `security/pairing.mdx`), W11 (`memory/chaos.mdx`), and W12 (`operations/soak.mdx`) are all creating new mintlify sub-trees with no existing nav entries in `docs/mintlify/docs.json`. Each file is correct in isolation but the docs site won't surface them until the nav is updated.
+  Citation: PRs #27, #28, #30, #31; `docs/mintlify/docs.json`.
+  Proposal: Single small PR by the docs owner that adds nav entries for "Memory", "Operations", and "Security" groups in one shot once W8/W9/W11/W12 land. — owner: needs-triage (docs).
+
 ---
 
 ## Closed follow-ups
