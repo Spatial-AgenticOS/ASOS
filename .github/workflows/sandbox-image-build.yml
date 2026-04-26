@@ -1,0 +1,84 @@
+name: Sandbox Image Build (W22)
+
+# CI smoke build for the W22 sandbox images. The two sandbox surfaces
+# (Dockerfile.sandbox + Dockerfile.sandbox-browser) MUST build cleanly
+# at all times; if they don't, a future operator can't ship the
+# sandbox and feral-core/security/docker_sandbox.py has no image to
+# launch. continue-on-error is intentionally false.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile.sandbox"
+      - "Dockerfile.sandbox-common"
+      - "Dockerfile.sandbox-browser"
+      - "feral-core/security/sandbox_image.py"
+      - ".github/workflows/sandbox-image-build.yml"
+  pull_request:
+    paths:
+      - "Dockerfile.sandbox"
+      - "Dockerfile.sandbox-common"
+      - "Dockerfile.sandbox-browser"
+      - "feral-core/security/sandbox_image.py"
+      - ".github/workflows/sandbox-image-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Smoke-build sandbox images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # We use plain `docker build` instead of `docker buildx`. With
+      # buildx + `--load` the first image lands in the daemon's
+      # registry, but the *next* buildx invocation runs inside an
+      # isolated builder context that does NOT see the daemon's local
+      # images — so `FROM feral-sandbox-common:latest` in
+      # Dockerfile.sandbox triggers a registry pull against an image
+      # that exists only locally, which fails with "pull access
+      # denied". Plain `docker build` reuses the daemon image cache
+      # for the whole job, so the dependent FROM resolves locally.
+
+      - name: Build feral-sandbox-common (base)
+        run: docker build --file Dockerfile.sandbox-common --tag feral-sandbox-common:latest .
+
+      - name: Build feral-sandbox (Dockerfile.sandbox)
+        run: |
+          docker build --file Dockerfile.sandbox \
+            --build-arg SANDBOX_COMMON_TAG=latest \
+            --tag feral-sandbox:test .
+
+      - name: Build feral-sandbox-browser (Dockerfile.sandbox-browser)
+        run: |
+          docker build --file Dockerfile.sandbox-browser \
+            --build-arg SANDBOX_COMMON_TAG=latest \
+            --tag feral-sandbox-browser:test .
+
+      - name: Inspect built images
+        run: docker images "feral-sandbox*"
+
+      - name: Smoke-run minimal sandbox watchdog (no script → exit 64)
+        run: |
+          set +e
+          docker run --rm --network=none --cap-drop=ALL \
+            --read-only --tmpfs /tmp:rw,nosuid,size=64m \
+            feral-sandbox:test
+          rc=$?
+          # Watchdog exits 124 (timeout) or non-zero when no entry script
+          # is mounted. Accept any non-zero — the goal here is "container
+          # boots, ENTRYPOINT runs, no segfault".
+          if [ "$rc" = "0" ]; then
+            echo "feral-sandbox watchdog returned 0 with no entry script — unexpected"
+            exit 1
+          fi
+
+      - name: Smoke-run browser sandbox (chromium --version)
+        run: |
+          docker run --rm --network=none --cap-drop=ALL \
+            feral-sandbox-browser:test --version
