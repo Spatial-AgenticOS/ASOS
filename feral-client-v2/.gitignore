@@ -4,3 +4,8 @@ coverage/
 .DS_Store
 *.log
 .vite/
+
+# Playwright (W4 added pair_device.spec.ts; W14 owns the full e2e program)
+playwright-report/
+test-results/
+playwright/.cache/
