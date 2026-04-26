@@ -72,16 +72,78 @@ def register_key_subparser(sub: "argparse._SubParsersAction") -> None:
              "leaves the secret in your shell history).",
     )
 
+    # ── W16 additions ───────────────────────────────────────────────
+    # The three subcommands below were added by W16. They are additive:
+    # the W9 `status`/`rotate`/`recover` behaviour above is unchanged.
+
+    list_p = key_sub.add_parser(
+        "list",
+        help="List per-agent auth profiles (W16). Shows profile ids and "
+             "credential types; never echoes secrets.",
+    )
+    list_p.add_argument(
+        "--agent",
+        default=None,
+        help="Agent id whose profiles to list (default: 'default').",
+    )
+
+    key_sub.add_parser(
+        "migrate",
+        help="W16: import the legacy ~/.feral/credentials.json blob "
+             "into the new per-agent auth profile store. Idempotent.",
+    )
+
+    # W16: extend `feral key rotate` with `--provider` so a single
+    # per-agent credential can be rotated without touching the W9 vault
+    # master key. When `--provider` is omitted the W9 master-key
+    # rotation behaviour above is preserved verbatim.
+    rotate_p.add_argument(
+        "--provider",
+        default=None,
+        help="W16: rotate ONE provider's credential in the per-agent "
+             "auth profile store. When set, this overrides the master-key "
+             "rotation default.",
+    )
+    rotate_p.add_argument(
+        "--agent",
+        default=None,
+        help="W16: agent id whose profile to rotate (default: 'default'). "
+             "Only meaningful with --provider.",
+    )
+    rotate_p.add_argument(
+        "--key",
+        default=None,
+        help="W16: new API key value. Only meaningful with --provider; "
+             "if omitted, prompted via getpass.",
+    )
+
 
 def dispatch_key_subcommand(args) -> int:
     action = getattr(args, "action", None) or "status"
     if action == "status":
         return cmd_key_status()
     if action == "rotate":
+        # W16: when --provider is supplied, rotate that single per-agent
+        # credential instead of the vault master key. The W9 master-key
+        # path is preserved exactly when --provider is absent.
+        provider = getattr(args, "provider", None)
+        if provider:
+            return cmd_key_rotate_provider(
+                provider=provider,
+                agent_id=getattr(args, "agent", None),
+                new_key=getattr(args, "key", None),
+            )
         return cmd_key_rotate(skip_confirm=getattr(args, "key_confirm", False))
     if action == "recover":
         return cmd_key_recover(code=getattr(args, "code", "") or "")
-    print(f"Unknown action: {action}. Try one of: status, rotate, recover.")
+    if action == "list":
+        return cmd_key_list(agent_id=getattr(args, "agent", None))
+    if action == "migrate":
+        return cmd_key_migrate()
+    print(
+        f"Unknown action: {action}. "
+        f"Try one of: status, rotate, recover, list, migrate."
+    )
     return 2
 
 
@@ -270,6 +332,168 @@ def _print_recovery_code(code: str, *, occasion: str) -> None:
     print("  It is the ONLY way to recover credentials if the OS keychain")
     print("  entry is lost. FERAL has no escrow copy.")
     print(bar)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# W16: per-agent auth profile commands (additive — never modify the
+# W9 status/rotate/recover behaviour above).
+# ─────────────────────────────────────────────────────────────────────
+
+
+def cmd_key_list(*, agent_id: Optional[str] = None) -> int:
+    """List the per-agent auth profiles (id + credential type + provider).
+
+    Never echoes the secret material; the most a row ever shows is the
+    fingerprint-style "*****abcd" tail of the key so an operator can
+    confirm "yes that's the key I think it is".
+    """
+    from security.auth_profiles import (
+        AuthProfileFileStore,
+        DEFAULT_AGENT_ID,
+        validate_agent_id,
+    )
+    from security.auth_profiles.types import (
+        ApiKeyCredential,
+        OAuthCredential,
+        TokenCredential,
+    )
+
+    cleaned = validate_agent_id(agent_id or DEFAULT_AGENT_ID)
+    store = AuthProfileFileStore(cleaned)
+    profiles = store.load()
+
+    print(f"  FERAL Auth Profiles — agent: {cleaned}")
+    print("  " + "=" * 60)
+    if not profiles:
+        print("  (no profiles registered)")
+        print()
+        print("  Tip: run `feral key migrate` to import the legacy")
+        print("       ~/.feral/credentials.json blob, or use the Settings")
+        print("       UI to add a credential.")
+        return 0
+
+    for profile_id in sorted(profiles.keys()):
+        cred = profiles[profile_id]
+        if isinstance(cred, ApiKeyCredential):
+            tail = cred.key[-4:] if len(cred.key) >= 4 else "****"
+            print(f"  {profile_id:<32}  api_key   {cred.provider:<16}  *****{tail}")
+        elif isinstance(cred, OAuthCredential):
+            print(
+                f"  {profile_id:<32}  oauth     {cred.provider:<16}  "
+                f"refresh stored, expires_ms={cred.expires}"
+            )
+        elif isinstance(cred, TokenCredential):
+            tail = cred.token[-4:] if len(cred.token) >= 4 else "****"
+            print(f"  {profile_id:<32}  token     {cred.provider:<16}  *****{tail}")
+        else:
+            print(f"  {profile_id:<32}  unknown   {type(cred).__name__}")
+    return 0
+
+
+def cmd_key_migrate() -> int:
+    """Manually trigger the W16 legacy → per-agent migration."""
+    from security.auth_profiles import run_migration_if_needed
+
+    result = run_migration_if_needed()
+    if not result.migrated:
+        if result.noop_reason == "already-migrated":
+            print(f"  Already migrated: {result.destination}")
+            print("  (no-op; per-agent file already exists)")
+            return 0
+        if result.noop_reason == "no-legacy-file":
+            print(f"  Nothing to migrate: {result.legacy_path} does not exist.")
+            return 0
+        print(f"  No migration performed (reason={result.noop_reason}).")
+        return 0
+
+    print("  W16 migration complete.")
+    print(f"    Source       : {result.legacy_path}")
+    print(f"    Destination  : {result.destination}")
+    print(f"    Backup       : {result.backup_path}  (mode 0600)")
+    print(f"    Entries      : {result.entries} ({result.api_keys} api_key, "
+          f"{result.oauth} oauth)")
+    print()
+    print("  The original credentials.json was NOT deleted — W9 still owns")
+    print("  that file's lifecycle. Once you've verified the per-agent file")
+    print("  loads correctly, the W9 vault path will rotate it out on its")
+    print("  next encryption migration.")
+    return 0
+
+
+def cmd_key_rotate_provider(
+    *,
+    provider: str,
+    agent_id: Optional[str] = None,
+    new_key: Optional[str] = None,
+) -> int:
+    """W16 — rotate one provider's credential in the per-agent store.
+
+    Today only the API-key shape is rotatable from the CLI: OAuth
+    rotation needs the provider's authorisation server in the loop and
+    is the user-facing flow's responsibility. Token rotation is a
+    delete + insert and so is structurally identical to API-key rotate.
+    """
+    from security.auth_profiles import AuthProfileFileStore, validate_agent_id
+    from security.auth_profiles.types import (
+        ApiKeyCredential,
+        OAuthCredential,
+        TokenCredential,
+    )
+
+    cleaned = validate_agent_id(agent_id or "default")
+    store = AuthProfileFileStore(cleaned)
+    existing = store.get(provider)
+    if existing is None:
+        print(
+            f"  No profile {provider!r} registered for agent {cleaned!r}. "
+            f"Add the credential first via Settings or `feral key migrate`."
+        )
+        return 1
+
+    if isinstance(existing, OAuthCredential):
+        print(
+            "  OAuth rotation must go through the provider's authorisation "
+            "server (browser flow). Use the Settings UI to re-authenticate, "
+            "or revoke + re-add the profile."
+        )
+        return 1
+
+    if not new_key:
+        print(f"  Paste the NEW key for provider {provider!r}, agent {cleaned!r}:")
+        try:
+            new_key = getpass.getpass("  New key: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("  Cancelled.")
+            return 1
+
+    if not new_key:
+        print("  No key supplied. Aborting.")
+        return 1
+
+    if isinstance(existing, ApiKeyCredential):
+        rotated: ApiKeyCredential | TokenCredential = ApiKeyCredential(
+            provider=existing.provider,
+            key=new_key,
+            email=existing.email,
+            display_name=existing.display_name,
+            metadata=dict(existing.metadata),
+        )
+    elif isinstance(existing, TokenCredential):
+        rotated = TokenCredential(
+            provider=existing.provider,
+            token=new_key,
+            expires=existing.expires,
+            email=existing.email,
+            display_name=existing.display_name,
+        )
+    else:
+        print(f"  Unsupported credential shape {type(existing).__name__}.")
+        return 1
+
+    store.upsert(provider, rotated)
+    print(f"  Rotated {provider!r} for agent {cleaned!r}.")
+    return 0
 
 
 # ─────────────────────────────────────────────────────────────────────
