@@ -1,6 +1,7 @@
 """W17: subagent lifecycle — spawn → run → reap, and parent-cancel propagation.
 
-Mirrors openclaw-tools.subagents.sessions-spawn.lifecycle.test.ts.
+Part of the canonical lifecycle test set: allowlist / cron-note /
+lifecycle / model / scope.
 """
 
 from __future__ import annotations

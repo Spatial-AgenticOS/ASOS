@@ -2,8 +2,8 @@
 
 Two agent ids ("default" and "twin") hold disjoint OAuth tokens.
 Cross-reads return ``None`` and deletions on one do not affect the
-other. This is the openclaw "per-agent directory" guarantee from
-``OPENCLAW_LESSONS.md`` §1.
+other. This is the "per-agent directory" guarantee discussed in
+``docs/OPENCLAW_LESSONS.md`` §1 (internal comparative analysis).
 """
 
 from __future__ import annotations

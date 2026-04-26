@@ -172,8 +172,8 @@ def test_two_agents_share_one_refresh(fake_refresh_server, shared_feral_home, mo
 
     The second agent blocks on the lock, observes that the credential
     was rotated, and adopts the new tokens without firing its own HTTP
-    refresh — exactly the openclaw rule preventing
-    ``refresh_token_reused`` storms.
+    refresh — preventing the ``refresh_token_reused`` storms that a
+    provider treats as credential compromise.
     """
     feral_core = Path(__file__).resolve().parents[1]
     script = _agent_script(feral_core)

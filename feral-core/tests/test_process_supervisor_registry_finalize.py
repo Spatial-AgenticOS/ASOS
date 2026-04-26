@@ -1,7 +1,7 @@
 """W18: registry finalize stamps finished_at + exit_code; clears active.
 
-Mirrors openclaw's ``registry.test.ts`` "finalize sets exited state"
-contract. Spec: spawn → wait → finalize; assert RunRecord has
+Contract: "finalize sets exited state". Spec: spawn → wait →
+finalize; assert RunRecord has
 finished_at + exit_code populated; assert list_active is empty after
 finalize.
 
