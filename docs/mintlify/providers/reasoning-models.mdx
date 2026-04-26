@@ -1,0 +1,123 @@
+---
+title: "Reasoning models"
+description: "How FERAL forks chat-completion parameters for reasoning / thinking models — and why this is the fix for the 400s on gpt-5.5, claude-opus-4-7, and deepseek-v4-pro."
+---
+
+## Why the fork exists
+
+Every reasoning-capable frontier model in 2026 has its own
+chat-completion contract that differs from the legacy chat payload:
+
+* **OpenAI** `gpt-5` / `gpt-5.4*` / `gpt-5.5*` / `o1` / `o3` / `o4`
+  on `/v1/chat/completions` require `max_completion_tokens` instead
+  of `max_tokens`, reject `temperature != 1`, and reject
+  `top_p` / `presence_penalty` / `frequency_penalty`. Sending the
+  legacy payload is a `400 Bad Request`.
+* **Anthropic** extended-thinking models (Sonnet 4.6, Haiku 4.5,
+  older Opus / Sonnet 4.x) require a `thinking={"type":"enabled",
+  "budget_tokens":N}` block and drop the `temperature` knob. Opus 4.7
+  uses *adaptive* thinking and rejects the explicit block — sending
+  one is a 400.
+* **DeepSeek** `v4-pro` / `deepseek-reasoner` require
+  `extra_body={"thinking":{"type":"enabled"}}` plus
+  `reasoning_effort`, and reject `temperature` / `top_p` /
+  penalty params in strict mode.
+* **Gemini** `-thinking` variants accept
+  `generationConfig.thinkingConfig.enabled=true`; non-thinking
+  Gemini 3.x rejects the block.
+
+Before W24a, FERAL sent the legacy payload for every model — which
+is the exact shape of the 400s in the shipped v2026.5.0 terminal log.
+
+## The fork table
+
+Single call site: `agents.llm_provider.apply_reasoning_fork(provider,
+model, body)`. Every chat-body assembly site in
+`agents/llm_provider.py` now passes through it. Per-adapter mirrors
+(`providers/openai_provider.py::_apply_reasoning_fork`,
+`deepseek_provider.py::_apply_reasoning_fork`, etc.) share the same
+contract so the adapter-level `chat()` path matches the dispatcher.
+
+| Provider   | Trigger                                                      | What the fork **strips**                                                 | What the fork **adds**                                                                                                |
+| ---------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| OpenAI     | `classify()=="reasoning"`                                    | `max_tokens`, `temperature (!= 1)`, `top_p`, `presence_penalty`, `frequency_penalty` | `max_completion_tokens` (from old `max_tokens`), `reasoning_effort` (default `"medium"`)                             |
+| Anthropic  | Reasoning-class model AND the caller opted into thinking     | `temperature` (when extended thinking)                                   | `thinking={"type":"enabled","budget_tokens":<opus 32k / sonnet 16k / haiku caller-supplied>}` for extended-thinking models. Adaptive-thinking (Opus 4.7) receives **no** thinking block. |
+| DeepSeek   | `classify()=="reasoning"` (v4-pro / deepseek-reasoner)       | `temperature`, `top_p`, `presence_penalty`, `frequency_penalty`          | `extra_body={"thinking":{"type":"enabled"}}`, `reasoning_effort="high"` (orchestrator subagents → `"max"`)            |
+| Gemini     | Model id ends with `-thinking`                               | — (Gemini keeps temperature)                                             | `generationConfig.thinkingConfig.enabled=true` (+ optional `thinkingBudget`)                                          |
+| Groq       | Groq-hosted reasoning model (DeepSeek-R1 distill, Qwen QwQ)  | same as OpenAI                                                           | same as OpenAI                                                                                                        |
+
+## Gotchas
+
+### OpenAI: `temperature=1` is the only safe legacy value
+
+The fork silently drops `temperature != 1` rather than rejecting —
+callers that pass `0.7` to a reasoning model get the server default.
+If you genuinely need a specific temperature, switch to a non-
+reasoning chat model (e.g. `gpt-4o`) or pick `reasoning_effort`
+instead: the effort knob (`"minimal"` / `"low"` / `"medium"` /
+`"high"` / `"xhigh"`) is the reasoning-mode analog of temperature.
+
+### Anthropic: Opus 4.7 is *adaptive*, not *extended*
+
+Sonnet 4.6 and Haiku 4.5 accept
+`thinking={"type":"enabled","budget_tokens":N}` and let you tune
+the depth. Opus 4.7 decides its own depth — sending the extended
+block 400s the request with
+`thinking.type.enabled not supported for this model`. The adapter's
+`supports_extended_thinking(model)` / `supports_adaptive_thinking(model)`
+methods read the capability flags from the live `/v1/models` response
+when available, and fall back to a static overlay when the adapter
+hasn't refreshed yet.
+
+### DeepSeek: carry `reasoning_content` through tool calls
+
+DeepSeek's thinking mode emits `reasoning_content` on the assistant
+message. The upstream contract:
+
+* Tool-call cycle in flight → the NEXT request **must** replay the
+  assistant message WITH `reasoning_content` intact. Dropping it is a
+  `400 reasoning_content missing`.
+* Tool cycle completed → the NEXT request **should** drop
+  `reasoning_content` from the replayed assistant message. Leaving it
+  makes the model regenerate reasoning tokens and bloats context.
+
+`providers.deepseek_provider.carry_reasoning_content(messages)` walks
+a replay list and applies the right branch. The regression is pinned
+in `tests/test_deepseek_reasoning_content_carry.py`.
+
+### DeepSeek: streaming keep-alive is not a terminator
+
+DeepSeek's thinking-mode stream keeps the connection open with
+`: keep-alive` SSE comment lines for up to 10 minutes. The shared
+streaming loop in `agents/llm_provider.py` now skips empty lines and
+`:`-prefixed comments so the stream reader doesn't think the turn
+ended early. OpenRouter queue-busy comments (`:OPENROUTER PROCESSING`)
+and Anthropic keep-alive events fall through the same branch.
+
+### Gemini: non-thinking models reject `thinkingConfig`
+
+Sending `thinkingConfig.enabled=true` to `gemini-3.1-pro` (the non-
+thinking flagship) is a 400. Only `-thinking` ids receive the block.
+The classifier regex is `^gemini-.+-thinking(-.+)?$` — extend it when
+Google ships new research builds.
+
+## What callers need to change
+
+Nothing. The fork is purely internal to the dispatch path — calling
+`LLMProvider.chat(messages, temperature=0.7, max_tokens=1024)`
+continues to work for every model; the fork rewrites the payload
+before it hits the wire.
+
+The one additive knob: `reasoning_effort=` in kwargs. Pass
+`"high"` for a one-off deeper reasoning pass, `"max"` for
+orchestrator-spawned subagents that need the longest reasoning
+window, `"minimal"` for latency-critical paths.
+
+## See also
+
+* [Model classes](./model-classes) — which ids the classifier flags
+  as reasoning vs chat vs embedding.
+* `feral-core/tests/test_reasoning_model_params.py` — the wire-shape
+  matrix that pins every fork branch against a mocked httpx client.
+* `feral-core/tests/test_deepseek_reasoning_content_carry.py` — the
+  multi-turn carry contract for DeepSeek thinking mode.

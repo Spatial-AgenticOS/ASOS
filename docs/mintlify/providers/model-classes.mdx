@@ -1,0 +1,133 @@
+---
+title: "Model classes"
+description: "How FERAL classifies each provider model so the picker never sends babbage-002 to /chat/completions."
+---
+
+## The problem this solves
+
+A provider's ``/v1/models`` endpoint returns every model the account
+can access — chat, reasoning, embeddings, audio transcription, speech
+synthesis, image generation, realtime voice, and legacy completion-
+only. OpenAI returns ~130 today; Anthropic returns ~40; OpenRouter
+returns 300+ routed slugs. Without a filter, the model picker is
+unusable: pick the wrong id and the next request to
+``/chat/completions`` comes back ``400``.
+
+FERAL's answer is a small deterministic classifier,
+``feral-core/providers/model_classes.py``, that tags every known id
+with one of ten classes and lets callers ask for the slice they want.
+
+## The ten classes
+
+| Class           | What it means                                                                                   | Example ids                                         |
+| --------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `chat`          | General chat completion — the superclass for everything conversational.                         | `gpt-4o`, `claude-haiku-4-5`, `deepseek-v4-flash`   |
+| `reasoning`     | Chat models with a thinking / reasoning contract. Strict subset of `chat`.                      | `gpt-5.5`, `o3`, `claude-opus-4-7`, `deepseek-v4-pro` |
+| `vision`        | (Capability, not a class.) Chat models that accept image parts.                                 | `gpt-5.5`, `claude-opus-4-7`, `gemini-3.1-pro`      |
+| `embedding`     | Dense vector output for retrieval / memory.                                                     | `text-embedding-3-large`, `text-embedding-004`      |
+| `audio`         | Audio input (transcription) or audio output (TTS).                                              | `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-tts` |
+| `image`         | Image generation.                                                                               | `dall-e-3`, `gpt-image-2`, `gemini-3-pro-image`     |
+| `realtime`      | Streaming speech-to-speech.                                                                     | `gpt-realtime-1.5`                                  |
+| `completion-only` | Legacy ``/v1/completions`` models (400 on ``/chat/completions``).                             | `babbage-002`, `davinci-002`, `gpt-3.5-turbo-instruct` |
+| `video`         | Reserved for future video-generation providers.                                                 | —                                                   |
+| `unknown`       | No rule matched. Default-included in the `chat` filter (so freshly-released names aren't silently dropped) and excluded from narrower filters. | Any id FERAL hasn't seen yet. |
+
+`reasoning` is a strict subset of `chat`. A reasoning model's
+`classify()` returns `"reasoning"` AND it appears when you ask for
+`model_class="chat"`. Vision is additive to chat — ask the adapter's
+`_capabilities_for_model(id)` for the vision flag rather than using a
+class filter.
+
+## Filtering the picker
+
+```python
+from providers.openai_provider import OpenAIProvider
+
+adapter = OpenAIProvider(api_key="sk-...")
+await adapter.refresh_models()  # pulls the live 130-entry /v1/models
+
+# The v2 Settings chat composer dropdown:
+chat_ids = adapter.list_models(model_class="chat")
+
+# feral-memory's embedding lookup:
+embedding_ids = adapter.list_models(model_class="embedding")
+
+# feral-voice's transcription picker:
+audio_ids = adapter.list_models(model_class="audio")
+
+# Legacy callers — the no-arg form returns the full list, unchanged.
+raw = adapter.list_models()
+```
+
+The filter runs inside `BaseProvider.list_models`, so every adapter
+that inherits from it — OpenAI, Anthropic, DeepSeek, Gemini, Groq,
+OpenRouter, Together, Fireworks, Ollama, LM Studio — gets the filter
+for free.
+
+## How the classifier decides
+
+The rules are regex-driven and per-provider, so `"gpt-5.5"` on OpenAI
+and `"openai/gpt-5.5"` on OpenRouter both resolve to `reasoning`:
+
+* OpenAI: `gpt-5{,.x}`, `o1`, `o3`, `o4` → reasoning. `gpt-4o`,
+  `gpt-4.1`, `gpt-3.5-turbo` → chat. `babbage-*`, `*-instruct` →
+  completion-only. `text-embedding-*` → embedding. `whisper-*`,
+  `*-transcribe`, `*-tts` → audio. `dall-e-*`, `gpt-image-*` → image.
+  `gpt-realtime-*`, `gpt-4o-realtime-*` → realtime.
+* Anthropic: every `claude-4-*` model is reasoning (Opus 4.7 uses
+  adaptive thinking; Sonnet 4.6 / Haiku 4.5 use extended thinking).
+  Older `claude-3-*` is chat. `claude-instant-*` is chat.
+* DeepSeek: `deepseek-v4-pro` and `deepseek-reasoner` → reasoning.
+  `deepseek-v4-flash` and `deepseek-chat` → chat.
+* Gemini: any id ending `-thinking` → reasoning. `*-image` → image.
+  Everything else that looks like a chat model name → chat.
+* Groq: `deepseek-r1-distill-*`, `qwen-qwq-*` → reasoning.
+  `whisper-*` → audio. Llama / Mixtral / Gemma → chat.
+* OpenRouter: peel the `<vendor>/` prefix and delegate — OR is a
+  router, so class semantics match the routed target.
+
+Adding a rule is a two-line edit to `model_classes.py` plus one case
+in `tests/test_provider_model_classes.py`.
+
+## Refreshing the catalog
+
+When a provider ships a new model id, run the refresh script once so
+the bundled catalog (the list that ships in wheels and on first boot)
+is re-seeded from the live `/v1/models` endpoint:
+
+```bash
+# No credentials needed — dry-run prints the target URLs and the
+# current-vs-live drift count.
+python scripts/refresh_provider_catalog.py --dry-run
+
+# With keys in the env — writes feral-core/providers/model_catalog.json
+# plus feral-core/tests/fixtures/<provider>_models.json.
+OPENAI_API_KEY=sk-... \
+ANTHROPIC_API_KEY=sk-ant-... \
+DEEPSEEK_API_KEY=sk-... \
+OPENROUTER_API_KEY=sk-or-... \
+  python scripts/refresh_provider_catalog.py
+```
+
+Providers the host has no credentials for are skipped with a
+`skipped (no key)` line. OpenRouter's `/api/v1/models` endpoint is
+public — the refresh works without a key and is the main way new
+routed slugs reach the catalog automatically.
+
+After a refresh the printed `drift = N` tells you how many ids
+changed. `drift = 0` means the bundled list is already at parity
+with the live APIs.
+
+## Extending for a new provider
+
+When you add a new adapter:
+
+1. Extend `_RULES_BY_PROVIDER` in `providers/model_classes.py` with
+   a regex table covering the provider's ids.
+2. Make sure the chat-class filter test (`test_chat_only_filter.py`)
+   has at least one ``(chat, non-chat)`` pair from your adapter.
+3. Add a fixture `tests/fixtures/<provider>_models.json` capturing a
+   representative `/v1/models` response. The classifier tests walk the
+   fixture and assert every id classifies away from `unknown`.
+4. Register the adapter in `scripts/refresh_provider_catalog.py` so
+   `--dry-run` surfaces drift for the new provider.

@@ -1,0 +1,11 @@
+{
+  "_source": "GET https://generativelanguage.googleapis.com/v1beta/models?key=... 2026-04-26. Shape: {models: [{name, version, displayName, supportedGenerationMethods, inputTokenLimit, outputTokenLimit}], nextPageToken?}",
+  "models": [
+    {"name": "models/gemini-3.1-pro-preview", "version": "001", "displayName": "Gemini 3.1 Pro (Preview)", "supportedGenerationMethods": ["generateContent", "streamGenerateContent", "countTokens"], "inputTokenLimit": 2097152, "outputTokenLimit": 65536},
+    {"name": "models/gemini-3-flash-preview", "version": "001", "displayName": "Gemini 3 Flash (Preview)", "supportedGenerationMethods": ["generateContent", "streamGenerateContent", "countTokens"], "inputTokenLimit": 1048576, "outputTokenLimit": 32768},
+    {"name": "models/gemini-3.1-flash-lite-preview", "version": "001", "displayName": "Gemini 3.1 Flash-Lite (Preview)", "supportedGenerationMethods": ["generateContent", "streamGenerateContent"], "inputTokenLimit": 1048576, "outputTokenLimit": 16384},
+    {"name": "models/gemini-3.1-pro-thinking", "version": "preview", "displayName": "Gemini 3.1 Pro Thinking", "supportedGenerationMethods": ["generateContent"], "inputTokenLimit": 2097152, "outputTokenLimit": 65536},
+    {"name": "models/gemini-3.1-flash-image-preview", "version": "preview", "displayName": "Gemini 3.1 Flash Image (Preview)", "supportedGenerationMethods": ["generateContent"], "inputTokenLimit": 32768, "outputTokenLimit": 32768},
+    {"name": "models/text-embedding-004", "version": "004", "displayName": "Text Embedding 004", "supportedGenerationMethods": ["embedContent"], "inputTokenLimit": 2048, "outputTokenLimit": 1}
+  ]
+}

@@ -8,8 +8,34 @@ from typing import Any, Optional
 import httpx
 
 from .base import BaseProvider, ChatMessage, ChatResponse
+from .model_classes import classify
 
 logger = logging.getLogger("feral.providers.groq")
+
+
+# Groq hosts OpenAI-compatible reasoning models (deepseek-r1 distills,
+# qwen-qwq series). When the backend is reasoning, the same param fork
+# the OpenAI adapter applies is needed: ``max_tokens`` must become
+# ``max_completion_tokens`` and ``temperature != 1`` must be stripped.
+# Keep this list in sync with ``providers/openai_provider.py``.
+_REASONING_STRIP_PARAMS = frozenset(
+    {"max_tokens", "top_p", "presence_penalty", "frequency_penalty"}
+)
+
+
+def _apply_reasoning_fork(model: str, payload: dict[str, object]) -> dict[str, object]:
+    if classify("groq", model) != "reasoning":
+        return payload
+    max_tokens = payload.pop("max_tokens", None)
+    if max_tokens is not None and "max_completion_tokens" not in payload:
+        payload["max_completion_tokens"] = max_tokens
+    temp = payload.get("temperature")
+    if temp is not None and temp != 1 and temp != 1.0:
+        payload.pop("temperature", None)
+    for key in _REASONING_STRIP_PARAMS:
+        payload.pop(key, None)
+    payload.setdefault("reasoning_effort", "medium")
+    return payload
 
 
 class GroqProvider(BaseProvider):
@@ -55,6 +81,9 @@ class GroqProvider(BaseProvider):
             payload["temperature"] = temperature
         if tools:
             payload["tools"] = tools
+
+        _apply_reasoning_fork(model, payload)
+
         async with httpx.AsyncClient(timeout=60.0) as c:
             r = await c.post(
                 f"{self._base_url}/chat/completions",

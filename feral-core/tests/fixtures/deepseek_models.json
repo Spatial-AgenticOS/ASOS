@@ -1,0 +1,11 @@
+{
+  "_source": "GET https://api.deepseek.com/v1/models 2026-04-26. Shape: {object:'list', data: [{id, object:'model', owned_by}]}",
+  "_note": "Per the DeepSeek pricing page, deepseek-chat and deepseek-reasoner are compatibility aliases for deepseek-v4-flash (non-thinking / thinking). Both remain in /v1/models until the 2026-07-24 deprecation.",
+  "object": "list",
+  "data": [
+    {"id": "deepseek-v4-pro", "object": "model", "owned_by": "deepseek"},
+    {"id": "deepseek-v4-flash", "object": "model", "owned_by": "deepseek"},
+    {"id": "deepseek-chat", "object": "model", "owned_by": "deepseek"},
+    {"id": "deepseek-reasoner", "object": "model", "owned_by": "deepseek"}
+  ]
+}
