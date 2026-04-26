@@ -1,0 +1,45 @@
+{
+  "id": "telegram",
+  "providers": [
+    "telegram"
+  ],
+  "providerAuthEnvVars": {
+    "telegram": [
+      "FERAL_TELEGRAM_BOT_TOKEN"
+    ]
+  },
+  "capabilities": {
+    "messagingProvider": true,
+    "fileProvider": true
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "telegram",
+      "method": "api-key",
+      "choiceId": "telegram-bot-token",
+      "choiceLabel": "Telegram Bot Token",
+      "choiceHint": "BotFather token, e.g. 123456:ABC-DEF...",
+      "optionKey": "telegramBotToken",
+      "cliFlag": "--telegram-bot-token",
+      "cliOption": "--telegram-bot-token <token>",
+      "cliDescription": "Telegram BotFather bot token"
+    }
+  ],
+  "modelSupport": {
+    "preferredModels": [
+      "gpt-5.5",
+      "claude-opus-4-7",
+      "gemini-3.1-pro"
+    ]
+  },
+  "contracts": {
+    "messaging": "v1"
+  },
+  "signature": {
+    "algo": "ed25519",
+    "publicKeyId": "w21-bundled-2026-04",
+    "publicKey": "mHmXMfNkifId5ZGgTHzestbgF4PmT06EHHLj7edn1nE=",
+    "signature": "acbIAX6uR8e1t52bioJKL1sUzlnN5U8KUZZYWATfk/XiyhSWy32FLQ3v20QuecwA6M/R/VLRh566DZ+4x7n8Bg==",
+    "signedAt": "2026-04-25T00:00:00+00:00"
+  }
+}
