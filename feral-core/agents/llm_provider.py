@@ -54,11 +54,15 @@ VISION_READY_OLLAMA_MODELS = (
     "gemma3",
 )
 
+# Empty ``model`` strings tell ``apply_preset`` → ``switch_provider``
+# to resolve the default via the shared catalog (Roadmap §3.5 P0).
+# Hardcoding a frontier name here drifts every quarter — the catalog
+# does not.
 LLM_PRESETS = {
     "ollama_text": {
         "provider": "ollama",
-        "model": "llama3.1",
-        "description": "Local text path on Ollama",
+        "model": "",
+        "description": "Local text path on Ollama (uses first installed text model)",
         "vision_supported": False,
     },
     "ollama_vision": {
@@ -69,7 +73,7 @@ LLM_PRESETS = {
     },
     "openai_default": {
         "provider": "openai",
-        "model": "gpt-4o-mini",
+        "model": "",
         "description": "Cloud default for balanced latency/quality",
         "vision_supported": True,
     },
@@ -164,17 +168,53 @@ class ProviderCooldownTracker:
         self._cooldowns.pop(provider, None)
 
 
-_PROVIDER_REGISTRY: dict[str, tuple[str, str, str]] = {
-    "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"),
-    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "llama-3.1-70b-versatile"),
-    "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "claude-sonnet-4-20250514"),
-    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", "gemini-2.5-flash"),
-    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "openai/gpt-4.1"),
-    "deepseek": ("https://api.deepseek.com", "DEEPSEEK_API_KEY", "deepseek-chat"),
-    "kimi": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY", "moonshot-v1-128k"),
-    "qwen": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", "qwen-max"),
-    "lmstudio": ("http://localhost:1234/v1", "", "local-model"),
+# Per-provider HTTP base URL + credential env var. Default model used to
+# live in this tuple — it has been stripped because hardcoded model
+# literals here drift the moment a provider ships a new frontier name
+# (Roadmap §3.5 P0). The runtime now resolves the default model lazily
+# through ``get_shared_catalog().default_model_for(pid)`` (see
+# ``_default_model_for``) so the catalog's bundled / live model list is
+# the single source of truth.
+_PROVIDER_REGISTRY: dict[str, tuple[str, str]] = {
+    "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY"),
+    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+    "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+    "deepseek": ("https://api.deepseek.com", "DEEPSEEK_API_KEY"),
+    "kimi": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
+    "qwen": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"),
+    "lmstudio": ("http://localhost:1234/v1", ""),
 }
+
+
+# Catalog id ↔ legacy llm_provider id. The catalog only knows
+# "anthropic", "moonshot" etc. but llm_provider historically used
+# "anthropic", "kimi" — keep this map small and explicit so no caller
+# has to remember the translation.
+_CATALOG_PROVIDER_MAP: dict[str, str] = {
+    "kimi": "moonshot",
+}
+
+
+def _default_model_for(provider_name: str) -> str:
+    """Return the catalog's current default model id for *provider_name*.
+
+    Returns ``""`` when the catalog is unavailable or the provider is
+    unknown. Callers MUST NOT substitute a hardcoded literal — surface
+    the empty string back to the user / settings UI so the picker
+    renders an honest "no model selected" state instead of a stale
+    guess like ``gpt-4o-mini``. The roadmap §3.5 P0 ban on hardcoded
+    defaults exists because those literals went stale every quarter
+    and shipped to production unnoticed.
+    """
+    pid = _CATALOG_PROVIDER_MAP.get(provider_name, provider_name)
+    try:
+        from providers.catalog import get_shared_catalog
+        return get_shared_catalog().default_model_for(pid) or ""
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("_default_model_for(%s) failed: %s", provider_name, exc)
+        return ""
 
 
 class LLMProvider:
@@ -191,7 +231,15 @@ class LLMProvider:
 
     def __init__(self):
         self.provider = os.getenv("FERAL_LLM_PROVIDER", "openai")
-        self.model = os.getenv("FERAL_LLM_MODEL", "gpt-4o-mini")
+        # Resolve the default model lazily from the shared
+        # ``ProviderCatalog`` rather than burning a literal here. The
+        # catalog reads ``model_catalog.json`` + each adapter's bundled
+        # list, so this picks up frontier IDs (gpt-5.5, claude-opus-4-7,
+        # gemini-3.1-pro-preview) without an llm_provider.py edit. If
+        # the catalog hasn't booted yet (offline ``feral setup``,
+        # tests), fall back to the env override or empty so the picker
+        # surfaces an honest "choose a model" state.
+        self.model = os.getenv("FERAL_LLM_MODEL", "") or _default_model_for(self.provider)
         self.api_key = os.getenv("OPENAI_API_KEY", "")
         self.base_url = os.getenv("FERAL_LLM_BASE_URL", "")
         self.available = True
@@ -213,44 +261,51 @@ class LLMProvider:
                 logger.warning("Local engine init failed, falling back to cloud")
                 self.provider = "openai"
 
-        # Set defaults based on provider
+        # Set defaults based on provider. Model defaults always come
+        # from the catalog (`_default_model_for`) so frontier IDs land
+        # without code edits.
         if self.provider == "ollama":
             self.base_url = self.base_url or ollama_openai_base_url()
-            self.model = self.model or "llama3"
+            # Ollama exposes the loaded model list via /api/tags; the
+            # detected name in __init__ is preferred. Fall back only if
+            # the user shipped no model.
+            self.model = self.model or _default_model_for("ollama")
             self.api_key = "ollama"
         elif self.provider == "groq":
             self.base_url = self.base_url or "https://api.groq.com/openai/v1"
             self.api_key = os.getenv("GROQ_API_KEY", self.api_key)
+            self.model = self.model or _default_model_for("groq")
         elif self.provider == "anthropic":
             self.base_url = self.base_url or "https://api.anthropic.com/v1"
             self.api_key = os.getenv("ANTHROPIC_API_KEY", self.api_key)
-            self.model = self.model or "claude-sonnet-4-20250514"
+            self.model = self.model or _default_model_for("anthropic")
         elif self.provider == "gemini":
             self.base_url = self.base_url or "https://generativelanguage.googleapis.com/v1beta/openai"
             self.api_key = _gemini_api_key() or self.api_key
-            self.model = self.model or "gemini-2.5-flash"
+            self.model = self.model or _default_model_for("gemini")
         elif self.provider == "openrouter":
             self.base_url = self.base_url or "https://openrouter.ai/api/v1"
             self.api_key = os.getenv("OPENROUTER_API_KEY", self.api_key)
-            self.model = self.model or "openai/gpt-4.1"
+            self.model = self.model or _default_model_for("openrouter")
         elif self.provider == "deepseek":
             self.base_url = self.base_url or "https://api.deepseek.com"
             self.api_key = os.getenv("DEEPSEEK_API_KEY", self.api_key)
-            self.model = self.model or "deepseek-chat"
+            self.model = self.model or _default_model_for("deepseek")
         elif self.provider == "kimi":
             self.base_url = self.base_url or "https://api.moonshot.cn/v1"
             self.api_key = os.getenv("MOONSHOT_API_KEY", self.api_key)
-            self.model = self.model or "moonshot-v1-128k"
+            self.model = self.model or _default_model_for("kimi")
         elif self.provider == "qwen":
             self.base_url = self.base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
             self.api_key = os.getenv("DASHSCOPE_API_KEY", self.api_key)
-            self.model = self.model or "qwen-max"
+            self.model = self.model or _default_model_for("qwen")
         elif self.provider == "lmstudio":
             self.base_url = self.base_url or "http://localhost:1234/v1"
             self.api_key = "lm-studio"
-            self.model = self.model or "local-model"
+            self.model = self.model or _default_model_for("lmstudio")
         else:
             self.base_url = self.base_url or "https://api.openai.com/v1"
+            self.model = self.model or _default_model_for("openai")
 
         # Check if API key is available — if not, try local fallbacks
         if not self.api_key and self.provider not in ("ollama", "lmstudio"):
@@ -844,13 +899,16 @@ class LLMProvider:
         if model:
             self.model = model
 
-        PROVIDER_DEFAULTS = {
-            "ollama": (ollama_openai_base_url(), "OLLAMA_DUMMY", "llama3.1"),
-            "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "llama-3.1-70b-versatile"),
-            "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"),
-            "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "claude-sonnet-4-20250514"),
-            "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "_GEMINI_HELPER", "gemini-2.0-flash"),
-            "lmstudio": ("http://localhost:1234/v1", "", "local-model"),
+        # Per-provider base URL + env-var lookup. Default model is
+        # resolved through the catalog so a switch never lands the
+        # user on a deprecated frontier ID.
+        PROVIDER_BASES = {
+            "ollama": (ollama_openai_base_url(), "OLLAMA_DUMMY"),
+            "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+            "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY"),
+            "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY"),
+            "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "_GEMINI_HELPER"),
+            "lmstudio": ("http://localhost:1234/v1", ""),
         }
 
         if provider == "lmstudio":
@@ -858,13 +916,13 @@ class LLMProvider:
             self.api_key = "lm-studio"
             if not model:
                 detected = self._detect_lmstudio()
-                self.model = detected or "local-model"
+                self.model = detected or _default_model_for("lmstudio")
         elif provider == "ollama":
             self.base_url = ollama_openai_base_url()
             self.api_key = "ollama"
             if not model:
                 detected = self._detect_ollama()
-                self.model = detected or "llama3.1"
+                self.model = detected or _default_model_for("ollama")
         elif provider == "local":
             self._init_local_engine()
             if self._local_engine:
@@ -875,18 +933,20 @@ class LLMProvider:
                 logger.warning("Local engine unavailable")
                 self.available = False
                 return
-        elif provider in PROVIDER_DEFAULTS:
-            base, env_key, default_model = PROVIDER_DEFAULTS[provider]
+        elif provider in PROVIDER_BASES:
+            base, env_key = PROVIDER_BASES[provider]
             self.base_url = base
             if env_key == "_GEMINI_HELPER":
                 self.api_key = api_key or _gemini_api_key() or ""
             else:
                 self.api_key = api_key or os.getenv(env_key, "")
             if not model:
-                self.model = default_model
+                self.model = _default_model_for(provider)
         else:
             self.base_url = os.getenv("FERAL_LLM_BASE_URL", "https://api.openai.com/v1")
             self.api_key = api_key
+            if not model:
+                self.model = _default_model_for(provider)
 
         self.client = self._build_client()
         self.available = bool(self.api_key)
@@ -1011,30 +1071,38 @@ class LLMProvider:
         return {"choices": [{"message": msg, "finish_reason": data.get("stop_reason", "end_turn")}]}
 
     def _get_provider_config(self, provider_name: str) -> dict:
-        """Resolve base_url / api_key / model for a named provider."""
+        """Resolve base_url / api_key / model for a named provider.
+
+        The model is always resolved through the shared catalog so the
+        failover candidate list never contains a stale literal.
+        """
         if provider_name == "ollama":
             return {
                 "base_url": ollama_openai_base_url(),
                 "api_key": "ollama",
-                "model": "llama3.1",
+                "model": _default_model_for("ollama") or self._detect_ollama() or "",
             }
         if provider_name == "lmstudio":
             detected = self._detect_lmstudio()
             return {
                 "base_url": "http://localhost:1234/v1",
                 "api_key": "lm-studio",
-                "model": detected or "local-model",
+                "model": detected or _default_model_for("lmstudio"),
             }
         reg = _PROVIDER_REGISTRY.get(
             provider_name,
-            ("https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"),
+            ("https://api.openai.com/v1", "OPENAI_API_KEY"),
         )
-        base_url, env_key, default_model = reg
+        base_url, env_key = reg
         if provider_name == "gemini":
             api_key = _gemini_api_key() or ""
         else:
             api_key = os.getenv(env_key, "")
-        return {"base_url": base_url, "api_key": api_key, "model": default_model}
+        return {
+            "base_url": base_url,
+            "api_key": api_key,
+            "model": _default_model_for(provider_name),
+        }
 
     def _build_candidate_list(self) -> list[tuple[str, dict]]:
         """Ordered list of (provider_name, config) — primary first, then fallbacks."""

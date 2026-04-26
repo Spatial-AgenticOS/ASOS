@@ -21,17 +21,26 @@ class AnthropicProvider(BaseProvider):
     provider_id = "anthropic"
     display_name = "Anthropic"
 
+    # Hand-curated as of 2026-04-24. Anthropic does not expose a public
+    # /v1/models endpoint, so this list IS the catalog — bumping it is
+    # the only way new Claude IDs reach the v2 picker until provider
+    # docs add a discovery endpoint. Mirrors anthropic.models in
+    # feral-core/providers/model_catalog.json (curated_at 2026-04-24).
     _models = [
-        "claude-sonnet-4-5",
-        "claude-opus-4-5",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
         "claude-haiku-4-5",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
+        "claude-opus-4-6",
+        "claude-opus-4-5",
+        "claude-sonnet-4-5",
     ]
     _pricing = {
-        "claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
-        "claude-opus-4-5": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-7": {"input": 0.018, "output": 0.09},
+        "claude-sonnet-4-6": {"input": 0.0035, "output": 0.018},
         "claude-haiku-4-5": {"input": 0.0008, "output": 0.004},
+        "claude-opus-4-6": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-5": {"input": 0.015, "output": 0.075},
+        "claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
     }
     _capabilities = {"tool_calling", "vision", "streaming", "thinking"}
 

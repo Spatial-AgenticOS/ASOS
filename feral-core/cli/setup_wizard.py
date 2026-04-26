@@ -103,17 +103,25 @@ def _ask_text(prompt: str, default: str = "") -> str:
     return raw or default
 
 # ═══════════════════════════════════════════════════════════
-# LLM Providers — updated April 2026
+# LLM Providers — wizard now reads model lists from the catalog
 # ═══════════════════════════════════════════════════════════
+#
+# Until 2026-04 this dict carried hardcoded ``models`` and
+# ``default_model`` literals (e.g. ``gpt-4.1``, ``claude-sonnet-4-20250514``,
+# ``gemini-2.5-flash``). Those names go stale every quarter and shipped
+# to production unnoticed (Roadmap §3.5 P0). We now hold only the
+# user-facing chrome (display name, env var, hint text) here and ask
+# ``providers.catalog`` for the live model list at runtime via
+# ``provider_models()`` / ``provider_default_model()`` below.
 
 PROVIDERS = {
     "openai": {
         "name": "OpenAI",
         "env_key": "OPENAI_API_KEY",
         "base_url": "",
-        "desc": "GPT-4.1, GPT-4o, o3-mini, realtime voice, DALL-E",
-        "models": ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "o3-mini"],
-        "default_model": "gpt-4.1",
+        "desc": "GPT-5.x, realtime voice, multimodal",
+        "models": [],
+        "default_model": "",
         "voice": True,
         "key_hint": "Starts with sk-...",
     },
@@ -121,9 +129,9 @@ PROVIDERS = {
         "name": "Anthropic",
         "env_key": "ANTHROPIC_API_KEY",
         "base_url": "",
-        "desc": "Claude Sonnet 4, Claude Opus, strong reasoning",
-        "models": ["claude-sonnet-4-20250514", "claude-3.5-sonnet-20241022", "claude-3-opus-20240229"],
-        "default_model": "claude-sonnet-4-20250514",
+        "desc": "Claude Opus / Sonnet / Haiku, strong reasoning",
+        "models": [],
+        "default_model": "",
         "voice": False,
         "key_hint": "Starts with sk-ant-...",
     },
@@ -131,9 +139,9 @@ PROVIDERS = {
         "name": "Google Gemini",
         "env_key": "GOOGLE_API_KEY",
         "base_url": "",
-        "desc": "Gemini 2.5 Flash/Pro, realtime voice, multimodal",
-        "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
-        "default_model": "gemini-2.5-flash",
+        "desc": "Gemini 3.x preview lineup, realtime voice, multimodal",
+        "models": [],
+        "default_model": "",
         "voice": True,
         "key_hint": "From Google AI Studio",
     },
@@ -142,14 +150,8 @@ PROVIDERS = {
         "env_key": "OPENROUTER_API_KEY",
         "base_url": "https://openrouter.ai/api/v1",
         "desc": "Gateway to 300+ models (OpenAI, Claude, Gemini, DeepSeek, Llama)",
-        "models": [
-            "openai/gpt-4.1",
-            "anthropic/claude-sonnet-4",
-            "google/gemini-2.5-flash",
-            "deepseek/deepseek-chat",
-            "meta-llama/llama-3.3-70b-instruct",
-        ],
-        "default_model": "openai/gpt-4.1",
+        "models": [],
+        "default_model": "",
         "voice": False,
         "key_hint": "From openrouter.ai/keys",
     },
@@ -158,8 +160,8 @@ PROVIDERS = {
         "env_key": "DEEPSEEK_API_KEY",
         "base_url": "https://api.deepseek.com",
         "desc": "DeepSeek V3 / R1, strong reasoning, low cost",
-        "models": ["deepseek-chat", "deepseek-reasoner"],
-        "default_model": "deepseek-chat",
+        "models": [],
+        "default_model": "",
         "voice": False,
         "key_hint": "From platform.deepseek.com",
     },
@@ -167,9 +169,9 @@ PROVIDERS = {
         "name": "Kimi (Moonshot)",
         "env_key": "MOONSHOT_API_KEY",
         "base_url": "https://api.moonshot.cn/v1",
-        "desc": "Moonshot v1, 128K context, strong Chinese + English",
-        "models": ["moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"],
-        "default_model": "moonshot-v1-128k",
+        "desc": "Moonshot v1 / Kimi K2, 128K context, strong Chinese + English",
+        "models": [],
+        "default_model": "",
         "voice": False,
         "key_hint": "From platform.moonshot.cn",
     },
@@ -178,8 +180,8 @@ PROVIDERS = {
         "env_key": "DASHSCOPE_API_KEY",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "desc": "Qwen Max/Plus/Turbo, strong multilingual",
-        "models": ["qwen-max", "qwen-plus", "qwen-turbo"],
-        "default_model": "qwen-max",
+        "models": [],
+        "default_model": "",
         "voice": False,
         "key_hint": "From dashscope.console.aliyun.com",
     },
@@ -188,8 +190,8 @@ PROVIDERS = {
         "env_key": "GROQ_API_KEY",
         "base_url": "https://api.groq.com/openai/v1",
         "desc": "Ultra-fast inference, Llama 3.3 / DeepSeek / Mixtral",
-        "models": ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b", "mixtral-8x7b-32768"],
-        "default_model": "llama-3.3-70b-versatile",
+        "models": [],
+        "default_model": "",
         "voice": False,
         "key_hint": "From console.groq.com",
     },
@@ -214,6 +216,45 @@ PROVIDERS = {
         "key_hint": "No key needed — just launch LM Studio and load a model",
     },
 }
+
+
+# ── Catalog-backed helpers ─────────────────────────────────
+#
+# Catalog id ↔ wizard id (only entries that diverge). The wizard
+# historically used ``kimi``; the catalog speaks ``moonshot``.
+_WIZARD_TO_CATALOG = {"kimi": "moonshot"}
+
+
+def provider_models(provider_id: str) -> list[str]:
+    """Return the catalog's bundled / live model list for *provider_id*.
+
+    Falls back to an empty list when the catalog is unavailable
+    (e.g. running the wizard before the brain has booted). Callers
+    should treat ``[]`` as "type any model id you want".
+    """
+    pid = _WIZARD_TO_CATALOG.get(provider_id, provider_id)
+    try:
+        from providers.catalog import get_shared_catalog
+        catalog = get_shared_catalog()
+        adapter = catalog.get_adapter(pid)
+        if adapter is not None:
+            return list(adapter.list_models() or [])
+    except Exception:
+        pass
+    return []
+
+
+def provider_default_model(provider_id: str) -> str:
+    """Return the current default model id from the catalog.
+
+    Empty string means "no default" — let the user type a value.
+    """
+    pid = _WIZARD_TO_CATALOG.get(provider_id, provider_id)
+    try:
+        from providers.catalog import get_shared_catalog
+        return get_shared_catalog().default_model_for(pid) or ""
+    except Exception:
+        return ""
 
 # ═══════════════════════════════════════════════════════════
 # Tool API Keys
@@ -675,7 +716,10 @@ class OnboardWizard:
             self.c.print()
             return
 
-        if not provider["models"]:
+        provider_id = self.config.get("provider", "")
+        models = provider_models(provider_id)
+        default_model = provider_default_model(provider_id) or (models[0] if models else "")
+        if not models:
             return
 
         self.c.print(Panel(
@@ -684,14 +728,14 @@ class OnboardWizard:
             style="blue",
         ))
 
-        for i, m in enumerate(provider["models"], 1):
-            default_marker = " [green](recommended)[/]" if m == provider["default_model"] else ""
+        for i, m in enumerate(models, 1):
+            default_marker = " [green](recommended)[/]" if m == default_model else ""
             self.c.print(f"  {i}. {m}{default_marker}")
 
         model = Prompt.ask(
             "Choose model",
-            choices=provider["models"],
-            default=provider["default_model"],
+            choices=models,
+            default=default_model,
         )
         self.config["model"] = model
         self.c.print()
@@ -1133,7 +1177,7 @@ class OnboardWizard:
         settings = {
             "llm": {
                 "provider": provider_id,
-                "model": self.config.get("model", "gpt-4o-mini"),
+                "model": self.config.get("model", "") or provider_default_model(provider_id),
                 "base_url": self.config.get("base_url", provider_info.get("base_url", "")),
             },
             "vision": {
@@ -1414,13 +1458,19 @@ class OnboardWizardPlain:
             else:
                 print("  No Ollama models found. Pull one: ollama pull llama3.1")
                 self.config["model"] = "llama3.1"
-        elif provider["models"]:
-            print("Step 2: Model")
-            for i, m in enumerate(provider["models"], 1):
-                default = " (default)" if m == provider["default_model"] else ""
-                print(f"  {i}. {m}{default}")
-            model_input = input(f"  Choose [{provider['default_model']}]: ").strip()
-            self.config["model"] = model_input if model_input in provider["models"] else provider["default_model"]
+        else:
+            provider_id = self.config.get("provider", "")
+            models = provider_models(provider_id)
+            default_model = provider_default_model(provider_id) or (models[0] if models else "")
+            if models:
+                print("Step 2: Model")
+                for i, m in enumerate(models, 1):
+                    default_marker = " (default)" if m == default_model else ""
+                    print(f"  {i}. {m}{default_marker}")
+                model_input = input(f"  Choose [{default_model}]: ").strip()
+                self.config["model"] = model_input if model_input in models else default_model
+            elif default_model:
+                self.config["model"] = default_model
         print()
 
         # About you (expanded)
@@ -1642,11 +1692,12 @@ class OnboardWizardPlain:
             pass
         (FERAL_HOME / "config.json").write_text(json.dumps(self.config, indent=2))
 
-        provider_info = PROVIDERS.get(self.config.get("provider", "openai"), {})
+        provider_id = self.config.get("provider", "openai")
+        provider_info = PROVIDERS.get(provider_id, {})
         settings = {
             "llm": {
-                "provider": self.config.get("provider", "openai"),
-                "model": self.config.get("model", "gpt-4o-mini"),
+                "provider": provider_id,
+                "model": self.config.get("model", "") or provider_default_model(provider_id),
                 "base_url": self.config.get("base_url", provider_info.get("base_url", "")),
             },
             "vision": settings_vision,
