@@ -58,21 +58,33 @@ def test_demo_step_1_issue_pair_url(brain):
 
 def test_demo_step_2_token_is_unclaimed_until_complete(brain):
     """Until BrowserNode.js calls /api/devices/pair/complete the token
-    should be issued-but-unclaimed so the Paired UI can display that."""
+    should be issued-but-unclaimed so the Paired UI can display that.
+
+    Post-W9: the plaintext token is no longer recoverable from
+    ``list_devices()`` — only the deterministic ``token_lookup`` (a
+    SHA-256 over the plaintext) is exposed. We verify the lookup
+    matches the issued token instead of comparing plaintext.
+    """
+    import hashlib
     c, store = brain
     issued = c.get("/api/devices/pair/url").json()
     token = issued["token"]
 
-    # Before the claim, claimed_at must be None.
     row = store.list_devices()[0]
     assert row["claimed_at"] is None
-    assert row["token"] == token
+    expected_lookup = hashlib.sha256(token.encode()).hexdigest()
+    assert row["token_lookup"] == expected_lookup
 
 
 def test_demo_step_3_complete_marks_claimed(brain):
     """BrowserNode.js POSTs to /api/devices/pair/complete after the WS
     register succeeds. That flips claimed_at so the UI shows the device
-    as live."""
+    as live.
+
+    Post-W9: identify the row by the device_id returned from
+    ``/api/devices/pair/complete`` (or by the deterministic
+    ``token_lookup``) — the plaintext token is no longer stored.
+    """
     c, store = brain
     issued = c.get("/api/devices/pair/url").json()
     token = issued["token"]
@@ -83,7 +95,7 @@ def test_demo_step_3_complete_marks_claimed(brain):
     assert body["success"] is True
     assert body["device_id"]
 
-    row = [d for d in store.list_devices() if d["token"] == token][0]
+    row = [d for d in store.list_devices() if d["device_id"] == body["device_id"]][0]
     assert row["claimed_at"] is not None
 
 

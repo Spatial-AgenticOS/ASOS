@@ -117,6 +117,17 @@ class ProviderStatus:
 # ----------------------------------------------------------------------
 
 
+# Cloud frontier providers no longer carry a hardcoded ``default_model``
+# in their descriptor. The catalog resolves the default lazily through
+# :meth:`ProviderCatalog.default_model_for` so the dropdown follows the
+# provider's live model list rather than a literal that drifts every
+# few months. (Roadmap §3.5 P0; see ``docs/AGENT_PROMPTS.md`` §D.W1 for
+# the historical names this replaced.)
+#
+# Local-runtime providers (ollama, lmstudio) keep an empty default too —
+# the live ``/api/tags`` (Ollama) or ``/v1/models`` (LM Studio) call is
+# the source of truth and the picker should reflect what's actually
+# loaded on the host, not a guess like "llama3.3".
 BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
     ProviderDescriptor(
         provider_id="openai",
@@ -124,7 +135,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=False,
         requires_api_key=True,
         default_base_url="https://api.openai.com/v1",
-        default_model="gpt-4o-mini",
+        default_model="",
         credential_env_var="OPENAI_API_KEY",
         aliases=("open ai", "openai api", "gpt", "chatgpt"),
     ),
@@ -134,7 +145,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=False,
         requires_api_key=True,
         default_base_url="https://api.anthropic.com/v1",
-        default_model="claude-sonnet-4-5",
+        default_model="",
         credential_env_var="ANTHROPIC_API_KEY",
         aliases=("claude", "anthropic api"),
         notes="No public /v1/models endpoint — models curated from the bundled catalog.",
@@ -145,7 +156,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=False,
         requires_api_key=True,
         default_base_url="https://generativelanguage.googleapis.com/v1beta",
-        default_model="gemini-2.5-flash",
+        default_model="",
         credential_env_var="GOOGLE_API_KEY",
         aliases=("google", "google gemini", "gemini api"),
     ),
@@ -155,7 +166,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=False,
         requires_api_key=True,
         default_base_url="https://api.groq.com/openai/v1",
-        default_model="llama-3.3-70b-versatile",
+        default_model="",
         credential_env_var="GROQ_API_KEY",
         aliases=("groq cloud",),
     ),
@@ -165,7 +176,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=False,
         requires_api_key=True,
         default_base_url="https://api.deepseek.com/v1",
-        default_model="deepseek-chat",
+        default_model="",
         credential_env_var="DEEPSEEK_API_KEY",
     ),
     ProviderDescriptor(
@@ -174,7 +185,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=False,
         requires_api_key=True,
         default_base_url="https://openrouter.ai/api/v1",
-        default_model="openai/gpt-4o-mini",
+        default_model="",
         credential_env_var="OPENROUTER_API_KEY",
         aliases=("open router", "router"),
     ),
@@ -184,7 +195,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=False,
         requires_api_key=True,
         default_base_url="https://api.together.xyz/v1",
-        default_model="meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+        default_model="",
         credential_env_var="TOGETHER_API_KEY",
         aliases=("together ai",),
     ),
@@ -194,7 +205,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=False,
         requires_api_key=True,
         default_base_url="https://api.fireworks.ai/inference/v1",
-        default_model="accounts/fireworks/models/llama-v3p3-70b-instruct",
+        default_model="",
         credential_env_var="FIREWORKS_API_KEY",
         aliases=("fireworks ai",),
     ),
@@ -204,7 +215,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=False,
         requires_api_key=True,
         default_base_url="",
-        default_model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        default_model="",
         credential_env_var="AWS_ACCESS_KEY_ID",
         aliases=("aws bedrock", "amazon"),
         notes="Auth via AWS IAM (AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY).",
@@ -215,7 +226,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=True,
         requires_api_key=False,
         default_base_url="http://localhost:11434",
-        default_model="llama3.3",
+        default_model="",
         aliases=("local-ollama",),
     ),
     ProviderDescriptor(
@@ -224,7 +235,7 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_local=True,
         requires_api_key=False,
         default_base_url="http://localhost:1234/v1",
-        default_model="local-model",
+        default_model="",
         aliases=("lm studio", "lm-studio", "local-lmstudio"),
         notes="LM Studio must be running with a model loaded.",
     ),
@@ -470,6 +481,12 @@ class ProviderCatalog:
             raise KeyError(f"unknown provider_id: {provider_id!r}")
         configured = self._is_configured(desc)
         cached = self._models.get(provider_id)
+        # ``descriptor.default_model`` is now empty for cloud providers
+        # (see Roadmap §3.5 P0); resolve lazily so the v2 picker, the
+        # CLI wizard, and the REST API all see the freshest model id
+        # the catalog knows about instead of a stale literal that
+        # drifts every quarter.
+        default_model = desc.default_model or self.default_model_for(provider_id)
         return ProviderStatus(
             provider_id=desc.provider_id,
             display_name=desc.display_name,
@@ -477,7 +494,7 @@ class ProviderCatalog:
             requires_api_key=desc.requires_api_key,
             configured=configured,
             default_base_url=desc.default_base_url,
-            default_model=desc.default_model,
+            default_model=default_model,
             last_refresh=cached.last_refresh if cached else 0.0,
         )
 
@@ -488,6 +505,85 @@ class ProviderCatalog:
                 out[pid] = await self.list_models(pid, live=True, force=True)
             except Exception as exc:
                 logger.debug("refresh_all: %s failed: %s", pid, exc)
+        return out
+
+    def default_model_for(self, provider_id: str) -> str:
+        """Resolve the default model id for *provider_id* lazily.
+
+        The descriptor no longer carries a hardcoded ``default_model``
+        literal — those drift the moment a provider ships a new
+        frontier name (Roadmap §3.5 P0). Instead, the catalog reads
+        the first entry of the most recent cached / fallback model
+        list, which traces back to either a live ``refresh_models``
+        call or the bundled ``model_catalog.json`` (and the adapter's
+        ``_models`` for Anthropic, which has no live discovery).
+
+        Returns ``""`` when the provider id is unknown so callers
+        (LLMProvider, the wizard, the v2 picker) can fall back to
+        whatever default the user typed in the UI rather than crash.
+        """
+        if provider_id not in self._descriptors:
+            return ""
+        cached = self._models.get(provider_id)
+        if cached and cached.models:
+            return cached.models[0]
+        adapter = self._adapters.get(provider_id)
+        if adapter is not None:
+            try:
+                models = list(adapter.list_models() or [])
+            except Exception:
+                models = []
+            if models:
+                return models[0]
+        return ""
+
+    async def refresh_async(
+        self,
+        *,
+        max_concurrency: int = 4,
+    ) -> dict[str, CachedModelList]:
+        """Refresh every configured provider in the background.
+
+        Wired into the Brain's startup task list (``api/server.py``)
+        so the catalog rolls forward without a manual click on the
+        ``Refresh models`` button. Skips providers that have no key
+        in either the environment or the vault — those would just
+        return cached fallback data and burn HTTP for nothing.
+
+        ``max_concurrency`` caps the parallel refresh fan-out so we
+        don't slam every provider at boot. Default keeps four in
+        flight which is plenty for the ~10 providers we ship.
+        """
+        candidates = [
+            pid
+            for pid, desc in self._descriptors.items()
+            if not desc.requires_api_key or self._is_configured(desc)
+        ]
+        if not candidates:
+            logger.info(
+                "ProviderCatalog.refresh_async: no provider has credentials — skipped"
+            )
+            return {}
+        sem = asyncio.Semaphore(max(1, max_concurrency))
+
+        async def _one(pid: str) -> tuple[str, Optional[CachedModelList]]:
+            async with sem:
+                try:
+                    return pid, await self.list_models(pid, live=True, force=True)
+                except Exception as exc:
+                    logger.debug("refresh_async: %s failed: %s", pid, exc)
+                    return pid, None
+
+        out: dict[str, CachedModelList] = {}
+        results = await asyncio.gather(*(_one(pid) for pid in candidates))
+        for pid, cached in results:
+            if cached is not None:
+                out[pid] = cached
+        logger.info(
+            "ProviderCatalog.refresh_async: refreshed %d/%d providers",
+            len(out),
+            len(candidates),
+        )
         return out
 
     # ------------------------------------------------------------------

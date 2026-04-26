@@ -12,7 +12,7 @@ function TestRoutes() {
 }
 
 describe('AppSurface', () => {
-  it('fetches the manifest + opens the entry surface + renders the tree', async () => {
+  it('fetches the manifest + opens the entry surface + renders the tree inside a sandboxed iframe', async () => {
     const manifest = {
       app_id: 'demo-app',
       version: '1.0.0',
@@ -30,7 +30,7 @@ describe('AppSurface', () => {
       screen_id: 'demo-app:home:v2-user',
       root: { type: 'VStack', children: [{ type: 'Text', value: 'welcome' }] },
     };
-    const { findByTestId, findByText } = renderV2(<TestRoutes />, {
+    const { findByTestId } = renderV2(<TestRoutes />, {
       route: '/apps/demo-app',
       fetch: (url) => {
         if (url.includes('/api/apps/demo-app/manifest')) {
@@ -42,7 +42,11 @@ describe('AppSurface', () => {
         return {};
       },
     });
-    expect(await findByText('welcome')).toBeInTheDocument();
+    const iframe = await findByTestId('v2-appsurface-iframe');
+    expect(iframe).toBeInTheDocument();
+    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
+    const srcDoc = iframe.getAttribute('srcdoc') || '';
+    expect(srcDoc).toContain('welcome');
     expect(await findByTestId('v2-appsurface-tab-home')).toBeInTheDocument();
     expect(await findByTestId('v2-appsurface-tab-thread')).toBeInTheDocument();
   });
