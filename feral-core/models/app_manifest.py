@@ -292,7 +292,13 @@ class AppManifest(BaseModel):
     description: str = ""
 
     brand: BrandProfile
-    permissions: list[str] = Field(default_factory=list)
+    # Permissions accept either the legacy opaque-tag list shape
+    # (``["calendar:read"]``) or the structured dict shape
+    # (``{"network": [...], "justification": "..."}``) that the
+    # GenUI sandbox + signing layer (W8) reads. Both round-trip;
+    # ``list(manifest.permissions)`` still works on both shapes
+    # because dict iteration yields its keys.
+    permissions: list[str] | dict[str, Any] = Field(default_factory=list)
     data_schemas: list[DataSchemaSpec] = Field(default_factory=list)
     surfaces: list[SurfaceSpec] = Field(default_factory=list)
     interactions: InteractionRules = Field(default_factory=InteractionRules)
