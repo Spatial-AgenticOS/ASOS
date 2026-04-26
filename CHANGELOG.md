@@ -1,10 +1,26 @@
 # Changelog
 
-<!-- feral-version: 2026.5.0 -->
+<!-- feral-version: 2026.5.1 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.1] - 2026-04-26
+
+### Added
+- (fill me in — what shipped that did not exist before?)
+
+### Fixed
+- (fill me in — what regressions did this release close?)
+
+### Changed
+- (fill me in — what user-visible behavior changed?)
+
+### Coverage
+- pytest (feral-core): TODO collected, TODO passed, TODO skipped.
+- vitest (feral-client-v2): TODO passed.
+
 
 (Empty since v2026.5.0 — append new entries above this line under `### Added` / `### Fixed` / etc. The README test-count marker is auto-maintained by `.github/workflows/version-coherence.yml`; do not bump it manually.)
 
