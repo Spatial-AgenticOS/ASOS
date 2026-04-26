@@ -1,0 +1,13 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "deepseek-v4-flash",
+      "object": "model"
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "object": "model"
+    }
+  ]
+}

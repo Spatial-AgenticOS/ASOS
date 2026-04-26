@@ -158,8 +158,20 @@
 - [open] 2026-04-26 · W24d · `advertise_brain_async` wiring into api/state.py
   Finding: W24d introduces `services.mdns.advertise_brain_async(...)` as the non-blocking variant. The async startup path in `feral-core/api/state.py` still calls the sync `advertise_brain(...)` (W24d made the sync path loop-safe by offloading to a thread, so this is correct-but-suboptimal). Switching to `await advertise_brain_async(...)` would remove one thread hop on boot.
   Citation: `feral-core/api/state.py:727–729`; `feral-core/services/mdns.py` (W24d).
-  Proposal: Follow-up PR by the api-startup owner to `await advertise_brain_async(...)` from the `boot_subsystem("mDNS")` block. Cross-boundary per W24d's owned-paths scope. — owner: needs-triage (api).
----
+  Proposal: Follow-up PR by the api-startup owner to `await advertise_brain_async(...)` from the `boot_subsystem("mDNS")` block. Cross-boundary per W24d's owned-paths scope. — owner: needs-triage (api).- [open] 2026-04-26 · W24a · `?class=chat` query param for `/api/llm/providers/{id}/models` + v2 Settings picker wiring (W24a.1)
+  Finding: `BaseProvider.list_models(model_class=...)` is the filter hook shipped by W24a. The HTTP route in `feral-core/api/routes/llm.py::list_llm_provider_models` and the v2 Settings dropdown in `feral-client-v2/src/pages/Settings.jsx` still hit the unfiltered list; the chat-only filter reaches the dispatcher but not the REST surface. Neither file is in W24a's owned paths.
+  Citation: `feral-core/api/routes/llm.py:141`; `feral-client-v2/src/pages/Settings.jsx:441`; W24a PR.
+  Proposal: Tracked as W24a.1 — a small cross-boundary PR that adds `?class=` to the route and passes `?class=chat` from Settings.jsx when rendering the chat composer dropdown. — owner: conductor.
+
+- [open] 2026-04-26 · W24a · Re-run `scripts/refresh_provider_catalog.py` with live keys before v2026.5.1 tag
+  Finding: W24a ships the refresh script + representative fixtures, but the host that authored the PR had no provider keys set in-env, so the bundled `model_catalog.json` remains the hand-seeded 2026-04-26 snapshot rather than a live-captured one. Dry-run confirms drift = 0 against the hand-seeded list. The live fetch will update exact pricing (especially DeepSeek's 75%-off window ending 2026-05-05) and catch any mid-week provider-side additions.
+  Citation: `scripts/refresh_provider_catalog.py`; W24a PR.
+  Proposal: Conductor runs the script with keys set before cutting v2026.5.1; expected drift ≤ 5 IDs per provider. — owner: conductor.
+
+- [open] 2026-04-26 · W24a · `test_provider_catalog.py::TestBundledCatalogFreshness` catalog-pin assertions need a refresh window
+  Finding: The `_VERIFIED_GEMINI_IDS` + `_DEPRECATED_OPENAI_IDS` + "anthropic endpoint is null" assertions were written at the 2026-04-24 snapshot. To keep them green W24a kept the Gemini `-preview` suffix + omitted `gpt-4o*` from the bundled openai seed + left the anthropic endpoint field null (with the live URL mirrored to `_live_endpoint`). Once Anthropic's `/v1/models` is the canonical refresh path (post W24a.2) and Gemini flips 3.x to GA, these asserts should be relaxed to "verified set from the most recent refresh" rather than hard-pinned literals.
+  Citation: `feral-core/tests/test_provider_catalog.py:302-334`.
+  Proposal: Replace literal pinning with a snapshot-based assertion driven by the fixture files. — owner: conductor.---
 
 ## Closed follow-ups
 

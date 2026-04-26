@@ -15,8 +15,46 @@ from typing import Any, Optional
 import httpx
 
 from .base import BaseProvider, ChatMessage, ChatResponse
+from .model_classes import classify
 
 logger = logging.getLogger("feral.providers.openai")
+
+
+# Reasoning-family params the /v1/chat/completions endpoint rejects with
+# 400 when sent against a reasoning model (gpt-5, gpt-5.4*, gpt-5.5*,
+# o1 / o3 / o4). Source: the OpenAI reasoning guide + the live 400s the
+# maintainer reported in v2026.5.0. Anything here is removed from the
+# outbound body when ``classify(provider, model) == "reasoning"``; the
+# replaced cousin for ``max_tokens`` is ``max_completion_tokens`` and
+# is added explicitly below.
+_REASONING_STRIP_PARAMS = frozenset(
+    {"max_tokens", "top_p", "presence_penalty", "frequency_penalty"}
+)
+
+
+def _apply_reasoning_fork(model: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Mutate ``payload`` in-place to match the reasoning-family contract.
+
+    Called by :class:`OpenAIProvider.chat` and imported by
+    ``llm_provider.py`` so the dispatch path converges on the same fork.
+    Legacy (non-reasoning) models are left untouched, preserving the
+    existing ``max_tokens`` / ``temperature`` / ``top_p`` semantics.
+    """
+    if classify("openai", model) != "reasoning":
+        return payload
+    max_tokens = payload.pop("max_tokens", None)
+    if max_tokens is not None and "max_completion_tokens" not in payload:
+        payload["max_completion_tokens"] = max_tokens
+    # Temperature on reasoning models must be 1 (or absent). Strip any
+    # other value the caller supplied. The default server-side is 1 so
+    # silent drop is correct here.
+    temp = payload.get("temperature")
+    if temp is not None and temp != 1 and temp != 1.0:
+        payload.pop("temperature", None)
+    for key in _REASONING_STRIP_PARAMS:
+        payload.pop(key, None)
+    payload.setdefault("reasoning_effort", "medium")
+    return payload
 
 
 class OpenAIProvider(BaseProvider):
@@ -80,6 +118,19 @@ class OpenAIProvider(BaseProvider):
         if tools:
             payload["tools"] = tools
 
+        # Fork: reasoning models (gpt-5, gpt-5.4*, gpt-5.5*, o1/o3/o4)
+        # reject ``max_tokens`` + arbitrary ``temperature`` on
+        # ``/v1/chat/completions`` with a 400. The helper rewrites the
+        # payload in-place so non-reasoning models (gpt-4o, gpt-4.1)
+        # keep the legacy parameter shape.
+        _apply_reasoning_fork(model, payload)
+        # The orchestrator can bump the reasoning effort to ``"high"``
+        # (or ``"max"`` for subagent workloads) by passing
+        # ``reasoning_effort=...`` through kwargs; the fork's default
+        # is ``"medium"`` per the OpenAI reasoning guide.
+        if "reasoning_effort" in kwargs and kwargs["reasoning_effort"]:
+            payload["reasoning_effort"] = kwargs["reasoning_effort"]
+
         async with httpx.AsyncClient(timeout=60.0) as c:
             r = await c.post(
                 f"{self._base_url}/chat/completions",
@@ -113,6 +164,12 @@ class OpenAIProvider(BaseProvider):
             r.raise_for_status()
         ids = [m["id"] for m in r.json().get("data", [])]
         if ids:
+            # Store the FULL raw list. The chat-only filter runs inside
+            # :meth:`BaseProvider.list_models` via the classifier —
+            # filtering here would silently hide embedding / whisper /
+            # dall-e models from callers that legitimately want them
+            # (feral-voice reads the audio class; feral-memory reads
+            # the embedding class).
             self._models = sorted(ids)
         return list(self._models)
 
