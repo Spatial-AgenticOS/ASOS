@@ -1,0 +1,124 @@
+---
+title: "Manifest signing"
+description: "Sign and verify GenUI app manifests with Ed25519 before installing."
+---
+
+GenUI app manifests describe a publisher's surfaces, capabilities, and
+permission surface. Because the FERAL host hands those manifests
+sensitive trust (network grants, screen real estate, postMessage
+routes), the host refuses to install one whose origin it cannot
+cryptographically prove.
+
+This page is the publisher quickstart. It covers:
+
+1. Generating a publisher keypair.
+2. Signing a manifest with `feral app sign`.
+3. Installing it via the API or CLI (`--allow-unsigned` for local dev).
+4. Verifying a signed manifest from the command line.
+
+## Trust model in one paragraph
+
+Every install path goes through `feral_core.agents.app_registry.install_app`.
+That method requires a `manifest.signed.json` envelope sitting next to
+`manifest.json`. The envelope is an
+[`Ed25519`](https://en.wikipedia.org/wiki/EdDSA) signature over the
+canonical JSON of the manifest, plus the publisher's public key and a
+key id that the host pins to a row in the
+`publisher_keys` namespace of the local vault. If the manifest is
+unsigned, tampered, or signed by a key the host doesn't trust,
+installation raises `UnverifiedManifestError` (HTTP 422 from
+`POST /api/apps/install`).
+
+The only escape hatch is the explicit `allow_unsigned=True` flag (CLI
+`--allow-unsigned`, API `unsigned: true`). Choosing it writes an
+`audit_log` entry tagged `unsigned_install` so the supervisor can
+trace which device admitted which untrusted bundle.
+
+## 1. Generate a keypair
+
+```python
+from feral_core.genui.manifest_signing import generate_keypair
+
+private_key, public_key = generate_keypair()
+# Persist `private_key` somewhere only your build pipeline can read.
+# Persist `public_key` in the FERAL host's vault under
+# namespace="publisher_keys", key=<your-key-id>.
+```
+
+The host uses `BlindVault.put_namespace("publisher_keys", key_id, public_key_b64)`
+internally; admins can also add keys through the API once that ships.
+
+## 2. Sign your manifest
+
+```bash
+feral app sign ./manifest.json --key-id pub-acme-2026 --private-key ./acme.key
+# writes ./manifest.signed.json next to ./manifest.json
+```
+
+The CLI calls `manifest_signing.sign(manifest_dict, private_key, key_id=...)`
+under the hood and emits a `SignedManifest` envelope:
+
+```json
+{
+  "manifest": { "name": "acme", "version": "1.0.0", ... },
+  "signature": "<base64 ed25519 sig>",
+  "public_key": "<base64 ed25519 public key>",
+  "key_id": "pub-acme-2026",
+  "signed_at": "2026-04-25T22:01:13Z",
+  "alg": "ed25519"
+}
+```
+
+The host re-derives the canonical JSON during verification, so any
+field reorder, whitespace change, or value mutation breaks the
+signature.
+
+## 3. Install
+
+### Production / signed
+
+```bash
+curl -X POST $FERAL_HOST/api/apps/install \
+  -H 'Content-Type: application/json' \
+  -d '{"path": "/abs/path/to/app-bundle"}'
+```
+
+`install_app` finds `manifest.signed.json`, calls `verify`, then
+proceeds with the existing install flow. On failure you get a 422 with
+an `error` envelope of:
+
+```json
+{ "error": "UnverifiedManifest", "reason": "signature_mismatch" }
+```
+
+### Local dev / unsigned (escape hatch)
+
+```bash
+curl -X POST $FERAL_HOST/api/apps/install \
+  -H 'Content-Type: application/json' \
+  -d '{"path": "/abs/path/to/app-bundle", "unsigned": true}'
+```
+
+This still writes `unsigned_install` to the audit log.
+
+## 4. Verify a manifest
+
+```bash
+feral app verify ./manifest.signed.json
+# exit 0 + "OK" on success
+# exit 1 + reason ("signature_mismatch" | "key_mismatch" | ...) on failure
+```
+
+CI pipelines should run `feral app verify` immediately after
+`feral app sign` so that a fat-fingered key id never escapes the build.
+
+## High-trust permissions
+
+If your manifest requests `permissions.network = ["*"]`, install will
+refuse it unless **all** of the following hold:
+
+- The manifest is signed and verified (i.e. `allow_unsigned=False`).
+- The manifest carries a non-empty `permissions.justification` string.
+- The installer passes `user_high_trust=True` (CLI flag / API field).
+
+This is enforced in `feral_core.genui.permissions_policy.enforce_install_policy`.
