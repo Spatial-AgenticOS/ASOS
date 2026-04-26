@@ -1,8 +1,7 @@
 """
 W16 — read-only adapters for external CLI credential overlays.
 
-Mirrors openclaw's ``auth-profiles/external-auth.ts`` +
-``external-cli-sync.ts``: when the user is already authenticated with
+When the user is already authenticated with
 ``gcloud``, ``aws sso``, ``codex``, etc., FERAL should *bootstrap* an
 OAuth profile from those locally-cached tokens rather than asking the
 user to paste keys again. The adapters here are **read-only** — they
@@ -138,7 +137,7 @@ def _read_aws_sso_credential() -> Optional[OAuthCredential]:
     if expires_iso:
         # AWS SSO cache uses ISO-8601 with a trailing 'Z'. Convert to
         # epoch ms so the OAuthCredential.expires invariant
-        # (milliseconds, like openclaw) holds.
+        # (milliseconds) holds.
         from datetime import datetime
         normalised = expires_iso.replace("Z", "+00:00")
         parsed_ts = datetime.fromisoformat(normalised)
@@ -159,8 +158,7 @@ def _read_codex_cli_credential() -> Optional[OAuthCredential]:
     """Read the OpenAI Codex CLI's cached credentials.
 
     The Codex CLI stashes its OAuth state under
-    ``~/.codex/credentials.json`` (mirroring openclaw's
-    ``readCodexCliCredentials``). When present we surface it as an
+    ``~/.codex/credentials.json``. When present we surface it as an
     OAuth profile keyed under the ``openai-codex`` provider so the
     user does not have to paste a Codex API key into FERAL when they
     are already signed into the CLI.
@@ -226,10 +224,9 @@ def overlay_external_credentials(
     Locally-stored credentials always win — an OAuth credential that
     FERAL already refreshed has the canonical refresh token and we
     must not clobber it with a stale CLI cache. The overlay only fills
-    in profiles the local store does not already know about. This is
-    the same rule as openclaw's
-    ``shouldBootstrapFromExternalCliCredential`` minus the cooldown
-    awareness (W19 will add that).
+    in profiles the local store does not already know about. A
+    cooldown-aware variant that can also skip recently-failed
+    profiles lands with W19.
     """
     merged: dict[str, AuthProfileCredential] = dict(stored)
     for profile_id, cred in list_external_credentials().items():

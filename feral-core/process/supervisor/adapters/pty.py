@@ -1,12 +1,10 @@
 """W18: PTY adapter — spawns commands inside a real controlling TTY.
 
-Mirrors openclaw's ``src/process/supervisor/adapters/pty.ts``. openclaw
-delegates to ``@lydell/node-pty`` (a C++ binding); we use the
-stdlib ``pty`` + raw ``os.fork`` + ``os.execvpe`` because (a) we want
-zero non-stdlib dependencies for the supervisor, (b) the use case is
-narrow (CLIs that check ``isatty()``: Codex CLI, Claude Code CLI,
-``ssh -t``, ``top`` smoke probes), and (c) Python's ``pty`` module
-hands us exactly the mechanism we need on POSIX.
+We use the stdlib ``pty`` + raw ``os.fork`` + ``os.execvpe`` because
+(a) we want zero non-stdlib dependencies for the supervisor, (b) the
+use case is narrow (CLIs that check ``isatty()``: Codex CLI, Claude
+Code CLI, ``ssh -t``, ``top`` smoke probes), and (c) Python's ``pty``
+module hands us exactly the mechanism we need on POSIX.
 
 Windows is explicitly unsupported — we raise ``NotImplementedError``
 at adapter creation time. ConPTY would be the right Windows answer
@@ -43,8 +41,8 @@ def _login_shell() -> str:
 
     macOS ships zsh as the default user shell since 10.15; mainstream
     Linux distros ship bash. We hard-code ``/bin/zsh`` and ``/bin/bash``
-    because (a) that's what openclaw's ``getShellConfig()`` resolves
-    to in practice, and (b) callers can override behavior by passing
+    because (a) that's the platform's shipped default user shell in
+    practice, and (b) callers can override behavior by passing
     a custom command — the shell only matters for ``-l`` semantics.
     """
     if sys.platform == "darwin":

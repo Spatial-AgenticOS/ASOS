@@ -1,8 +1,9 @@
 """
 W16 — credential shape definitions for the per-agent auth profile store.
 
-Mirrors openclaw's ``auth-profiles/types.ts`` (`OPENCLAW_LESSONS.md` §1).
-A profile is one of three credential shapes:
+Credential shape definitions for the per-agent auth profile store (see
+``docs/OPENCLAW_LESSONS.md`` §1 for the comparative analysis). A
+profile is one of three credential shapes:
 
 * :class:`ApiKeyCredential` — the classic provider-issued static key
   (``sk-...``, ``AIza...`` etc.). No refresh lifecycle.
@@ -100,15 +101,17 @@ class OAuthCredential:
 
     ``access`` is the short-lived bearer; ``refresh`` is the precious
     long-lived token used to mint new ``access`` values. ``expires`` is
-    the unix epoch in **milliseconds** — match openclaw's
-    ``OAuthCredentials.expires`` so downstream tooling and the W19
-    cooldown FSM can compare timestamps without a unit conversion.
+    the unix epoch in **milliseconds** — picked to match the
+    comparative reference (see ``docs/OPENCLAW_LESSONS.md`` §1) so
+    downstream tooling and the W19 cooldown FSM can compare timestamps
+    without a unit conversion.
 
     ``client_id`` is the OAuth app the credential was issued to (NOT a
     secret; identifies the requesting app). ``account_id`` and ``email``
     are identity bindings — they MUST match across mirror/adopt paths
     so we never overwrite one user's profile with another's tokens
-    (see openclaw ``isSafeToCopyOAuthIdentity``).
+    (the "safe-to-copy-identity" rule; see
+    ``docs/OPENCLAW_LESSONS.md`` §1).
     """
 
     provider: str

@@ -1,13 +1,12 @@
 """W18: ProcessSupervisor — the top-level run() / scope_cancel() surface.
 
-Mirrors openclaw's ``src/process/supervisor/supervisor.ts:41-291``. The
-two timeout types are ported verbatim:
+Two timeout types cover the W18 contract:
 
-* ``overall_timeout_sec`` — hard wall-clock kill (openclaw's
-  ``timeoutMs`` / ``overall-timeout`` reason).
+* ``overall_timeout_sec`` — hard wall-clock kill; the registry records
+  ``kill_reason="overall_timeout"``.
 * ``no_output_timeout_sec`` — fires when stdout *and* stderr go silent
-  for that many seconds (openclaw's ``noOutputTimeoutMs`` /
-  ``no-output-timeout`` reason).
+  for that many seconds; the registry records
+  ``kill_reason="no_output_timeout"``.
 
 The ``scope_key`` argument composes with W17's
 ``agents/subagent_spawner.py`` scope semantics — same string shape
@@ -43,10 +42,10 @@ AdapterType = Union[ChildAdapter, PtyAdapter]
 class RunHandle:
     """Caller-facing handle for a single supervised run.
 
-    Mirrors openclaw's ``ManagedRun`` interface (``runId``, ``pid``,
-    ``wait``, ``cancel``) plus an ``await wait()`` that resolves to the
-    finalized :class:`RunRecord` (so callers do not need to round-trip
-    through the registry to learn the kill_reason / exit_code).
+    Surface: ``run_id``, ``pid``, ``wait()``, ``cancel()``, plus an
+    ``await wait()`` that resolves to the finalized :class:`RunRecord`
+    (so callers do not need to round-trip through the registry to
+    learn the kill_reason / exit_code).
     """
 
     def __init__(
@@ -319,9 +318,9 @@ class ProcessSupervisor:
 def create_process_supervisor() -> ProcessSupervisor:
     """Factory for :class:`ProcessSupervisor`.
 
-    Mirrors openclaw's ``createProcessSupervisor()`` factory shape so
-    the two implementations read identically across the language
-    boundary. Returns a fresh, isolated supervisor — registries are
-    not shared across calls.
+    Factory form matches the comparative reference so readers of
+    both implementations see the same shape (see
+    `docs/OPENCLAW_LESSONS.md` §2 + §10 W18). Returns a fresh,
+    isolated supervisor — registries are not shared across calls.
     """
     return ProcessSupervisor()

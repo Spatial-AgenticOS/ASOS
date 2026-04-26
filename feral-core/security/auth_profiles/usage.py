@@ -21,8 +21,8 @@ Until then this tracker:
   has authority to disable a profile.
 
 W19 will replace ``record_failure`` with the failure-classification +
-cooldown logic from openclaw's ``auth-profiles/usage.ts`` while
-preserving this signature.
+cooldown logic documented in ``docs/OPENCLAW_LESSONS.md`` §1 + §10 W19
+while preserving this signature.
 """
 
 from __future__ import annotations

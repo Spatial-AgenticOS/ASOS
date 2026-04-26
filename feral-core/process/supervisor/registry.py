@@ -1,15 +1,14 @@
 """W18: in-memory RunRegistry + RunRecord dataclass.
 
-Mirrors openclaw ``src/process/supervisor/registry.ts``. The Python
-implementation is intentionally simpler — openclaw has to bound the
-exited-record cache because their supervisor runs for the whole
-desktop-app lifetime; ours is owned by per-process integrations and
-the records die with the process. We expose the four methods named in
-the W18 spec (register / finalize / list_active / list_by_scope) plus
+The Python implementation is intentionally simple: the registry is
+owned by per-process integrations and the records die with the
+process, so we do not need a bounded exited-record cache. We expose
+the four methods named in the W18 spec
+(register / finalize / list_active / list_by_scope) plus
 ``wait_for_finish`` so callers can block on a specific run id.
 
 Async-safe via ``asyncio.Lock``. Not thread-safe — the supervisor is
-asyncio-native, exactly like openclaw's Node-event-loop counterpart.
+asyncio-native end-to-end.
 
 Cites docs/OPENCLAW_LESSONS.md §2 + §10 W18.
 """

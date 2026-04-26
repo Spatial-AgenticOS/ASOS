@@ -1,6 +1,6 @@
 """W17: scope_key cancellation semantics.
 
-Mirrors openclaw-tools.subagents.scope.test.ts:
+Contract — scope_key semantics:
 * siblings sharing a scope_key die together
 * default cancel_all kills every child regardless of scope_key
   (the "all-children-tied" default)

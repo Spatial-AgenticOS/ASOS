@@ -1,6 +1,7 @@
 """W17: model_override is honoured on the spawned child's first LLM call.
 
-Mirrors openclaw-tools.subagents.sessions-spawn.model.test.ts.
+Contract: the spawned child's first LLM call uses the override.
+See ``docs/OPENCLAW_LESSONS.md`` §10 W17 for the comparative table.
 """
 
 from __future__ import annotations

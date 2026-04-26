@@ -94,7 +94,8 @@ def _legacy_credentials_path() -> Path:
 def _classify(value: object, *, key: str) -> AuthProfileCredential:
     """Map one legacy ``{key: value}`` entry to a credential dataclass.
 
-    Heuristic, mirrored from openclaw's ``applyLegacyAuthStore``:
+    Heuristic for classifying each legacy entry (see
+    ``docs/OPENCLAW_LESSONS.md`` §1 for the comparative walk-through):
 
     * a ``dict`` containing ``refresh_token`` → :class:`OAuthCredential`
       (provider derived from the key prefix; access/expires copied

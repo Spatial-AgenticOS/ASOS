@@ -2,12 +2,11 @@
 W16 — per-agent auth profile file store.
 
 On-disk authority. One JSON file per agent at
-``$FERAL_HOME/agents/<agent_id>/auth_profiles.json``. Mirrors openclaw's
-``auth-profiles/store.ts`` minus the runtime-snapshot cache (FERAL is
+``$FERAL_HOME/agents/<agent_id>/auth_profiles.json``. FERAL is
 single-process today; there is no gateway daemon racing against the
-CLI). The atomic-update path uses the same OS file lock as openclaw's
-``withFileLock`` so a future multi-process FERAL deployment is safe by
-construction.
+CLI. The atomic-update path uses an OS file lock so a future
+multi-process FERAL deployment is safe by construction (see
+``docs/OPENCLAW_LESSONS.md`` §1 for the comparative discussion).
 
 Concurrency model:
 
@@ -255,10 +254,9 @@ class AuthProfileFileStore:
         ``updater`` receives a mutable mapping and returns ``True`` to
         commit, ``False`` to abandon the change. The mapping holds the
         decoded :class:`AuthProfileCredential` objects; on commit we
-        re-serialise to JSON. This is the equivalent of openclaw's
-        ``updateAuthProfileStoreWithLock`` and is the supported way to
-        mirror an OAuth refresh across multiple profile ids in one
-        atomic write.
+        re-serialise to JSON. This is the supported way to mirror an
+        OAuth refresh across multiple profile ids in one atomic write
+        (see ``docs/OPENCLAW_LESSONS.md`` §1).
         """
         with self.with_lock():
             payload = self._read_payload()

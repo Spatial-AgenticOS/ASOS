@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://feral.io/schemas/feral-channel.manifest.json",
   "title": "FERAL Channel Manifest",
-  "description": "Declarative description of a FERAL channel adapter (W21 Phase 1). Modeled on openclaw's `openclaw.plugin.json`. Consumed by `feral_core.channels.manifest.load_manifest` and `feral_core.channels.loader.discover_bundled`.",
+  "description": "Declarative description of a FERAL channel adapter (W21 Phase 1). Consumed by `feral_core.channels.manifest.load_manifest` and `feral_core.channels.loader.discover_bundled`.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "providers", "providerAuthEnvVars", "capabilities"],
@@ -82,7 +82,7 @@
           }
         }
       },
-      "description": "Optional auth choice menu (oauth / device-code / api-key) modeled on openclaw's `providerAuthChoices`."
+      "description": "Optional auth choice menu (oauth / device-code / api-key) exposed to the user-facing picker."
     },
     "modelSupport": {
       "type": "object",

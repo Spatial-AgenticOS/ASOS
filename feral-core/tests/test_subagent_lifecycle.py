@@ -1,6 +1,7 @@
 """W17: subagent lifecycle — spawn → run → reap, and parent-cancel propagation.
 
-Mirrors openclaw-tools.subagents.sessions-spawn.lifecycle.test.ts.
+Contract: spawn → run → reap; parent-cancel propagates to children.
+See ``docs/OPENCLAW_LESSONS.md`` §10 W17 for the comparative test table.
 """
 
 from __future__ import annotations

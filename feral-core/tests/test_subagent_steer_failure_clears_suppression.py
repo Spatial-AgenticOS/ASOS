@@ -1,6 +1,5 @@
 """W17: steer-failure clears the suppression flag.
 
-Mirrors openclaw-tools.subagents.steer-failure-clears-suppression.test.ts.
 If the supervisor's ``steer`` decision raises mid-spawn, the parent's
 announce-suppression flag MUST be cleared before the exception
 propagates. Silent swallowing is forbidden by W17 doctrine.
@@ -78,7 +77,7 @@ async def test_steer_failure_clears_suppression_and_propagates():
 
 @pytest.mark.asyncio
 async def test_successful_steer_leaves_suppression_set():
-    """A successful steer keeps the suppression on (mirrors openclaw)."""
+    """A successful steer keeps the suppression flag set."""
     parent_id = "parent-2"
     child_id = await spawn_subsession(parent_id, "tool_runner", scope_key="alpha")
 

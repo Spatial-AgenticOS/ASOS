@@ -1,8 +1,9 @@
 """W18: process supervisor (overall + no-output timeouts, scope-cancel).
 
-The Python port of openclaw's ``src/process/supervisor/`` (TypeScript).
-Mirrors the canonical reference at
-``openclaw-main 2/src/process/supervisor/supervisor.ts:41-291``.
+A Python, asyncio-native supervisor for spawning, timing-out, and
+scope-cancelling external subprocesses (Codex CLI, Claude Code CLI,
+ffmpeg, Ollama serve, etc.). The comparative analysis in
+`docs/OPENCLAW_LESSONS.md` §2 + §10 W18 covers the lineage.
 
 Public surface::
 
