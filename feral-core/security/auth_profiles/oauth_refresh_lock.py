@@ -1,14 +1,13 @@
 """
 W16 — cross-process file lock for OAuth credential refreshes.
 
-Mirrors openclaw's ``auth-profiles/path-resolve.ts::resolveOAuthRefreshLockPath``
-+ ``oauth-manager.ts``'s ``withFileLock`` wrapper. The lock prevents
-the ``refresh_token_reused`` storm that hits when N processes share a
+The lock prevents the ``refresh_token_reused`` storm that hits when N
+processes share a
 single OAuth profile and all attempt to refresh the same single-use
 refresh token simultaneously: the first refresh succeeds and rotates
 the token; every subsequent refresh sees the rotated token, gets
 ``invalid_grant``, and the provider revokes the WHOLE chain (see
-``OPENCLAW_LESSONS.md`` §1 + §10 W16).
+``docs/OPENCLAW_LESSONS.md`` §1 + §10 W16).
 
 Semantics:
 
@@ -48,10 +47,9 @@ logger = logging.getLogger("feral.auth_profiles.oauth_refresh_lock")
 
 
 _LOCK_SUBDIR = "oauth-refresh"
-# Default acquisition timeout. openclaw uses 30s for its OAuth refresh
-# lock (`OAUTH_REFRESH_LOCK_OPTIONS`); we mirror that ceiling so a
-# stuck refresh in process A surfaces as an explicit timeout in
-# process B instead of an unbounded hang.
+# Default acquisition timeout. A 30s ceiling ensures a stuck refresh
+# in process A surfaces as an explicit timeout in process B instead
+# of an unbounded hang.
 DEFAULT_TIMEOUT_SECONDS = 30.0
 _POLL_INTERVAL_SECONDS = 0.05
 

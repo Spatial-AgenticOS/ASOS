@@ -1,8 +1,8 @@
 """
 W16 — per-agent path resolution for the auth profile store.
 
-Mirrors openclaw's ``auth-profiles/path-resolve.ts``: every agent gets
-its own subdirectory under ``$FERAL_HOME/agents/<agent_id>/`` so two
+Every agent gets its own subdirectory under
+``$FERAL_HOME/agents/<agent_id>/`` so two
 agents with disjoint credentials never read each other's secrets even
 if one's profile id collides with another's. ``agent_id`` defaults to
 ``"default"`` — that's the single-agent install everyone has today.
@@ -24,8 +24,7 @@ from typing import Optional
 from config.loader import feral_home
 
 
-# Filenames intentionally match openclaw's so future cross-tool diff is
-# trivial. ``auth_profiles.json`` is the secret-bearing payload;
+# ``auth_profiles.json`` is the secret-bearing payload;
 # ``auth_state.json`` is reserved for usage/cooldown state once W19
 # lands. The legacy flat credentials path is the W9 vault file.
 AUTH_PROFILES_FILENAME = "auth_profiles.json"
@@ -35,8 +34,7 @@ DEFAULT_AGENT_ID = "default"
 
 # Allowed agent_id alphabet. Filesystem-safe + no path-traversal:
 # letters, digits, dash, underscore. Two agents named "twin" and
-# "twin/" would otherwise clobber each other on POSIX. Same rule
-# openclaw applies via its ``resolveOpenClawAgentDir`` validation.
+# "twin/" would otherwise clobber each other on POSIX.
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 
