@@ -415,6 +415,10 @@ function ProviderForm({ provider, onCancel, onSaved }) {
   // honestly tell the user the dropdown is a fallback list, not live data.
   const [modelWarning, setModelWarning] = useState('');
   const [modelSource, setModelSource] = useState('');
+  // Unix-seconds timestamp of the catalog's most recent live fetch
+  // (0 when the row is the bundled fallback list). Drives the
+  // Live/Cached/Stale badge below.
+  const [modelLastRefresh, setModelLastRefresh] = useState(0);
   const [modelFilter, setModelFilter] = useState('');
   const [selectedModel, setSelectedModel] = useState(provider.default_model || '');
   const [apiKey, setApiKey] = useState('');
@@ -425,6 +429,10 @@ function ProviderForm({ provider, onCancel, onSaved }) {
 
   // `force=true` is what the explicit "Refresh models" button hits — it
   // bypasses the 6h disk cache so the user always gets a wire fetch.
+  // Returns the parsed response so the initial-mount effect can decide
+  // whether the cache is stale enough to warrant an immediate force
+  // refresh (Roadmap §3.5 P0 / Appendix A.1 — "GPT-5.5 missing" was a
+  // 24h+ cache that the picker silently served).
   const loadModels = useCallback(async ({ force = false } = {}) => {
     setLoadingModels(true);
     setModelError(null);
@@ -435,17 +443,46 @@ function ProviderForm({ provider, onCancel, onSaved }) {
       setModels(list);
       setModelWarning(d.warning || '');
       setModelSource(d.source || '');
-      if (list.length > 0 && !selectedModel) {
-        setSelectedModel(list[0].id || list[0]);
+      // ``last_refresh`` is the unix-seconds timestamp of the catalog's
+      // most recent successful live fetch (0 when the response is the
+      // bundled fallback list). Used by the freshness badge below.
+      setModelLastRefresh(typeof d.last_refresh === 'number' ? d.last_refresh : 0);
+      // Functional setter so we don't re-run the effect every time
+      // the user picks a model — without this, the auto-stale-refresh
+      // useEffect below would be cancelled mid-flight by the
+      // setSelectedModel state churn.
+      if (list.length > 0) {
+        setSelectedModel((current) => current || (list[0].id || list[0]));
       }
+      return d;
     } catch (e) {
       setModelError(e?.message || 'failed to fetch models');
+      return null;
     } finally {
       setLoadingModels(false);
     }
-  }, [provider.provider_id, selectedModel]);
+  }, [provider.provider_id]);
 
-  useEffect(() => { loadModels(); }, [loadModels]);
+  useEffect(() => {
+    // Initial mount: do the cheap cached fetch first, then force a
+    // live refresh if the catalog says the row is stale (>24h) OR the
+    // dropdown would otherwise be empty. Without this the v2 picker
+    // happily served pre-2026 model lists for as long as the brain
+    // had been up — that was the bug in Appendix A.1.
+    let cancelled = false;
+    (async () => {
+      const d = await loadModels();
+      if (cancelled || !d) return;
+      const lastRefresh = typeof d.last_refresh === 'number' ? d.last_refresh : 0;
+      const ageSec = lastRefresh > 0 ? (Date.now() / 1000) - lastRefresh : Infinity;
+      const STALE_AFTER_SEC = 24 * 3600;
+      const noModels = !Array.isArray(d.models) || d.models.length === 0;
+      if (noModels || ageSec > STALE_AFTER_SEC) {
+        await loadModels({ force: true });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [loadModels]);
 
   const save = async () => {
     setBusy(true);
@@ -456,7 +493,7 @@ function ProviderForm({ provider, onCancel, onSaved }) {
         method: 'POST',
         body: JSON.stringify({
           provider: provider.provider_id,
-          model: selectedModel || provider.default_model || 'gpt-4o-mini',
+          model: selectedModel || provider.default_model || (models[0] && (typeof models[0] === 'string' ? models[0] : models[0].id)) || '',
           api_key: apiKey || undefined,
           base_url: baseUrl || undefined,
         }),
@@ -547,9 +584,40 @@ function ProviderForm({ provider, onCancel, onSaved }) {
             className="v2-input"
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
-            placeholder={provider.default_model || 'gpt-4o-mini'}
+            placeholder={provider.default_model || 'pick a model'}
             list={`models-${provider.provider_id}`}
           />
+          {(() => {
+            // Live/Cached/Stale freshness badge.
+            // green dot < 2h, yellow dot < 24h, red dot otherwise (or
+            // no successful live refresh yet). Source: ProviderCatalog
+            // CachedModelList.last_refresh round-tripped through
+            // /api/llm/providers/{id}/models.
+            const ageSec = modelLastRefresh > 0
+              ? (Date.now() / 1000) - modelLastRefresh
+              : Infinity;
+            let tone = 'stale';
+            let label = 'Stale';
+            if (modelLastRefresh > 0 && ageSec < 2 * 3600) { tone = 'live'; label = 'Live'; }
+            else if (modelLastRefresh > 0 && ageSec < 24 * 3600) { tone = 'cached'; label = 'Cached'; }
+            const ageHuman = (() => {
+              if (!isFinite(ageSec)) return 'never refreshed';
+              if (ageSec < 60) return 'just now';
+              if (ageSec < 3600) return `${Math.round(ageSec / 60)}m ago`;
+              if (ageSec < 86400) return `${Math.round(ageSec / 3600)}h ago`;
+              return `${Math.round(ageSec / 86400)}d ago`;
+            })();
+            return (
+              <span
+                className={`v2-chip v2-chip--${tone === 'live' ? 'live' : tone === 'cached' ? 'warn' : 'error'}`}
+                data-testid={`model-age-${provider.provider_id}`}
+                data-age-tone={tone}
+                title={`Model list age: ${ageHuman}`}
+              >
+                {label} · {ageHuman}
+              </span>
+            );
+          })()}
           <button
             type="button"
             className="v2-btn v2-btn--ghost"
@@ -1509,6 +1577,37 @@ function TwinSection() {
   const availableUnconfigured = available.filter((a) => !policyDomains.has(a.domain));
   const hasActive = policies.length > 0;
 
+  // A "configured executor" is anything the backend reports as wired
+  // right now — a stored policy whose executor is still bound, or any
+  // discovery entry in `available`. Disconnected entries are stale and
+  // do NOT count, which is what removes the kill-switch theatre on a
+  // brand-new install (Roadmap §A.5 / W2).
+  const hasConfiguredExecutor = policies.length > 0 || available.length > 0;
+
+  // Workaround: TwinSection cannot edit Settings.jsx lines outside its
+  // own range (W2 contract), so it cannot take a real `setSection`
+  // prop yet. The Connect button on each "Available executors" row
+  // therefore clicks the matching settings nav button via the DOM.
+  // Tracked in docs/AGENT_PROMPTS_FOLLOWUPS.md for lifting into props.
+  const navigateToSettingsSection = (target) => {
+    if (typeof document === 'undefined') return;
+    const buttons = document.querySelectorAll('.v2-settings-btn');
+    for (const b of buttons) {
+      if ((b.textContent || '').trim() === target) {
+        b.click();
+        return;
+      }
+    }
+  };
+
+  // Channels-driven domains live under Settings → Channels; the
+  // productivity-flavoured ones (mail, calendar, meetings, readings,
+  // journal) live under Settings → Integrations. Anything else
+  // defaults to Channels.
+  const targetSectionForDomain = (domain) => (
+    /email|calendar|meeting|reading|journal/i.test(domain) ? 'Integrations' : 'Channels'
+  );
+
   return (
     <div className="v2-twin-section">
       <p className="v2-p v2-p--muted">
@@ -1518,36 +1617,43 @@ function TwinSection() {
         and every orchestrator dispatch at once.
       </p>
 
-      <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button
-          type="button"
-          className={`v2-btn ${paused ? 'v2-btn--primary' : ''}`}
-          onClick={togglePause}
+      {hasConfiguredExecutor && (
+        <div
+          style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}
+          data-testid="twin-kill-switch"
         >
-          {paused ? 'Resume all actions' : 'Pause all actions'}
-        </button>
-        <span className="v2-p v2-p--muted v2-p--tiny">
-          {hasActive
-            ? 'Kill switch — pauses every wired twin action at once.'
-            : 'Kill switch — nothing is currently active, but this will block any future wiring too.'}
-        </span>
-      </div>
+          <button
+            type="button"
+            className={`v2-btn ${paused ? 'v2-btn--primary' : ''}`}
+            onClick={togglePause}
+          >
+            {paused ? 'Resume all actions' : 'Pause all actions'}
+          </button>
+          <span className="v2-p v2-p--muted v2-p--tiny">
+            {hasActive
+              ? 'Kill switch — pauses every wired twin action at once.'
+              : 'Kill switch — pauses every executor below the moment you enable a policy.'}
+          </span>
+        </div>
+      )}
 
       {err && <div className="v2-chip v2-chip--error" style={{ marginTop: 8 }}>{err}</div>}
 
-      {!hasActive && disconnected.length === 0 && (
+      {!hasConfiguredExecutor && disconnected.length === 0 && (
         <div
           className="v2-twin-empty"
           data-testid="twin-empty-state"
           style={{ marginTop: 14 }}
         >
           <Glass level={0} radius="md" padding="md">
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>No twin actions wired yet.</div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              No twin executors configured.
+            </div>
             <p className="v2-p v2-p--muted" style={{ margin: 0 }}>
-              Connect a channel under Settings → Channels or wire an integration
-              under Settings → Integrations. Authorised twin actions will appear
-              here as soon as a real executor is ready — until then the twin
-              has nothing to act on.
+              Connect iMessage / email / calendar in the Channels and
+              Integrations sections to enable. Authorised twin actions will
+              appear here as soon as a real executor is ready — until then
+              the twin has nothing to act on.
             </p>
           </Glass>
         </div>
@@ -1624,25 +1730,46 @@ function TwinSection() {
             type="button"
             className="v2-btn v2-btn--ghost"
             onClick={() => setShowAvailable((v) => !v)}
+            aria-expanded={showAvailable}
           >
-            {showAvailable ? 'Hide' : 'Show'} available executors ({availableUnconfigured.length})
+            Available executors ({availableUnconfigured.length}) {showAvailable ? '▾' : '▸'}
           </button>
           {showAvailable && (
-            <div className="v2-twin-domains" style={{ marginTop: 8 }}>
+            <div
+              className="v2-twin-domains"
+              style={{ marginTop: 8 }}
+              data-testid="twin-available-list"
+            >
               {availableUnconfigured.map((a) => {
                 const id = a.domain;
                 const label = _twinLabel(id, a.label);
+                const target = targetSectionForDomain(id);
                 return (
-                  <Glass key={id} level={0} radius="md" padding="sm" className="v2-twin-domain">
+                  <Glass
+                    key={id}
+                    level={0}
+                    radius="md"
+                    padding="sm"
+                    className="v2-twin-domain v2-twin-domain--available"
+                    data-testid={`twin-available-row-${id}`}
+                  >
                     <div className="v2-twin-domain-head">
                       <div>
                         <div className="v2-twin-domain-label">{label}</div>
                         <div className="v2-p v2-p--tiny v2-p--muted">
-                          <code>{id}</code> · executor wired, no policy yet
+                          <code>{id}</code> · off · not connected
                         </div>
                       </div>
                       <div className="v2-twin-domain-actions">
-                        <button type="button" className="v2-btn v2-btn--primary" onClick={() => upsert(id, { mode: 'draft_only' })} disabled={busy}>Set draft policy</button>
+                        <button
+                          type="button"
+                          className="v2-btn v2-btn--primary"
+                          onClick={() => navigateToSettingsSection(target)}
+                          disabled={busy}
+                          aria-label={`Connect ${label} in ${target}`}
+                        >
+                          Connect
+                        </button>
                       </div>
                     </div>
                   </Glass>
