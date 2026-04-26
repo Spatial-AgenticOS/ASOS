@@ -1,0 +1,142 @@
+---
+title: "Sync chaos & recovery"
+description: "What FERAL's federated memory sync survives, what it surfaces, and what is genuinely fatal."
+---
+
+The federated memory layer (`feral-core/memory/sync.py` +
+`memory/store.py`) is built so a flaky LAN, a half-killed peer, or a
+wedged disk never wedges the brain itself. This page documents the
+failure modes the chaos suite exercises, which behaviors are
+**recoverable** (sync resumes on its own or after one operator action),
+and which are **fatal** (you need a backup restore).
+
+The corresponding tests live at
+`feral-core/tests/test_memory_sync_chaos.py` and
+`feral-core/tests/test_memory_recovery.py`, plus the nightly chaos
+script `scripts/chaos/sync_kill.py`. They run on cron via
+`.github/workflows/sync-chaos-nightly.yml`.
+
+## What the chaos suite asserts
+
+### `kill_peer_mid_handshake` — recoverable
+
+A peer accepts the TCP connection, receives the first handshake frame,
+then drops the websocket without responding.
+
+**Behavior:** the initiator wraps the entire handshake in retry-with-
+backoff (default 3 attempts, 1s/2s/4s exponential). After the final
+attempt it returns `{success: false, error, attempts: 3}` instead of
+raising. No asyncio task is left orphaned and the websocket is closed
+via `async with` even on the failing attempt.
+
+**Operator action:** none. The next `sync_with_peer` call retries the
+peer normally.
+
+### `corrupt_wal` — recoverable, requires intervention
+
+A stray byte lands inside `memory.db` or `sync_wal.db` (cosmic ray,
+filesystem bug, partial write).
+
+**Behavior:** `MemoryStore.refresh()` runs `PRAGMA integrity_check` on
+both files and returns a structured dict:
+
+```json
+{
+  "ok": false,
+  "error": "wal_corruption",
+  "memory_db": "ok",
+  "sync_wal": "wal_corruption",
+  "sync_wal_detail": "database disk image is malformed"
+}
+```
+
+The sync engine refuses to apply remote changes while `refresh()`
+returns `ok: false` — the corruption is surfaced rather than masked.
+
+**Operator action:** restore from the most recent SQLite backup (see
+the §3.3 #2 backup runbook), then `engine.resume()` once `refresh()`
+returns `ok: true`.
+
+### `disk_full` — recoverable
+
+`SyncWAL.append()` returns `OSError(ENOSPC)` (or the SQLite-translated
+"disk I/O" / "no space" variants).
+
+**Behavior:** the WAL layer translates the error to
+`SyncDiskFullError` and the engine sets `_io_paused = True`. While
+paused:
+
+- `log_operation()` raises `SyncDiskFullError` immediately (no
+  further WAL writes attempted),
+- `sync_with_peer()` short-circuits and returns
+  `{success: false, error: "disk_full", io_paused: true}`,
+- the per-peer `asyncio.Lock` is released on the failing path so a
+  second sync attempt is not blocked behind it.
+
+**Operator action:** free disk space, then call `engine.resume()`.
+`resume()` runs an integrity check before clearing the flag, so a
+second corruption doesn't slip through.
+
+### `mdns_fail_static_fallback` — recoverable, fully automatic
+
+`zeroconf.Zeroconf()` raises (interface offline, permissions error,
+package missing).
+
+**Behavior:** `start_discovery()` catches the exception, logs a
+warning, and falls through to the `FERAL_SYNC_PEERS` static peer list.
+No exception is allowed to escape into the asyncio loop. The engine
+ends up `_running = True` with the static peers loaded as
+`source: "static"`.
+
+**Operator action:** none — but make sure `FERAL_SYNC_PEERS` is set
+on hosts that don't see mDNS (overlay networks, container hosts).
+
+## What the recovery suite asserts
+
+### `kill_brain_mid_apply` — recoverable
+
+Peer A produces 100 ops, peer B starts applying them, B gets killed at
+~50%, restart, re-sync.
+
+**Guarantees verified:**
+
+- WAL has exactly 100 entries on B (no duplicates: `INSERT OR
+  REPLACE` keyed on `op_id`),
+- materialized `episodes` table has exactly 100 rows on B (no
+  duplicates: `INSERT OR IGNORE` keyed on row `id`),
+- HLC monotonicity preserved: the merged WAL sorted by HLC never
+  goes backwards, and the pre-crash prefix is a prefix of the
+  post-recovery ordering,
+- A and B converge: every op_id on A is byte-identical on B.
+
+## Fatal failure modes (intentionally NOT recoverable)
+
+These need the backup-restore runbook, because no amount of retrying
+brings the data back:
+
+- **Both** the `memory.db` *and* its backup are physically lost.
+- The HLC node identifier is reused across two different processes
+  (split-brain): two writers claiming the same node id will both
+  produce timestamps that look causal but represent divergent state.
+  Operator-side discipline; not recoverable from inside the engine.
+- A signed peer with TLS client cert auth becomes hostile: the engine
+  trusts that any peer with a valid cert is honest. Mitigation lives
+  at the cert-issuance layer (§3.3 #3 mTLS rotation), not here.
+
+## Running the suite locally
+
+```bash
+cd feral-core
+pytest tests/test_memory_sync_chaos.py tests/test_memory_recovery.py -v --no-cov
+
+# Or just the chaos-marked tests across the whole suite:
+pytest -m chaos -v --no-cov
+
+# And the multi-process kill loop:
+python ../scripts/chaos/sync_kill.py --iterations 5 --ops-per-cycle 20
+```
+
+Nightly CI runs both via the `Sync chaos (nightly)` workflow at
+05:00 UTC. The job is allowed to fail (it does not gate any release)
+but always uploads logs and any leftover `/tmp/feral-chaos-*` run
+directories as artifacts for forensics.

@@ -206,8 +206,7 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
     "no_auto_feral_home: skip the autouse FERAL_HOME isolation fixture",
-    "soak: long-duration soak test (gated behind --runsoak); see W12 / roadmap §3.4 #3-4",
-]
+    "chaos: federated-sync chaos / recovery tests (W11, roadmap §3.3 #1)",    "soak: long-duration soak test (gated behind --runsoak); see W12 / roadmap §3.4 #3-4",]
 # Coverage is on by default for every `pytest` run. The previous setup
 # configured [tool.coverage.*] but never forced `--cov`, so pytest-cov
 # was installed and dormant. Overridable: `pytest --no-cov` to skip
