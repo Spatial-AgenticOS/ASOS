@@ -2,6 +2,15 @@
  * Page-level styles for v2. Primitives live in ui.css.
  */
 
+/*
+ * Stacking-context constants live in _z.css and resolve as CSS
+ * custom properties on :root. Imported here because pages.css is the
+ * last sheet @import-ed by index.css, so any rules below that name a
+ * stacking constant (e.g. .v2-modal-backdrop) win the cascade over the
+ * legacy numeric literals in ui.css.
+ */
+@import "./_z.css";
+
 /* ── Generic page shells ────────────────────────────────────── */
 .v2-page { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
 .v2-page--grid { gap: 24px; }
@@ -1363,3 +1372,45 @@
   color: var(--v2-text-secondary);
 }
 .v2-code--copyable:hover { background: var(--v2-surface-1); color: var(--v2-text-primary); }
+
+/* ── Devices / Modal stacking-context overrides (W4) ───────── */
+/*
+ * The legacy .v2-modal-backdrop rule in ui.css uses a numeric literal
+ * (z-index: 100). Re-declare it here so it (a) wins the cascade —
+ * pages.css is @import-ed after ui.css — and (b) reads from the
+ * shared --z-modal token in _z.css, keeping every layer in one place.
+ *
+ * This rule pairs with Modal.jsx, which now mounts via React Portal
+ * onto document.body. The portal escapes the .v2-shell-main stacking
+ * context (which has its own positive z-index above .v2-ambient), so
+ * a modal at --z-modal is genuinely above the dock + menubar instead
+ * of being trapped inside the shell-main subtree at z=1.
+ *
+ * v2-modal-card mirrors the backdrop so a screenshot tool that sees
+ * only the inner Glass card can still verify the correct layer.
+ */
+.v2-modal-backdrop {
+  z-index: var(--z-modal);
+}
+.v2-modal-card {
+  position: relative;
+  z-index: calc(var(--z-modal) + 1);
+}
+
+/*
+ * Devices page paired-list filter chip. Used when a row that the
+ * current PairDeviceModal session issued is hidden from the
+ * historical list until pairing actually completes — see
+ * Devices.jsx pendingPairIds.
+ */
+.v2-device-pending-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: var(--v2-radius-pill);
+  background: var(--v2-accent-soft);
+  color: var(--v2-accent);
+  font-size: var(--v2-size-xs);
+  letter-spacing: 0.04em;
+}
