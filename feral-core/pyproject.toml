@@ -39,6 +39,15 @@ dependencies = [
     "PyJWT>=2.8.0",
     "cryptography>=41.0.0",
     "pynacl>=1.5.0",
+    # W9: vault encryption-at-rest. The OS keychain is now a hard
+    # requirement of the security path — `keyring` reads/writes the
+    # 32-byte ChaCha20-Poly1305 master key from
+    # macOS Keychain / Linux Secret Service / Windows Credential Manager.
+    "keyring>=25.0",
+    # W9: pairing-token hashing. argon2id is the primary KDF; bcrypt is
+    # the documented fallback when argon2-cffi is genuinely unavailable
+    # on a given platform (see security/device_pairing.py).
+    "argon2-cffi>=23.1",
 ]
 
 [project.optional-dependencies]

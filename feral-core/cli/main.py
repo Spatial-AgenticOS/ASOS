@@ -1449,6 +1449,10 @@ def main():
     except Exception:
         pass
 
+    # feral key — vault key lifecycle (W9)
+    from cli.key_commands import register_key_subparser
+    register_key_subparser(sub)
+
     # Parse known args — everything else is treated as a message
     args, remaining = parser.parse_known_args()
     _apply_connection_args(args)
@@ -1526,6 +1530,9 @@ def main():
     elif args.subcommand == "twin":
         from cli.twin_commands import cmd_twin
         cmd_twin(args)
+    elif args.subcommand == "key":
+        from cli.key_commands import dispatch_key_subcommand
+        sys.exit(dispatch_key_subcommand(args))
     elif args.subcommand is None and not remaining:
         asyncio.run(repl())
     else:
