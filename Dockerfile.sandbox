@@ -1,7 +1,103 @@
-FROM python:3.12-slim-bookworm
-RUN groupadd -r sandbox && useradd -r -g sandbox -d /home/sandbox -s /bin/bash sandbox
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir numpy pandas requests
-WORKDIR /home/sandbox
-USER sandbox
-CMD ["sleep", "infinity"]
+# syntax=docker/dockerfile:1.7
+#
+# FERAL minimal sandbox image (W22).
+# ==================================
+# Used by:
+#   - tool-genesis-generated code (W8 GenUI app code that runs in the
+#     "code interpreter" execution slot)
+#   - W17 subagent-spawned worker code (kind=tool_runner / research / …)
+#
+# Mount points (passed at `docker run` time by the launcher in
+# feral-core/security/docker_sandbox.py):
+#   /work        ro     — script the brain wants to execute
+#   /tmp         tmpfs  — scratch (rw, nosuid, size=128m)
+#
+# Environment the launcher sets:
+#   FERAL_SANDBOX_ENTRY     path inside /work to execute (default /work/script.py)
+#   FERAL_SANDBOX_LANG      python | node | bash
+#   FERAL_SANDBOX_TIMEOUT_S integer wall-clock limit (default 30s)
+#
+# ENTRYPOINT runs the entry script under a Python watchdog that enforces
+# FERAL_SANDBOX_TIMEOUT_S via SIGALRM and forwards SIGTERM to the child
+# so a docker stop tears the workload down within the grace period.
+
+ARG SANDBOX_COMMON_TAG=latest
+FROM feral-sandbox-common:${SANDBOX_COMMON_TAG}
+
+USER root
+
+# Node.js is a hard dep for tool-genesis JavaScript snippets. We install
+# it from Debian's stable repo so the supply chain matches the base
+# image (no curl|bash). Pin to the major version Debian 12 ships.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        nodejs \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --chmod=0755 <<'WATCHDOG_EOF' /usr/local/bin/feral-sandbox-watchdog
+#!/usr/bin/env python3
+"""Inline watchdog baked into Dockerfile.sandbox at build time (W22).
+
+Reads FERAL_SANDBOX_LANG / FERAL_SANDBOX_ENTRY / FERAL_SANDBOX_TIMEOUT_S
+from the environment, runs the entry script, and kills it with exit
+code 124 if it overruns the wall-clock limit. The launcher in
+feral-core/security/docker_sandbox.py also enforces a wall-clock via
+asyncio.wait_for; this watchdog is a defense-in-depth so a runaway
+loop dies even if the launcher is bypassed.
+"""
+import os
+import signal
+import subprocess
+import sys
+
+DEFAULT_TIMEOUT_S = 30
+TIMEOUT_S = int(os.environ.get("FERAL_SANDBOX_TIMEOUT_S", str(DEFAULT_TIMEOUT_S)))
+ENTRY = os.environ.get("FERAL_SANDBOX_ENTRY", "/work/script.py")
+LANG = os.environ.get("FERAL_SANDBOX_LANG", "python").lower()
+
+ARGV_BY_LANG = {
+    "python":  ["python3", ENTRY],
+    "python3": ["python3", ENTRY],
+    "node":    ["node",    ENTRY],
+    "bash":    ["bash",    ENTRY],
+}
+argv = ARGV_BY_LANG.get(LANG)
+if not argv:
+    sys.stderr.write(
+        "feral-sandbox-watchdog: unknown FERAL_SANDBOX_LANG="
+        + repr(LANG) + "\n"
+    )
+    sys.exit(64)
+
+proc = subprocess.Popen(argv)
+
+
+def _forward_term(signum, _frame):
+    proc.terminate()
+
+
+def _alarm(_signum, _frame):
+    proc.kill()
+    sys.stderr.write(
+        "feral-sandbox-watchdog: timeout after "
+        + str(TIMEOUT_S) + "s\n"
+    )
+    sys.exit(124)
+
+
+signal.signal(signal.SIGTERM, _forward_term)
+signal.signal(signal.SIGALRM, _alarm)
+signal.alarm(max(1, TIMEOUT_S))
+
+sys.exit(proc.wait())
+WATCHDOG_EOF
+
+USER feral
+WORKDIR /home/feral
+
+LABEL org.feral-ai.image.kind="sandbox" \
+      org.feral-ai.image.role="tool-genesis + W17 subagent worker code"
+
+ENTRYPOINT ["/usr/local/bin/feral-sandbox-watchdog"]
+CMD []
