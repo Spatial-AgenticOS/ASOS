@@ -148,6 +148,10 @@ _ANTHROPIC_RULES: tuple[tuple[re.Pattern[str], ModelClass], ...] = (
     (re.compile(r"^claude-opus-4-[0-4](-\d{8})?$"), "reasoning"),
     (re.compile(r"^claude-sonnet-4-[0-3](-\d{8})?$"), "reasoning"),
     (re.compile(r"^claude-haiku-4-[0-3](-\d{8})?$"), "reasoning"),
+    # Base 4.0 dated-snapshot form (e.g. ``claude-opus-4-20250514``)
+    # omits the minor-version digit. The live /v1/models response on
+    # 2026-04-26 exposes these alongside the minor-version variants.
+    (re.compile(r"^claude-(opus|sonnet|haiku)-4(-\d{8})?$"), "reasoning"),
     # 3.x families remain chat (no thinking).
     (re.compile(r"^claude-(opus|sonnet|haiku)-3(-.+)?$"), "chat"),
     (re.compile(r"^claude-3(-\d)?-(opus|sonnet|haiku)(-.+)?$"), "chat"),
