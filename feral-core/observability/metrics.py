@@ -1,11 +1,43 @@
-"""Lightweight OpenTelemetry-compatible metrics. Uses OTel if available; falls back to in-memory counters."""
+"""FERAL observability metrics surface.
+
+Two layers live here:
+
+1. **Legacy in-process layer** (``increment``/``observe``/``measure``/
+   ``in_memory_snapshot``). Optional OpenTelemetry meter; falls back to
+   a process-local counter dict. Predates W13 — kept verbatim so the
+   dozens of call sites scattered across the codebase keep working.
+
+2. **W13 Prometheus REGISTRY + ``emit()``** (added in PR #36, roadmap
+   §3.1 #4). A single :class:`prometheus_client.CollectorRegistry`
+   singleton holds every metric the default Grafana dashboard
+   (``ops/grafana/feral-overview.json``) and Prometheus alert rules
+   (``ops/prometheus/alerts.yml``) reference. ``emit()`` is the
+   uniform write API; it no-ops when ``FERAL_METRICS_ENDPOINT`` is
+   explicitly turned off, so individual call sites can land without
+   gating logic of their own.
+
+The W13 charter intentionally only wires ONE call site
+(``api/server.py``'s rate-limit middleware, for
+``feral_http_requests_total``). The rest — sync, MCP, LLM provider,
+supervisor, sandbox, vault — are tracked as W13.1 follow-ups so each
+owning workstream adds its own ``emit()`` calls inside its own PR.
+The metric definitions below document which workstream owns the
+eventual call site.
+"""
+from __future__ import annotations
+
 import logging
 import os
 import time
 from collections import defaultdict
 from contextlib import contextmanager
+from typing import Mapping
 
 logger = logging.getLogger("feral.observability")
+
+# ───────────────────────────────────────────────────────────────────
+# Legacy in-process metrics (unchanged from pre-W13)
+# ───────────────────────────────────────────────────────────────────
 
 _OTEL_ENABLED = False
 _meter = None
@@ -90,3 +122,197 @@ def _reset_inmem():
     """Reset in-memory stores — for test isolation only."""
     _inmem["counters"].clear()
     _inmem["histograms"].clear()
+
+
+# ───────────────────────────────────────────────────────────────────
+# W13 — Prometheus registry + emit() helper
+# ───────────────────────────────────────────────────────────────────
+#
+# Owned by W13 (roadmap §3.1 #4). REGISTRY is a dedicated
+# CollectorRegistry instance so we never collide with the
+# prometheus_client default registry the multiprocess collector or
+# third-party libs may scribble into. Every metric the default
+# Grafana dashboard + alert rules reference must be defined below;
+# tests/test_metrics_registry.py enforces that contract.
+
+from prometheus_client import (
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+)
+
+REGISTRY: CollectorRegistry = CollectorRegistry(auto_describe=True)
+
+# HTTP — emitted by feral-core/api/server.py's RateLimitMiddleware.
+# Owned by W13.
+HTTP_REQUESTS_TOTAL = Counter(
+    "feral_http_requests_total",
+    "Total HTTP requests served by the FERAL Brain, labelled by method, route template, and status class.",
+    labelnames=("method", "route", "status"),
+    registry=REGISTRY,
+)
+HTTP_REQUEST_DURATION_SECONDS = Histogram(
+    "feral_http_request_duration_seconds",
+    "HTTP request latency in seconds, labelled by method and route template.",
+    labelnames=("method", "route"),
+    registry=REGISTRY,
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+
+# LLM — to be emitted by feral-core/agents/llm_provider.py.
+# W13.1 follow-up owner: W19 (LLM provider hardening).
+LLM_429_TOTAL = Counter(
+    "feral_llm_429_total",
+    "Provider rate-limit (HTTP 429) responses returned by upstream LLM APIs, labelled by provider id.",
+    labelnames=("provider",),
+    registry=REGISTRY,
+)
+LLM_FAILOVER_CHAIN_EXHAUSTED_TOTAL = Counter(
+    "feral_llm_failover_chain_exhausted_total",
+    "Number of LLM requests that fell through every configured provider in the failover chain.",
+    registry=REGISTRY,
+)
+
+# Federated sync — to be emitted by feral-core/memory/sync.py.
+# W13.1 follow-up owner: W11 (federated sync chaos).
+SYNC_ACTIVE_PEERS = Gauge(
+    "feral_sync_active_peers",
+    "Current number of federated-sync peers the Brain has an open transport to.",
+    registry=REGISTRY,
+)
+SYNC_FAILURES_TOTAL = Counter(
+    "feral_sync_failures_total",
+    "Federated-sync transport or apply-changes failures, labelled by failure reason.",
+    labelnames=("reason",),
+    registry=REGISTRY,
+)
+SYNC_WAS_ACTIVE_RECENT = Gauge(
+    "feral_sync_was_active_recent",
+    "1 if the sync engine has had at least one active peer in the recent window (default 24h), 0 otherwise. Used by the SyncPeerDown alert to suppress noise on single-node installs.",
+    registry=REGISTRY,
+)
+
+# Supervisor — to be emitted by feral-core/agents/supervisor.py.
+# W13.1 follow-up owner: W17 (supervisor / approval queue).
+SUPERVISOR_APPROVAL_QUEUE = Gauge(
+    "feral_supervisor_approval_queue",
+    "Current depth of the supervisor's pending-approval queue.",
+    registry=REGISTRY,
+)
+
+# Tool denials / sandbox — to be emitted by feral-core/security/sandbox_policy.py
+# and the sandbox runner. W13.1 follow-up owner: W4 (sandbox / security policy).
+TOOL_DENIALS_TOTAL = Counter(
+    "feral_tool_denials_total",
+    "Tool calls denied by policy before reaching the executor, labelled by tool id.",
+    labelnames=("tool",),
+    registry=REGISTRY,
+)
+SANDBOX_KILLS_TOTAL = Counter(
+    "feral_sandbox_kills_total",
+    "Sandbox processes killed by the runner (timeout, OOM, policy violation), labelled by reason.",
+    labelnames=("reason",),
+    registry=REGISTRY,
+)
+
+# Vault — to be emitted by feral-core/security/vault.py.
+# W13.1 follow-up owner: W9 (vault encryption-at-rest).
+VAULT_DECRYPT_ERRORS_TOTAL = Counter(
+    "feral_vault_decrypt_errors_total",
+    "Vault entries that failed AEAD decrypt — typically wrong key, tampered ciphertext, or schema drift.",
+    registry=REGISTRY,
+)
+
+# WebSocket — to be emitted by feral-core/api/server.py's main client
+# WS endpoint and the daemon endpoint. Single gauge, value =
+# len(state.sessions). W13.1 follow-up owner: W17 / W13 sweep.
+WS_ACTIVE_SESSIONS = Gauge(
+    "feral_ws_active_sessions",
+    "Current number of authenticated WebSocket sessions held open by the Brain.",
+    registry=REGISTRY,
+)
+
+
+# Map of metric name → metric object so emit() can dispatch by string.
+# Tests/test_metrics_registry.py walks this map to enforce parity with
+# the dashboard + alert rules.
+_METRICS: dict[str, Counter | Gauge | Histogram] = {
+    "feral_http_requests_total": HTTP_REQUESTS_TOTAL,
+    "feral_http_request_duration_seconds": HTTP_REQUEST_DURATION_SECONDS,
+    "feral_llm_429_total": LLM_429_TOTAL,
+    "feral_llm_failover_chain_exhausted_total": LLM_FAILOVER_CHAIN_EXHAUSTED_TOTAL,
+    "feral_sync_active_peers": SYNC_ACTIVE_PEERS,
+    "feral_sync_failures_total": SYNC_FAILURES_TOTAL,
+    "feral_sync_was_active_recent": SYNC_WAS_ACTIVE_RECENT,
+    "feral_supervisor_approval_queue": SUPERVISOR_APPROVAL_QUEUE,
+    "feral_tool_denials_total": TOOL_DENIALS_TOTAL,
+    "feral_sandbox_kills_total": SANDBOX_KILLS_TOTAL,
+    "feral_vault_decrypt_errors_total": VAULT_DECRYPT_ERRORS_TOTAL,
+    "feral_ws_active_sessions": WS_ACTIVE_SESSIONS,
+}
+
+
+def registered_metric_names() -> set[str]:
+    """Return the set of metric names defined in :data:`REGISTRY`.
+
+    Used by ``tests/test_metrics_registry.py`` to assert dashboard/alert
+    parity. Includes every metric name registered above (without any
+    ``_total`` / ``_bucket`` suffix the prometheus_client client tacks
+    on at scrape time — those are accessor names, not separate metrics).
+    """
+    return set(_METRICS.keys())
+
+
+def _metrics_endpoint_enabled() -> bool:
+    """Whether the /metrics endpoint and emit() writes are active.
+
+    Default-on as of W13: the kill switch must be EXPLICITLY set to a
+    falsy value to silence the metrics surface. This matches the
+    behaviour the dashboard + alert rules assume (a fresh install
+    serves /metrics on loopback by default).
+    """
+    val = os.getenv("FERAL_METRICS_ENDPOINT", "1").strip().lower()
+    return val not in ("0", "false", "off", "no")
+
+
+def emit(metric: str, value: float = 1.0, labels: Mapping[str, str] | None = None) -> None:
+    """Write to a registered metric. No-op when the metrics surface is off.
+
+    Dispatches on the underlying prometheus_client type:
+      * Counter   → ``inc(value)`` (default 1.0)
+      * Gauge     → ``set(value)``
+      * Histogram → ``observe(value)``
+
+    Unknown metric names are silently ignored — emit() is the surface
+    the rest of the codebase calls into and we never want a missing
+    metric definition to crash a hot path. ``tests/test_metrics_registry.py``
+    is responsible for catching dashboard / alert references that don't
+    have a matching ``_METRICS`` entry.
+    """
+    if not _metrics_endpoint_enabled():
+        return
+    m = _METRICS.get(metric)
+    if m is None:
+        return
+    target = m.labels(**dict(labels)) if labels else m
+    if isinstance(m, Counter):
+        target.inc(value)
+    elif isinstance(m, Gauge):
+        target.set(value)
+    elif isinstance(m, Histogram):
+        target.observe(value)
+
+
+def render_prometheus() -> tuple[str, str]:
+    """Render the registry into Prometheus exposition text.
+
+    Returns ``(body, content_type)`` ready for the ASGI response. Kept
+    out of ``api/server.py`` so the endpoint handler stays a one-liner
+    and tests can call it without spinning up FastAPI.
+    """
+    return generate_latest(REGISTRY).decode("utf-8"), CONTENT_TYPE_LATEST
+
+
