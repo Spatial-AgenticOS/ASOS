@@ -889,8 +889,29 @@ class LLMProvider:
             logger.error(f"Anthropic stream failed: {e}")
             yield {"type": "error", "content": str(e)}
 
-    async def switch_provider(self, provider: str, model: str = "", api_key: str = ""):
-        """Hot-swap the LLM provider at runtime."""
+    async def switch_provider(
+        self,
+        provider: str,
+        model: str = "",
+        api_key: str = "",
+        base_url: str = "",
+    ):
+        """Hot-swap the LLM provider at runtime.
+
+        ``base_url`` is an optional override; when empty, the adapter
+        looks up the default base URL from ``PROVIDER_BASES`` below.
+        The override path is what lets the v2 Settings page's
+        Save-&-switch endpoint point a user at a self-hosted inference
+        URL (lmstudio, ollama, a custom OpenAI-compatible gateway)
+        without shipping that literal in the adapter's defaults.
+
+        NOTE: this kwarg was added after W1 in response to the shipped
+        v2026.5.0 crash (``api/routes/config.py::update_config`` was
+        already passing ``base_url=`` but ``switch_provider`` did not
+        accept it -> TypeError -> every Save-&-switch 500'd). The
+        regression test lives in
+        ``tests/test_switch_provider_base_url.py``.
+        """
         client = getattr(self, "client", None)
         if client is not None:
             await client.aclose()
@@ -911,14 +932,19 @@ class LLMProvider:
             "lmstudio": ("http://localhost:1234/v1", ""),
         }
 
+        # Honor the explicit override before the lookup. An empty
+        # string is treated as "no override" so legacy callers that
+        # always omitted the kwarg keep the auto-resolved default.
+        _base_url_override = base_url or ""
+
         if provider == "lmstudio":
-            self.base_url = "http://localhost:1234/v1"
+            self.base_url = _base_url_override or "http://localhost:1234/v1"
             self.api_key = "lm-studio"
             if not model:
                 detected = self._detect_lmstudio()
                 self.model = detected or _default_model_for("lmstudio")
         elif provider == "ollama":
-            self.base_url = ollama_openai_base_url()
+            self.base_url = _base_url_override or ollama_openai_base_url()
             self.api_key = "ollama"
             if not model:
                 detected = self._detect_ollama()
@@ -935,7 +961,7 @@ class LLMProvider:
                 return
         elif provider in PROVIDER_BASES:
             base, env_key = PROVIDER_BASES[provider]
-            self.base_url = base
+            self.base_url = _base_url_override or base
             if env_key == "_GEMINI_HELPER":
                 self.api_key = api_key or _gemini_api_key() or ""
             else:
@@ -943,7 +969,7 @@ class LLMProvider:
             if not model:
                 self.model = _default_model_for(provider)
         else:
-            self.base_url = os.getenv("FERAL_LLM_BASE_URL", "https://api.openai.com/v1")
+            self.base_url = _base_url_override or os.getenv("FERAL_LLM_BASE_URL", "https://api.openai.com/v1")
             self.api_key = api_key
             if not model:
                 self.model = _default_model_for(provider)
