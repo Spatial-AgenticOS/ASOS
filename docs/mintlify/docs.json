@@ -75,6 +75,12 @@
         ]
       },
       {
+        "group": "Memory",
+        "pages": [
+          "memory/chaos"
+        ]
+      },
+      {
         "group": "Hardware",
         "pages": [
           "guides/hardware",
@@ -108,6 +114,13 @@
         ]
       },
       {
+        "group": "Security",
+        "pages": [
+          "genui/signing",
+          "genui/sandbox"
+        ]
+      },
+      {
         "group": "Native Apps",
         "pages": [
           "guides/ios-app",
@@ -120,7 +133,9 @@
         "group": "Operations",
         "pages": [
           "guides/observability",
-          "guides/federated-sync"
+          "guides/federated-sync",
+          "operations/soak",
+          "operations/metrics"
         ]
       },
       {
