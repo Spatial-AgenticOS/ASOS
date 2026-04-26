@@ -355,7 +355,20 @@ class IdentityLoader:
         async_builder = getattr(self.memory, "build_context_for_llm_async", None)
         sync_builder = getattr(self.memory, "build_context_for_llm", None)
 
-        if async_builder is not None:
+        # Detect a running event loop BEFORE calling `async_builder(...)`, so we
+        # never allocate a coroutine we can't await. Python evaluates call args
+        # before `asyncio.run` does its loop check, so calling the async method
+        # first would create a coroutine object that gets dropped unawaited and
+        # emits `RuntimeWarning: coroutine … was never awaited` at GC time
+        # (see A9 in docs/WAVE5_HARDENING_PROMPT.md / W24d).
+        loop_is_running = False
+        try:
+            asyncio.get_running_loop()
+            loop_is_running = True
+        except RuntimeError:
+            loop_is_running = False
+
+        if async_builder is not None and not loop_is_running:
             try:
                 return asyncio.run(
                     async_builder(
@@ -366,10 +379,16 @@ class IdentityLoader:
                     )
                 )
             except RuntimeError:
-                # Already inside an event loop; fall through to the sync path.
+                # A loop was raced in between our check and asyncio.run; fall
+                # through to the sync builder without leaking a coroutine.
                 logger.debug("Event loop already running — using sync memory builder")
             except Exception as exc:
                 logger.debug("Async memory builder failed, falling back to sync: %s", exc)
+        elif async_builder is not None and loop_is_running:
+            logger.debug(
+                "Event loop already running — skipping async memory builder to "
+                "avoid an un-awaited coroutine; using sync memory builder"
+            )
 
         if sync_builder is not None:
             try:

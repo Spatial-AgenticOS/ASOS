@@ -150,7 +150,15 @@
   Citation: this PR; existing follow-up `2026-04-25 · W12 · mintlify nav ownership for docs/mintlify/operations/`.
   Proposal: Roll into the same docs-owner sweep that resolves W8/W9/W11/W12 nav additions. — owner: needs-triage (docs).
 
-- [open] 2026-04-26 · W24a · `?class=chat` query param for `/api/llm/providers/{id}/models` + v2 Settings picker wiring (W24a.1)
+- [open] 2026-04-26 · W24d · security/* mintlify pages still unauthored
+  Finding: The W24d charter referenced `docs/mintlify/security/vault.mdx` (W9), `docs/mintlify/security/pairing.mdx` (W9), and `docs/mintlify/security/genui.mdx` (W8) for the new "Security" nav group, but none of those paths exist on `origin/main` at the W24d cutoff. The only security-adjacent mdx files on disk are `docs/mintlify/genui/signing.mdx` and `docs/mintlify/genui/sandbox.mdx`, so W24d's docs.json Security group points at those two pages instead.
+  Citation: W24d — `docs/mintlify/docs.json` Security group; `scripts/check_mintlify_nav.py`.
+  Proposal: W9 / W8 docs owners should author the three charter-named mdx files (or move `genui/signing.mdx` + `genui/sandbox.mdx` under `security/`). Once landed, update the Security group entries accordingly; the `check_mintlify_nav.py` linter will keep the nav honest during the transition. — owner: W9 + W8 docs.
+
+- [open] 2026-04-26 · W24d · `advertise_brain_async` wiring into api/state.py
+  Finding: W24d introduces `services.mdns.advertise_brain_async(...)` as the non-blocking variant. The async startup path in `feral-core/api/state.py` still calls the sync `advertise_brain(...)` (W24d made the sync path loop-safe by offloading to a thread, so this is correct-but-suboptimal). Switching to `await advertise_brain_async(...)` would remove one thread hop on boot.
+  Citation: `feral-core/api/state.py:727–729`; `feral-core/services/mdns.py` (W24d).
+  Proposal: Follow-up PR by the api-startup owner to `await advertise_brain_async(...)` from the `boot_subsystem("mDNS")` block. Cross-boundary per W24d's owned-paths scope. — owner: needs-triage (api).- [open] 2026-04-26 · W24a · `?class=chat` query param for `/api/llm/providers/{id}/models` + v2 Settings picker wiring (W24a.1)
   Finding: `BaseProvider.list_models(model_class=...)` is the filter hook shipped by W24a. The HTTP route in `feral-core/api/routes/llm.py::list_llm_provider_models` and the v2 Settings dropdown in `feral-client-v2/src/pages/Settings.jsx` still hit the unfiltered list; the chat-only filter reaches the dispatcher but not the REST surface. Neither file is in W24a's owned paths.
   Citation: `feral-core/api/routes/llm.py:141`; `feral-client-v2/src/pages/Settings.jsx:441`; W24a PR.
   Proposal: Tracked as W24a.1 — a small cross-boundary PR that adds `?class=` to the route and passes `?class=chat` from Settings.jsx when rendering the chat composer dropdown. — owner: conductor.
@@ -163,8 +171,7 @@
 - [open] 2026-04-26 · W24a · `test_provider_catalog.py::TestBundledCatalogFreshness` catalog-pin assertions need a refresh window
   Finding: The `_VERIFIED_GEMINI_IDS` + `_DEPRECATED_OPENAI_IDS` + "anthropic endpoint is null" assertions were written at the 2026-04-24 snapshot. To keep them green W24a kept the Gemini `-preview` suffix + omitted `gpt-4o*` from the bundled openai seed + left the anthropic endpoint field null (with the live URL mirrored to `_live_endpoint`). Once Anthropic's `/v1/models` is the canonical refresh path (post W24a.2) and Gemini flips 3.x to GA, these asserts should be relaxed to "verified set from the most recent refresh" rather than hard-pinned literals.
   Citation: `feral-core/tests/test_provider_catalog.py:302-334`.
-  Proposal: Replace literal pinning with a snapshot-based assertion driven by the fixture files. — owner: conductor.
----
+  Proposal: Replace literal pinning with a snapshot-based assertion driven by the fixture files. — owner: conductor.---
 
 ## Closed follow-ups
 
