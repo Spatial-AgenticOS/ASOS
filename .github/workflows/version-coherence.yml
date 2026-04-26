@@ -1,15 +1,36 @@
 name: Version coherence
 
 # W7 (docs/AGENT_PROMPTS.md §D.W7 / FEATURE_STABILITY_ROADMAP.md §3.1 #2-3)
-# release-block CI gate. Two checks, both fatal:
-#   1. version drift — every declared location must match
-#      feral-core/pyproject.toml's [project] version. Implementation:
-#      `python3 scripts/sync_versions.py --check --no-metadata`.
-#   2. README test-count drift — the marker
-#      `<!-- sync-versions:test-counts pytest=N vitest=M -->` in README.md
-#      must equal the live `pytest --collect-only` and `vitest list`
-#      counts on this PR. If a PR adds/removes tests it MUST update the
-#      marker. This is the W4.4 #1 release-block check.
+#
+# This workflow has two responsibilities, split into two jobs:
+#
+#   1. ``version-drift`` — release-block gate. Every declared FERAL
+#      version literal in the repo must match
+#      ``feral-core/pyproject.toml``'s ``[project] version``. Runs on
+#      PRs AND on push-to-main; fails fast on any drift. The version
+#      literal IS author-controlled, so failing the PR is the right
+#      thing to do.
+#
+#   2. ``readme-test-counts-autobump`` — derived-artifact maintainer.
+#      The ``<!-- sync-versions:test-counts pytest=N vitest=M -->``
+#      marker in README.md is a *derived* count — no human should ever
+#      have to know what the live numbers are. This job runs ONLY on
+#      push-to-main: it computes the live counts, and if the README
+#      marker is out of sync it pushes a single-line bump commit
+#      (with ``[skip ci]`` so it doesn't loop). Never fails the
+#      workflow — derived state is reconciled, not policed.
+#
+# What this is NOT:
+#   - It is NOT a PR-time test-count gate. We tried that. Every PR
+#     author had to predict what the post-merge live count would be,
+#     which is impossible when other PRs are in flight. The previous
+#     "skip dependabot" conditional was a workaround for that flaw.
+#     The right fix is to make the marker self-heal on main, which is
+#     what ``readme-test-counts-autobump`` does.
+#
+#   - It does NOT replace the actual pytest / vitest CI jobs in
+#     ``ci.yml`` — those are still the source of truth for whether
+#     tests pass. This workflow only cares about the *count*.
 
 on:
   push:
@@ -19,6 +40,9 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ---------------------------------------------------------------------
+  # Job 1: version-drift — the actual release-block gate.
+  # ---------------------------------------------------------------------
   version-drift:
     name: sync_versions --check
     runs-on: ubuntu-latest
@@ -30,23 +54,28 @@ jobs:
         with:
           python-version: "3.11"
 
-      # The check mode is read-only and does not require feral-ai to be
-      # installed; --no-metadata reads the source from
-      # feral-core/pyproject.toml directly. This keeps the gate fast (~1s).
+      # ``--check --no-metadata`` is read-only and reads the source
+      # straight from feral-core/pyproject.toml; no install needed.
       - name: Run version drift check
         run: python3 scripts/sync_versions.py --check --no-metadata
 
-  test-count-drift:
-    name: README test-count vs live counts
+  # ---------------------------------------------------------------------
+  # Job 2: readme-test-counts-autobump — keeps the README marker honest
+  # WITHOUT making PR authors do the bookkeeping. Push-to-main only.
+  # ---------------------------------------------------------------------
+  readme-test-counts-autobump:
+    name: README test-count auto-bump (push-to-main only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Dependabot PRs only touch package.json / lockfiles / pyproject deps — they
-    # never add or remove tests. Forcing every dep bump to also bump the
-    # README marker is pure friction, so we skip this job for dependabot.
-    # The actual pytest/vitest jobs in ci.yml still run and will catch any
-    # genuine test-count regression a dep bump could cause.
-    if: github.actor != 'dependabot[bot]'
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # We need the full history + a token that can push back to
+          # main so the auto-bump commit lands on the protected branch.
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -72,9 +101,9 @@ jobs:
       - name: Compute live pytest count
         id: pytest_count
         working-directory: feral-core
-        # `pytest --collect-only -q` ends with a line like
-        # "1964 tests collected in 4.56s". We grep for that and emit the
-        # integer to GITHUB_OUTPUT so the assert step can read it.
+        # ``pytest --collect-only -q`` ends with a line like
+        # "1964 tests collected in 4.56s". We grep for that and emit
+        # the integer to GITHUB_OUTPUT.
         run: |
           set -euo pipefail
           line=$(python3 -m pytest --collect-only -q --no-cov 2>&1 | tail -3 | grep -E "^[0-9]+ tests? collected" || true)
@@ -90,9 +119,7 @@ jobs:
       - name: Compute live vitest count
         id: vitest_count
         working-directory: feral-client-v2
-        # `vitest list` prints one test per line (no JSON despite the
-        # --reporter flag — this is upstream behaviour). We count the
-        # lines that look like a test path ("file > suite > name").
+        # ``vitest list`` prints one test per line ("file > suite > name").
         run: |
           set -euo pipefail
           n=$(npx vitest list 2>/dev/null | grep -cE " > " || true)
@@ -104,7 +131,7 @@ jobs:
           echo "live_vitest=$n" >> "$GITHUB_OUTPUT"
           echo "vitest live count: $n"
 
-      - name: Compare to README marker
+      - name: Auto-bump README marker if drifted
         env:
           LIVE_PYTEST: ${{ steps.pytest_count.outputs.live_pytest }}
           LIVE_VITEST: ${{ steps.vitest_count.outputs.live_vitest }}
@@ -113,52 +140,96 @@ jobs:
           python3 - <<'PY'
           import os
           import re
+          import subprocess
           import sys
           from pathlib import Path
 
           live_pytest = int(os.environ["LIVE_PYTEST"])
           live_vitest = int(os.environ["LIVE_VITEST"])
 
-          readme = Path("README.md").read_text(encoding="utf-8")
-          marker = re.search(
+          readme_path = Path("README.md")
+          readme = readme_path.read_text(encoding="utf-8")
+
+          marker_re = re.compile(
               r"<!--\s*sync-versions:test-counts\s+"
-              r"pytest=(?P<py>\d+)\s+vitest=(?P<vi>\d+)\s*-->",
-              readme,
+              r"pytest=(?P<py>\d+)\s+vitest=(?P<vi>\d+)\s*-->"
           )
+          marker = marker_re.search(readme)
           if marker is None:
               print(
-                  "::error::README.md is missing the "
-                  "`<!-- sync-versions:test-counts pytest=N vitest=M -->` "
-                  "marker. Add it above the test-count line."
+                  "::warning::README.md is missing the "
+                  "<!-- sync-versions:test-counts pytest=N vitest=M --> "
+                  "marker; nothing to auto-bump."
               )
-              sys.exit(1)
+              sys.exit(0)
 
           declared_pytest = int(marker.group("py"))
           declared_vitest = int(marker.group("vi"))
 
-          drift = []
-          if declared_pytest != live_pytest:
-              drift.append(
-                  f"pytest: README says {declared_pytest}, live says "
-                  f"{live_pytest} (delta {live_pytest - declared_pytest:+d})"
-              )
-          if declared_vitest != live_vitest:
-              drift.append(
-                  f"vitest: README says {declared_vitest}, live says "
-                  f"{live_vitest} (delta {live_vitest - declared_vitest:+d})"
-              )
-
-          if drift:
+          if declared_pytest == live_pytest and declared_vitest == live_vitest:
               print(
-                  "::error::README test-count marker is out of sync with "
-                  "live counts. Update the marker AND the human-readable "
-                  "sentence above it (e.g. `**N backend + M frontend "
-                  "tests pass**`) in the same PR.\n  - " + "\n  - ".join(drift)
+                  f"OK — README marker already matches live "
+                  f"(pytest={live_pytest}, vitest={live_vitest}); "
+                  "nothing to do."
               )
-              sys.exit(1)
+              sys.exit(0)
 
-          print(
-              f"OK — pytest={live_pytest}, vitest={live_vitest} "
-              "match README marker."
+          # Bump both the machine-readable marker and the human sentence
+          # below it. Keep the change strictly scoped to those two
+          # patterns so we never touch unrelated README content.
+          new_marker = (
+              f"<!-- sync-versions:test-counts pytest={live_pytest} "
+              f"vitest={live_vitest} -->"
           )
+          updated = marker_re.sub(new_marker, readme, count=1)
+
+          # Human sentence (best-effort; if it doesn't exist or already
+          # matches, we just keep the marker change and move on).
+          updated = re.sub(
+              r"\*\*\d+ backend \+ \d+ frontend tests pass\*\*",
+              f"**{live_pytest} backend + {live_vitest} frontend "
+              "tests pass**",
+              updated,
+              count=1,
+          )
+
+          if updated == readme:
+              # Marker regex didn't actually mutate (possible if the live
+              # counts equal declared after all — defensive belt-and-braces).
+              print("no effective change after substitution; nothing to do.")
+              sys.exit(0)
+
+          readme_path.write_text(updated, encoding="utf-8")
+          print(
+              f"README marker bumped: pytest={declared_pytest}->{live_pytest}, "
+              f"vitest={declared_vitest}->{live_vitest}"
+          )
+
+          # Commit + push back to main with [skip ci] so we don't loop.
+          subprocess.run(
+              ["git", "config", "user.name", "github-actions[bot]"],
+              check=True,
+          )
+          subprocess.run(
+              [
+                  "git", "config", "user.email",
+                  "41898282+github-actions[bot]@users.noreply.github.com",
+              ],
+              check=True,
+          )
+          subprocess.run(["git", "add", "README.md"], check=True)
+          msg = (
+              f"chore(readme): auto-bump test-count marker to live "
+              f"(pytest={live_pytest}, vitest={live_vitest}) [skip ci]\n\n"
+              f"Drift was {live_pytest - declared_pytest:+d} pytest, "
+              f"{live_vitest - declared_vitest:+d} vitest. README marker "
+              "is a derived artifact maintained by the version-coherence "
+              "workflow; PR authors don't bump it."
+          )
+          subprocess.run(["git", "commit", "-m", msg], check=True)
+          subprocess.run(
+              ["git", "push", "origin", "HEAD:main"],
+              check=True,
+          )
+          print("pushed README bump to main.")
           PY
