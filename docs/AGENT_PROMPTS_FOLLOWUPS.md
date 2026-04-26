@@ -97,6 +97,26 @@
   Citation: PRs #27, #28, #30, #31; `docs/mintlify/docs.json`.
   Proposal: Single small PR by the docs owner that adds nav entries for "Memory", "Operations", and "Security" groups in one shot once W8/W9/W11/W12 land. — owner: needs-triage (docs).
 
+- [open] 2026-04-25 · W21 · channel-manifest phase 2 (Slack / Discord / WhatsApp)
+  Finding: W21 Phase 1 (this PR) ships the schema + loader + signing glue + bundled Telegram manifest. Slack / Discord / WhatsApp adapters in `feral-core/channels/base.py` still have no `feral-channel.manifest.json` beside them, so the capability registry only sees Telegram.
+  Citation: `feral-core/channels/base.py:421` (DiscordChannel), `:585` (SlackChannel), `:759` (WhatsAppChannel); `feral-core/channels/telegram/feral-channel.manifest.json` (the Phase-1 worked example).
+  Proposal: W21.2 — split the in-base.py adapters into per-channel directories and add signed `feral-channel.manifest.json` for each. Keeps the Phase-1 schema and signer untouched. — owner: W21.2.
+
+- [open] 2026-04-25 · W21 · channel SDK barrel + extension SDK
+  Finding: `docs/contributing-channels.md` §5 documents the SDK-barrel rule ("channel code reaches into core ONLY via `feral_core.channels.sdk`") prospectively, but the `feral_core.channels.sdk` module itself does not yet exist. Phase-1 channels still import directly from `channels.base` etc.
+  Citation: `docs/contributing-channels.md` §5; openclaw `AGENTS.md:27–30`.
+  Proposal: W21.3 — author `feral-core/channels/sdk/__init__.py` as the public barrel (typed runtime helpers, `Channel`, `ChannelMessage`, `ChannelResponse`, manifest types) and add a lint that fails new channel imports outside the barrel. — owner: W21.3.
+
+- [open] 2026-04-25 · W21 · 3rd-party channel discovery (entry points + vault-pinned keys)
+  Finding: `loader.discover_bundled()` only walks the in-tree `feral-core/channels/<id>/` directory. There is no entry-point loader, no out-of-tree path discovery, and no vault integration for `public_key_provider` (Phase 1 trusts the embedded public key because the manifest is in-tree).
+  Citation: `feral-core/channels/loader.py` (`discover_bundled`, `load_with_verification`).
+  Proposal: W21.4 — add `discover_entry_points()` reading the `feral.channels` entry-point group; integrate `feral_core.security.vault` as the default `public_key_provider` so 3rd-party manifests must pin to a vaulted publisher key. — owner: W21.4.
+
+- [open] 2026-04-25 · W21 · `ChannelManager.CHANNEL_TYPES` ↔ manifest discovery convergence
+  Finding: `ChannelManager.CHANNEL_TYPES` in `feral-core/channels/base.py:889` still hard-codes the four classes. The Phase-1 contract test asserts the manifest provider IDs are present in that map, but the consumer (the orchestrator that calls `start_channel(...)`) doesn't yet build itself from the manifest registry.
+  Citation: `feral-core/channels/base.py:889`; `feral-core/tests/test_channel_manifest_contract.py::test_channel_manager_recognises_manifest_provider`.
+  Proposal: When W21.2 lands the remaining manifests, follow up with a small change in `feral-core/channels/base.py` to derive `CHANNEL_TYPES` from the registry (or replace it entirely with a registry lookup). Out-of-scope for Phase 1 (cross-boundary) and Phase 2 (still in-tree only). — owner: W21.3.
+
 ---
 
 ## Closed follow-ups

@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://feral.io/schemas/feral-channel.manifest.json",
+  "title": "FERAL Channel Manifest",
+  "description": "Declarative description of a FERAL channel adapter (W21 Phase 1). Modeled on openclaw's `openclaw.plugin.json`. Consumed by `feral_core.channels.manifest.load_manifest` and `feral_core.channels.loader.discover_bundled`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "providers", "providerAuthEnvVars", "capabilities"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*$",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Stable, lowercase manifest identifier — usually the channel name (e.g. `telegram`)."
+    },
+    "providers": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_-]*$",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "description": "Underlying provider IDs the channel speaks to (often a single ID equal to `id`, but a manifest may bridge multiple providers)."
+    },
+    "providerAuthEnvVars": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "description": "Per-provider env-var requirements. Keys MUST appear in `providers`. Each entry is the list of env vars that MUST be set for that provider's auth to succeed."
+    },
+    "capabilities": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "boolean"},
+      "properties": {
+        "messagingProvider": {"type": "boolean"},
+        "voiceProvider": {"type": "boolean"},
+        "fileProvider": {"type": "boolean"},
+        "webhookProvider": {"type": "boolean"},
+        "videoProvider": {"type": "boolean"},
+        "presenceProvider": {"type": "boolean"}
+      },
+      "description": "Capability flags. At least one MUST be `true` (a manifest with no advertised capability is useless to the registry)."
+    },
+    "providerAuthChoices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider", "method", "choiceId"],
+        "properties": {
+          "provider": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+          "method": {"type": "string", "enum": ["oauth", "device-code", "api-key"]},
+          "choiceId": {"type": "string", "minLength": 1, "maxLength": 128},
+          "choiceLabel": {"type": "string", "maxLength": 256},
+          "choiceHint": {"type": "string", "maxLength": 512},
+          "assistantPriority": {"type": "integer"},
+          "groupId": {"type": "string", "maxLength": 128},
+          "groupLabel": {"type": "string", "maxLength": 256},
+          "groupHint": {"type": "string", "maxLength": 512},
+          "optionKey": {"type": "string", "maxLength": 128},
+          "cliFlag": {"type": "string", "pattern": "^--[a-z][a-z0-9-]*$"},
+          "cliOption": {"type": "string", "maxLength": 256},
+          "cliDescription": {"type": "string", "maxLength": 512},
+          "deprecatedChoiceIds": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 128}
+          }
+        }
+      },
+      "description": "Optional auth choice menu (oauth / device-code / api-key) modeled on openclaw's `providerAuthChoices`."
+    },
+    "modelSupport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "modelPrefixes": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "maxLength": 64}
+        },
+        "preferredModels": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        }
+      },
+      "description": "Optional hint of which model families this channel works best with."
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {"type": "string", "minLength": 1},
+          {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          }
+        ]
+      },
+      "description": "Optional capability-contract version pins (e.g. {\"messaging\": \"v1\"})."
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algo", "publicKeyId", "signature", "publicKey", "signedAt"],
+      "properties": {
+        "algo": {"type": "string", "enum": ["ed25519"]},
+        "publicKeyId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "publicKey": {"type": "string", "minLength": 1},
+        "signature": {"type": "string", "minLength": 1},
+        "signedAt": {"type": "string", "format": "date-time"}
+      },
+      "description": "Optional Ed25519 signature envelope. The signature is taken over `canonical_json(manifest)` of the manifest with `signature` REMOVED — see `feral_core.channels.manifest.verify_signature`. Reuses W8's PyNaCl-based signer (`feral_core.genui.manifest_signing`)."
+    }
+  }
+}
