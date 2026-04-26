@@ -42,6 +42,26 @@
   Citation: `git log origin/main..feral/W*` shows zero overlap on owned paths.
   Proposal: Surface in this PR body so reviewers see the recommended sequence; do not auto-merge. — owner: conductor.
 
+- [open] 2026-04-25 · W17 · `feral-core/api/server.py` orange zone
+  Finding: W17 PR #29 adds a one-line `app.include_router(sessions_router)` registration in `feral-core/api/server.py` to expose `POST /api/sessions/{id}/spawn`. `server.py` is the orange-zone file already shared with W1 (startup hook) and W13 (planned `/metrics` block).
+  Citation: PR #29 (`feral/W17-subagent-spawn`).
+  Proposal: Conductor sign-off granted — the registration is additive, single line, and located in the routers section (no overlap with W1's startup hook or W13's planned `/metrics` block). — owner: conductor.
+
+- [open] 2026-04-25 · W17 · BrainState shared LLMProvider wireup
+  Finding: `subagent_spawner.register_llm_provider(...)` exists but is never auto-wired to `BrainState`'s shared `LLMProvider` at boot. Spawned children today only have an LLM if a caller registers one explicitly. W17 deliberately held the one-line boot wireup off-PR to stay strictly inside owned paths.
+  Citation: PR #29 conductor-questions block.
+  Proposal: Add a one-line `register_llm_provider(brain_state.llm_provider)` call in the existing brain-state initialiser. — owner: needs-triage (small, can fold into next PR touching the boot path or a tiny standalone PR).
+
+- [open] 2026-04-25 · W17 · `Supervisor.steer` channel does not exist
+  Finding: W17's `steer_subsession` takes an injectable `steer_hook` and falls back to `getattr(supervisor, "steer", None)` because `feral-core/agents/supervisor.py` does not expose a `steer` method. Real supervisor-driven steering is therefore a no-op until the channel exists.
+  Citation: PR #29 conductor-questions block; `feral-core/agents/supervisor.py`.
+  Proposal: Author a real `Supervisor.steer(child_session_id, intervention) -> SteerDecision` API. Candidate W18 work item or a focused W18.5 ticket. — owner: needs-triage.
+
+- [open] 2026-04-25 · conductor · doctrine docs not yet on `origin/main`
+  Finding: Multiple worker agents (W17 most recently in PR #29) cite `docs/OPENCLAW_LESSONS.md` and `docs/AGENT_PROMPTS.md` in their commit/PR bodies, but those files only exist on the `feral/docs-doctrine-housekeeping` branch (PR #26). Until #26 merges, those citations resolve to 404 in the GitHub PR UI.
+  Citation: PR #26 (this PR); PR #29 body anchor links.
+  Proposal: Merge PR #26 first (or at minimum before any W## PR that cites these docs is reviewed externally). — owner: conductor (already top of recommended merge order).
+
 ---
 
 ## Closed follow-ups
