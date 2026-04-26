@@ -1,8 +1,9 @@
 # Track A — Channels + LLM Providers (Weeks 5-7)
 
 > Runs in parallel with tracks B/C/D after v2 ships. Closes the single
-> biggest cohort-reach gap in `STATE_OF_FERAL.md § 4`: FERAL has 4
-> channels vs OpenClaw's 15+, and 4 providers vs OpenClaw's 30+.
+> biggest cohort-reach gap in `STATE_OF_FERAL.md § 4`: FERAL ships 4
+> channels and 4 providers today; Track A grows that surface to cover
+> the most-requested integrations the cohort is missing.
 >
 > Every channel + provider in this track follows the same shipped
 > template. Each is ~1-3 days of real work for one engineer.

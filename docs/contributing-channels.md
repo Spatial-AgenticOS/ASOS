@@ -40,7 +40,7 @@ Optional fields:
 
 | Field | Type | Notes |
 |---|---|---|
-| `providerAuthChoices` | array | Auth menu (`oauth` / `device-code` / `api-key`) modeled on openclaw's `providerAuthChoices`. |
+| `providerAuthChoices` | array | Auth menu (`oauth` / `device-code` / `api-key`) exposed to the user-facing picker. |
 | `modelSupport` | object | `modelPrefixes`, `preferredModels` — hint for the model picker. |
 | `contracts` | object | Capability-contract version pins (e.g. `{"messaging": "v1"}`). |
 | `signature` | object | Ed25519 signature envelope (see §4). |
@@ -119,7 +119,8 @@ verbatim — do not rename them silently.
 
 ## 5. SDK-barrel rule (architectural boundary)
 
-Modeled on openclaw's `AGENTS.md:27–30`:
+The SDK-barrel rule (see `docs/OPENCLAW_LESSONS.md` §5 for the internal
+comparative discussion):
 
 > **Channel code reaches into core ONLY via `feral_core.channels.sdk`;
 > everything else is private.** Core must not reach into channel
@@ -157,6 +158,6 @@ body.
 
 ## 7. Cross-references
 
-* OPENCLAW lessons §5: [`docs/OPENCLAW_LESSONS.md`](OPENCLAW_LESSONS.md#5-plugin--extension--channel-model)
+* Comparative analysis §5: [`docs/OPENCLAW_LESSONS.md`](OPENCLAW_LESSONS.md#5-plugin--extension--channel-model)
 * W8 signing primitive: [`feral-core/genui/manifest_signing.py`](../feral-core/genui/manifest_signing.py)
 * Existing channel base class: [`feral-core/channels/base.py`](../feral-core/channels/base.py)
