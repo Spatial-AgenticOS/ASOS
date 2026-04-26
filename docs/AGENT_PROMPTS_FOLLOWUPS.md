@@ -149,6 +149,11 @@
   Finding: W13 adds `docs/mintlify/operations/metrics.mdx` alongside the existing `operations/soak.mdx` (W12). Neither has an entry in `docs/mintlify/docs.json` yet. This is the same nav-ownership question already raised by W12.
   Citation: this PR; existing follow-up `2026-04-25 · W12 · mintlify nav ownership for docs/mintlify/operations/`.
   Proposal: Roll into the same docs-owner sweep that resolves W8/W9/W11/W12 nav additions. — owner: needs-triage (docs).
+
+- [open] 2026-04-26 · W24b · remaining plaintext `credentials.json` writers in `cli/setup_wizard.py`
+  Finding: W24b fixed the ``feral.config`` plaintext leak (`ConfigLoader.save_credentials`) but the two CLI setup-wizard classes still call ``creds_path.write_text(json.dumps(...))`` directly inside their ``_save_all`` methods, leaking plaintext whenever a user runs the interactive wizard.
+  Citation: `feral-core/cli/setup_wizard.py:1167-1169` and `feral-core/cli/setup_wizard.py:1687-1692` (and the corresponding `_load_existing_creds` read at `:566`, `:1347`). Also `feral-core/cli/setup/state.py:47` (`_write_json` into `credentials.json`).
+  Proposal: Track as W24b.1 — route each wizard write through `ConfigLoader.save_credentials` (now vault-backed) or call `BlindVault.set_credential` directly, and drop the plaintext `write_text` + `chmod 0600`. — owner: needs-triage.
 ---
 
 ## Closed follow-ups

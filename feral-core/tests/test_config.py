@@ -134,17 +134,24 @@ class TestCredentials:
         assert "OPENAI_API_KEY" not in json.dumps(safe)
         assert safe["has_llm_key"] is True
 
-    def test_save_credentials_sets_permissions(self, temp_dirs):
+    def test_save_credentials_never_writes_plaintext(self, temp_dirs, monkeypatch):
+        """W24b: ``save_credentials`` must never touch plaintext
+        ``credentials.json``. The encrypted vault is the sole on-disk
+        store; the in-memory ``_credentials`` dict stays hot for env
+        export. Replaces the pre-W9 ``_sets_permissions`` test which
+        encoded the v2026.5.0 plaintext-leak regression as correct."""
         _, user_home, _ = temp_dirs
+        monkeypatch.setenv("FERAL_HOME", str(user_home))
+
         loader = ConfigLoader()
         loader.user_home = user_home
         loader.discover()
         loader.save_credentials({"OPENAI_API_KEY": "sk-new"})
 
-        cred_path = user_home / "credentials.json"
-        assert cred_path.exists()
-        stat = cred_path.stat()
-        assert oct(stat.st_mode)[-3:] == "600"
+        assert not (user_home / "credentials.json").exists(), (
+            "save_credentials wrote plaintext credentials.json — W24b regression"
+        )
+        assert loader.get_credential("OPENAI_API_KEY") == "sk-new"
 
 
 class TestSetupStatus:
