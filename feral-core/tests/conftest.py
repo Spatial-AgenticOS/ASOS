@@ -63,3 +63,37 @@ def isolate_feral_home(request, tmp_path, monkeypatch):
     feral_dir = tmp_path / ".feral-isolation"
     monkeypatch.setenv("FERAL_HOME", str(feral_dir))
     os.makedirs(feral_dir, exist_ok=True)
+
+
+@pytest.fixture(autouse=True)
+def isolate_os_keychain(monkeypatch):
+    """Replace the OS keychain with a per-test in-memory dict.
+
+    W9 made the OS keychain a hard dependency of the security path
+    (BlindVault stores its master key there). Without this fixture the
+    test suite would write `feral-ai/vault-master` into every developer's
+    real macOS Keychain / Linux Secret Service / Windows Credential
+    Manager during a normal `pytest` run — and then leave it behind.
+
+    Each test gets its own dict so cross-test bleed is impossible. Tests
+    that explicitly want to exercise the real keychain (none today) can
+    monkeypatch the wrappers back in their own scope.
+    """
+    store: dict[tuple[str, str], str] = {}
+
+    def fake_get(service, username):
+        return store.get((service, username))
+
+    def fake_set(service, username, password):
+        store[(service, username)] = password
+
+    def fake_delete(service, username):
+        store.pop((service, username), None)
+
+    try:
+        from security import vault as _v
+    except Exception:
+        return
+    monkeypatch.setattr(_v, "_keyring_get_password", fake_get)
+    monkeypatch.setattr(_v, "_keyring_set_password", fake_set)
+    monkeypatch.setattr(_v, "_keyring_delete_password", fake_delete)
