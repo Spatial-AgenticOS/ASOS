@@ -338,14 +338,53 @@ class ConfigLoader:
         logger.info(f"User settings saved to {path}")
 
     def save_credentials(self, credentials: dict):
-        """Write credentials to the credentials file (separate from settings)."""
+        """Persist credentials to the W9 encrypted BlindVault.
+
+        W24b (v2026.5.0): the pre-W9 implementation wrote the plaintext
+        ``~/.feral/credentials.json`` alongside the encrypted vault,
+        leaking every API key to disk as a P0 security regression. The
+        legacy file is no longer written under any condition — the
+        encrypted ``~/.feral/credentials.enc`` is now the sole on-disk
+        store. The in-memory ``self._credentials`` dict is still updated
+        so ``export_as_env`` / ``get_credential`` / boot-time providers
+        observe the new values without waiting for a reload.
+
+        Skill-keys (the nested ``skill_keys`` dict) are kept in memory
+        only, which matches the HTTP-route behaviour that has always
+        skipped the vault for them.
+        """
         self.user_home.mkdir(parents=True, exist_ok=True)
-        path = self.user_home / "credentials.json"
         self._credentials.update(credentials)
-        with open(path, "w") as f:
-            json.dump(self._credentials, f, indent=2)
-        os.chmod(path, 0o600)  # Read/write only by owner
-        logger.info(f"Credentials saved to {path}")
+
+        flat_creds = {
+            key: value
+            for key, value in credentials.items()
+            if key != "skill_keys" and isinstance(value, str) and value
+        }
+        if not flat_creds:
+            return
+
+        try:
+            from security.vault import BlindVault
+        except Exception as exc:  # pragma: no cover — import-time failure
+            logger.error(
+                "save_credentials: vault unavailable (%s); refusing to "
+                "persist to plaintext — credentials kept in memory only.",
+                exc,
+            )
+            return
+
+        # Route through a vault anchored on ``self.user_home`` so tests
+        # (and any consumer that relocates user_home away from
+        # ``feral_home()``) keep the encrypted payload inside the
+        # expected directory. The BlindVault maps ``*.json`` → ``*.enc``
+        # internally, so this never creates a plaintext file.
+        vault = BlindVault(vault_path=str(self.user_home / "credentials.json"))
+        for key, value in flat_creds.items():
+            vault.set_credential(key, value)
+        logger.info(
+            "Credentials saved to encrypted vault (%d key(s))", len(flat_creds)
+        )
 
     def update_settings(self, section: str, key: str, value):
         """Update a single setting and persist to user config."""
