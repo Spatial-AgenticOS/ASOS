@@ -6,23 +6,54 @@ All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+(Empty since v2026.5.0 — append new entries above this line under `### Added` / `### Fixed` / etc. The README test-count marker is auto-maintained by `.github/workflows/version-coherence.yml`; do not bump it manually.)
+
 ## [2026.5.0] - 2026-04-25
 
+The largest cut since the v2 UI shell. **16 workstreams** + **4 chore/CI PRs** landed in a 24-hour conductor-driven sprint (PRs #19-#40). The headline change is W9 — vault encryption-at-rest with on-disk format change and pairing-token hashing — see **Breaking** below for the upgrade story.
+
+### Breaking
+
+- **W9 (#28) — vault encryption-at-rest + pairing-token hashing.** `~/.feral/credentials.json` is auto-migrated to ChaCha20-Poly1305 AEAD ciphertext at `~/.feral/credentials.enc`. The 32-byte master key now lives in the OS keychain (`feral-ai/vault-master`); a one-time **recovery code** is printed on first boot — there is no escrow. Pairing tokens are now argon2id-hashed (bcrypt fallback) with a 24h sliding TTL; legacy plaintext rows are flagged in `needs_rotation_log` and refuse to verify until the device re-pairs. Auto-migration preserves `~/.feral/credentials.json.bak.legacy` (mode 0600) for one release. New CLI: `feral key {status,rotate,recover}`. **42 new tests.**
+
 ### Added
-- (fill me in — what shipped that did not exist before?)
+
+- **W8 (#27) — A2UI manifest signing + iframe-sandboxed AppSurface.** Ed25519 signed manifests, CSP derived from manifest permissions, `sandbox="allow-scripts"` only (no same-origin escape), postMessage host↔app schema, new `feral app {sign,verify}` CLI. **22 new tests.**
+- **W11 (#31) — Memory P2P sync chaos + recovery harness.** `kill_peer_mid_handshake`, `corrupt_wal`, `disk_full` (ENOSPC), `mdns_fail_static_fallback`, `kill_brain_mid_apply`. Hardened `memory/sync.py` (retry-with-backoff, ENOSPC translator, no leaked tasks). New nightly chaos workflow.
+- **W12 (#30) — Voice + channel soak harness.** Fake-WS-peer voice soak, env-gated real-channel soak (Telegram/Slack/Discord), `--runsoak` pytest hook, nightly soak workflow with `continue-on-error`.
+- **W13 (#39) — Default observability surface.** 10-panel Grafana dashboard, 5 Prometheus alert rules (`HighErrorRate`, `LLMAllProvidersDown`, `SyncPeerDown`, `SupervisorBacklog`, `VaultDecryptFailed`), prometheus_client metrics registry. New `FERAL_METRICS_PUBLIC` env switch (default off — `/metrics` is loopback-only). Cross-module emit-call wiring deferred to W13.1.
+- **W16 (#37) — Per-agent auth profiles + multi-shape credential store.** `ApiKeyCredential` / `OAuthCredential` / `TokenCredential` with `~/.feral/agents/<id>/auth_profiles.json` storage; cross-process OAuth refresh lock at `~/.feral/locks/oauth-refresh/sha256(provider \0 profile_id)`. New CLI: `feral key {list,migrate,rotate --provider}`. **12 new tests.** *Note: stored plaintext at chmod 0600 — see `docs/AGENT_PROMPTS_FOLLOWUPS.md` for the architectural decision around future encryption.*
+- **W17 (#29) — Subagent spawn contract + scope cancel.** Per-parent allowlist (default deny), HTTP `POST /api/sessions/{id}/spawn` (Supervisor-gated), in-memory registry, asyncio-native cancellation. **22 new tests.** Parent → 5-children cancel measured at **0.30 ms** (budget 200 ms).
+- **W18 (#35) — Process supervisor for external CLI backends.** Two timeout types (overall + no-output), scope-cancel, `RunRegistry`, child + PTY adapters with login-shell semantics. Ships ready for Codex/Claude CLI integrations. **11 new tests.** Scope-cancel: **1.29 ms** for 5 children.
+- **W21 (#36) — Channel manifest schema (Phase 1).** `feral-channel.manifest.json` schema (JSON-schema), bundled-manifest loader, capability registry, signed Telegram example wired through W8's Ed25519 verifier. **56 new tests.** Phases 2/3/4 (Slack/Discord/WhatsApp migration + full SDK barrel + 3rd-party paths) tracked as W21.{2,3,4}.
+- **W22 (#38) — `SECURITY.md` + sandbox Dockerfiles + approval-bypass tests.** Single-trusted-operator threat model documented; three Dockerfiles (`Dockerfile.sandbox-common`, `Dockerfile.sandbox`, `Dockerfile.sandbox-browser`) with non-root user + `--cap-drop=ALL` + `--network=none` defaults; `feral-core/security/sandbox_image.py` build helper with deterministic version pinning; sandbox-image build CI. **14 new approval-bypass tests.**
 
 ### Fixed
-- (fill me in — what regressions did this release close?)
+
+- **W1 (#23) — Provider catalog freshness.** Stale model IDs killed across 3 registries (catalog.json, catalog.py, llm_provider.py); new lazy `default_model_for()` resolver; daily cron re-enabled; v2 picker shows Live/Cached/Stale freshness badge. (See detailed entry below.)
+- **W2 (#19) — Settings → Twin no-theatre.** Kill switch only renders when an executor is configured; "Available executors" rows now offer Connect (deeplinks to Channels/Integrations) instead of phantom Set-policy buttons. (Detailed entry below.)
+- **W3 (#20) — Fix MCP HTTP routes regression.** `Request` forward-ref crash in `mcp/server.py::get_http_routes` resolved.
+- **W4 (#25) — Pair-a-device modal opens reliably.** `createPortal` to escape stacking context; named z-index constants in `_z.css`; phantom-row prune in Paired list during pairing session. (Detailed entry below.)
+- **W5 (#24) — Glass Brain empty-state.** Legend dots no longer overlap the empty-state prompt. (Detailed entry below.)
+- **W7 (#22) — Single-source FERAL version literal across 13 declared locations + `version-coherence` release-block CI gate.**
 
 ### Changed
-- (fill me in — what user-visible behavior changed?)
+
+- **doctrine + housekeeping (#26).** `FEATURE_STABILITY_ROADMAP.md`, `docs/AGENT_PROMPTS.md`, `docs/OPENCLAW_LESSONS.md`, `docs/AGENT_PROMPTS_FOLLOWUPS.md` landed; full `workstream:W*` + `release-impact:*` label set created and back-applied to in-flight PRs.
+- **#33 + #34 — `version-coherence` workflow restructured.** README test-count marker is now a derived artifact auto-bumped by the workflow on every push to main; PR-time test-count gate removed (it was a friction generator during parallel merge chains and broke every dependabot PR). The `version-drift` gate (FERAL version literal) stays unchanged.
 
 ### Coverage
-- pytest (feral-core): TODO collected, TODO passed, TODO skipped.
-- vitest (feral-client-v2): TODO passed.
 
+- **pytest (feral-core): 2190 passed** (was 1952 on `2026.4.32`; **+238**).
+- **vitest (feral-client-v2): 152 passed** (was 133 on `2026.4.32`; **+19**).
+- **New nightly workflows:** `sync-chaos-nightly.yml` (W11), `soak-nightly.yml` (W12), `sandbox-image-build.yml` (W22).
+- **Pre-existing skip:** 1 timing-sensitive `test_heartbeat_prevents_auto_abandon` flake on Ubuntu 3.12 (re-runs cleanly).
 
-### Fixed
+### Detailed entries (selected workstreams)
+
+The four workstreams below shipped their own detailed entries during the parallel merge sprint. They are preserved verbatim for the historical record.
+
+#### W4, W5, W1, W2 — full bodies
 
 - **W4: Pair-a-device modal opens reliably; no more phantom rows in the Paired list.** Roadmap §A.2. Three pieces: (1) [`feral-client-v2/src/ui/Modal.jsx`](feral-client-v2/src/ui/Modal.jsx) now mounts via `createPortal(node, document.body)` so it escapes `.v2-shell-main`'s positive-z stacking context (which was trapping the modal behind the dock + menubar even though `.v2-modal-backdrop` had `z-index: 100`). (2) New [`feral-client-v2/src/styles/_z.css`](feral-client-v2/src/styles/_z.css) defines named stacking constants `--z-base / --z-dock / --z-orb / --z-overlay / --z-modal / --z-toast` (1, 50, 60, 90, 100, 110); [`feral-client-v2/src/styles/pages.css`](feral-client-v2/src/styles/pages.css) re-declares `.v2-modal-backdrop` to read from `var(--z-modal)` so the cascade lands on the named token. (3) [`feral-client-v2/src/pages/Devices.jsx`](feral-client-v2/src/pages/Devices.jsx) hides any device IDs the active `PairDeviceModal` session created from the historical Paired list until pairing actually completes (`claimed_at` flips truthy) — the existing modal-close prune already revokes unclaimed tokens, so the user no longer sees a row materialise the moment they click "+ Pair new device". [`feral-client-v2/src/components/PairDeviceModal.jsx`](feral-client-v2/src/components/PairDeviceModal.jsx) gains an `onTokenIssued(deviceId)` callback to thread issued IDs to the parent. Test coverage: 5 new vitest assertions in [`feral-client-v2/src/__tests__/Devices.modal-z.test.jsx`](feral-client-v2/src/__tests__/Devices.modal-z.test.jsx) (named-constant ordering, modal portal placement, `.v2-modal-card` class wiring) + 1 new Playwright spec [`feral-client-v2/e2e/pair_device.spec.ts`](feral-client-v2/e2e/pair_device.spec.ts) (asserts dialog visibility / QR placeholder / privacy hint / no phantom row in Paired). Total vitest after change: 138 passed (was 133).- **W5: Glass Brain — coloured legend dots overlapped the empty-state prompt.** [`feral-client-v2/src/pages/GlassBrain.jsx`](feral-client-v2/src/pages/GlassBrain.jsx) used to render the `Pane` `actions` legend (intent + flow `border-radius: 50%` dots) unconditionally, even when `summary.total === 0`. The 2026.4.29 fix in `ConsciousnessMindMap.jsx` removed the SVG centre anchor for empty graphs, but the legend kept bleeding two coloured pills into the pane header that — on narrower viewports — visually overlapped the centred `.v2-mindmap-empty` text the user had reported as "a blue ball overlapping the empty-state text" (see `FEATURE_STABILITY_ROADMAP.md` Appendix A.3). The page now derives `hasNodes = summary.total > 0` and returns `actions={null}` while the graph is empty; once at least one entity is in flight the legend reappears. Test coverage: new [`feral-client-v2/src/__tests__/pages/GlassBrain.empty-state.test.jsx`](feral-client-v2/src/__tests__/pages/GlassBrain.empty-state.test.jsx) (3 cases) mocks `Element.prototype.getBoundingClientRect` to simulate the user-reported geometry and asserts no `border-radius: 50%` element with non-zero rendered size intersects the empty-state bounding box. New [`feral-client-v2/e2e/glass_brain_empty.spec.ts`](feral-client-v2/e2e/glass_brain_empty.spec.ts) ships the runtime contract; it runs once the W14 / W4 `playwright.config.ts` lands. vitest: 136/136 green (was 133/133; +3 new cases, 0 regressions).- **Settings → Providers dropdown still served pre-2026 model IDs (no GPT-5.5, no Claude Opus 4.7, no Gemini 3.x)** — the bug from Roadmap §3.5 P0 / Appendix A.1. Three registries colluded to lock the picker on stale literals: [`feral-core/providers/model_catalog.json`](feral-core/providers/model_catalog.json) carried the previous-gen frontier names; [`feral-core/providers/catalog.py`](feral-core/providers/catalog.py) `BUILT_IN_DESCRIPTORS` hardcoded `default_model="gpt-4o-mini"` / `"claude-sonnet-4-5"` / `"gemini-2.5-flash"`; [`feral-core/agents/llm_provider.py`](feral-core/agents/llm_provider.py) `_PROVIDER_REGISTRY` and `__init__` repeated the same literals. [`.github/workflows/provider-research.yml`](.github/workflows/provider-research.yml) was `workflow_dispatch`-only since 2026.4.18-dev so the catalog never refreshed itself.
 - Six-fold fix (W1):
