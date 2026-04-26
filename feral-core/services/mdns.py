@@ -3,6 +3,11 @@ import logging
 import socket
 from typing import Optional
 
+# Single-source-of-truth: VERSION is proxied from importlib.metadata in
+# feral-core/version.py. Importing it here means the mDNS announce can
+# never drift from feral-core/pyproject.toml. See W7 / docs/AGENT_PROMPTS.md.
+from version import VERSION as _FERAL_VERSION
+
 logger = logging.getLogger("feral.services.mdns")
 
 _registration: Optional[tuple] = None
@@ -25,7 +30,7 @@ def advertise_brain(port: int = 9090, name: str = "FERAL Brain") -> bool:
             addresses=[socket.inet_aton(ip)],
             port=port,
             properties={
-                "version": "2026.4.32",
+                "version": _FERAL_VERSION,
                 "name": name,
                 "hostname": hostname,
             },

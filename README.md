@@ -16,7 +16,9 @@
 </p>
 
 <p align="center">
+  <!-- sync-versions:badge -->
   <img src="https://img.shields.io/badge/version-2026.4.32-06b6d4?style=flat-square" alt="Version" />
+  <!-- /sync-versions:badge -->
   <a href="https://github.com/FERAL-AI/FERAL-AI/stargazers"><img src="https://img.shields.io/github/stars/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Stars" /></a>
   <a href="https://github.com/FERAL-AI/FERAL-AI/commits/main"><img src="https://img.shields.io/github/last-commit/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Last Commit" /></a>
   <img src="https://img.shields.io/badge/license-Apache%202.0-06b6d4?style=flat-square" alt="License" />
@@ -36,7 +38,9 @@
 
 ## Feature Maturity
 
-> **Stable** means all 5 criteria are met: ≥1 integration test, structured logging (`feral.{subsystem}.{name}`), documented env vars + settings, graceful error handling, and a troubleshooting guide in `docs/mintlify/`. **1344 tests pass** on every commit. See [docs/mintlify/guides/](docs/mintlify/guides/) for per-feature troubleshooting.
+<!-- sync-versions:test-counts pytest=1972 vitest=133 -->
+> **Stable** means all 5 criteria are met: ≥1 integration test, structured logging (`feral.{subsystem}.{name}`), documented env vars + settings, graceful error handling, and a troubleshooting guide in `docs/mintlify/`. **1972 backend + 133 frontend tests pass** on every commit. See [docs/mintlify/guides/](docs/mintlify/guides/) for per-feature troubleshooting.
+<!-- /sync-versions:test-counts -->
 
 | Feature | Status | Details |
 |---------|--------|---------|
