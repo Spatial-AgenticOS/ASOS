@@ -97,6 +97,16 @@
   Citation: PRs #27, #28, #30, #31; `docs/mintlify/docs.json`.
   Proposal: Single small PR by the docs owner that adds nav entries for "Memory", "Operations", and "Security" groups in one shot once W8/W9/W11/W12 land. — owner: needs-triage (docs).
 
+- [open] 2026-04-25 · W16 · boot-path wiring of `run_migration_if_needed`
+  Finding: W16 (PR #37) ships `security/auth_profiles/migrate.py` but does not wire `run_migration_if_needed()` into the brain boot path; existing installs migrate only when an operator runs `feral key migrate`. Wiring touches `cli/main.py` / brain startup which is outside W16's owned paths.
+  Citation: PR #37; `feral-core/security/auth_profiles/migrate.py:run_migration_if_needed`.
+  Proposal: Tiny W16-followup PR that adds a single call from the brain boot path (or amend W9's vault `_load` to invoke it before the encryption migration). — owner: needs-triage.
+
+- [open] 2026-04-25 · W16 · legacy `credentials.json` deletion lifecycle
+  Finding: W16's migration leaves `~/.feral/credentials.json` in place and only writes `…bak.legacy.w16` (mode 0600). W9 still owns the eventual deletion of the original file; until the boot path treats the per-agent store as canonical, both files coexist.
+  Citation: PR #37; `feral-core/security/vault.py:_migrate_from_plaintext` (W9-owned).
+  Proposal: W9 follow-up that, once `auth_profiles.json` exists at the per-agent path, unlinks the legacy file on the next encryption migration. — owner: W9 / needs-triage.
+
 ---
 
 ## Closed follow-ups
