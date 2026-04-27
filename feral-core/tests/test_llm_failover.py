@@ -246,3 +246,55 @@ def test_explicit_fallbacks_override_auto_prepend(config_client):
     })
     assert r.status_code == 200
     assert store["llm.fallback_providers"] == []
+
+
+@pytest.mark.asyncio
+async def test_stream_nonstream_failover_helper_converts_response_to_stream_events():
+    from agents.llm_provider import LLMProvider, ProviderCooldownTracker
+
+    llm = LLMProvider.__new__(LLMProvider)
+    llm._config = {"fallback_providers": ["anthropic"]}
+    llm._local_engine = None
+    llm.provider = "openai"
+    llm.model = "gpt-4o-mini"
+    llm._cooldown = ProviderCooldownTracker()
+    llm.chat_with_failover = AsyncMock(
+        return_value={"choices": [{"message": {"content": "fallback text"}}]}
+    )
+
+    events = await llm._stream_via_nonstream_failover(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        temperature=0.7,
+        max_tokens=256,
+        primary_error=RuntimeError("400 bad request"),
+    )
+
+    assert events is not None
+    assert events[0] == {"type": "text_delta", "content": "fallback text"}
+    assert events[-1] == {"type": "done"}
+    llm.chat_with_failover.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stream_nonstream_failover_helper_skips_context_overflow():
+    from agents.llm_provider import LLMProvider, ProviderCooldownTracker
+
+    llm = LLMProvider.__new__(LLMProvider)
+    llm._config = {"fallback_providers": ["anthropic"]}
+    llm._local_engine = None
+    llm.provider = "openai"
+    llm.model = "gpt-4o-mini"
+    llm._cooldown = ProviderCooldownTracker()
+    llm.chat_with_failover = AsyncMock()
+
+    events = await llm._stream_via_nonstream_failover(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        temperature=0.7,
+        max_tokens=256,
+        primary_error=RuntimeError("context length exceeded"),
+    )
+
+    assert events is None
+    llm.chat_with_failover.assert_not_awaited()

@@ -8,6 +8,7 @@ import SduiRenderer, { applySduiPatches } from '../ui/SduiRenderer';
 import { useFeralSocket, sendUiEvent } from '../hooks/useFeralSocket';
 import { useConnectionStatus } from '../hooks/useConnectionStatus';
 import { apiJson, apiFetch } from '../lib/api';
+import { useChatThread } from '../shell/Shell';
 
 function newId() {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -16,9 +17,12 @@ function newId() {
 export default function Chat() {
   const socket = useFeralSocket();
   const { state } = useConnectionStatus();
-  const [messages, setMessages] = useState([
+  const thread = useChatThread();
+  const [localMessages, setLocalMessages] = useState([
     { id: 'hello', role: 'assistant', text: 'FERAL v2 is listening. What do you need?' },
   ]);
+  const messages = thread?.messages || localMessages;
+  const setMessages = thread?.setMessages || setLocalMessages;
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
   const [streamingText, setStreamingText] = useState('');
@@ -29,6 +33,7 @@ export default function Chat() {
   const bottomRef = useRef(null);
   const streamBufferRef = useRef('');
   const greetingSeenRef = useRef(false);
+  const chatReady = thread?.ready ?? true;
 
   // On mount, pull paused thoughts from the consciousness store so the
   // user can re-thread any half-formed sentence the agent was in the
@@ -180,10 +185,17 @@ export default function Chat() {
     if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ behavior: 'smooth' });
   }, [messages, thinking, streamingText]);
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
     const text = input.trim();
-    if (!text || state !== 'open') return;
+    if (!text || state !== 'open' || !chatReady) return;
+    if (thread?.ensureConversation) {
+      try {
+        await thread.ensureConversation();
+      } catch {
+        // best effort; keep chatting even if thread ensure call fails
+      }
+    }
     setMessages((prev) => [...prev, { id: newId(), role: 'user', text }]);
     setInput('');
     setThinking(true);
@@ -281,19 +293,54 @@ export default function Chat() {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={state === 'open' ? 'Ask FERAL…' : 'Reconnecting…'}
-          disabled={state !== 'open'}
+          placeholder={!chatReady ? 'Loading conversation…' : state === 'open' ? 'Ask FERAL…' : 'Reconnecting…'}
+          disabled={state !== 'open' || !chatReady}
         />
-        <button type="submit" className="v2-chat-send" disabled={!input.trim() || state !== 'open'} aria-label="Send">Send</button>
+        <button type="submit" className="v2-chat-send" disabled={!input.trim() || state !== 'open' || !chatReady} aria-label="Send">Send</button>
       </Glass>
 
-      {paneOpen === 'threads' && <ThreadsPane onClose={() => setPaneOpen(null)} onLoad={(msgs) => { setMessages(msgs); setPaneOpen(null); }} />}
+      {paneOpen === 'threads' && (
+        <ThreadsPane
+          onClose={() => setPaneOpen(null)}
+          onOpenConversation={async (conversationId) => {
+            if (thread?.loadConversation) {
+              const ok = await thread.loadConversation(conversationId);
+              if (ok) setPaneOpen(null);
+              return;
+            }
+            try {
+              const d = await apiJson(`/api/conversations/${encodeURIComponent(conversationId)}`);
+              const msgs = (d.messages || []).map((m) => ({ id: m.id || newId(), role: m.role, text: m.content || m.text || '' }));
+              setMessages(msgs);
+              setPaneOpen(null);
+            } catch {
+              /* silent */
+            }
+          }}
+          onStartNewConversation={async () => {
+            if (thread?.startNewConversation) {
+              await thread.startNewConversation();
+              setPaneOpen(null);
+              return;
+            }
+            try {
+              const r = await apiFetch('/api/conversations/new', { method: 'POST' });
+              if (r.ok) {
+                setMessages([{ id: 'hello', role: 'assistant', text: 'New thread started. What do you need?' }]);
+                setPaneOpen(null);
+              }
+            } catch {
+              /* silent */
+            }
+          }}
+        />
+      )}
       {paneOpen === 'snapshots' && <SnapshotsPane onClose={() => setPaneOpen(null)} messages={messages} onRestore={(msgs) => { setMessages(msgs); setPaneOpen(null); }} />}
     </div>
   );
 }
 
-function ThreadsPane({ onClose, onLoad }) {
+function ThreadsPane({ onClose, onOpenConversation, onStartNewConversation }) {
   const [threads, setThreads] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -310,20 +357,18 @@ function ThreadsPane({ onClose, onLoad }) {
 
   const open = async (id) => {
     try {
-      const d = await apiJson(`/api/conversations/${encodeURIComponent(id)}`);
-      const msgs = (d.messages || []).map((m) => ({ id: m.id || newId(), role: m.role, text: m.content || m.text || '' }));
-      onLoad(msgs);
-    } catch { /* silent */ }
+      if (onOpenConversation) await onOpenConversation(id);
+    } finally {
+      refresh();
+    }
   };
 
   const startNew = async () => {
     try {
-      const r = await apiFetch('/api/conversations/new', { method: 'POST' });
-      if (r.ok) {
-        onLoad([{ id: 'hello', role: 'assistant', text: 'New thread started. What do you need?' }]);
-        refresh();
-      }
-    } catch { /* silent */ }
+      if (onStartNewConversation) await onStartNewConversation();
+    } finally {
+      refresh();
+    }
   };
 
   const del = async (id) => {

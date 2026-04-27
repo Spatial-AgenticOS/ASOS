@@ -40,6 +40,41 @@ async def get_conversation(conversation_id: str):
     return conv
 
 
+@router.get("/api/conversations/active/thread")
+async def get_active_conversation(conversation_id: str = ""):
+    """Resolve the active conversation for UI rehydration.
+
+    Resolution order:
+      1) explicit ``conversation_id`` query param when it exists,
+      2) most recently updated thread,
+      3) create-and-return a brand new empty thread.
+    """
+    if not state.memory:
+        return {"error": "Memory not initialized"}
+
+    conv = None
+    if conversation_id:
+        conv = state.memory.conversation_get(conversation_id)
+
+    if not conv:
+        recent = state.memory.conversation_list(limit=1)
+        if recent:
+            conv = state.memory.conversation_get(recent[0]["id"])
+
+    if conv:
+        return conv
+
+    created_id = f"thread-{str(uuid4())[:10]}"
+    created = state.memory.conversation_save(created_id, [], title="New conversation")
+    return {
+        "id": created.get("id", created_id),
+        "title": created.get("title", "New conversation"),
+        "messages": [],
+        "message_count": created.get("message_count", 0),
+        "updated_at": created.get("updated_at", time.time()),
+    }
+
+
 @router.post("/api/conversations/save")
 async def save_conversation(body: dict):
     if not state.memory:

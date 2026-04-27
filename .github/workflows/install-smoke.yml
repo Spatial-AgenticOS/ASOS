@@ -8,6 +8,9 @@ on:
 
 jobs:
   smoke:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
