@@ -155,3 +155,72 @@ class TestLoadStoredCredentials:
         from api.state import BrainState
         BrainState._load_stored_credentials()
         assert os.environ.get("TAVILY_API_KEY") == "tavily-alias-key"
+
+    def test_partial_creds_file_hydrates_missing_keys_from_vault(
+        self, tmp_path, monkeypatch
+    ):
+        """A partial plaintext mirror must NOT suppress vault fallback
+        for the other providers. Pre-fix this test would leave
+        ANTHROPIC_API_KEY unset because OPENAI_API_KEY came from the
+        file and the vault-fallback gate was ``not loaded``."""
+        monkeypatch.setenv("FERAL_HOME", str(tmp_path))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+        from security.vault import BlindVault
+        vault = BlindVault(vault_path=str(tmp_path / "credentials.json"))
+        vault.set_credential("ANTHROPIC_API_KEY", "sk-ant-vault")
+        vault.set_credential("GROQ_API_KEY", "gk-vault")
+
+        (tmp_path / "credentials.json").write_text(
+            json.dumps({"OPENAI_API_KEY": "sk-openai-file"})
+        )
+
+        from api.state import BrainState
+        BrainState._load_stored_credentials()
+
+        assert os.environ.get("OPENAI_API_KEY") == "sk-openai-file"
+        assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-vault"
+        assert os.environ.get("GROQ_API_KEY") == "gk-vault"
+
+    def test_vault_only_bootstrap_with_no_creds_file(self, tmp_path, monkeypatch):
+        """No credentials.json at all — every key must come from the
+        encrypted vault. This is the v2026.5.0+ default once the
+        plaintext mirror has been scrubbed."""
+        monkeypatch.setenv("FERAL_HOME", str(tmp_path))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        from security.vault import BlindVault
+        vault = BlindVault()
+        vault.set_credential("OPENAI_API_KEY", "sk-vault-only")
+        vault.set_credential("ANTHROPIC_API_KEY", "sk-ant-vault-only")
+
+        assert not (tmp_path / "credentials.json").exists()
+
+        from api.state import BrainState
+        BrainState._load_stored_credentials()
+
+        assert os.environ.get("OPENAI_API_KEY") == "sk-vault-only"
+        assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-vault-only"
+
+    def test_corrupt_creds_file_falls_back_to_vault(self, tmp_path, monkeypatch):
+        """Corrupt credentials.json must never lock the user out of
+        keys that still live in the encrypted vault."""
+        monkeypatch.setenv("FERAL_HOME", str(tmp_path))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+        from security.vault import BlindVault
+        vault = BlindVault()
+        vault.set_credential("OPENAI_API_KEY", "sk-from-vault")
+        vault.set_credential("GROQ_API_KEY", "gk-from-vault")
+
+        (tmp_path / "credentials.json").write_text("{not valid json,,,")
+
+        from api.state import BrainState
+        BrainState._load_stored_credentials()
+
+        assert os.environ.get("OPENAI_API_KEY") == "sk-from-vault"
+        assert os.environ.get("GROQ_API_KEY") == "gk-from-vault"

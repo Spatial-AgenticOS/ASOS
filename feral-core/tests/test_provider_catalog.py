@@ -511,3 +511,118 @@ class TestDefaultModelLazyResolve:
         # empty. FakeAdapter._models = ["fallback-model"].
         catalog.register_adapter(FakeAdapter(models=[]))
         assert catalog.default_model_for("openai") == "fallback-model"
+
+
+# ----------------------------------------------------------------------
+# Chat-readiness signal — Wave 1 A3 (catalog truthfulness)
+# ----------------------------------------------------------------------
+#
+# The Wave 1 / A3 contract: the catalog must distinguish
+# configured-but-not-chat-ready adapters (bedrock today) from the
+# production-wired majority so the Settings / Setup UI doesn't
+# advertise a stubbed provider as equivalently ready to OpenAI /
+# Anthropic. Discovery + probe semantics are unchanged — only the
+# ``chat_ready`` + ``stub_reason`` signal is new.
+
+
+class TestChatReadinessSignal:
+    def test_production_providers_default_chat_ready(self, catalog):
+        # Every production-wired built-in must advertise chat_ready=True
+        # with an empty stub_reason so the UI doesn't render a warning
+        # chip for providers that genuinely carry chat turns today.
+        for pid in ("openai", "anthropic", "gemini", "groq", "deepseek",
+                    "openrouter", "together", "fireworks", "ollama", "lmstudio"):
+            status = catalog.status_for(pid)
+            assert status.chat_ready is True, (
+                f"{pid} descriptor must default to chat_ready=True "
+                f"(got {status.chat_ready!r})"
+            )
+            assert status.stub_reason == "", (
+                f"{pid} must not carry a stub_reason "
+                f"(got {status.stub_reason!r})"
+            )
+
+    def test_bedrock_flagged_as_not_chat_ready(self, catalog):
+        # Bedrock's ``chat()`` raises at stub level today — the catalog
+        # must surface that through ``chat_ready`` so the UI can render
+        # a "preview" chip instead of a green "ready" dot.
+        status = catalog.status_for("bedrock")
+        assert status.chat_ready is False
+        assert status.stub_reason, (
+            "bedrock must carry a human-readable stub_reason so the "
+            "Settings UI has something to render in the chip"
+        )
+        # Discovery must still work — the picker relies on the descriptor
+        # being configured / reachable independent of chat readiness.
+        desc = catalog.get_descriptor("bedrock")
+        assert desc is not None
+        assert desc.provider_id == "bedrock"
+
+    def test_status_to_dict_exposes_readiness_fields(self, catalog):
+        # REST consumers (``/api/llm/providers``) call ``to_dict`` to
+        # serialise the status. Both new fields must ride along so the
+        # v2 picker can render the chip without a second round-trip.
+        payload = catalog.status_for("bedrock").to_dict()
+        assert payload["chat_ready"] is False
+        assert payload["stub_reason"]
+        ready_payload = catalog.status_for("openai").to_dict()
+        assert ready_payload["chat_ready"] is True
+        assert ready_payload["stub_reason"] == ""
+
+    def test_adapter_override_downgrades_descriptor(self, catalog):
+        # A community adapter that declares itself not chat-ready must
+        # override a chat_ready=True descriptor — the adapter is what
+        # actually runs ``chat()`` so its opinion wins when it opts
+        # out of the default. Confirms the precedence rule documented
+        # on :meth:`ProviderCatalog._resolve_chat_readiness`.
+        class StubbedAdapter(FakeAdapter):
+            chat_ready = False
+            stub_reason = "override: chat not wired in this environment"
+
+        catalog.register_adapter(StubbedAdapter(models=["m1"]))
+        status = catalog.status_for("openai")
+        assert status.chat_ready is False
+        assert status.stub_reason == (
+            "override: chat not wired in this environment"
+        )
+
+    def test_adapter_without_attr_keeps_descriptor_default(self, catalog):
+        # Adapters predating this signal don't expose ``chat_ready``.
+        # The catalog must default them to the descriptor's verdict
+        # (True for every production provider) rather than blow up on
+        # the missing attribute. This keeps legacy / community
+        # adapters working unchanged.
+        class LegacyAdapter(FakeAdapter):
+            pass
+
+        assert not hasattr(LegacyAdapter, "chat_ready") or \
+            LegacyAdapter.chat_ready is True  # belt-and-suspenders
+        catalog.register_adapter(LegacyAdapter(models=["m1"]))
+        status = catalog.status_for("openai")
+        assert status.chat_ready is True
+        assert status.stub_reason == ""
+
+    def test_adapter_cannot_upgrade_descriptor_stub(self, catalog):
+        # Inverse of the previous test: a descriptor that declares the
+        # adapter is stubbed must NOT be silently upgraded by an
+        # adapter that happens to expose ``chat_ready=True``. The
+        # descriptor carries the package-author's verdict and a
+        # downstream adapter reassigning the class attr shouldn't
+        # paper over a known stub. (Only adapter-level ``False`` wins.)
+        class BedrockLike(FakeAdapter):
+            chat_ready = True
+
+        # Rebind the openai adapter to prove the rule; then re-assert
+        # bedrock which has a chat_ready=False descriptor.
+        status = catalog.status_for("bedrock")
+        assert status.chat_ready is False
+        # Swapping in a "ready" adapter for the bedrock slot must not
+        # flip the verdict — descriptor says stub, stay stub.
+        stub_like = BedrockLike(models=["m"])
+        stub_like.provider_id = "bedrock"
+        catalog.register_adapter(stub_like)
+        status2 = catalog.status_for("bedrock")
+        assert status2.chat_ready is False, (
+            "adapter-level chat_ready=True must not upgrade a "
+            "descriptor-level stub verdict"
+        )
