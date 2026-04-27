@@ -36,7 +36,15 @@ async def whatsapp_webhook_verify(request: Request):
     mode = params.get("hub.mode")
     token = params.get("hub.verify_token")
     challenge = params.get("hub.challenge")
-    verify_token = os.environ.get("WHATSAPP_VERIFY_TOKEN", "feral-verify")
+    # Canonical env key is ``FERAL_WHATSAPP_VERIFY_TOKEN`` (matches the
+    # rest of the FERAL_* credential namespace and what bootstrap/config
+    # expects). The unprefixed ``WHATSAPP_VERIFY_TOKEN`` is kept as a
+    # backward-compat fallback so existing deployments don't break.
+    verify_token = (
+        os.environ.get("FERAL_WHATSAPP_VERIFY_TOKEN")
+        or os.environ.get("WHATSAPP_VERIFY_TOKEN")
+        or "feral-verify"
+    )
     if mode == "subscribe" and token == verify_token:
         return Response(content=challenge, media_type="text/plain")
     return Response(content="Forbidden", status_code=403)

@@ -92,6 +92,11 @@ class ProactiveEngine:
         self._baseline = baseline_engine
         self._interval = check_interval_s
         self._running = False
+        # A7 — Hold the evaluation loop task so stop() can cancel it
+        # rather than only flipping ``_running`` (which could still let
+        # one more LLM evaluation fire while waiting on the interval
+        # sleep).
+        self._task: Optional[asyncio.Task] = None
         self._callbacks: list[Callable[[ProactiveMessage], Awaitable[None]]] = []
         self._trigger_states: dict[str, TriggerState] = {}
         self._trigger_counts: dict[str, int] = defaultdict(int)
@@ -121,18 +126,52 @@ class ProactiveEngine:
         }
 
     async def start(self):
+        """Start the evaluation loop as a background task.
+
+        Returns once the task is scheduled — callers should NOT ``await``
+        the coroutine expecting it to block for the lifetime of the
+        engine. Idempotent: a second call while running is a no-op.
+        """
+        if self._running and self._task and not self._task.done():
+            return
         self._running = True
         self._session_start = time.time()
         logger.info("Proactive engine started (interval=%.0fs)", self._interval)
+        self._task = asyncio.create_task(self._run_loop(), name="feral-proactive-loop")
+
+    async def _run_loop(self):
         while self._running:
-            await asyncio.sleep(self._interval)
+            try:
+                await asyncio.sleep(self._interval)
+            except asyncio.CancelledError:
+                break
+            if not self._running:
+                break
             try:
                 await self._evaluate()
+            except asyncio.CancelledError:
+                break
             except Exception as e:
                 logger.warning("Proactive evaluation error: %s", e)
 
-    def stop(self):
+    async def stop(self):
+        """Stop the evaluation loop and wait for it to exit.
+
+        A7: Cancel the running task so any in-progress ``asyncio.sleep``
+        returns immediately, then await completion. Flipping ``_running``
+        alone is not enough — a pending interval sleep would still wake
+        up and fire one more LLM evaluation after shutdown began.
+        """
         self._running = False
+        task = self._task
+        self._task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     async def evaluate(self, session_id: str = ""):
         """Public entry point for on-demand evaluation."""

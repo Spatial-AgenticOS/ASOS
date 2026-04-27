@@ -545,3 +545,270 @@ async def test_channel_manager_stop_all_clears_channels():
     await mgr.stop_all()
     assert mgr.active_channels == []
     assert mgr.stats["channel_count"] == 0
+
+
+# ── A3 — Wave 2 hardening regressions ───────────────────────────────────────
+
+
+def _make_resp(status_code=200, json_body=None, text_body=None, content_type="application/json"):
+    """Shape a ``MagicMock`` that looks enough like an ``httpx.Response``.
+
+    ``resp.json()`` will either return ``json_body`` or raise a JSON
+    decode error if ``json_body`` is ``None`` and ``text_body`` is set
+    (mimicking httpx's real ``JSONDecodeError`` on HTML/empty bodies).
+    """
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.headers = {"content-type": content_type}
+
+    def _json():
+        if json_body is not None:
+            return json_body
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+    resp.json = _json
+    resp.text = text_body if text_body is not None else ""
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_telegram_start_strips_whitespace_from_token():
+    """Tokens pasted from clipboard managers frequently carry a trailing
+    newline. Before A3, this landed in the URL path segment and turned
+    every ``getUpdates`` into an HTML 404 from Telegram's frontend.
+    """
+    mock_http = MagicMock()
+    mock_http.post = AsyncMock()
+    mock_http.aclose = AsyncMock()
+    mock_http.get = AsyncMock(
+        return_value=_make_resp(
+            200, {"ok": True, "result": {"username": "stripbot"}}
+        )
+    )
+
+    with patch("httpx.AsyncClient", return_value=mock_http):
+        ch = TelegramChannel({"bot_token": "  123:ABC\n ", "enabled": True})
+        await ch.start()
+        ch._running = False
+        await ch.stop()
+
+    assert ch._base_url == "https://api.telegram.org/bot123:ABC"
+    # getMe is the first call; the URL must use the stripped token.
+    first_call = mock_http.get.await_args_list[0]
+    assert "bot123:ABC/getMe" in first_call.args[0]
+
+
+async def _run_poll_loop_once(ch: TelegramChannel, expected_gets: int = 1):
+    """Run ``_poll_loop`` until the mocked ``_http.get`` has been awaited
+    ``expected_gets`` times, then cancel the task. Avoids patching
+    ``asyncio.sleep`` (which mutates the global module because
+    ``channels.base.asyncio`` IS the real asyncio module)."""
+    task = asyncio.create_task(ch._poll_loop())
+    for _ in range(60):
+        await asyncio.sleep(0.01)
+        if ch._http.get.await_count >= expected_gets:
+            break
+    ch._running = False
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_telegram_poll_loop_survives_empty_body(caplog):
+    """200-with-empty-body should log 'non-JSON body' and back off,
+    NOT raise ``JSONDecodeError`` out of the task.
+    """
+    bad = _make_resp(200, json_body=None, text_body="", content_type="text/html")
+
+    mock_http = MagicMock()
+    mock_http.post = AsyncMock()
+    mock_http.aclose = AsyncMock()
+    mock_http.get = AsyncMock(return_value=bad)
+
+    ch = TelegramChannel({"bot_token": "t"})
+    ch._http = mock_http
+    ch._base_url = "https://api.telegram.org/bott"
+    ch._running = True
+    ch._offset = 0
+
+    caplog.set_level("WARNING", logger="feral.channels")
+    await _run_poll_loop_once(ch, expected_gets=1)
+
+    # No uncaught JSONDecodeError — the loop logged and continued.
+    assert any("non-JSON body" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_telegram_poll_loop_survives_html_200(caplog):
+    html = _make_resp(
+        200, json_body=None, text_body="<html>oops</html>", content_type="text/html"
+    )
+    mock_http = MagicMock()
+    mock_http.post = AsyncMock()
+    mock_http.aclose = AsyncMock()
+    mock_http.get = AsyncMock(return_value=html)
+
+    ch = TelegramChannel({"bot_token": "t"})
+    ch._http = mock_http
+    ch._base_url = "https://api.telegram.org/bott"
+    ch._running = True
+    ch._offset = 0
+
+    caplog.set_level("WARNING", logger="feral.channels")
+    await _run_poll_loop_once(ch, expected_gets=1)
+    assert any("non-JSON body" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_telegram_poll_loop_backs_off_on_http_error(caplog):
+    bad = _make_resp(502, json_body=None, text_body="bad gateway", content_type="text/plain")
+    mock_http = MagicMock()
+    mock_http.post = AsyncMock()
+    mock_http.aclose = AsyncMock()
+    mock_http.get = AsyncMock(return_value=bad)
+
+    ch = TelegramChannel({"bot_token": "t"})
+    ch._http = mock_http
+    ch._base_url = "https://api.telegram.org/bott"
+    ch._running = True
+    ch._offset = 0
+
+    caplog.set_level("WARNING", logger="feral.channels")
+    await _run_poll_loop_once(ch, expected_gets=1)
+    assert any("HTTP 502" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_telegram_start_skips_poll_loop_on_unauthorized():
+    """If ``getMe`` returns 401+ok=false, the token is bad. Starting the
+    poll loop anyway just spams the logs forever — so we don't.
+    """
+    unauth = _make_resp(
+        401,
+        {"ok": False, "error_code": 401, "description": "Unauthorized"},
+    )
+    mock_http = MagicMock()
+    mock_http.post = AsyncMock()
+    mock_http.aclose = AsyncMock()
+    mock_http.get = AsyncMock(return_value=unauth)
+
+    with patch("httpx.AsyncClient", return_value=mock_http):
+        ch = TelegramChannel({"bot_token": "bad-token"})
+        await ch.start()
+
+    assert ch._connected is False
+    assert ch._running is False
+    # Only the one getMe call should have happened — no poll loop.
+    assert mock_http.get.await_count == 1
+    # aclose() should have been invoked exactly once in start()'s cleanup.
+    assert mock_http.aclose.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_channel_manager_start_twice_stops_first_instance():
+    """Regression for duplicate Telegram poll loops. A second
+    ``start_channel('telegram', ...)`` must ``stop()`` the first one.
+    """
+    mock_http_a = MagicMock()
+    mock_http_a.post = AsyncMock()
+    mock_http_a.aclose = AsyncMock()
+    mock_http_a.get = AsyncMock(
+        return_value=_make_resp(200, {"ok": True, "result": {"username": "a"}})
+    )
+    mock_http_b = MagicMock()
+    mock_http_b.post = AsyncMock()
+    mock_http_b.aclose = AsyncMock()
+    mock_http_b.get = AsyncMock(
+        return_value=_make_resp(200, {"ok": True, "result": {"username": "b"}})
+    )
+
+    mgr = ChannelManager()
+
+    with patch("httpx.AsyncClient", side_effect=[mock_http_a, mock_http_b]):
+        await mgr.start_channel("telegram", {"bot_token": "first"})
+        first = mgr.get_channel("telegram")
+        assert first is not None
+        assert first._running is True
+
+        await mgr.start_channel("telegram", {"bot_token": "second"})
+        second = mgr.get_channel("telegram")
+
+    assert second is not first
+    # First instance must have been stopped and its httpx client closed.
+    assert first._running is False
+    assert mock_http_a.aclose.await_count >= 1
+    # Second instance should be live.
+    assert second._running is True
+    await mgr.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_verify_prefers_feral_env(monkeypatch):
+    """Meta verify GET must succeed when only ``FERAL_WHATSAPP_VERIFY_TOKEN``
+    is set (the canonical FERAL_* name).
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from api.routes.channels import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    monkeypatch.delenv("WHATSAPP_VERIFY_TOKEN", raising=False)
+    monkeypatch.setenv("FERAL_WHATSAPP_VERIFY_TOKEN", "canonical-secret")
+
+    with TestClient(app) as client:
+        r = client.get(
+            "/api/channels/whatsapp/webhook",
+            params={
+                "hub.mode": "subscribe",
+                "hub.verify_token": "canonical-secret",
+                "hub.challenge": "42",
+            },
+        )
+    assert r.status_code == 200
+    assert r.text == "42"
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_verify_backcompat_old_env(monkeypatch):
+    """Legacy deployments that only set the unprefixed name still work."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from api.routes.channels import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    monkeypatch.delenv("FERAL_WHATSAPP_VERIFY_TOKEN", raising=False)
+    monkeypatch.setenv("WHATSAPP_VERIFY_TOKEN", "legacy-secret")
+
+    with TestClient(app) as client:
+        r = client.get(
+            "/api/channels/whatsapp/webhook",
+            params={
+                "hub.mode": "subscribe",
+                "hub.verify_token": "legacy-secret",
+                "hub.challenge": "ok",
+            },
+        )
+    assert r.status_code == 200
+    assert r.text == "ok"
+
+
+def test_whatsapp_env_keys_are_accepted_by_credentials_whitelist():
+    """``/api/config/credentials`` must accept the FERAL_WHATSAPP_* keys
+    the rest of the system reads. Prior to A3 they were silently
+    rejected because they don't match ``*_API_KEY``.
+    """
+    from api.routes.config import _is_accepted_env_key
+
+    for key in (
+        "FERAL_WHATSAPP_ACCESS_TOKEN",
+        "FERAL_WHATSAPP_PHONE_NUMBER_ID",
+        "FERAL_WHATSAPP_APP_SECRET",
+        "FERAL_WHATSAPP_VERIFY_TOKEN",
+    ):
+        assert _is_accepted_env_key(key), f"{key} should be accepted"

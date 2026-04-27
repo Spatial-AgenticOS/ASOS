@@ -290,6 +290,23 @@ _OPEN_PATH_PREFIXES = (
     "/webhooks/",
 )
 
+# Narrow GET-only allowlist for the device-pairing landing page and the
+# static bundle it needs to boot. A phone on the LAN that scanned the
+# pairing QR will not have the Brain's API key yet; locking these paths
+# behind Bearer-auth would make `/pair?t=…` unusable off-loopback. The
+# pairing token is validated separately on the WebSocket handshake
+# (`verify_device`), so serving the SPA shell + hashed asset bundles
+# here does not widen the authenticated API surface.
+_OPEN_GET_PATHS = frozenset({
+    "/pair",
+    "/v2/pair",
+})
+
+_OPEN_GET_PATH_PREFIXES = (
+    "/assets/",
+    "/v2/assets/",
+)
+
 
 def _is_webhook_receive(path: str) -> bool:
     """External webhook endpoints (POST /api/webhooks/{app_id}) must be public.
@@ -312,6 +329,12 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if _is_webhook_receive(path) and request.method == "POST":
             return await call_next(request)
+
+        if request.method == "GET":
+            if path in _OPEN_GET_PATHS:
+                return await call_next(request)
+            if any(path.startswith(p) for p in _OPEN_GET_PATH_PREFIXES):
+                return await call_next(request)
 
         scope_type = request.scope.get("type", "")
         if scope_type == "websocket":
@@ -545,7 +568,9 @@ async def startup():
                 await state.broadcast_event("dashboard_update", dashboard)
             except Exception:
                 pass
-    asyncio.create_task(_state_heartbeat())
+    state.register_background_task(
+        asyncio.create_task(_state_heartbeat(), name="feral-state-heartbeat")
+    )
 
     async def _provider_catalog_refresher():
         """Refresh the ProviderCatalog every 6h while the Brain is up.
@@ -568,27 +593,117 @@ async def startup():
             except Exception as exc:
                 logger.debug("provider catalog refresh failed: %s", exc)
             await asyncio.sleep(6 * 3600)
-    asyncio.create_task(_provider_catalog_refresher())
+    state.register_background_task(
+        asyncio.create_task(_provider_catalog_refresher(), name="feral-provider-catalog-refresher")
+    )
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Graceful shutdown: close LLM clients, MCP connections, sync engine, mDNS.
+    """Graceful shutdown: stop producers, close LLM, then teardown I/O.
 
-    Also snapshots the ConsciousnessStore to disk so the agent's in-flight
-    state survives the next boot — this is the 'know where I left off'
-    contract documented in feral-core/memory/consciousness.py.
+    A7 — Ordering matters. Before this pass, ``llm.close()`` ran first
+    while ambient loops (proactive, screen loop, scheduled tasks,
+    scene analysis, channel handlers) were still firing HTTP requests
+    through the shared client, producing ``Cannot send a request, as
+    the client has been closed`` tracebacks. We now:
+
+      1. Stop every background producer (registry + engines + integrations
+         + channel manager + embed queue).
+      2. THEN close the LLM + MCP so no in-flight request can leak.
+      3. Stop taskflows.
+      4. Tear down sync/mDNS via the async-safe paths so zeroconf
+         doesn't stall the loop (``EventLoopBlocked``).
+      5. Snapshot ConsciousnessStore last, while SQLite pools are alive.
     """
     logger.info("FERAL Brain shutting down gracefully...")
+
+    # (a) Cancel every registered background task (heartbeat, catalog
+    # refresher, ideas brief, screen loop bootstrap, demo, proactive
+    # evaluation loop, etc.). This flips producer state before we
+    # touch the shared HTTP client.
+    try:
+        cancelled = await state.shutdown_background_tasks(timeout=5.0)
+        if cancelled:
+            logger.info("Shutdown: cancelled %d background task(s)", cancelled)
+    except Exception as exc:
+        logger.warning("Shutdown: background-task cancellation failed: %s", exc)
+
+    # (a.1) Ask the engines that own their own task handles to stop so
+    # they can drain any in-flight tick cleanly. These are idempotent
+    # with the registry cancellation above — if the task is already
+    # cancelled, stop() becomes a no-op.
+    for owner_name in ("proactive", "screen_loop"):
+        owner = getattr(state, owner_name, None)
+        if owner is None:
+            continue
+        stop = getattr(owner, "stop", None)
+        if not callable(stop):
+            continue
+        try:
+            result = stop()
+            if hasattr(result, "__await__"):
+                await result
+        except Exception as exc:
+            logger.debug("Shutdown: %s.stop() raised: %s", owner_name, exc)
+
+    # (a.2) Messaging + channel integrations that spawn their own
+    # polling loops.
+    for bridge_name in ("channel_manager", "mqtt_bridge", "email_watcher"):
+        bridge = getattr(state, bridge_name, None)
+        if bridge is None:
+            continue
+        stop = getattr(bridge, "stop_all", None) or getattr(bridge, "stop", None)
+        if not callable(stop):
+            continue
+        try:
+            result = stop()
+            if hasattr(result, "__await__"):
+                await result
+        except Exception as exc:
+            logger.warning("Shutdown: %s stop failed: %s", bridge_name, exc)
+
+    # (a.3) Close the MemoryStore so the embed queue's background
+    # coroutine stops before the event loop starts tearing down.
+    try:
+        if state.memory is not None:
+            close = getattr(state.memory, "close", None)
+            if callable(close):
+                close()
+    except Exception as exc:
+        logger.debug("Shutdown: memory.close() raised: %s", exc)
+
+    # (b) LLM client — safe now that every producer is stopped.
     if state.orchestrator and state.orchestrator.llm:
-        await state.orchestrator.llm.close()
+        try:
+            await state.orchestrator.llm.close()
+        except Exception as exc:
+            logger.debug("Shutdown: llm.close() raised: %s", exc)
+
+    # (c) MCP connections.
     if state.mcp_client:
-        await state.mcp_client.disconnect_all()
-    if state.sync_engine:
-        await state.sync_engine.stop_discovery()
+        try:
+            await state.mcp_client.disconnect_all()
+        except Exception as exc:
+            logger.debug("Shutdown: mcp disconnect_all raised: %s", exc)
+
+    # (d) Taskflows. These may call back into skills/LLM; we keep them
+    # after LLM close because TaskFlowRuntime.stop() is expected to
+    # cancel outstanding runs rather than start new ones.
     if state.taskflows:
-        await state.taskflows.stop()
-    # Persist consciousness before the SQLite connection pools die.
+        try:
+            await state.taskflows.stop()
+        except Exception as exc:
+            logger.debug("Shutdown: taskflows.stop raised: %s", exc)
+
+    # (e) Sync engine mDNS teardown (async-safe — see memory/sync.py).
+    if state.sync_engine:
+        try:
+            await state.sync_engine.stop_discovery()
+        except Exception as exc:
+            logger.warning("Shutdown: sync_engine.stop_discovery failed: %s", exc)
+
+    # (f) Persist consciousness before the SQLite connection pools die.
     try:
         store = getattr(state, "consciousness", None)
         if store is not None:

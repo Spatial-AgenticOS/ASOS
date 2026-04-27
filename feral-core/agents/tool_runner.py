@@ -45,6 +45,11 @@ class ToolRunner:
         self._tool_repeat_state: dict[str, dict] = {}
         self._active_subagent_tasks = 0
         self._daemon_session_map: dict[str, str] = {}
+        # A2 fix: futures keyed by daemon request_id so the LLM loop can
+        # actually ``await`` the hardware daemon's result instead of
+        # short-circuiting with a stub "command_sent_to_hardware_daemon"
+        # success. Resolved from ``ui_handlers.handle_daemon_result``.
+        self._pending_daemon_acks: dict[str, asyncio.Future] = {}
         self._pending_approvals: dict[str, dict] = {}
         self._approval_mgr = ApprovalManager()
 
@@ -259,6 +264,93 @@ class ToolRunner:
         await ws.send_json(daemon_msg)
         await self._orch._send_text(session_id, f"Command sent to node '{actual_node_id}'...")
 
+    async def execute_daemon_command_with_ack(
+        self,
+        session_id: str,
+        node_id: str,
+        action: str,
+        args: dict,
+        timeout: float = 30.0,
+    ) -> dict:
+        """Send a daemon command and wait for its ``tool_result`` ack.
+
+        The previous behaviour returned ``{"status": "command_sent_to_hardware_daemon"}``
+        immediately — a silent stub-success that let the LLM claim "I did it"
+        while the daemon had either rejected the command or never received it.
+
+        This variant:
+          * registers a future in ``_pending_daemon_acks`` keyed by ``request_id``;
+          * is resolved from ``ui_handlers.handle_daemon_result`` when the daemon
+            sends back an ack;
+          * times out with ``success: False`` after ``timeout`` seconds so a
+            misbehaving daemon can't hang the LLM loop.
+        """
+        actual_node_id = node_id.replace("daemon_", "")
+        daemons = self._orch.daemons
+
+        if actual_node_id not in daemons:
+            available = list(daemons.keys()) if daemons else ["none"]
+            return {
+                "success": False,
+                "status_code": 503,
+                "error": f"Daemon '{actual_node_id}' not connected. Available: {available}",
+                "data": None,
+            }
+
+        ws = daemons[actual_node_id]
+        request_id = str(uuid4())[:8]
+        daemon_msg = {
+            "type": "command",
+            "request_id": request_id,
+            "command": action,
+            "args": args,
+        }
+
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future = loop.create_future()
+        self._pending_daemon_acks[request_id] = future
+        self._daemon_session_map[request_id] = session_id
+        try:
+            await ws.send_json(daemon_msg)
+        except Exception as exc:
+            self._pending_daemon_acks.pop(request_id, None)
+            return {
+                "success": False,
+                "status_code": 500,
+                "error": f"Failed to send command to daemon '{actual_node_id}': {exc}",
+                "data": None,
+            }
+
+        try:
+            ack = await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            self._pending_daemon_acks.pop(request_id, None)
+            return {
+                "success": False,
+                "status_code": 504,
+                "error": (
+                    f"Daemon '{actual_node_id}' did not acknowledge {action} "
+                    f"within {timeout:.0f}s."
+                ),
+                "data": None,
+            }
+        finally:
+            self._pending_daemon_acks.pop(request_id, None)
+
+        return ack if isinstance(ack, dict) else {"success": True, "data": ack}
+
+    def resolve_daemon_ack(self, request_id: str, result: dict) -> bool:
+        """Deliver a daemon ack to whichever LLM turn is waiting on it.
+
+        Called from ``ui_handlers.handle_daemon_result``. Returns ``True`` if
+        the request_id matched a pending future.
+        """
+        future = self._pending_daemon_acks.pop(request_id, None)
+        if future is None or future.done():
+            return False
+        future.set_result(result)
+        return True
+
     # ─────────────────────────────────────────────
     # Tool Execution (LLM loop variant)
     # ─────────────────────────────────────────────
@@ -319,8 +411,9 @@ class ToolRunner:
             return denial
 
         if skill_id.startswith("daemon_"):
-            await self.execute_daemon_command(session_id, skill_id, endpoint_id, args)
-            return {"status": "command_sent_to_hardware_daemon", "note": "Command is executing asynchronously on the device."}
+            return await self.execute_daemon_command_with_ack(
+                session_id, skill_id, endpoint_id, args,
+            )
 
         skills = self._orch.skills
         skill = skills.skills.get(skill_id)

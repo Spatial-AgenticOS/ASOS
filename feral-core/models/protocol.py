@@ -119,6 +119,35 @@ class StreamDeltaPayload(BaseModel):
     is_final: bool = False
 
 
+class ToolStartPayload(BaseModel):
+    """Brain notifies client that a tool call has begun.
+
+    Renders as a chip or equivalent affordance in the UI so the user
+    sees what the agent is doing without the model having to narrate
+    it in prose. ``args_preview`` is a short, redacted JSON string
+    suitable for a one-line display — not the full argument blob.
+    """
+    tool: str
+    call_id: str = ""
+    skill_id: str = ""
+    endpoint_id: str = ""
+    args_preview: str = ""
+
+
+class ToolResultPayload(BaseModel):
+    """Brain notifies client that a tool call finished.
+
+    Paired with ``tool_start`` by ``call_id`` when present. The client
+    uses this to clear the active-tool chip and (optionally) record a
+    per-turn activity row.
+    """
+    tool: str
+    call_id: str = ""
+    success: bool = True
+    error: str = ""
+    latency_ms: float = 0.0
+
+
 class GesturePayload(BaseModel):
     """Gesture detected by a hardware daemon (glasses IMU, camera, etc.)."""
     gesture: str  # "nod", "shake", "look_up", "look_down", "double_tap"
@@ -326,6 +355,8 @@ MESSAGE_TYPES = {
     "tts_chunk": TTSChunkPayload,
     "text_response": TextResponsePayload,
     "stream_delta": StreamDeltaPayload,
+    "tool_start": ToolStartPayload,
+    "tool_result": ToolResultPayload,
     "gesture": GesturePayload,
     "error": ErrorPayload,
 

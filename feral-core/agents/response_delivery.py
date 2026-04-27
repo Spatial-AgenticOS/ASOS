@@ -4,18 +4,23 @@ import json
 import logging
 
 from models.protocol import FeralMessage, SDUIPayload, TextResponsePayload
+from agents.chat_sanitizer import sanitize_assistant_display_text
 
 logger = logging.getLogger("feral.orchestrator")
 
 
 async def send_text(orchestrator, session_id: str, text: str):
+    # Defense in depth: even non-streaming callers that hand us raw
+    # model text benefit from the same artifact scrubber the stream
+    # path uses.
+    clean = sanitize_assistant_display_text(text) if text else text
     await orchestrator.send(
         session_id,
         FeralMessage(
             session_id=session_id,
             hop="brain",
             type="text_response",
-            payload=TextResponsePayload(text=text).model_dump(),
+            payload=TextResponsePayload(text=clean).model_dump(),
         ),
     )
 

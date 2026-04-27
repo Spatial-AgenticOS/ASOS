@@ -5,6 +5,8 @@ from models.protocol import (
     FeralMessage,
     StreamDeltaPayload,
     GesturePayload,
+    ToolStartPayload,
+    ToolResultPayload,
     parse_message,
     MESSAGE_TYPES,
 )
@@ -69,10 +71,38 @@ class TestGesturePayload:
         assert payload.gesture == "double_tap"
 
 
+class TestToolEvents:
+    def test_tool_start_registered(self):
+        assert "tool_start" in MESSAGE_TYPES
+        assert MESSAGE_TYPES["tool_start"] is ToolStartPayload
+
+    def test_tool_result_registered(self):
+        assert "tool_result" in MESSAGE_TYPES
+        assert MESSAGE_TYPES["tool_result"] is ToolResultPayload
+
+    def test_tool_start_parse(self):
+        raw = {
+            "type": "tool_start",
+            "hop": "brain",
+            "payload": {"tool": "web_search__run", "call_id": "c1", "skill_id": "web_search", "endpoint_id": "run"},
+        }
+        msg, payload = parse_message(raw)
+        assert isinstance(payload, ToolStartPayload)
+        assert payload.tool == "web_search__run"
+        assert payload.skill_id == "web_search"
+
+    def test_tool_result_success_default(self):
+        p = ToolResultPayload(tool="x")
+        assert p.success is True
+        assert p.error == ""
+
+
 class TestNewMessageTypes:
     def test_all_new_types_registered(self):
         assert "stream_delta" in MESSAGE_TYPES
         assert "gesture" in MESSAGE_TYPES
+        assert "tool_start" in MESSAGE_TYPES
+        assert "tool_result" in MESSAGE_TYPES
 
     def test_total_message_types(self):
         # We should have at least 17 message types now

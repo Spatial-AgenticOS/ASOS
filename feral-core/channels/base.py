@@ -187,33 +187,112 @@ class TelegramChannel(Channel):
         return "telegram"
 
     async def start(self):
-        token = self.config.get("bot_token", "")
+        # Normalize token: users pasting the token into Settings often
+        # include trailing newlines or whitespace from clipboard managers,
+        # which silently corrupts the URL path segment and makes every
+        # request return an HTML error page. Strip once here.
+        raw_token = self.config.get("bot_token", "") or ""
+        token = raw_token.strip() if isinstance(raw_token, str) else ""
         if not token:
             logger.warning("Telegram channel: no bot_token configured")
             return
+        if token != raw_token:
+            # Persist the cleaned value back so downstream reads (e.g. file
+            # downloads that re-read ``self.config['bot_token']``) see the
+            # same value we used to build the base URL.
+            self.config["bot_token"] = token
 
         import httpx
         self._running = True
         self._http = httpx.AsyncClient(timeout=35.0)
         self._base_url = f"https://api.telegram.org/bot{token}"
         self._offset = 0
+        self._poll_task: Optional[asyncio.Task] = None
+
+        getme_authoritative_failure = False
         try:
             me_resp = await self._http.get(f"{self._base_url}/getMe")
-            me_data = me_resp.json() if me_resp.status_code == 200 else {}
+            status = getattr(me_resp, "status_code", 0)
+            ctype = ""
+            try:
+                ctype = me_resp.headers.get("content-type", "")
+            except Exception:
+                pass
+            me_data: dict = {}
+            if status == 200 and "json" in ctype.lower():
+                try:
+                    me_data = me_resp.json() or {}
+                except Exception as je:
+                    logger.error("Telegram getMe: non-JSON body despite 200 (%s): %s", ctype, je)
+            elif status == 200:
+                try:
+                    me_data = me_resp.json() or {}
+                except Exception:
+                    snippet = ""
+                    try:
+                        snippet = (me_resp.text or "")[:200]
+                    except Exception:
+                        pass
+                    logger.error(
+                        "Telegram getMe: 200 with non-JSON body (content-type=%r); snippet=%r",
+                        ctype, snippet,
+                    )
+
             if me_data.get("ok"):
                 self._bot_username = me_data.get("result", {}).get("username")
                 self._connected = True
                 logger.info("Telegram channel started (bot: @%s)", self._bot_username)
             else:
-                logger.error("Telegram getMe failed: %s", me_data)
+                # Authoritative negative from Telegram (e.g. 401 "Unauthorized"
+                # with ok=false) — the token is bad. Don't start the poll loop;
+                # otherwise we'd spin forever burning quota and spamming logs.
+                self._connected = False
+                if status in (401, 403) or (isinstance(me_data, dict) and me_data.get("ok") is False):
+                    getme_authoritative_failure = True
+                    logger.error(
+                        "Telegram getMe rejected (status=%s, description=%r). Not starting poll loop.",
+                        status, (me_data or {}).get("description"),
+                    )
+                else:
+                    logger.warning(
+                        "Telegram getMe returned non-ok status=%s body=%r; will start poll loop anyway.",
+                        status, me_data,
+                    )
         except Exception as e:
-            logger.error("Telegram getMe error: %s", e)
-        asyncio.ensure_future(self._poll_loop())
+            # Network error — bot may still be reachable later. Leave
+            # _connected False but start the poll loop so it can recover.
+            self._connected = False
+            logger.warning("Telegram getMe transport error (will still poll): %s", e)
+
+        if getme_authoritative_failure:
+            self._running = False
+            try:
+                await self._http.aclose()
+            except Exception:
+                pass
+            return
+
+        self._poll_task = asyncio.ensure_future(self._poll_loop())
 
     async def stop(self):
         self._running = False
-        if hasattr(self, "_http"):
-            await self._http.aclose()
+        # Cancel the long-poll task first so we don't race aclose() with
+        # an in-flight getUpdates. Without this, replacing a TelegramChannel
+        # in ChannelManager could leak a poll loop that keeps calling
+        # getUpdates against the closed httpx client (logs a noisy
+        # RuntimeError) or, worse, double-subscribes the same bot.
+        task = getattr(self, "_poll_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if hasattr(self, "_http") and self._http is not None:
+            try:
+                await self._http.aclose()
+            except Exception:
+                pass
 
     async def _poll_loop(self):
         while self._running:
@@ -222,7 +301,57 @@ class TelegramChannel(Channel):
                     f"{self._base_url}/getUpdates",
                     params={"offset": self._offset, "timeout": 30},
                 )
-                data = resp.json()
+                try:
+                    status = int(getattr(resp, "status_code", 0) or 0)
+                except (TypeError, ValueError):
+                    status = 0
+                # Telegram will reply with non-2xx + JSON body for
+                # ``{"ok": false, "description": "..."}`` errors, but a
+                # reverse proxy or outage can return HTML or an empty body.
+                # ``.json()`` raises ``JSONDecodeError`` on both, which
+                # prior to this fix would spam the logs once per iteration
+                # with the unhelpful ``Expecting value: line 1 column 1``.
+                if status and status >= 400:
+                    snippet = ""
+                    try:
+                        snippet = (resp.text or "")[:200]
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "Telegram getUpdates HTTP %s; snippet=%r", status, snippet,
+                    )
+                    await asyncio.sleep(5 if status != 429 else 10)
+                    continue
+                ctype = ""
+                try:
+                    ctype = resp.headers.get("content-type", "") or ""
+                except Exception:
+                    pass
+                try:
+                    data = resp.json()
+                except Exception as je:
+                    snippet = ""
+                    try:
+                        snippet = (resp.text or "")[:200]
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "Telegram getUpdates non-JSON body (content-type=%r, status=%s): %s; snippet=%r",
+                        ctype, status, je, snippet,
+                    )
+                    await asyncio.sleep(5)
+                    continue
+                if not isinstance(data, dict):
+                    logger.warning(
+                        "Telegram getUpdates unexpected payload shape: %r", type(data).__name__,
+                    )
+                    await asyncio.sleep(5)
+                    continue
+                if data.get("ok") is False:
+                    desc = data.get("description") or "unknown"
+                    logger.warning("Telegram getUpdates not ok: %s", desc)
+                    await asyncio.sleep(5)
+                    continue
 
                 for update in data.get("result", []):
                     self._offset = update["update_id"] + 1
@@ -907,6 +1036,24 @@ class ChannelManager:
         if not cls:
             logger.warning(f"Unknown channel type: {channel_type}")
             return
+
+        # Stop-before-replace. Previously ``self._channels[type] = channel``
+        # silently orphaned the previous channel's long-poll / websocket
+        # task, which for Telegram meant two getUpdates clients competing
+        # for the same bot (one of them is guaranteed to return empty
+        # results and confuse downstream logic).
+        existing = self._channels.get(channel_type)
+        if existing is not None:
+            try:
+                await existing.stop()
+            except Exception as exc:
+                logger.warning(
+                    "Error stopping previous %s channel before replace: %s",
+                    channel_type, exc,
+                )
+            # Drop the reference even if stop() raised, so we don't keep
+            # a dead channel around on top of the new one.
+            self._channels.pop(channel_type, None)
 
         channel = cls(config)
         if self._handler:

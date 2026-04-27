@@ -589,12 +589,41 @@ class SyncEngine:
             self._load_static_peers()
 
     async def stop_discovery(self):
-        if self._zeroconf:
-            if self._service_info:
-                self._zeroconf.unregister_service(self._service_info)
-            self._zeroconf.close()
-            self._zeroconf = None
+        """Tear down mDNS registration without blocking the event loop.
+
+        A7 — Pre-fix, ``unregister_service`` / ``close`` ran inline on
+        the loop thread during FastAPI shutdown and triggered
+        ``zeroconf.EventLoopBlocked``. We now prefer ``AsyncZeroconf``
+        when the underlying handle exposes it (the instance we open on
+        ``start_discovery`` is still the sync ``Zeroconf`` class, so we
+        offload to a worker thread via ``asyncio.to_thread`` — same
+        non-blocking strategy used by ``services/mdns.py``).
+        """
         self._running = False
+        zc = self._zeroconf
+        info = self._service_info
+        self._zeroconf = None
+        self._service_info = None
+        if zc is None:
+            return
+
+        def _sync_close():
+            try:
+                if info is not None:
+                    zc.unregister_service(info)
+            except Exception as exc:
+                logger.debug("sync engine unregister_service failed: %s", exc)
+            try:
+                zc.close()
+            except Exception as exc:
+                logger.debug("sync engine zeroconf.close failed: %s", exc)
+
+        try:
+            await asyncio.wait_for(asyncio.to_thread(_sync_close), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.warning("SyncEngine.stop_discovery: zeroconf close timed out after 3s")
+        except Exception as exc:
+            logger.debug("SyncEngine.stop_discovery: %s", exc)
 
     async def sync_with_peer(
         self,

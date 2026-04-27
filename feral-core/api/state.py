@@ -80,6 +80,19 @@ logger = logging.getLogger("feral.brain")
 VISION_MAX_FRAME_KB = int(os.environ.get("FERAL_VISION_MAX_FRAME_KB", "512"))
 
 
+def _feature_flag_enabled(env_key: str) -> bool:
+    """Return True when ``os.environ[env_key]`` holds a truthy flag value.
+
+    Shared by the A6 boot gates for ScreenLoop + ProactiveEngine so the
+    "is the operator opted in" check is consistent across call sites.
+    Accepts the conventional ``"true"/"1"/"yes"/"on"`` values; anything
+    else — including an unset env var — is treated as disabled, which
+    is the safe default for ambient API-quota burners.
+    """
+    val = os.environ.get(env_key, "")
+    return isinstance(val, str) and val.strip().lower() in ("true", "1", "yes", "on")
+
+
 class VisionBuffer:
     """Stores the latest N frames per hardware node in a memory-bounded ring buffer."""
 
@@ -214,6 +227,82 @@ class BrainState:
 
         # Collectors for channel-based sessions (no WebSocket)
         self._channel_collectors: dict[str, list[str]] = {}
+
+        # A7 — Central registry of long-lived background tasks so
+        # shutdown can cancel them BEFORE the LLM client / HTTP sessions
+        # are closed. Producers (state.init, server startup, config
+        # toggles) register their tasks via ``register_background_task``.
+        # Tasks are auto-discarded on completion so the set doesn't grow
+        # unboundedly during a long-running brain.
+        import asyncio as _aio
+        self._background_tasks: "set[_aio.Task]" = set()
+
+    # ------------------------------------------------------------------
+    # Back-compat attribute aliases (A2 fix)
+    # ------------------------------------------------------------------
+    # Several subsystems (self_introspection, tool_genesis routes, the
+    # v2 Forge UI bridge) historically read ``state.skills`` /
+    # ``state.mitosis_engine`` / ``state.node_registry``. The real field
+    # names on ``BrainState`` are ``skill_registry`` / ``agent_mitosis``
+    # / ``device_registry``. Without these aliases every legacy caller
+    # silently hit ``AttributeError``, got swallowed by a broad ``except``
+    # and returned empty lists with ``success: True``. Exposing them as
+    # properties keeps the canonical attribute names while preserving
+    # backward compatibility for any caller that still uses the old
+    # names.
+    @property
+    def skills(self) -> SkillRegistry:
+        return self.skill_registry
+
+    @property
+    def mitosis_engine(self):
+        return self.agent_mitosis
+
+    @property
+    def node_registry(self):
+        return self.device_registry
+
+    def register_background_task(self, task):
+        """Track a fire-and-forget task so it can be cancelled on shutdown.
+
+        Accepts any ``asyncio.Task``; the task is auto-removed from the
+        registry when it completes (success or exception) so short-lived
+        tasks that happen to be registered don't leak.
+        """
+        if task is None:
+            return task
+        self._background_tasks.add(task)
+        try:
+            task.add_done_callback(self._background_tasks.discard)
+        except Exception:
+            pass
+        return task
+
+    async def shutdown_background_tasks(self, timeout: float = 5.0) -> int:
+        """Cancel all registered background tasks and await their exit.
+
+        Returns the number of tasks that were cancelled. Safe to call
+        multiple times; already-done tasks are skipped. Tasks that refuse
+        to finish within ``timeout`` seconds are logged and abandoned so
+        shutdown can continue to the next phase (LLM close, etc.).
+        """
+        import asyncio as _aio
+        tasks = [t for t in list(self._background_tasks) if not t.done()]
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            try:
+                await _aio.wait_for(
+                    _aio.gather(*tasks, return_exceptions=True),
+                    timeout=timeout,
+                )
+            except _aio.TimeoutError:
+                logger.warning(
+                    "shutdown_background_tasks: %d tasks did not exit within %.1fs",
+                    len(tasks), timeout,
+                )
+        self._background_tasks.clear()
+        return len(tasks)
 
     @property
     def skill_executor(self):
@@ -512,8 +601,25 @@ class BrainState:
                 llm=_shared_llm,
                 scene_analyzer=self.scene,
             )
-            import asyncio
-            asyncio.create_task(self.screen_loop.start())
+            # A6 — only start the ambient screen-capture loop when the
+            # operator has explicitly opted in. Before this gate the
+            # loop spent vision-model API quota on every cold start
+            # regardless of ``features.vision`` / ``vision.enabled``.
+            # The config loader coalesces both keys into
+            # ``FERAL_VISION_ENABLED`` (see ``config/loader.py``).
+            if _feature_flag_enabled("FERAL_VISION_ENABLED"):
+                import asyncio
+                self.register_background_task(
+                    asyncio.create_task(
+                        self.screen_loop.start(),
+                        name="feral-screen-loop-bootstrap",
+                    )
+                )
+            else:
+                logger.info(
+                    "ScreenLoop gated off at boot "
+                    "(FERAL_VISION_ENABLED not truthy)"
+                )
 
         self.session_handoff = None
         with boot_subsystem(self._boot_report, "SessionHandoffManager"):
@@ -662,7 +768,9 @@ class BrainState:
 
             from datetime import datetime, timedelta as _timedelta
             import asyncio
-            asyncio.create_task(_ideas_daily_brief_loop())
+            self.register_background_task(
+                asyncio.create_task(_ideas_daily_brief_loop(), name="feral-ideas-daily-brief")
+            )
             try:
                 self.ideas_engine.morning_brief()
             except Exception as exc:
@@ -695,8 +803,21 @@ class BrainState:
                 await self.broadcast_event("proactive_alert", alert)
 
             self.proactive.on_message(_proactive_delivery)
-            import asyncio
-            asyncio.create_task(self.proactive.start())
+            # A6 — only start the proactive loop when enabled. Before
+            # this gate the engine ran its rule-based + 60s-LLM
+            # evaluation on every cold start regardless of
+            # ``features.proactive`` / ``FERAL_PROACTIVE``.
+            # ``ProactiveEngine.start`` schedules its inner loop task
+            # and returns fast (A7), so it's safe to ``await`` it.
+            if _feature_flag_enabled("FERAL_PROACTIVE"):
+                await self.proactive.start()
+                if getattr(self.proactive, "_task", None) is not None:
+                    self.register_background_task(self.proactive._task)
+            else:
+                logger.info(
+                    "ProactiveEngine gated off at boot "
+                    "(FERAL_PROACTIVE not truthy)"
+                )
 
         with boot_subsystem(self._boot_report, "MQTTBridge"):
             self.mqtt_bridge = MQTTBridge()
@@ -789,7 +910,9 @@ class BrainState:
                 self._demo.on_telemetry(_push_demo_telemetry)
                 self._demo.set_refs(self.orchestrator, self.sessions)
                 import asyncio
-                asyncio.create_task(self._demo.start())
+                self.register_background_task(
+                    asyncio.create_task(self._demo.start(), name="feral-demo-loop")
+                )
 
         self._boot_report.total_elapsed_ms = (time.time() - _boot_start) * 1000
         self._boot_report.log_summary()
