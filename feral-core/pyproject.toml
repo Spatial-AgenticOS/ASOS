@@ -37,6 +37,7 @@ dependencies = [
     "aiohttp>=3.9.0",
     "openai>=1.50.0",
     "PyJWT>=2.8.0",
+    "prometheus-client>=0.20",
     "cryptography>=41.0.0",
     "pynacl>=1.5.0",
     # W9: vault encryption-at-rest. The OS keychain is now a hard
