@@ -20,12 +20,90 @@ All config is saved to ~/.feral/ — no env vars needed.
 from __future__ import annotations
 import asyncio
 import json
+import logging
 import os
 import socket
 import textwrap
+from pathlib import Path
 
 from config.loader import feral_home
 from config.runtime import ollama_base_url
+
+logger = logging.getLogger("feral.cli.setup_wizard")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Credential persistence — routed through the W9 encrypted BlindVault.
+#
+# A7 cleanup (2026-04-26): these two helpers replaced the direct
+# plaintext ``credentials.json`` writers that used to live in
+# ``OnboardWizard._save_all`` and ``OnboardWizardPlain.run``. The
+# encrypted vault maps ``credentials.json`` → ``credentials.enc``
+# internally, so anchoring it at the wizard home keeps the on-disk
+# artefact inside ``~/.feral/`` without leaving a cleartext file.
+#
+# Returning users with a pre-W9 plaintext ``credentials.json`` still
+# get their keys preserved: instantiating ``BlindVault`` triggers the
+# built-in auto-migration (``credentials.json`` → ``credentials.enc``
+# with the original moved to ``credentials.json.bak.legacy``).
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _load_vault_creds(home: Path) -> dict | None:
+    """Return credentials from the encrypted vault, or ``None`` if the
+    vault is unavailable (so callers can decide whether to fall back
+    to a legacy plaintext read)."""
+    try:
+        from security.vault import BlindVault
+    except Exception as exc:  # pragma: no cover — import-time failure
+        logger.warning("setup_wizard: vault import failed (%s)", exc)
+        return None
+    try:
+        vault = BlindVault(vault_path=str(home / "credentials.json"))
+    except Exception as exc:
+        logger.warning("setup_wizard: vault init failed (%s)", exc)
+        return None
+    try:
+        return {k: vault.retrieve(k) or "" for k in vault.list_keys()}
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("setup_wizard: vault read failed (%s)", exc)
+        return None
+
+
+def _persist_vault_creds(home: Path, credentials: dict) -> None:
+    """Write every credential to the encrypted vault.
+
+    Empty values are skipped. When the vault is unavailable we refuse
+    to fall back to plaintext — the credentials stay in memory for the
+    current process and the user is instructed to fix the vault on
+    next boot via ``feral key recover``.
+    """
+    flat = {k: v for k, v in credentials.items() if isinstance(v, str) and v}
+    if not flat:
+        return
+    try:
+        from security.vault import BlindVault
+    except Exception as exc:  # pragma: no cover — import-time failure
+        logger.error(
+            "setup_wizard: vault import failed (%s); refusing to "
+            "persist plaintext credentials. Keys remain in memory only.",
+            exc,
+        )
+        return
+    try:
+        vault = BlindVault(vault_path=str(home / "credentials.json"))
+    except Exception as exc:
+        logger.error(
+            "setup_wizard: vault init failed (%s); refusing to persist "
+            "plaintext credentials. Keys remain in memory only.",
+            exc,
+        )
+        return
+    for key, value in flat.items():
+        try:
+            vault.set_credential(key, value)
+        except Exception as exc:
+            logger.error("setup_wizard: vault write for %s failed: %s", key, exc)
 
 try:
     from rich.console import Console
@@ -563,7 +641,20 @@ class OnboardWizard:
         self._step_finish()
 
     def _load_existing_creds(self):
+        """Load previously-saved credentials.
+
+        Priority: encrypted vault (post-W9) → legacy plaintext
+        ``credentials.json`` (pre-W9 installs that have not yet booted
+        the brain since migration). The vault auto-migrates the
+        plaintext file on first instantiation, so once the wizard has
+        ``save``d at least once there is nothing plaintext left on
+        disk.
+        """
         creds_path = FERAL_HOME / "credentials.json"
+        loaded = _load_vault_creds(FERAL_HOME)
+        if loaded is not None:
+            self.creds = loaded
+            return
         if creds_path.exists():
             try:
                 self.creds = json.loads(creds_path.read_text())
@@ -1164,9 +1255,7 @@ class OnboardWizard:
     # ── Save & Finish ──────────────────────────────────────
 
     def _save_all(self):
-        creds_path = FERAL_HOME / "credentials.json"
-        creds_path.write_text(json.dumps(self.creds, indent=2))
-        creds_path.chmod(0o600)
+        _persist_vault_creds(FERAL_HOME, self.creds)
 
         config_path = FERAL_HOME / "config.json"
         config_path.write_text(json.dumps(self.config, indent=2))
@@ -1344,12 +1433,16 @@ class OnboardWizardPlain:
     async def run(self):
         FERAL_HOME.mkdir(parents=True, exist_ok=True)
 
-        creds_path = FERAL_HOME / "credentials.json"
-        if creds_path.exists():
-            try:
-                self.creds = json.loads(creds_path.read_text())
-            except Exception:
-                self.creds = {}
+        loaded = _load_vault_creds(FERAL_HOME)
+        if loaded is not None:
+            self.creds = loaded
+        else:
+            creds_path = FERAL_HOME / "credentials.json"
+            if creds_path.exists():
+                try:
+                    self.creds = json.loads(creds_path.read_text())
+                except Exception:
+                    self.creds = {}
 
         print()
         print("=" * 60)
@@ -1683,13 +1776,7 @@ class OnboardWizardPlain:
         else:
             settings_vision = {"enabled": False, "provider": "", "model": ""}
 
-        # Save
-        creds_path = FERAL_HOME / "credentials.json"
-        creds_path.write_text(json.dumps(self.creds, indent=2))
-        try:
-            creds_path.chmod(0o600)
-        except Exception:
-            pass
+        _persist_vault_creds(FERAL_HOME, self.creds)
         (FERAL_HOME / "config.json").write_text(json.dumps(self.config, indent=2))
 
         provider_id = self.config.get("provider", "openai")

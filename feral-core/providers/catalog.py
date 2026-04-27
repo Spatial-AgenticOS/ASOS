@@ -80,6 +80,22 @@ class ProviderDescriptor:
     credential_env_var: str = ""
     aliases: tuple[str, ...] = ()
     notes: str = ""
+    # Truthfulness signal — whether the adapter's ``chat()`` path is
+    # production-wired for this provider. Defaults to ``True`` so every
+    # existing descriptor + community-installed provider keeps
+    # advertising itself as chat-ready. Set to ``False`` for adapters
+    # that are discovery-visible (they participate in the picker +
+    # model refresh loop) but whose ``chat()`` method still raises or
+    # otherwise can't carry a user turn — e.g. the bedrock adapter
+    # stubs ``chat()`` until the AWS runtime path is wired. The v2
+    # Settings UI reads this through :class:`ProviderStatus` to render
+    # a "preview / not chat-ready" chip instead of presenting these
+    # providers as equivalently ready next to OpenAI / Anthropic.
+    chat_ready: bool = True
+    # One-line human-readable reason shown alongside ``chat_ready``
+    # when the adapter is not production-wired. Empty when chat_ready
+    # is True so the UI can collapse the chip entirely.
+    stub_reason: str = ""
 
 
 @dataclass
@@ -96,6 +112,15 @@ class ProviderStatus:
     default_model: str = ""
     last_refresh: float = 0.0
     error: str = ""
+    # Runtime truthfulness for the v2 Settings / Setup UI. When the
+    # descriptor (or its adapter) declares the chat path is at stub
+    # level, the status surfaces it here so the picker can render a
+    # distinct "preview / not chat-ready" chip. Kept optional with a
+    # safe default so legacy consumers that never look at this field
+    # keep working unchanged, and so new adapters default to
+    # production-ready unless they opt out.
+    chat_ready: bool = True
+    stub_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,6 +134,8 @@ class ProviderStatus:
             "default_model": self.default_model,
             "last_refresh": self.last_refresh,
             "error": self.error,
+            "chat_ready": self.chat_ready,
+            "stub_reason": self.stub_reason,
         }
 
 
@@ -219,6 +246,17 @@ BUILT_IN_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         credential_env_var="AWS_ACCESS_KEY_ID",
         aliases=("aws bedrock", "amazon"),
         notes="Auth via AWS IAM (AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY).",
+        # Bedrock's ``chat()`` path currently raises at stub level —
+        # model discovery works (so users can still see the inventory
+        # and pick a region-enabled id) but a real chat turn won't go
+        # through until the ``bedrock-runtime.converse`` wiring lands.
+        # Signal that to the UI instead of presenting bedrock as
+        # equivalently chat-ready to OpenAI / Anthropic.
+        chat_ready=False,
+        stub_reason=(
+            "Chat path is at stub level — model discovery is live but "
+            "bedrock-runtime.converse is not wired yet."
+        ),
     ),
     ProviderDescriptor(
         provider_id="ollama",
@@ -387,6 +425,8 @@ class ProviderCatalog:
         *,
         live: bool = True,
         force: bool = False,
+        model_class: Optional[str] = None,
+        recommended: bool = False,
     ) -> CachedModelList:
         """Return models for *provider_id*.
 
@@ -397,9 +437,30 @@ class ProviderCatalog:
         returned, but ``CachedModelList.warning`` carries the error so
         the client can render a visible "key rejected" chip instead of
         silently lying about models.
+
+        ``model_class`` and ``recommended`` are projection-only filters
+        layered on top of the canonical cached raw list. They never
+        mutate :attr:`_models` — a filtered response returns a new
+        :class:`CachedModelList` whose ``models`` are the filtered view
+        while the catalog's internal cache keeps the full list from
+        the provider, so a subsequent unfiltered call still sees every
+        id the provider advertises.
         """
         if provider_id not in self._descriptors:
             raise KeyError(f"unknown provider_id: {provider_id!r}")
+        base = await self._resolve_cached(provider_id, live=live, force=force)
+        return self._project(provider_id, base, model_class=model_class, recommended=recommended)
+
+    async def _resolve_cached(
+        self,
+        provider_id: str,
+        *,
+        live: bool,
+        force: bool,
+    ) -> CachedModelList:
+        """Return the canonical raw ``CachedModelList`` honouring TTL +
+        force/live semantics, before any projection-only filter is
+        layered on top."""
         cached = self._models.get(provider_id)
         now = time.time()
         if cached and not force and (now - cached.last_refresh) < self._cache_ttl:
@@ -429,6 +490,44 @@ class ProviderCatalog:
         fallback = self._fallback_models(provider_id)
         fallback.warning = warning
         return fallback
+
+    def _project(
+        self,
+        provider_id: str,
+        base: CachedModelList,
+        *,
+        model_class: Optional[str],
+        recommended: bool,
+    ) -> CachedModelList:
+        """Return a filtered view of *base* without mutating the cache.
+
+        When no filter is requested the canonical cached instance is
+        returned untouched (preserves existing identity-based test
+        semantics). When a filter is requested, a new
+        :class:`CachedModelList` is constructed so the catalog's
+        in-memory cache keeps the full raw list for subsequent
+        unfiltered reads.
+        """
+        if not model_class and not recommended:
+            return base
+        # Local imports keep this module's import graph flat at module
+        # load time — filter_models and recommended_for pull in the
+        # classifier + shortlist tables which aren't needed until a
+        # caller actually asks for the filtered view.
+        from .model_classes import filter_models
+        from .recommended import recommended_for
+
+        models = list(base.models)
+        if model_class:
+            models = filter_models(provider_id, models, model_class=model_class)
+        if recommended:
+            models = recommended_for(provider_id, models)
+        return CachedModelList(
+            models=models,
+            last_refresh=base.last_refresh,
+            source=base.source,
+            warning=base.warning,
+        )
 
     async def probe(self, provider_id: str) -> ProviderStatus:
         """Try to reach the provider; return a ready/not-ready snapshot.
@@ -487,6 +586,7 @@ class ProviderCatalog:
         # the catalog knows about instead of a stale literal that
         # drifts every quarter.
         default_model = desc.default_model or self.default_model_for(provider_id)
+        chat_ready, stub_reason = self._resolve_chat_readiness(desc)
         return ProviderStatus(
             provider_id=desc.provider_id,
             display_name=desc.display_name,
@@ -496,7 +596,38 @@ class ProviderCatalog:
             default_base_url=desc.default_base_url,
             default_model=default_model,
             last_refresh=cached.last_refresh if cached else 0.0,
+            chat_ready=chat_ready,
+            stub_reason=stub_reason,
         )
+
+    def _resolve_chat_readiness(
+        self, descriptor: ProviderDescriptor
+    ) -> tuple[bool, str]:
+        """Combine descriptor + adapter hints into a single readiness verdict.
+
+        The descriptor carries the authoritative, static verdict for
+        built-in providers (see the bedrock entry). Concrete adapters
+        may also expose ``chat_ready`` / ``stub_reason`` class-level
+        attributes so community-installed providers can opt out of the
+        "chat-ready" default without editing this module. Adapter
+        values take precedence when they explicitly say "not ready" —
+        a descriptor-level True never upgrades an adapter-level False
+        because the adapter is closer to the truth (it's what actually
+        runs ``chat()``).
+        """
+        chat_ready = descriptor.chat_ready
+        stub_reason = descriptor.stub_reason
+        adapter = self._adapters.get(descriptor.provider_id)
+        if adapter is not None:
+            adapter_ready = getattr(adapter, "chat_ready", True)
+            if adapter_ready is False:
+                chat_ready = False
+                adapter_reason = getattr(adapter, "stub_reason", "") or ""
+                if adapter_reason:
+                    stub_reason = adapter_reason
+        if chat_ready:
+            stub_reason = ""
+        return chat_ready, stub_reason
 
     async def refresh_all(self) -> dict[str, CachedModelList]:
         out: dict[str, CachedModelList] = {}
