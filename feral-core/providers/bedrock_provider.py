@@ -48,6 +48,19 @@ class BedrockProvider(BaseProvider):
     _pricing: dict[str, dict[str, float]] = {}
     _capabilities = {"tool_calling"}
 
+    # Truthfulness hint the ProviderCatalog reads into
+    # :class:`ProviderStatus` so the Settings / Setup UI can render a
+    # distinct "preview / not chat-ready" chip for this adapter. The
+    # discovery path (``refresh_models`` + pricing + capabilities)
+    # still works — only ``chat()`` raises until the AWS runtime is
+    # wired. Defaults elsewhere (``chat_ready = True``) are unchanged
+    # so every production-wired adapter keeps presenting as ready.
+    chat_ready: bool = False
+    stub_reason: str = (
+        "Chat path is at stub level — model discovery is live but "
+        "bedrock-runtime.converse is not wired yet."
+    )
+
     def __init__(
         self,
         *,

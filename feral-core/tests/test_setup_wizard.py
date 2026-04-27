@@ -212,7 +212,14 @@ def test_load_existing_creds_missing_file_leaves_empty(wizard_home, mock_console
 # ── OnboardWizard._save_all ───────────────────────────────────────────────────
 
 
-def test_save_all_writes_credentials_config_settings(wizard_home, mock_console):
+def test_save_all_writes_config_settings_and_encrypts_credentials(wizard_home, mock_console):
+    """A7: credentials go to the encrypted BlindVault, NEVER to a
+    plaintext ``credentials.json``. Settings and config stay plain
+    JSON (they are not secret material)."""
+    from security.vault import BlindVault, reset_vault
+
+    reset_vault()
+
     w = OnboardWizard(mock_console)
     w.creds = {"OPENAI_API_KEY": "sk-secret"}
     w.config = {
@@ -229,16 +236,73 @@ def test_save_all_writes_credentials_config_settings(wizard_home, mock_console):
     }
     w._save_all()
 
-    creds_path = wizard_home / "credentials.json"
-    assert creds_path.read_text()
-    assert json.loads(creds_path.read_text())["OPENAI_API_KEY"] == "sk-secret"
+    creds_json = wizard_home / "credentials.json"
+    creds_enc = wizard_home / "credentials.enc"
+    assert not creds_json.exists(), (
+        "A7 regression: setup wizard wrote a plaintext credentials.json. "
+        f"Contents: {creds_json.read_text() if creds_json.exists() else '<none>'}"
+    )
+    assert creds_enc.exists(), "Encrypted vault file credentials.enc is missing"
+
+    vault = BlindVault(vault_path=str(wizard_home / "credentials.json"))
+    assert vault.retrieve("OPENAI_API_KEY") == "sk-secret"
+
     assert (wizard_home / "config.json").exists()
     settings = json.loads((wizard_home / "settings.json").read_text())
     assert settings["llm"]["provider"] == "openai"
     assert settings["llm"]["model"] == "gpt-4.1"
     assert settings["meta"]["setup_complete"] is True
     assert settings["features"]["multi_agent"] is True
-    assert creds_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_save_all_never_writes_plaintext_credentials_json(wizard_home, mock_console):
+    """Explicit A7 regression: even if callers pass many keys (openai,
+    tool keys, HA token), none of them end up on disk as cleartext."""
+    from security.vault import reset_vault
+
+    reset_vault()
+
+    w = OnboardWizard(mock_console)
+    w.creds = {
+        "OPENAI_API_KEY": "sk-a",
+        "EXA_API_KEY": "exa-b",
+        "HA_TOKEN": "ha-c",
+    }
+    w.config = {"provider": "openai", "model": "gpt-4.1"}
+    w._save_all()
+
+    assert not (wizard_home / "credentials.json").exists()
+    assert (wizard_home / "credentials.enc").exists()
+
+
+def test_save_all_does_not_clobber_legacy_plaintext_until_vault_migrates(
+    wizard_home, mock_console
+):
+    """Returning users with a pre-W9 ``credentials.json`` must have
+    their keys preserved via the BlindVault auto-migration. After
+    ``_save_all`` the plaintext file is gone (moved to
+    ``credentials.json.bak.legacy``) and the encrypted vault is the
+    sole authoritative store."""
+    from security.vault import BlindVault, reset_vault
+
+    reset_vault()
+
+    legacy = wizard_home / "credentials.json"
+    legacy.write_text(json.dumps({"ANTHROPIC_API_KEY": "sk-ant-legacy"}))
+
+    w = OnboardWizard(mock_console)
+    w.creds = {"ANTHROPIC_API_KEY": "sk-ant-legacy", "OPENAI_API_KEY": "sk-new"}
+    w.config = {"provider": "openai", "model": "gpt-4.1"}
+    w._save_all()
+
+    assert not legacy.exists(), "Plaintext credentials.json should be removed after migration"
+    assert (wizard_home / "credentials.enc").exists()
+    backup = wizard_home / "credentials.json.bak.legacy"
+    assert backup.exists(), "Legacy backup is expected at credentials.json.bak.legacy"
+
+    vault = BlindVault(vault_path=str(wizard_home / "credentials.json"))
+    assert vault.retrieve("ANTHROPIC_API_KEY") == "sk-ant-legacy"
+    assert vault.retrieve("OPENAI_API_KEY") == "sk-new"
 
 
 # ── OnboardWizardPlain ────────────────────────────────────────────────────────

@@ -29,35 +29,104 @@ def _require_catalog():
 
 @router.get("/api/llm/status")
 async def llm_status():
-    """LLM availability status for the client UI."""
+    """LLM availability status for the client UI.
+
+    ``supported`` surfaces whether the currently-selected provider
+    has a runtime adapter in this build. The UI uses it to render a
+    clear "provider not supported" badge instead of showing a green
+    dot based on ``available`` alone — the old shape made an unknown
+    provider with a stale API key look healthy.
+    """
     if not state.orchestrator:
-        return {"available": False, "provider": "none", "reason": "Brain not initialized"}
+        return {
+            "available": False, "provider": "none",
+            "supported": False, "reason": "Brain not initialized",
+        }
     llm = state.orchestrator.llm
     if not llm:
-        return {"available": False, "provider": "none", "reason": "No LLM configured"}
-    return {
-        "available": getattr(llm, "available", False),
-        "provider": getattr(llm, "provider", "unknown"),
+        return {
+            "available": False, "provider": "none",
+            "supported": False, "reason": "No LLM configured",
+        }
+    from agents.llm_provider import is_supported_runtime_provider
+    provider = getattr(llm, "provider", "unknown")
+    supported = is_supported_runtime_provider(provider) or provider in ("local", "hybrid")
+    payload: dict[str, Any] = {
+        "available": bool(getattr(llm, "available", False)) and supported,
+        "provider": provider,
         "model": getattr(llm, "model", "unknown"),
+        "supported": supported,
     }
+    if not supported:
+        payload["reason"] = (
+            f"Provider {provider!r} has no runtime adapter in this build. "
+            "Select a supported provider via /api/llm/config."
+        )
+    return payload
 
 
 @router.post("/api/llm/switch")
 async def llm_switch(body: dict):
-    """Hot-swap the LLM provider at runtime."""
+    """Hot-swap the LLM provider at runtime.
+
+    Validates the request against the catalog (rejects unknown ids
+    with a 400) and against the runtime adapter registry (rejects
+    catalog-only providers that have no wire in this build unless
+    the caller supplies an explicit ``base_url`` override for a
+    custom OpenAI-compatible gateway). Previously, an unknown id
+    slipped through and ``switch_provider`` silently aliased it to
+    OpenAI.
+    """
     if not state.orchestrator or not state.orchestrator.llm:
         return {"error": "Brain not initialized"}
     provider = body.get("provider", "")
     model = body.get("model", "")
     api_key = body.get("api_key", "")
+    base_url = body.get("base_url", "")
     if not provider:
         return {"error": "provider is required"}
-    await state.orchestrator.llm.switch_provider(provider, model=model, api_key=api_key)
+
+    catalog = getattr(state, "provider_catalog", None)
+    resolved = provider
+    if catalog is not None:
+        alias = catalog.resolve_alias(provider)
+        if alias is not None:
+            resolved = alias
+        if catalog.get_descriptor(resolved) is None and not base_url:
+            # Unknown id with no custom base_url escape hatch -> 400.
+            # A caller-supplied base_url signals a custom
+            # OpenAI-compatible gateway, which is always welcome.
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown provider {provider!r}; resolve via /api/llm/providers",
+            )
+
+    from agents.llm_provider import is_supported_runtime_provider
+    if (
+        not is_supported_runtime_provider(resolved)
+        and resolved not in ("local", "hybrid")
+        and not base_url
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"provider {resolved!r} has no runtime adapter; supply an "
+                "explicit base_url for a custom OpenAI-compatible gateway or "
+                "pick a supported provider via /api/llm/providers"
+            ),
+        )
+
+    await state.orchestrator.llm.switch_provider(
+        resolved, model=model, api_key=api_key, base_url=base_url,
+    )
+    llm = state.orchestrator.llm
     return {
         "success": True,
-        "provider": state.orchestrator.llm.provider,
-        "model": state.orchestrator.llm.model,
-        "available": state.orchestrator.llm.available,
+        "provider": llm.provider,
+        "model": llm.model,
+        "available": bool(llm.available),
+        "supported": is_supported_runtime_provider(llm.provider)
+                     or llm.provider in ("local", "hybrid"),
     }
 
 
@@ -139,7 +208,13 @@ async def get_llm_provider(provider_id: str):
 
 
 @router.get("/api/llm/providers/{provider_id}/models")
-async def list_llm_provider_models(provider_id: str, live: bool = True, force: bool = False):
+async def list_llm_provider_models(
+    provider_id: str,
+    live: bool = True,
+    force: bool = False,
+    model_class: Optional[str] = None,
+    recommended: bool = False,
+):
     """Return the model list for a provider.
 
     ``live=true`` (default) refreshes from the upstream API when the
@@ -148,11 +223,25 @@ async def list_llm_provider_models(provider_id: str, live: bool = True, force: b
     ``source: "live"|"cache"|"fallback"`` and an optional ``warning``
     string set when the live attempt failed (e.g. wrong API key) so the
     v2 picker can render a chip explaining the stale list.
+
+    ``model_class`` (e.g. ``"chat"``) and ``recommended=true`` are
+    projection-only filters applied to the catalog's raw cached list
+    so the v2 picker can default to the chat-ready curated subset
+    without the catalog forgetting the full inventory — an unfiltered
+    request immediately after still sees every model the provider
+    advertised. When both filters are absent, behaviour is unchanged
+    so legacy callers keep receiving the full list.
     """
     catalog = _require_catalog()
     if catalog.get_descriptor(provider_id) is None:
         raise HTTPException(status_code=404, detail=f"unknown provider_id {provider_id!r}")
-    cached = await catalog.list_models(provider_id, live=live, force=force)
+    cached = await catalog.list_models(
+        provider_id,
+        live=live,
+        force=force,
+        model_class=model_class,
+        recommended=recommended,
+    )
     return {
         "provider_id": provider_id,
         "models": cached.models,
@@ -259,7 +348,24 @@ async def configure_llm_provider(provider_id: str, req: ConfigureRequest):
     if req.api_key:
         persisted = _persist_key(env_var, req.api_key)
 
-    if req.base_url and state.config is not None:
+    # Provider-scoped configure() must not overwrite the GLOBAL
+    # ``llm.base_url`` unless the provider being configured is the one
+    # currently active in settings. Otherwise adding a key for a
+    # second provider (e.g. anthropic while openai is active) would
+    # quietly repoint the active adapter at the wrong endpoint. The
+    # per-provider override still lives on the adapter itself (via
+    # ``catalog.configure`` above), and is promoted to ``llm.base_url``
+    # only when the user explicitly switches via ``/api/llm/config``.
+    active_provider = ""
+    if state.config is not None:
+        try:
+            active_provider = state.config.get("llm", "provider", "") or ""
+        except Exception:
+            active_provider = ""
+    resolved_active = catalog.resolve_alias(active_provider) or active_provider
+    is_active_provider = resolved_active == provider_id
+
+    if req.base_url and state.config is not None and is_active_provider:
         try:
             state.config.update_settings("llm", "base_url", req.base_url)
         except Exception as exc:
@@ -269,6 +375,7 @@ async def configure_llm_provider(provider_id: str, req: ConfigureRequest):
         "success": True,
         "status": catalog.status_for(provider_id).to_dict(),
         "persisted": persisted,
+        "active_provider": is_active_provider,
     }
 
 
@@ -344,6 +451,27 @@ async def set_llm_config(req: LLMConfigRequest):
         )
     if state.config is None:
         raise HTTPException(status_code=503, detail="ConfigLoader not initialised")
+
+    # Gate catalog-only descriptors (e.g. ``bedrock``, ``together``,
+    # ``fireworks``) that ship without a runtime adapter in this build.
+    # We allow the save to proceed only when the caller supplies an
+    # explicit ``base_url`` override — that's the escape hatch for
+    # custom OpenAI-compatible gateways. Otherwise we 400 so the UI
+    # never lands on a provider the runtime can't actually call.
+    from agents.llm_provider import is_supported_runtime_provider
+    if (
+        not is_supported_runtime_provider(resolved)
+        and resolved not in ("local", "hybrid")
+        and not req.base_url
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"provider {resolved!r} is listed in the catalog but has no "
+                "runtime adapter. Supply an explicit base_url for a custom "
+                "OpenAI-compatible gateway, or pick a supported provider."
+            ),
+        )
 
     # Auto-prepend the previous primary as a fallback so failover works
     # by default. User can still explicitly pass `fallback_providers`

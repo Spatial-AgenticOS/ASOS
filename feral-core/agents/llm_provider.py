@@ -375,6 +375,35 @@ _CATALOG_PROVIDER_MAP: dict[str, str] = {
 }
 
 
+# Canonical set of provider ids the runtime can actually execute chat
+# calls against. This is the single source of truth consulted by
+# ``_get_provider_config``, ``switch_provider``, ``__init__``,
+# ``health_snapshot`` and ``is_available`` so unknown provider ids
+# (catalog-registered descriptors without a runtime binding, user
+# typos, deprecated aliases) can never silently masquerade as OpenAI
+# at request time. Previously every one of those call sites had its
+# own implicit ``... or OPENAI defaults`` branch — removing that
+# fallback is the whole point of this module-level constant.
+SUPPORTED_RUNTIME_PROVIDERS: frozenset[str] = frozenset({
+    *_PROVIDER_REGISTRY.keys(),  # cloud + lmstudio from the registry
+    "ollama",                    # local, base url derived dynamically
+    "local",                     # on-device inference engine
+    "hybrid",                    # local + cloud splitter
+})
+
+
+def is_supported_runtime_provider(provider_name: str) -> bool:
+    """True when *provider_name* has a runtime binding in this module.
+
+    The check is intentionally narrower than ``ProviderCatalog`` —
+    the catalog exposes every descriptor the UI can render (e.g.
+    ``bedrock``, ``together``, ``fireworks``), but those providers
+    have no OpenAI-compatible runtime adapter here yet. Returning
+    False keeps the runtime from silently dialling OpenAI for them.
+    """
+    return (provider_name or "") in SUPPORTED_RUNTIME_PROVIDERS
+
+
 def _default_model_for(provider_name: str) -> str:
     """Return the catalog's current default model id for *provider_name*.
 
@@ -481,9 +510,46 @@ class LLMProvider:
             self.base_url = self.base_url or "http://localhost:1234/v1"
             self.api_key = "lm-studio"
             self.model = self.model or _default_model_for("lmstudio")
-        else:
+        elif self.provider == "openai":
+            # Default path. Previously this case rode the else branch
+            # that also served as the silent fallback for unknown
+            # provider ids — that's the conflation W1 A3 is untangling.
+            # Splitting ``openai`` into its own branch lets the else
+            # below report unknown provider ids truthfully.
             self.base_url = self.base_url or "https://api.openai.com/v1"
+            self.api_key = os.getenv("OPENAI_API_KEY", self.api_key)
             self.model = self.model or _default_model_for("openai")
+        else:
+            # Unknown provider id. Previously this branch silently
+            # defaulted to ``https://api.openai.com/v1`` with the
+            # inherited ``OPENAI_API_KEY`` — which meant a typo'd or
+            # not-yet-supported provider id (e.g. catalog-only entries
+            # like ``bedrock`` / ``together`` / ``fireworks``) would
+            # masquerade as OpenAI at request time and leak the user's
+            # OpenAI key to the wrong endpoint name in logs / metrics.
+            # The new contract: keep the unknown provider name visible
+            # to the caller, clear the inherited OpenAI key, and mark
+            # the runtime unavailable unless the operator explicitly
+            # set FERAL_LLM_BASE_URL for a custom OpenAI-compatible
+            # gateway. Local-fallback detection below still runs.
+            logger.warning(
+                "Unknown LLM provider %r — no runtime adapter. "
+                "Supported providers: %s. Set FERAL_LLM_PROVIDER to a "
+                "supported id or supply FERAL_LLM_BASE_URL for a "
+                "custom OpenAI-compatible endpoint.",
+                self.provider,
+                sorted(SUPPORTED_RUNTIME_PROVIDERS),
+            )
+            if self.base_url:
+                # Operator explicitly pointed us at a custom gateway.
+                # Trust it, keep the explicit api_key (if any), and
+                # resolve the default model best-effort.
+                self.model = self.model or _default_model_for(self.provider)
+            else:
+                self.base_url = ""
+                self.api_key = ""
+                self.model = self.model or _default_model_for(self.provider)
+                self.available = False
 
         # Check if API key is available — if not, try local fallbacks
         if not self.api_key and self.provider not in ("ollama", "lmstudio"):
@@ -614,6 +680,18 @@ class LLMProvider:
             if not ok:
                 logger.warning(reason)
                 return {"error": reason, "choices": []}
+
+        # Guard against unsupported provider before any wire work.
+        # Without this the body is assembled and POSTed against
+        # whatever ``base_url`` happens to be set — which for the
+        # old unknown-provider path was ``https://api.openai.com/v1``.
+        if not is_supported_runtime_provider(self.provider) and self.provider not in ("local", "hybrid"):
+            reason = (
+                f"Selected LLM provider {self.provider!r} is not supported by this "
+                f"runtime. Supported: {sorted(SUPPORTED_RUNTIME_PROVIDERS)}."
+            )
+            logger.warning(reason)
+            return {"error": reason, "choices": []}
 
         # Local inference path
         if self._local_engine and self.provider in ("local", "hybrid"):
@@ -882,6 +960,16 @@ class LLMProvider:
                 yield {"type": "error", "content": reason}
                 return
 
+        if not is_supported_runtime_provider(self.provider) and self.provider not in ("local", "hybrid"):
+            yield {
+                "type": "error",
+                "content": (
+                    f"Selected LLM provider {self.provider!r} is not supported by this "
+                    f"runtime. Supported: {sorted(SUPPORTED_RUNTIME_PROVIDERS)}."
+                ),
+            }
+            return
+
         # Local streaming path
         if self._local_engine and self.provider in ("local", "hybrid"):
             use_local = self.provider == "local" or not self._hybrid_cloud_provider
@@ -1123,18 +1211,23 @@ class LLMProvider:
         """Hot-swap the LLM provider at runtime.
 
         ``base_url`` is an optional override; when empty, the adapter
-        looks up the default base URL from ``PROVIDER_BASES`` below.
-        The override path is what lets the v2 Settings page's
-        Save-&-switch endpoint point a user at a self-hosted inference
-        URL (lmstudio, ollama, a custom OpenAI-compatible gateway)
-        without shipping that literal in the adapter's defaults.
+        looks up the default base URL from :data:`_PROVIDER_REGISTRY`
+        for cloud providers or the local helper for
+        ``ollama`` / ``lmstudio``. The override path is what lets the
+        v2 Settings page's Save-&-switch endpoint point a user at a
+        self-hosted inference URL (lmstudio, ollama, a custom
+        OpenAI-compatible gateway) without shipping that literal in
+        the adapter's defaults. Unknown provider ids without an
+        explicit ``base_url`` no longer silently alias to OpenAI —
+        W1 A3 removed that fallback because it was a recurring
+        footgun (see the ``unknown`` branch below).
 
-        NOTE: this kwarg was added after W1 in response to the shipped
-        v2026.5.0 crash (``api/routes/config.py::update_config`` was
-        already passing ``base_url=`` but ``switch_provider`` did not
-        accept it -> TypeError -> every Save-&-switch 500'd). The
-        regression test lives in
-        ``tests/test_switch_provider_base_url.py``.
+        NOTE: the ``base_url`` kwarg itself was added after W1 in
+        response to the shipped v2026.5.0 crash
+        (``api/routes/config.py::update_config`` was already passing
+        ``base_url=`` but ``switch_provider`` did not accept it ->
+        TypeError -> every Save-&-switch 500'd). The regression test
+        lives in ``tests/test_switch_provider_base_url.py``.
         """
         client = getattr(self, "client", None)
         if client is not None:
@@ -1143,18 +1236,6 @@ class LLMProvider:
         self.provider = provider
         if model:
             self.model = model
-
-        # Per-provider base URL + env-var lookup. Default model is
-        # resolved through the catalog so a switch never lands the
-        # user on a deprecated frontier ID.
-        PROVIDER_BASES = {
-            "ollama": (ollama_openai_base_url(), "OLLAMA_DUMMY"),
-            "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
-            "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY"),
-            "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY"),
-            "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "_GEMINI_HELPER"),
-            "lmstudio": ("http://localhost:1234/v1", ""),
-        }
 
         # Honor the explicit override before the lookup. An empty
         # string is treated as "no override" so legacy callers that
@@ -1183,23 +1264,71 @@ class LLMProvider:
                 logger.warning("Local engine unavailable")
                 self.available = False
                 return
-        elif provider in PROVIDER_BASES:
-            base, env_key = PROVIDER_BASES[provider]
+        elif provider in _PROVIDER_REGISTRY:
+            # Runtime-registered provider. Resolve the default base URL
+            # + credential env var from the single registry source so
+            # openrouter / deepseek / kimi / qwen stay reachable
+            # (before W1 A3 these were missing from the local
+            # PROVIDER_BASES dict and silently fell through to OpenAI).
+            base, env_key = _PROVIDER_REGISTRY[provider]
             self.base_url = _base_url_override or base
-            if env_key == "_GEMINI_HELPER":
+            if provider == "gemini":
                 self.api_key = api_key or _gemini_api_key() or ""
-            else:
+            elif env_key:
                 self.api_key = api_key or os.getenv(env_key, "")
+            else:
+                self.api_key = api_key
             if not model:
                 self.model = _default_model_for(provider)
         else:
-            self.base_url = _base_url_override or os.getenv("FERAL_LLM_BASE_URL", "https://api.openai.com/v1")
-            self.api_key = api_key
-            if not model:
-                self.model = _default_model_for(provider)
+            # Unknown / unsupported provider id. Previously we
+            # silently defaulted to ``https://api.openai.com/v1`` and
+            # reused whatever ``api_key`` the caller passed — which
+            # meant a catalog-only descriptor (``bedrock``,
+            # ``together``, ``fireworks``) or a typo would send a
+            # valid OpenAI-shaped request against OpenAI's endpoint
+            # while the UI believed it was on the selected provider.
+            # The new contract:
+            #   * if the caller supplied ``base_url``, trust it as an
+            #     operator-controlled custom OpenAI-compatible gateway
+            #     (keeps Save-&-switch working for on-prem setups);
+            #   * otherwise refuse the swap — mark the adapter
+            #     unavailable and keep the unknown id visible so the
+            #     REST / UI layer can report it truthfully.
+            logger.warning(
+                "switch_provider(%r): provider is not in the runtime "
+                "registry. Supported: %s. %s",
+                provider,
+                sorted(SUPPORTED_RUNTIME_PROVIDERS),
+                "Honouring explicit base_url override."
+                if _base_url_override
+                else "No base_url override supplied — leaving adapter "
+                     "unavailable.",
+            )
+            if _base_url_override:
+                self.base_url = _base_url_override
+                self.api_key = api_key
+                if not model:
+                    self.model = _default_model_for(provider)
+            else:
+                self.base_url = ""
+                self.api_key = ""
+                if not model:
+                    self.model = _default_model_for(provider)
+                self.client = self._build_client()
+                self.available = False
+                logger.info(
+                    "Switched LLM to %s/%s (available=False, reason=unsupported_provider)",
+                    provider, self.model,
+                )
+                return
 
         self.client = self._build_client()
-        self.available = bool(self.api_key)
+        # Availability requires BOTH a working base_url and a usable
+        # credential. Previously ``bool(self.api_key)`` alone said
+        # True even when base_url was empty — masking the failure
+        # until the next chat call 404'd.
+        self.available = bool(self.api_key) and bool(self.base_url)
         logger.info(f"Switched LLM to {provider}/{self.model} (available={self.available})")
 
     async def reconfigure(
@@ -1325,12 +1454,22 @@ class LLMProvider:
 
         The model is always resolved through the shared catalog so the
         failover candidate list never contains a stale literal.
+
+        For provider ids that have no runtime binding in this module,
+        returns a shape-compatible dict with ``supported=False`` and
+        empty URL / key / model. Callers (``_build_candidate_list``,
+        ``health_snapshot``, ``is_available``, ``_call_provider``)
+        must treat these as unreachable instead of silently
+        substituting OpenAI defaults — that substitution was the
+        exact footgun this method used to hide behind its two-arg
+        ``dict.get`` fallback.
         """
         if provider_name == "ollama":
             return {
                 "base_url": ollama_openai_base_url(),
                 "api_key": "ollama",
                 "model": _default_model_for("ollama") or self._detect_ollama() or "",
+                "supported": True,
             }
         if provider_name == "lmstudio":
             detected = self._detect_lmstudio()
@@ -1338,26 +1477,46 @@ class LLMProvider:
                 "base_url": "http://localhost:1234/v1",
                 "api_key": "lm-studio",
                 "model": detected or _default_model_for("lmstudio"),
+                "supported": True,
             }
-        reg = _PROVIDER_REGISTRY.get(
-            provider_name,
-            ("https://api.openai.com/v1", "OPENAI_API_KEY"),
-        )
+        reg = _PROVIDER_REGISTRY.get(provider_name)
+        if reg is None:
+            # Unknown provider id — return an explicitly unsupported
+            # config so downstream code can report it honestly
+            # instead of silently hitting api.openai.com.
+            return {
+                "base_url": "",
+                "api_key": "",
+                "model": _default_model_for(provider_name),
+                "supported": False,
+            }
         base_url, env_key = reg
         if provider_name == "gemini":
             api_key = _gemini_api_key() or ""
         else:
-            api_key = os.getenv(env_key, "")
+            api_key = os.getenv(env_key, "") if env_key else ""
         return {
             "base_url": base_url,
             "api_key": api_key,
             "model": _default_model_for(provider_name),
+            "supported": True,
         }
 
     def _build_candidate_list(self) -> list[tuple[str, dict]]:
-        """Ordered list of (provider_name, config) — primary first, then fallbacks."""
+        """Ordered list of (provider_name, config) — primary first, then fallbacks.
+
+        Every config dict carries a ``supported`` bool so the failover
+        loop, health snapshot and availability check can tell runtime
+        candidates apart from catalog-only descriptors whose runtime
+        adapter hasn't shipped yet.
+        """
         candidates: list[tuple[str, dict]] = [
-            (self.provider, {"base_url": self.base_url, "api_key": self.api_key, "model": self.model}),
+            (self.provider, {
+                "base_url": self.base_url,
+                "api_key": self.api_key,
+                "model": self.model,
+                "supported": is_supported_runtime_provider(self.provider),
+            }),
         ]
         for fb in self._config.get("fallback_providers", []):
             if fb != self.provider:
@@ -1409,6 +1568,18 @@ class LLMProvider:
         **kwargs,
     ) -> dict:
         """Make a chat request to a specific provider. Raises on error."""
+        # Refuse up front for provider ids that have no runtime
+        # adapter. Previously the fallback path built an httpx client
+        # against whatever default ``_get_provider_config`` handed
+        # back — which was OpenAI for any unknown id. That silently
+        # turned a user-selected ``bedrock`` fallback into an OpenAI
+        # call. Raise a clear error so the failover loop records a
+        # cooldown against the right provider name.
+        if config.get("supported") is False or not is_supported_runtime_provider(provider_name):
+            raise RuntimeError(
+                f"Provider {provider_name!r} has no runtime adapter — "
+                f"supported: {sorted(SUPPORTED_RUNTIME_PROVIDERS)}"
+            )
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 1024)
 
@@ -1519,6 +1690,20 @@ class LLMProvider:
         last_error: Optional[Exception] = None
 
         for provider_name, config in candidates:
+            if not config.get("supported", True):
+                # Skip catalog-only providers with no runtime adapter.
+                # No cooldown — the problem isn't transient, it's that
+                # this module has no wire for them. Logged once per
+                # attempt so the ops log shows *why* the candidate was
+                # passed over rather than silently dropping it.
+                logger.info(
+                    "Skipping unsupported provider %r in failover chain",
+                    provider_name,
+                )
+                last_error = last_error or RuntimeError(
+                    f"Provider {provider_name!r} has no runtime adapter"
+                )
+                continue
             if not self._cooldown.should_probe(provider_name):
                 continue
             increment("feral.llm.calls_total", attributes={"provider": provider_name, "model": config.get("model", self.model)})
@@ -1549,55 +1734,82 @@ class LLMProvider:
         and why, without having to dig through server logs.
         """
         now = time.time()
+        primary_supported = is_supported_runtime_provider(self.provider)
         primary = {
             "provider": self.provider,
             "model": self.model,
             "has_key": bool(self.api_key) and self.api_key not in ("none", ""),
-            "available": bool(self.available),
+            "available": bool(self.available) and primary_supported,
             "base_url": self.base_url,
+            "supported": primary_supported,
         }
         candidates = []
         try:
             candidate_list = self._build_candidate_list()
         except Exception:
             candidate_list = [(self.provider, {
-                "base_url": self.base_url, "api_key": self.api_key, "model": self.model,
+                "base_url": self.base_url,
+                "api_key": self.api_key,
+                "model": self.model,
+                "supported": primary_supported,
             })]
         for name, cfg in candidate_list:
             until = self._cooldown._cooldowns.get(name, 0.0)
             in_cooldown = until > now
+            supported = bool(cfg.get("supported", is_supported_runtime_provider(name)))
+            has_key = bool(cfg.get("api_key")) and cfg.get("api_key") not in ("none", "")
             candidates.append({
                 "provider": name,
                 "model": cfg.get("model") or "",
                 "base_url": cfg.get("base_url") or "",
-                "has_key": bool(cfg.get("api_key")) and cfg.get("api_key") not in ("none", ""),
+                "has_key": has_key,
                 "in_cooldown": in_cooldown,
                 "cooldown_until": until if in_cooldown else None,
                 "cooldown_remaining": max(0.0, until - now) if in_cooldown else 0.0,
+                "supported": supported,
             })
         fallbacks = list(self._config.get("fallback_providers", [])) if isinstance(self._config, dict) else []
         return {
             "active": primary,
             "candidates": candidates,
             "fallback_providers": fallbacks,
-            "total_available": sum(1 for c in candidates if c["has_key"] and not c["in_cooldown"]),
+            # Total ready-to-serve = supported AND has key AND not in cooldown.
+            # Unsupported candidates were counted as "available" before W1 A3
+            # whenever a lookalike env var happened to be set, inflating the
+            # fallbacks card with providers the runtime could never actually
+            # call.
+            "total_available": sum(
+                1 for c in candidates
+                if c["has_key"] and not c["in_cooldown"] and c["supported"]
+            ),
         }
 
     def is_available(self) -> bool:
-        """True if at least one provider has a valid key and is not in cooldown."""
+        """True if at least one provider has a valid key and is not in cooldown.
+
+        A primary or fallback that has no runtime adapter
+        (``is_supported_runtime_provider`` False) never counts — even
+        if the corresponding credential env var happens to be set.
+        """
         if not self.available:
             return False
         if self._local_engine and self.provider in ("local", "hybrid"):
             return True
         if self.provider in ("ollama", "lmstudio"):
             return True
-        if self.api_key and self.api_key not in ("none", ""):
-            if self._cooldown.is_available(self.provider):
-                return True
+        if (
+            is_supported_runtime_provider(self.provider)
+            and self.api_key and self.api_key not in ("none", "")
+            and self.base_url
+            and self._cooldown.is_available(self.provider)
+        ):
+            return True
         for fb in self._config.get("fallback_providers", []):
             if fb == self.provider:
                 continue
             cfg = self._get_provider_config(fb)
+            if not cfg.get("supported"):
+                continue
             if cfg.get("api_key") and self._cooldown.is_available(fb):
                 return True
         return False

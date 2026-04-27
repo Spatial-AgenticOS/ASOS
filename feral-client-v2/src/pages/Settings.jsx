@@ -394,7 +394,12 @@ function ProviderCard({ provider, isCurrent, isEditing, onEdit, onCancel, onSave
       </div>
 
       {isEditing ? (
-        <ProviderForm provider={provider} onCancel={onCancel} onSaved={onSaved} />
+        <ProviderForm
+          provider={provider}
+          isCurrent={isCurrent}
+          onCancel={onCancel}
+          onSaved={onSaved}
+        />
       ) : (
         <div className="v2-provider-actions">
           <button type="button" className="v2-btn v2-btn--primary" onClick={onEdit}>
@@ -406,7 +411,7 @@ function ProviderCard({ provider, isCurrent, isEditing, onEdit, onCancel, onSave
   );
 }
 
-function ProviderForm({ provider, onCancel, onSaved }) {
+function ProviderForm({ provider, isCurrent, onCancel, onSaved }) {
   const [models, setModels] = useState([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelError, setModelError] = useState(null);
@@ -437,7 +442,14 @@ function ProviderForm({ provider, onCancel, onSaved }) {
     setLoadingModels(true);
     setModelError(null);
     try {
-      const qs = force ? 'live=true&force=true' : 'live=true';
+      // Default to the conductor-curated chat-ready shortlist
+      // (recommended=true, model_class=chat) so the Settings picker
+      // surfaces the handful of 2026-era chat models users actually
+      // care about instead of the full /v1/models dump. Filter is
+      // projection-only on the catalog side — the raw cache still
+      // has every id the provider advertised.
+      const base = force ? 'live=true&force=true' : 'live=true';
+      const qs = `${base}&recommended=true&model_class=chat`;
       const d = await apiJson(`/api/llm/providers/${encodeURIComponent(provider.provider_id)}/models?${qs}`);
       const list = d.models || d || [];
       setModels(list);
@@ -484,6 +496,53 @@ function ProviderForm({ provider, onCancel, onSaved }) {
     return () => { cancelled = true; };
   }, [loadModels]);
 
+  // Save credentials for this provider WITHOUT switching the active
+  // provider/model. Hits the provider-scoped
+  // ``/api/llm/providers/{id}/configure`` route which re-binds the
+  // adapter + persists the key into vault/env without touching
+  // ``llm.provider`` / ``llm.model`` in settings. Used when the user
+  // is adding a key for a provider that is not currently active, so
+  // a "second provider" key paste doesn't churn the active session.
+  const saveCredentialsOnly = async () => {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const r = await apiFetch(`/api/llm/providers/${encodeURIComponent(provider.provider_id)}/configure`, {
+        method: 'POST',
+        body: JSON.stringify({
+          api_key: apiKey || undefined,
+          base_url: baseUrl || undefined,
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok || body?.success === false) {
+        setErr(body?.detail || body?.error || `${r.status}`);
+        return;
+      }
+      const p = body.persisted || {};
+      const warn = p.warnings || [];
+      if (warn.length) {
+        setMsg(`Saved — warning: ${warn.join('; ')}`);
+      } else {
+        setMsg('Saved ✓');
+      }
+      if (apiKey) {
+        try { await loadModels({ force: true }); } catch (_) { /* swallow */ }
+      }
+      setTimeout(() => onSaved(), 600);
+    } catch (e) {
+      setErr(e?.message || 'failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Save credentials AND make this provider/model the active one. Hits
+  // ``/api/llm/config`` which persists llm.provider / llm.model /
+  // llm.base_url, stores the key, and hot-swaps the running LLM.
+  // Explicit user intent — used for the "Save & switch" button and as
+  // the single action on the current provider's reconfigure form.
   const save = async () => {
     setBusy(true);
     setErr(null);
@@ -655,9 +714,40 @@ function ProviderForm({ provider, onCancel, onSaved }) {
 
       <div className="v2-provider-actions" style={{ justifyContent: 'flex-end' }}>
         <button type="button" className="v2-btn" onClick={onCancel} disabled={busy}>Cancel</button>
-        <button type="button" className="v2-btn v2-btn--primary" onClick={save} disabled={busy || !selectedModel}>
-          {busy ? 'Saving…' : 'Save & switch'}
-        </button>
+        {isCurrent ? (
+          <button
+            type="button"
+            className="v2-btn v2-btn--primary"
+            onClick={save}
+            disabled={busy || !selectedModel}
+            data-testid={`provider-save-apply-${provider.provider_id}`}
+          >
+            {busy ? 'Saving…' : 'Save & apply'}
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="v2-btn v2-btn--primary"
+              onClick={saveCredentialsOnly}
+              disabled={busy}
+              data-testid={`provider-save-key-${provider.provider_id}`}
+              title="Persist key and base URL without changing the active provider."
+            >
+              {busy ? 'Saving…' : 'Save key'}
+            </button>
+            <button
+              type="button"
+              className="v2-btn"
+              onClick={save}
+              disabled={busy || !selectedModel}
+              data-testid={`provider-save-switch-${provider.provider_id}`}
+              title="Persist credentials AND make this provider/model active now."
+            >
+              {busy ? 'Saving…' : 'Save & switch'}
+            </button>
+          </>
+        )}
       </div>
       {msg && <div className="v2-chip v2-chip--live">{msg}</div>}
       {err && <div className="v2-chip v2-chip--error">{err}</div>}

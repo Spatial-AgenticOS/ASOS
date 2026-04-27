@@ -117,7 +117,15 @@ export default function Setup() {
     (async () => {
       setLlmError(null);
       try {
-        const r = await apiJson(`/api/llm/providers/${encodeURIComponent(pickedProvider)}/models?live=true`);
+        // Default to the conductor-curated chat-ready shortlist so the
+        // wizard surfaces "the 6-10 models that actually earn their $$"
+        // instead of the raw /v1/models dump (which includes embeddings,
+        // whisper-*, tts-*, image models, etc). Backend filter is
+        // projection-only — the catalog's raw list is untouched.
+        const r = await apiJson(
+          `/api/llm/providers/${encodeURIComponent(pickedProvider)}/models`
+          + `?live=true&recommended=true&model_class=chat`,
+        );
         setModels(r?.models || []);
         setModelSource(r?.source || '');
         if (!pickedModel && r?.models?.length) {
