@@ -18,13 +18,13 @@ on:
       feral_version:
         description: "feral-ai PyPI version (calver, no v prefix)"
         required: false
-        default: "2026.5.1"
+        default: "2026.5.2"
 
 permissions:
   contents: read
 
 env:
-  FERAL_VERSION: "2026.5.1"
+  FERAL_VERSION: "2026.5.2"
 
 concurrency:
   group: ha-add-on-build-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
@@ -48,7 +48,35 @@ jobs:
             echo "FERAL_VERSION=${{ github.event.inputs.feral_version }}" >> "$GITHUB_ENV"
           fi
 
+      - name: Check version availability on PyPI
+        id: pypi
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from urllib.request import urlopen
+
+          version = os.environ["FERAL_VERSION"]
+          available = False
+          try:
+              with urlopen("https://pypi.org/pypi/feral-ai/json", timeout=10) as resp:
+                  data = json.load(resp)
+              available = version in (data.get("releases") or {})
+          except Exception:
+              available = False
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"available={'true' if available else 'false'}\n")
+          print(f"feral-ai=={version} available_on_pypi={available}")
+          PY
+
+      - name: Skip note for unpublished version
+        if: steps.pypi.outputs.available != 'true'
+        run: |
+          echo "::notice::Skipping HA add-on image build because feral-ai==${FERAL_VERSION} is not on PyPI yet."
+
       - name: Build addon image
+        if: steps.pypi.outputs.available == 'true'
         run: |
           cd feral-ha-addon
           docker build \
@@ -57,6 +85,7 @@ jobs:
             -t feral-addon:test .
 
       - name: Smoke test (import installed package)
+        if: steps.pypi.outputs.available == 'true'
         run: |
           docker run --rm feral-addon:test python3 -c \
             "import importlib.metadata as m; import version; print(m.version('feral-ai'), version.VERSION, 'ok')"
