@@ -146,6 +146,12 @@ def _apply_anthropic_reasoning_fork(model: str, body: dict) -> dict:
             body.pop("temperature", None)
     elif probe.supports_adaptive_thinking(model):
         body.pop("thinking", None)
+        # Live smoke on 2026-04-26 confirmed: claude-opus-4-7 returns
+        # 400 ``temperature is deprecated for this model`` when any
+        # temperature value is sent. The adaptive-thinking contract
+        # says the model chooses its own behaviour; temperature is no
+        # longer a caller-controlled knob for this class. Drop it.
+        body.pop("temperature", None)
     return body
 
 

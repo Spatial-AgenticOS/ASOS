@@ -57,22 +57,6 @@ FORBIDDEN_TERMS: tuple[str, ...] = (
 
 EXEMPT_FILES: frozenset[str] = frozenset(
     {
-        # Comparative-architecture analysis docs — the internal source
-        # of truth for everything we learned from reference projects.
-        "docs/OPENCLAW_LESSONS.md",
-        "docs/OPENCLAW_LESSONS_PROMPT.md",
-        # Conductor prompt library + follow-up log — internal process
-        # documents, not shipped user-facing artifacts.
-        "docs/AGENT_PROMPTS.md",
-        "docs/AGENT_PROMPTS_FOLLOWUPS.md",
-        "docs/WAVE5_HARDENING_PROMPT.md",
-        # Internal critique / state / strategy docs. These read like
-        # the analysis-docs bucket above but under different filenames;
-        # each one names reference projects by design as part of the
-        # comparative story. None is published to Mintlify.
-        "docs/critique.md",
-        "docs/analysis.md",
-        "STATE_OF_FERAL.md",
         # CHANGELOG historical entries on/before 2026-04-25 keep their
         # original prose for honest history. The whole file is exempt
         # because the linter has no per-heading awareness; future-dated
@@ -88,6 +72,16 @@ EXEMPT_FILES: frozenset[str] = frozenset(
         # well-formed PRs, but belt-and-braces for the linter.
         "_PROPOSAL.md",
     }
+)
+
+
+# Directories that are private-by-definition. Everything inside is
+# exempt from the shipped-artifacts rule because the whole tree is
+# gitignored and never published.
+EXEMPT_DIR_PREFIXES: tuple[str, ...] = (
+    # Conductor analysis docs, handoff notes, scratch — .internal/ is
+    # in .gitignore and never ships to GitHub.
+    ".internal/",
 )
 
 
@@ -176,6 +170,9 @@ def _is_exempt_dir(dirname: str) -> bool:
 def _is_exempt_file(rel: str) -> bool:
     if rel in EXEMPT_FILES:
         return True
+    for prefix in EXEMPT_DIR_PREFIXES:
+        if rel.startswith(prefix):
+            return True
     suffix = Path(rel).suffix.lower()
     if suffix in BINARY_SUFFIXES:
         return True

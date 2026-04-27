@@ -204,8 +204,11 @@ class AnthropicProvider(BaseProvider):
                 temperature = None
         elif want_reasoning and self.supports_adaptive_thinking(model):
             # Opus 4.7 chooses its own thinking depth; pass no thinking
-            # block. Temperature restrictions don't apply here.
-            pass
+            # block. Live smoke on 2026-04-26 also confirmed that
+            # adaptive-thinking models (currently Opus 4.7) return 400
+            # "temperature is deprecated for this model" — drop
+            # caller-supplied temperature here too.
+            temperature = None
 
         if temperature is not None:
             payload["temperature"] = temperature

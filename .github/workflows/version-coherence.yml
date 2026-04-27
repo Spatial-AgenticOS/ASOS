@@ -39,6 +39,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: version-coherence-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # ---------------------------------------------------------------------
   # Job 1: version-drift — the actual release-block gate.
