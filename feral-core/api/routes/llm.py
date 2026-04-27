@@ -359,7 +359,13 @@ async def configure_llm_provider(provider_id: str, req: ConfigureRequest):
     active_provider = ""
     if state.config is not None:
         try:
-            active_provider = state.config.get("llm", "provider", "") or ""
+            raw_active = state.config.get("llm", "provider", "") or ""
+            # Some route-level tests patch ``state.config`` with a bare
+            # MagicMock; ``config.get(...)`` then returns a mock object,
+            # not a string. Passing that into ``resolve_alias`` can raise
+            # TypeError in its substring path. Non-string provider values
+            # are treated as unset for this guard.
+            active_provider = raw_active if isinstance(raw_active, str) else ""
         except Exception:
             active_provider = ""
     resolved_active = catalog.resolve_alias(active_provider) or active_provider

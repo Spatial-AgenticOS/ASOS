@@ -77,7 +77,46 @@ def fake_feral(monkeypatch):
     """Isolated fake home; patches module-level FERAL_HOME."""
     storage: dict[str, str] = {}
     root = _FakePath(storage)
+
+    # The setup wizard now routes credentials through vault helpers.
+    # In this fake-path harness we emulate those helpers in-memory so
+    # the tests can stay filesystem-free while still asserting the A7
+    # contract (encrypted artifact, no plaintext writer).
+    def _fake_load_vault_creds(_home):
+        enc = storage.get("credentials.enc")
+        if enc is not None:
+            try:
+                return json.loads(enc)
+            except Exception:
+                return {}
+
+        legacy = storage.get("credentials.json")
+        if legacy is None:
+            return {}
+        try:
+            parsed = json.loads(legacy)
+        except Exception:
+            return {}
+
+        # Simulate the real vault's legacy migration behaviour.
+        storage["credentials.enc"] = json.dumps(parsed)
+        storage["credentials.json.bak.legacy"] = legacy
+        storage.pop("credentials.json", None)
+        return parsed
+
+    def _fake_persist_vault_creds(_home, creds):
+        flat = {
+            k: v for k, v in (creds or {}).items()
+            if isinstance(v, str) and v
+        }
+        if flat:
+            storage["credentials.enc"] = json.dumps(flat)
+        else:
+            storage.pop("credentials.enc", None)
+
     monkeypatch.setattr(sw, "FERAL_HOME", root)
+    monkeypatch.setattr(sw, "_load_vault_creds", _fake_load_vault_creds)
+    monkeypatch.setattr(sw, "_persist_vault_creds", _fake_persist_vault_creds)
     return storage, root
 
 
@@ -114,7 +153,9 @@ def test_returning_user_credentials_json_loaded_into_creds(fake_feral):
     w = OnboardWizard(MagicMock())
     w._load_existing_creds()
     assert w.creds == prior
-    assert _fake_path_exists(storage, "credentials.json")
+    assert _fake_path_exists(storage, "credentials.enc")
+    assert _fake_path_exists(storage, "credentials.json.bak.legacy")
+    assert not _fake_path_exists(storage, "credentials.json")
 
 
 def test_load_existing_creds_malformed_json_falls_back_empty(fake_feral):
@@ -193,8 +234,9 @@ def test_save_all_writes_credentials_config_and_settings(fake_feral):
         "glasses_model": "",
     }
     w._save_all()
-    assert "credentials.json" in storage
-    assert json.loads(storage["credentials.json"])["OPENAI_API_KEY"] == "sk-x"
+    assert "credentials.enc" in storage
+    assert "credentials.json" not in storage
+    assert json.loads(storage["credentials.enc"])["OPENAI_API_KEY"] == "sk-x"
     cfg = json.loads(storage["config.json"])
     assert cfg["provider"] == "openai" and cfg["model"] == "gpt-4.1"
     settings = json.loads(storage["settings.json"])
@@ -298,7 +340,8 @@ def test_plain_wizard_non_numeric_provider_choice_falls_back_to_openai(fake_fera
             with patch("cli.setup_wizard._get_local_ip", return_value="192.168.0.5"):
                 asyncio.run(OnboardWizardPlain().run())
 
-    assert json.loads(storage["credentials.json"])["OPENAI_API_KEY"].startswith("sk-plainwizard")
+    assert json.loads(storage["credentials.enc"])["OPENAI_API_KEY"].startswith("sk-plainwizard")
+    assert "credentials.json" not in storage
     cfg = json.loads(storage["config.json"])
     assert cfg["provider"] == "openai"
     settings = json.loads(storage["settings.json"])
