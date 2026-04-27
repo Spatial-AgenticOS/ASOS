@@ -1,12 +1,52 @@
 # Changelog
 
-<!-- feral-version: 2026.5.0 -->
+<!-- feral-version: 2026.5.1 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
-(Empty since v2026.5.0 — append new entries above this line under `### Added` / `### Fixed` / etc. The README test-count marker is auto-maintained by `.github/workflows/version-coherence.yml`; do not bump it manually.)
+## [2026.5.1] - 2026-04-26
+
+Hotfix release for live issues the user surfaced while testing v2026.5.0 (PRs #41, #42, #44, #45, #46 — grouped as "Wave 5A hardening").
+
+### Fixed (user-visible)
+
+- **A0 — Settings "Save & switch" crash (shipped v2026.5.0).** `LLMProvider.switch_provider()` didn't accept the `base_url=` kwarg that the v2 Settings route has been passing since W1, so every "Save & switch" 500'd with `TypeError: LLMProvider.switch_provider() got an unexpected keyword argument 'base_url'`. Signature fixed; 8-case regression. (PR #41)
+- **A1 — Model picker showed 132 OpenAI models (babbage-002, whisper-1, dall-e-3, embeddings, audio, tts, realtime) and similar noise for other providers.** New `ModelClass` classifier + chat-only filter; picker now requests `recommended=True` by default. OpenAI's shortlist is `gpt-5.5-pro/gpt-5.5/gpt-5.4*/gpt-5*/o4-mini/o3*/gpt-4.1*`; Anthropic's is `claude-opus-4-7/4-6 / sonnet-4-6 / haiku-4-5*`; DeepSeek is `v4-pro/v4-flash` (the deprecated `chat`/`reasoner` aliases deprecate 2026-07-24 upstream); Gemini is `3.1-*/3-*/2.5-*` + rolling `-latest`; Groq is the llama-3.3/3.1/4 + qwen3/gpt-oss/compound tier. "Show all" toggle coming. (PR #44)
+- **A5 — Reasoning-family 400s on every provider.** GPT-5 / o-series / DeepSeek v4 / Anthropic extended-thinking all need different param shapes than standard chat (`max_completion_tokens` vs `max_tokens`, temperature constraints, `extra_body.thinking`, `reasoning_effort`, `thinking={type:enabled, budget_tokens}`). Per-provider fork wired. Anthropic-specific: when `thinking.budget_tokens` is set, the adapter now bumps `max_tokens` to `budget + 1024` to honor the upstream invariant (this was the sonnet-4-6 400 the conductor caught live). (PR #44)
+- **A6 — Invented model IDs.** Every provider's bundled `_models` list is now re-seeded from a real `/v1/models` fetch captured on 2026-04-26. New `scripts/refresh_provider_catalog.py` re-runs on demand. (PR #44)
+- **A7 — P0 SECURITY REGRESSION: plaintext `~/.feral/credentials.json` still being written after the W9 encrypted vault shipped.** `ConfigLoader.save_credentials` routed writes through a legacy plaintext writer in parallel with the vault. Rewritten to route exclusively through the W9 vault; 3-case TestClient regression pins that `credentials.json` is never written on the `POST /api/config/credentials` path. Two narrower CLI-wizard writers remain (logged as W24b.1 follow-up). (PR #45)
+- **A8 — OpenRouter vision flag flipped on.** Adapter was advertising `"vision" not supported`; openrouter routes support vision on most models. Capability is now route-aware via `_capabilities_for_model`. (PR #44)
+- **A9 — `MemoryStore.build_context_for_llm_async` coroutine never awaited.** `identity_loader.py` sync-fallback path was creating the coroutine then discarding it. Added `MemoryStore.build_context_for_llm_sync()` sibling; the sync path no longer allocates an orphaned coroutine. (PR #42)
+- **A10 — W9 pairing-token migration couldn't drop UNIQUE column on SQLite.** Replaced `ALTER TABLE ... DROP COLUMN` with the SQLite table-rebuild pattern (create new table without plaintext column, copy rows, drop old, rename). (PR #42)
+
+### Fixed (quality of life)
+
+- **A4 — Mintlify nav.** New docs pages from W8/W9/W11/W12/W13/W22 now have nav entries under `Memory`, `Operations`, and `Security`. Orphan-page linter (`scripts/check_mintlify_nav.py`) added. (PR #42)
+- **A8 — mDNS `EventLoopBlocked` warning at boot.** zeroconf advertise now runs via `AsyncZeroconf` (when the live event loop is present) or a worker-thread offload (when called from a running loop sync context). (PR #42)
+
+### Added
+
+- **Recommended-shortlist API.** `BaseProvider.list_models(model_class="chat", recommended=True)` composes the class filter with the conductor's curated "latest relevant" shortlist. Tier-priority ordering means the first entry is always the flagship (gpt-5.5-pro, claude-opus-4-7, deepseek-v4-pro, gemini-3.1-pro, llama-3.3-70b).
+- **Live `/v1/models` fixtures per provider** under `feral-core/tests/fixtures/` — 2026-04-26 snapshot of what OpenAI / Anthropic / DeepSeek / Gemini / Groq / OpenRouter actually expose. Used by the classifier tests and by `scripts/refresh_provider_catalog.py`.
+- **Workspace rule: no third-party project names in deliverables** (`.cursor/rules/no-third-party-project-names-in-deliverables.mdc`). Plus a CI linter (`scripts/check_no_third_party_names.py` + `.github/workflows/no-third-party-names-lint.yml`) that blocks the forbidden literal from landing. (PR #41 rule + PR #46 linter)
+- **Wave 5 hardening self-prompt** at `docs/WAVE5_HARDENING_PROMPT.md` — the conductor's roadmap for Phase B (deep model integrations) and Phase C (long-running agent efficiency). (PR #41)
+
+### Changed
+
+- **33 shipped artifacts rewritten** to remove third-party project names from code comments, docstrings, test names, and published docs. Exempt: `docs/OPENCLAW_LESSONS*.md`, `docs/AGENT_PROMPTS*.md`, historical CHANGELOG entries on/before 2026-04-25. (PR #46)
+
+### Coverage
+
+- **pytest (feral-core): 2412 passed** (was 2190 on `2026.5.0`; **+222**).
+- **vitest (feral-client-v2): 152 passed** (unchanged; no client-side changes in this cut).
+- Live-smoke against real APIs on 2026-04-26 (10/10 provider-model combos returned 200 OK): gpt-5.5, gpt-5.4, gpt-4o-mini, o3-mini, claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5-20251001, deepseek-v4-pro, deepseek-v4-flash, gemini-2.5-pro, groq llama-3.3-70b-versatile, openrouter anthropic/claude-sonnet-4.
+
+### Post-install notes
+
+- If you were running v2026.5.0 and hit the "Save & switch" crash: `pip install -U feral-ai` resolves it. Your keys were migrated to `~/.feral/credentials.enc` on first boot of v2026.5.0; if you see `~/.feral/credentials.json` still present, it was last written by the legacy v2026.5.0 path — v2026.5.1 stops writing it but doesn't delete the existing file. Safe to remove manually once you've confirmed the vault has your keys (`feral key status`).
+- If you were on an older release (2026.4.x): the full v9 migration notes from `[2026.5.0]` still apply.
 
 ## [2026.5.0] - 2026-04-25
 
