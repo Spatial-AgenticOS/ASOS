@@ -1068,13 +1068,11 @@ class BrainState:
         loaded: list[str] = []
         creds: dict = {}
         creds_path = feral_home() / "credentials.json"
-        creds_corrupt = False
         if creds_path.exists():
             try:
                 import json as _json
                 creds = _json.loads(creds_path.read_text())
             except Exception as exc:
-                creds_corrupt = True
                 logger.warning(
                     "credentials.json is corrupt (%s) — falling back to vault", exc,
                 )
@@ -1087,14 +1085,22 @@ class BrainState:
             os.environ["TAVILY_API_KEY"] = creds["web_search"]
             loaded.append("TAVILY_API_KEY")
 
-        # Vault fallback — only for keys still missing from env.
-        if creds_corrupt or not loaded:
+        # Vault fallback — always hydrate keys still missing from env,
+        # regardless of whether a partial credentials.json already
+        # populated some others. A pre-W24b install can legitimately
+        # have a subset of keys in the plaintext mirror while the
+        # encrypted vault holds the rest (e.g. the user configured
+        # OpenAI in v1 and added Anthropic after the /configure route
+        # switched to vault-only writes). Gating vault lookup on
+        # ``not loaded`` silently stranded those extra keys on every
+        # boot; the corrupt-file path is preserved by the outer
+        # exception swallow below.
+        missing_keys = [key for key in env_keys if not os.environ.get(key)]
+        if missing_keys:
             try:
                 from security.vault import BlindVault
                 vault = BlindVault()
-                for key in env_keys:
-                    if os.environ.get(key):
-                        continue
+                for key in missing_keys:
                     val = vault.retrieve(key) if hasattr(vault, "retrieve") else None
                     if val:
                         os.environ[key] = val
