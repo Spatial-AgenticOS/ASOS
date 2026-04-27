@@ -57,16 +57,35 @@ FORBIDDEN_TERMS: tuple[str, ...] = (
 
 EXEMPT_FILES: frozenset[str] = frozenset(
     {
+        # Comparative-architecture analysis docs — the internal source
+        # of truth for everything we learned from reference projects.
         "docs/OPENCLAW_LESSONS.md",
         "docs/OPENCLAW_LESSONS_PROMPT.md",
+        # Conductor prompt library + follow-up log — internal process
+        # documents, not shipped user-facing artifacts.
         "docs/AGENT_PROMPTS.md",
         "docs/AGENT_PROMPTS_FOLLOWUPS.md",
+        "docs/WAVE5_HARDENING_PROMPT.md",
+        # Internal critique / state / strategy docs. These read like
+        # the analysis-docs bucket above but under different filenames;
+        # each one names reference projects by design as part of the
+        # comparative story. None is published to Mintlify.
         "docs/critique.md",
+        "docs/analysis.md",
+        "STATE_OF_FERAL.md",
+        # CHANGELOG historical entries on/before 2026-04-25 keep their
+        # original prose for honest history. The whole file is exempt
+        # because the linter has no per-heading awareness; future-dated
+        # entries follow the rule via code review.
         "CHANGELOG.md",
+        # The rule itself + enforcement scaffolding — they carry the
+        # term as data, not prose.
         ".cursor/rules/no-third-party-project-names-in-deliverables.mdc",
         "scripts/check_no_third_party_names.py",
         ".github/workflows/no-third-party-names-lint.yml",
         "feral-core/tests/test_no_third_party_names_literal.py",
+        # Agent worktree scratchpads — never reach origin/main in
+        # well-formed PRs, but belt-and-braces for the linter.
         "_PROPOSAL.md",
     }
 )
