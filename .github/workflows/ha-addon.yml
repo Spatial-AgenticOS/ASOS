@@ -26,6 +26,10 @@ permissions:
 env:
   FERAL_VERSION: "2026.5.1"
 
+concurrency:
+  group: ha-add-on-build-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     if: >-
