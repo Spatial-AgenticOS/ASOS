@@ -62,3 +62,6 @@ ROADMAP_NEXT.md
 private/
 docs/analysis.md
 docs/demos/
+
+# Conductor / internal analysis docs — never ship to public repo.
+.internal/
