@@ -100,8 +100,14 @@ class TestWizardState:
         saved = json.loads((state.home / "settings.json").read_text())
         assert saved["llm"]["provider"] == "openai"
         assert saved["meta"]["setup_complete"] is True
-        creds = json.loads((state.home / "credentials.json").read_text())
-        assert creds["OPENAI_API_KEY"] == "sk-new"
+        # A7 contract: setup credentials are encrypted at rest through
+        # BlindVault and must not leave a plaintext credentials.json.
+        from security.vault import BlindVault, reset_vault
+        assert not (state.home / "credentials.json").exists()
+        assert (state.home / "credentials.enc").exists()
+        reset_vault()
+        vault = BlindVault(vault_path=str(state.home / "credentials.json"))
+        assert vault.retrieve("OPENAI_API_KEY") == "sk-new"
 
 
 # ----------------------------------------------------------------------
