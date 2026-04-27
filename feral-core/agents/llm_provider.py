@@ -309,6 +309,73 @@ def classify_error(error: Exception) -> FailoverReason:
     return FailoverReason.UNKNOWN
 
 
+def _describe_http_status_error(error: httpx.HTTPStatusError) -> str:
+    """Return a safe, structured summary for an HTTP status failure."""
+    status = getattr(error.response, "status_code", "unknown")
+    try:
+        payload = error.response.json()
+    except Exception:
+        payload = {}
+
+    detail = ""
+    if isinstance(payload, dict):
+        err = payload.get("error", payload)
+        if isinstance(err, dict):
+            parts: list[str] = []
+            if err.get("type"):
+                parts.append(str(err["type"]))
+            if err.get("code"):
+                parts.append(f"code={err['code']}")
+            if err.get("param"):
+                parts.append(f"param={err['param']}")
+            msg = str(err.get("message", "")).strip()
+            if parts and msg:
+                detail = f"{', '.join(parts)}: {msg}"
+            elif parts:
+                detail = ", ".join(parts)
+            elif msg:
+                detail = msg
+
+    if not detail:
+        try:
+            detail = (error.response.text or "").strip()[:500]
+        except Exception:
+            detail = str(error)
+
+    if detail:
+        return f"HTTP {status} — {detail}"
+    return f"HTTP {status}"
+
+
+def _describe_error(error: Exception) -> str:
+    if isinstance(error, httpx.HTTPStatusError):
+        return _describe_http_status_error(error)
+    return str(error)
+
+
+def _chat_completions_model_guard(provider: str, model: str) -> str:
+    """Return a guardrail error string for non-chat model classes.
+
+    Empty string means "no guard hit".
+    """
+    if not provider or not model:
+        return ""
+    try:
+        from providers.model_classes import classify
+        model_class = classify(provider, model)
+    except Exception:
+        return ""
+
+    incompatible = {"completion-only", "embedding", "audio", "image", "video", "realtime"}
+    if model_class in incompatible:
+        return (
+            f"Model {model!r} for provider {provider!r} is classified as "
+            f"{model_class!r} and is not valid for chat completions. "
+            "Pick a chat or reasoning model in Settings -> Providers."
+        )
+    return ""
+
+
 class ProviderCooldownTracker:
     """Tracks per-provider cooldown state for failover decisions."""
 
@@ -693,6 +760,11 @@ class LLMProvider:
             logger.warning(reason)
             return {"error": reason, "choices": []}
 
+        model_guard_error = _chat_completions_model_guard(self.provider, self.model)
+        if model_guard_error:
+            logger.warning(model_guard_error)
+            return {"error": model_guard_error, "choices": []}
+
         # Local inference path
         if self._local_engine and self.provider in ("local", "hybrid"):
             use_local = self.provider == "local" or not self._hybrid_cloud_provider
@@ -740,12 +812,14 @@ class LLMProvider:
             return result
         except httpx.HTTPStatusError as e:
             increment("feral.llm.errors_total", attributes={"provider": self.provider, "model": self.model})
-            logger.error(f"LLM API error: {e.response.status_code} — {e.response.text[:500]}")
-            return {"error": str(e), "choices": []}
+            detail = _describe_http_status_error(e)
+            logger.error("LLM API error: %s", detail)
+            return {"error": detail, "choices": []}
         except Exception as e:
             increment("feral.llm.errors_total", attributes={"provider": self.provider, "model": self.model})
-            logger.error(f"LLM call failed: {e}")
-            return {"error": str(e), "choices": []}
+            detail = _describe_error(e)
+            logger.error("LLM call failed: %s", detail)
+            return {"error": detail, "choices": []}
 
     def extract_response(self, data: dict) -> tuple[Optional[str], list[dict]]:
         """
@@ -908,11 +982,13 @@ class LLMProvider:
 
             return {"choices": [{"message": msg, "finish_reason": data.get("stop_reason", "end_turn")}]}
         except httpx.HTTPStatusError as e:
-            logger.error(f"Anthropic API error: {e.response.status_code} — {e.response.text[:500]}")
-            return {"error": str(e), "choices": []}
+            detail = _describe_http_status_error(e)
+            logger.error("Anthropic API error: %s", detail)
+            return {"error": detail, "choices": []}
         except Exception as e:
-            logger.error(f"Anthropic call failed: {e}")
-            return {"error": str(e), "choices": []}
+            detail = _describe_error(e)
+            logger.error("Anthropic call failed: %s", detail)
+            return {"error": detail, "choices": []}
 
     async def _chat_local(
         self, messages: list[dict], tools: Optional[list[dict]],
@@ -941,6 +1017,84 @@ class LLMProvider:
             logger.error(f"Local inference failed: {e}")
             return {"error": str(e), "choices": []}
 
+    async def _stream_via_nonstream_failover(
+        self,
+        messages: list[dict],
+        tools: Optional[list[dict]],
+        temperature: float,
+        max_tokens: int,
+        *,
+        primary_error: Exception,
+    ) -> Optional[list[dict]]:
+        """Fallback path for streaming failures.
+
+        For providers that support cross-provider failover in non-stream
+        mode, run one failover attempt and convert the response into
+        stream-shaped events.
+        """
+        fallbacks = self._config.get("fallback_providers") if isinstance(self._config, dict) else None
+        if not fallbacks:
+            return None
+        if self._local_engine and self.provider in ("local", "hybrid"):
+            return None
+
+        reason = classify_error(primary_error)
+        # Don't hide context overflow; the caller should surface the
+        # explicit model/context failure.
+        if reason == FailoverReason.CONTEXT_OVERFLOW:
+            return None
+
+        try:
+            self._cooldown.record_failure(self.provider, reason)
+            # Prevent immediate re-probe of the same failing primary in
+            # chat_with_failover's candidate loop.
+            self._cooldown._last_probe[self.provider] = time.time()
+        except Exception:
+            pass
+
+        logger.warning(
+            "Stream primary %s/%s failed (%s); attempting non-stream failover",
+            self.provider,
+            self.model,
+            reason.value,
+        )
+        try:
+            result = await self.chat_with_failover(
+                messages,
+                tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except Exception as exc:
+            primary_detail = _describe_error(primary_error)
+            failover_detail = _describe_error(exc)
+            logger.warning(
+                "Non-stream failover attempt after stream failure exhausted: %s",
+                failover_detail,
+            )
+            return [{
+                "type": "error",
+                "content": (
+                    f"{primary_detail} | failover exhausted: {failover_detail}"
+                ),
+            }]
+
+        if not isinstance(result, dict):
+            return None
+        if result.get("error"):
+            return None
+        if not result.get("choices"):
+            return None
+
+        text, tool_calls = self.extract_response(result)
+        events: list[dict] = []
+        if text:
+            events.append({"type": "text_delta", "content": text})
+        for tc in tool_calls:
+            events.append({"type": "tool_call_delta", "tool_call": tc})
+        events.append({"type": "done"})
+        return events
+
     async def chat_stream(
         self,
         messages: list[dict],
@@ -968,6 +1122,11 @@ class LLMProvider:
                     f"runtime. Supported: {sorted(SUPPORTED_RUNTIME_PROVIDERS)}."
                 ),
             }
+            return
+
+        model_guard_error = _chat_completions_model_guard(self.provider, self.model)
+        if model_guard_error:
+            yield {"type": "error", "content": model_guard_error}
             return
 
         # Local streaming path
@@ -1008,6 +1167,7 @@ class LLMProvider:
 
         apply_reasoning_fork(self.provider, self.model, body)
 
+        streamed_text = False
         stream_cm = None
         try:
             for _attempt in range(MAX_RETRIES):
@@ -1063,6 +1223,7 @@ class LLMProvider:
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
 
                 if delta.get("content"):
+                    streamed_text = True
                     yield {"type": "text_delta", "content": delta["content"]}
 
                 for tc_delta in delta.get("tool_calls", []):
@@ -1083,11 +1244,37 @@ class LLMProvider:
                         entry["id"] = tc_delta["id"]
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"LLM stream error: {e.response.status_code}")
-            yield {"type": "error", "content": str(e)}
+            detail = _describe_http_status_error(e)
+            logger.error("LLM stream error: %s", detail)
+            if not streamed_text:
+                failover_events = await self._stream_via_nonstream_failover(
+                    messages,
+                    tools,
+                    temperature,
+                    max_tokens,
+                    primary_error=e,
+                )
+                if failover_events:
+                    for event in failover_events:
+                        yield event
+                    return
+            yield {"type": "error", "content": detail}
         except Exception as e:
-            logger.error(f"LLM stream failed: {e}")
-            yield {"type": "error", "content": str(e)}
+            detail = _describe_error(e)
+            logger.error("LLM stream failed: %s", detail)
+            if not streamed_text:
+                failover_events = await self._stream_via_nonstream_failover(
+                    messages,
+                    tools,
+                    temperature,
+                    max_tokens,
+                    primary_error=e,
+                )
+                if failover_events:
+                    for event in failover_events:
+                        yield event
+                    return
+            yield {"type": "error", "content": detail}
         finally:
             if stream_cm:
                 try:
@@ -1195,11 +1382,13 @@ class LLMProvider:
 
             yield {"type": "done"}
         except httpx.HTTPStatusError as e:
-            logger.error(f"Anthropic stream error: {e.response.status_code}")
-            yield {"type": "error", "content": str(e)}
+            detail = _describe_http_status_error(e)
+            logger.error("Anthropic stream error: %s", detail)
+            yield {"type": "error", "content": detail}
         except Exception as e:
-            logger.error(f"Anthropic stream failed: {e}")
-            yield {"type": "error", "content": str(e)}
+            detail = _describe_error(e)
+            logger.error("Anthropic stream failed: %s", detail)
+            yield {"type": "error", "content": detail}
 
     async def switch_provider(
         self,
@@ -1580,6 +1769,10 @@ class LLMProvider:
                 f"Provider {provider_name!r} has no runtime adapter — "
                 f"supported: {sorted(SUPPORTED_RUNTIME_PROVIDERS)}"
             )
+        selected_model = self.model if provider_name == self.provider else str(config.get("model", "") or "")
+        model_guard_error = _chat_completions_model_guard(provider_name, selected_model)
+        if model_guard_error:
+            raise RuntimeError(model_guard_error)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 1024)
 

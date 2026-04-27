@@ -18,13 +18,10 @@ on:
       feral_version:
         description: "feral-ai PyPI version (calver, no v prefix)"
         required: false
-        default: "2026.5.2"
+        default: ""
 
 permissions:
   contents: read
-
-env:
-  FERAL_VERSION: "2026.5.2"
 
 concurrency:
   group: ha-add-on-build-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
@@ -43,10 +40,32 @@ jobs:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Resolve FERAL_VERSION
+        id: version
+        env:
+          INPUT_FERAL_VERSION: ${{ github.event.inputs.feral_version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "FERAL_VERSION=${{ github.event.inputs.feral_version }}" >> "$GITHUB_ENV"
-          fi
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          manual = (os.environ.get("INPUT_FERAL_VERSION") or "").strip()
+          if manual:
+              version = manual
+          else:
+              pyproject = pathlib.Path("feral-core/pyproject.toml")
+              data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+              version = str((data.get("project") or {}).get("version") or "").strip()
+
+          if not version:
+              raise SystemExit("Failed to resolve FERAL_VERSION")
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"FERAL_VERSION={version}\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"feral_version={version}\n")
+          print(f"Resolved FERAL_VERSION={version}")
+          PY
 
       - name: Check version availability on PyPI
         id: pypi

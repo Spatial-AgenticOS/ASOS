@@ -10,9 +10,11 @@ End-to-end release flow built on top of ``scripts/sync_versions.py``:
        other declared location.
     4. Insert a templated entry under the ``[Unreleased]`` heading in
        ``CHANGELOG.md`` (preserved for the maintainer to flesh out).
-    5. Run the test suites (pytest + vitest, both gated by --skip-tests).
-    6. Build the wheel/sdist artifacts (skipped with --skip-build).
-    7. Commit, push, and open a release PR via ``gh`` (skipped with
+    5. Rebuild/sync the bundled v2 web UI assets and validate the
+       model-picker contract tokens in the shipped bundle.
+    6. Run the test suites (pytest + vitest, both gated by --skip-tests).
+    7. Build the wheel/sdist artifacts (skipped with --skip-build).
+    8. Commit, push, and open a release PR via ``gh`` (skipped with
        --no-pr / --dry-run).
 
 Calver shape: YYYY.M.D. The bump kinds are interpreted as:
@@ -45,6 +47,8 @@ from typing import Sequence
 
 ASOS_ROOT = Path(__file__).resolve().parent.parent
 SYNC_VERSIONS = ASOS_ROOT / "scripts" / "sync_versions.py"
+BUILD_WEBUI_V2 = ASOS_ROOT / "scripts" / "build_webui_v2.sh"
+CHECK_WEBUI_V2 = ASOS_ROOT / "scripts" / "check_webui_v2_contract.py"
 CHANGELOG = ASOS_ROOT / "CHANGELOG.md"
 PYPROJECT = ASOS_ROOT / "feral-core" / "pyproject.toml"
 
@@ -195,6 +199,20 @@ def _run_sync_versions() -> None:
         [sys.executable, str(SYNC_VERSIONS), "--write", "--no-metadata"],
         cwd=ASOS_ROOT,
     )
+
+
+def _sync_webui_v2_bundle() -> None:
+    """Rebuild feral-client-v2 and sync artifacts into webui_v2.
+
+    This keeps the bundled wheel assets aligned with source changes so
+    PyPI releases cannot ship a stale Settings/Setup contract.
+    """
+    if not BUILD_WEBUI_V2.exists():
+        raise SystemExit(f"✗ missing bundle script: {BUILD_WEBUI_V2}")
+    if not CHECK_WEBUI_V2.exists():
+        raise SystemExit(f"✗ missing bundle contract check: {CHECK_WEBUI_V2}")
+    _run(["bash", str(BUILD_WEBUI_V2)], cwd=ASOS_ROOT)
+    _run([sys.executable, str(CHECK_WEBUI_V2)], cwd=ASOS_ROOT)
 
 
 def _run_tests(*, pytest_args: list[str], vitest_args: list[str]) -> None:
@@ -374,28 +392,33 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         print(
-            "[1/6] writing canonical version literal — DRY-RUN (no write)"
+            "[1/7] writing canonical version literal — DRY-RUN (no write)"
         )
-        print("[2/6] propagating with sync_versions.py — DRY-RUN")
+        print("[2/7] propagating with sync_versions.py — DRY-RUN")
         print(
             "      (would run: scripts/sync_versions.py --write --no-metadata)"
         )
-        print("[3/6] inserting CHANGELOG template entry — DRY-RUN")
+        print("[3/7] inserting CHANGELOG template entry — DRY-RUN")
         print(f"      (would insert ## [{new_version}] - {iso_today})")
+        print("[4/7] rebuilding/syncing webui_v2 bundle — DRY-RUN")
+        print("      (would run: scripts/build_webui_v2.sh + check_webui_v2_contract.py)")
     else:
-        print("[1/6] writing canonical version literal")
+        print("[1/7] writing canonical version literal")
         _write_canonical_version(new_version)
 
-        print("\n[2/6] propagating with sync_versions.py")
+        print("\n[2/7] propagating with sync_versions.py")
         _run_sync_versions()
 
-        print("\n[3/6] inserting CHANGELOG template entry")
+        print("\n[3/7] inserting CHANGELOG template entry")
         _insert_changelog_entry(new_version, date=iso_today)
 
+        print("\n[4/7] rebuilding + validating bundled v2 web UI")
+        _sync_webui_v2_bundle()
+
     if args.skip_tests:
-        print("\n[4/6] tests SKIPPED (--skip-tests / --dry-run)")
+        print("\n[5/7] tests SKIPPED (--skip-tests / --dry-run)")
     else:
-        print("\n[4/6] running test suites")
+        print("\n[5/7] running test suites")
         _run_tests(
             pytest_args=args.pytest_arg or [
                 "-q",
@@ -407,14 +430,14 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.skip_build:
-        print("\n[5/6] artifact build SKIPPED (--skip-build / --dry-run)")
+        print("\n[6/7] artifact build SKIPPED (--skip-build / --dry-run)")
     else:
-        print("\n[5/6] building artifacts")
+        print("\n[6/7] building artifacts")
         _build_artifacts()
 
     if args.no_pr:
         print(
-            "\n[6/6] git commit / push / PR SKIPPED (--no-pr / --dry-run)"
+            "\n[7/7] git commit / push / PR SKIPPED (--no-pr / --dry-run)"
         )
         print(
             "\n✓ release prepared. Review the diff with "
@@ -423,7 +446,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    print("\n[6/6] committing, pushing, opening PR")
+    print("\n[7/7] committing, pushing, opening PR")
     branch = _git_commit_push(new_version, branch=args.branch)
     _open_pr(new_version, branch)
     print(f"\n✓ release v{new_version} opened on branch {branch}")

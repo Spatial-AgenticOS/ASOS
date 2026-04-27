@@ -133,6 +133,104 @@ class TestChatStream:
         assert "".join(texts) == "Hello"
         assert events[-1] == {"type": "done"}
 
+    @pytest.mark.asyncio
+    async def test_chat_stream_uses_nonstream_failover_on_primary_400(self) -> None:
+        env = {
+            "FERAL_LLM_PROVIDER": "openai",
+            "OPENAI_API_KEY": "sk-openai-test",
+            "FERAL_LLM_MODEL": "gpt-4o-mini",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(LLMProvider, "_detect_ollama", return_value=None):
+                llm = LLMProvider()
+
+        response = httpx.Response(
+            400,
+            json={"error": {"type": "invalid_request_error", "param": "model", "message": "bad model"}},
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+        )
+        stream_error = httpx.HTTPStatusError("400 bad request", request=response.request, response=response)
+
+        stream_cm = MagicMock()
+        stream_cm.__aenter__ = AsyncMock(side_effect=stream_error)
+        stream_cm.__aexit__ = AsyncMock(return_value=None)
+        llm.client.stream = MagicMock(return_value=stream_cm)
+
+        llm.set_config({"fallback_providers": ["anthropic"]})
+        llm.chat_with_failover = AsyncMock(
+            return_value={"choices": [{"message": {"content": "fallback answer"}}]}
+        )
+
+        events = []
+        async for ev in llm.chat_stream([{"role": "user", "content": "hi"}], tools=None):
+            events.append(ev)
+
+        assert events[0]["type"] == "text_delta"
+        assert "fallback answer" in events[0]["content"]
+        assert events[-1] == {"type": "done"}
+        llm.chat_with_failover.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_surfaces_structured_http_error_details(self) -> None:
+        env = {
+            "FERAL_LLM_PROVIDER": "openai",
+            "OPENAI_API_KEY": "sk-openai-test",
+            "FERAL_LLM_MODEL": "gpt-4o-mini",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(LLMProvider, "_detect_ollama", return_value=None):
+                llm = LLMProvider()
+
+        response = httpx.Response(
+            400,
+            json={
+                "error": {
+                    "type": "invalid_request_error",
+                    "param": "model",
+                    "message": "The model is invalid for chat.completions",
+                }
+            },
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+        )
+        stream_error = httpx.HTTPStatusError("400 bad request", request=response.request, response=response)
+
+        stream_cm = MagicMock()
+        stream_cm.__aenter__ = AsyncMock(side_effect=stream_error)
+        stream_cm.__aexit__ = AsyncMock(return_value=None)
+        llm.client.stream = MagicMock(return_value=stream_cm)
+        llm.set_config({"fallback_providers": []})
+
+        events = []
+        async for ev in llm.chat_stream([{"role": "user", "content": "hi"}], tools=None):
+            events.append(ev)
+
+        assert events
+        assert events[0]["type"] == "error"
+        assert "HTTP 400" in events[0]["content"]
+        assert "invalid_request_error" in events[0]["content"]
+        assert "param=model" in events[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_rejects_completion_only_model_preflight(self) -> None:
+        env = {
+            "FERAL_LLM_PROVIDER": "openai",
+            "OPENAI_API_KEY": "sk-openai-test",
+            "FERAL_LLM_MODEL": "babbage-002",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(LLMProvider, "_detect_ollama", return_value=None):
+                llm = LLMProvider()
+
+        llm.client.stream = MagicMock()
+        events = []
+        async for ev in llm.chat_stream([{"role": "user", "content": "hi"}], tools=None):
+            events.append(ev)
+
+        assert events
+        assert events[0]["type"] == "error"
+        assert "completion-only" in events[0]["content"]
+        llm.client.stream.assert_not_called()
+
 
 class TestSwitchProvider:
     @pytest.mark.asyncio

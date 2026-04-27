@@ -15,6 +15,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: feral-client-v2/package-lock.json
+
+      - name: Build + sync v2 web UI bundle
+        env:
+          FERAL_FORCE_NPM_CI: "1"
+        run: scripts/build_webui_v2.sh
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -23,9 +35,51 @@ jobs:
       - name: Install build tools
         run: pip install build
 
+      - name: Verify bundled v2 model-picker contract
+        run: python scripts/check_webui_v2_contract.py
+
       - name: Build wheel and sdist
         run: python -m build
         working-directory: feral-core
+
+      - name: Pre-publish wheel smoke (bundle + startup contract)
+        shell: bash
+        run: |
+          python -m venv .wheel-smoke
+          source .wheel-smoke/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install feral-core/dist/*.whl
+          python - <<'PY'
+          import importlib.metadata as md
+          from pathlib import Path
+
+          import api
+          from api.server import app
+          from fastapi.testclient import TestClient
+
+          version = md.version("feral-ai")
+          site = Path(api.__file__).resolve().parent.parent
+          v2 = site / "webui_v2"
+          index = v2 / "index.html"
+          assets = v2 / "assets"
+          js = list(assets.glob("*.js"))
+          css = list(assets.glob("*.css"))
+
+          assert index.exists(), f"Missing wheel asset: {index}"
+          assert js, f"Missing webui_v2 JS assets in {assets}"
+          assert css, f"Missing webui_v2 CSS assets in {assets}"
+
+          client = TestClient(app, raise_server_exceptions=False)
+          health = client.get("/health")
+          assert health.status_code == 200, f"/health failed: {health.status_code}"
+          root = client.get("/")
+          assert root.status_code == 200, f"/ failed: {root.status_code}"
+          body = root.text
+          assert "FERAL" in body and "v2" in body.lower(), "Root page missing v2 markers"
+          assert "leaflet" not in body.lower(), "Root page appears to be legacy v1 fallback"
+
+          print(f"Wheel smoke passed for feral-ai=={version}")
+          PY
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
