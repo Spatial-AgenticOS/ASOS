@@ -50,8 +50,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install feral-core/dist/*.whl
           python - <<'PY'
+          import os
           import importlib.metadata as md
           from pathlib import Path
+
+          os.environ["FERAL_API_KEY"] = "release-wheel-smoke-key"
 
           import api
           from api.server import app
@@ -72,7 +75,7 @@ jobs:
           client = TestClient(app, raise_server_exceptions=False)
           health = client.get("/health")
           assert health.status_code == 200, f"/health failed: {health.status_code}"
-          root = client.get("/")
+          root = client.get("/", headers={"Authorization": "Bearer release-wheel-smoke-key"})
           assert root.status_code == 200, f"/ failed: {root.status_code}"
           body = root.text
           assert "FERAL" in body and "v2" in body.lower(), "Root page missing v2 markers"
