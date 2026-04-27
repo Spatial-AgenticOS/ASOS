@@ -315,8 +315,15 @@ class ScreenLoop:
 
         if self._scene_analyzer and self._scene_analyzer.available:
             encoding = "jpeg" if mime == "image/jpeg" else "png"
+            # A6 — periodic ticks MUST respect the SceneAnalyzer
+            # cooldown. The previous ``force=True`` bypassed the
+            # cooldown on every tick, so a 10s cooldown + 8s tick
+            # interval still issued a vision-model call every 8s.
+            # The cooldown is operator-tunable via
+            # ``FERAL_SCENE_COOLDOWN`` / ``vision.scene_cooldown``;
+            # letting it apply here is the whole point of that knob.
             result = await self._scene_analyzer.analyze_frame(
-                image_b64, encoding=encoding, node_id=self._session_id, force=True,
+                image_b64, encoding=encoding, node_id=self._session_id,
             )
             if result:
                 description = result.get("scene_description")

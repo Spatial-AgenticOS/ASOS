@@ -36,6 +36,13 @@ export async function maybeRedirectToSetup() {
     if (typeof window === 'undefined') return;
     const path = window.location.pathname || '';
     if (path.startsWith('/setup') || path.startsWith('/v2/setup')) return;
+    // The /pair?t=<token> landing page is the device-pairing flow. It
+    // runs before the Brain is necessarily configured (e.g. a phone
+    // joining a fresh install) and MUST preserve its ?t= query string.
+    // Redirecting to /setup would both hijack the flow and strip the
+    // token, so exempt it the same way we exempt /setup itself.
+    if (path === '/pair' || path.startsWith('/pair/') ||
+        path === '/v2/pair' || path.startsWith('/v2/pair/')) return;
     const r = await fetch(`${API_BASE}/api/setup/status`, { credentials: 'same-origin' });
     if (!r.ok) return;
     const data = await r.json();

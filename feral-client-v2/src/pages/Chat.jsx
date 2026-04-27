@@ -14,6 +14,31 @@ function newId() {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
+// Client-side defense-in-depth scrubber for assistant display text.
+// Mirrors feral-core/agents/chat_sanitizer.py; if an older brain
+// build forgets to strip control-token residue, the UI still
+// presents clean prose. Kept narrow: only strips recognized residue,
+// never invents content.
+const TOOL_TAG = '(?:tool_calls|tool_call|function_call|function_calls|tool_use|tool_result|tools)';
+const SENTINEL_RE = /<\|[^|>\s][^|>]*\|>/g;
+const TOOL_BLOCK_RE = new RegExp(`<\\s*${TOOL_TAG}\\b[^>]*>[\\s\\S]*?<\\/\\s*${TOOL_TAG}\\s*>`, 'gi');
+const ORPHAN_CLOSE_RE = new RegExp(`<\\/\\s*${TOOL_TAG}\\s*>`, 'gi');
+const ORPHAN_OPEN_RE = new RegExp(`<\\s*${TOOL_TAG}\\b[^>]*\\/?>`, 'gi');
+const INVOKE_RE = /\binvoke\s*\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]/gi;
+const TRAILING_MARKER_RE = /(?:^|\s)(?:FUNCTION|FUNCTIONS|TOOL|TOOLS)\s*$/;
+
+export function sanitizeAssistantText(input) {
+  if (!input) return input;
+  let out = String(input);
+  out = out.replace(TOOL_BLOCK_RE, '');
+  out = out.replace(INVOKE_RE, '');
+  out = out.replace(ORPHAN_CLOSE_RE, '');
+  out = out.replace(ORPHAN_OPEN_RE, '');
+  out = out.replace(SENTINEL_RE, '');
+  out = out.replace(TRAILING_MARKER_RE, '');
+  return out;
+}
+
 export default function Chat() {
   const socket = useFeralSocket();
   const { state } = useConnectionStatus();
@@ -109,13 +134,13 @@ export default function Chat() {
           commit(final);
           return;
         }
-        const delta = p.delta || '';
+        const delta = sanitizeAssistantText(p.delta || '');
         if (!delta) return;
         streamBufferRef.current += delta;
         setStreamingText(streamBufferRef.current);
         setThinking(false);
       } else if (type === 'text_response') {
-        const text = msg.payload?.text || '';
+        const text = sanitizeAssistantText(msg.payload?.text || '');
         if (!text) return;
         if (text === 'FERAL Brain connected. How can I help?') {
           if (greetingSeenRef.current) return;

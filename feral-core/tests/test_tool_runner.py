@@ -488,15 +488,41 @@ class TestExecuteToolCallForLLM:
             "mcp_weather__get_forecast", {"city": "NY"},
         )
 
-    async def test_daemon_tool_dispatched_correctly(self):
+    async def test_daemon_tool_dispatched_and_awaits_ack(self):
+        """A2 fix: the daemon branch now waits for the daemon ack instead
+        of short-circuiting with a stub success. We simulate the ack by
+        resolving the pending future as soon as the command is sent."""
+        import asyncio as _asyncio
+
         ws = AsyncMock()
         self.orch.daemons = {"mynode": ws}
+
+        async def _resolve_once_sent(*_args, **_kwargs):
+            for req_id in list(self.runner._pending_daemon_acks.keys()):
+                self.runner.resolve_daemon_ack(
+                    req_id,
+                    {"success": True, "data": {"output": "ok"}, "error": None},
+                )
+
+        ws.send_json = AsyncMock(side_effect=_resolve_once_sent)
 
         result = await self.runner.execute_tool_call_for_llm(
             "s1", {"name": "daemon_mynode__do_thing", "args": {"val": 1}}, [],
         )
-        assert result["status"] == "command_sent_to_hardware_daemon"
+        assert result["success"] is True
+        assert result["data"]["output"] == "ok"
         ws.send_json.assert_called_once()
+
+    async def test_daemon_tool_times_out_without_ack(self):
+        """No ack within the timeout → success: False with actionable error."""
+        ws = AsyncMock()
+        self.orch.daemons = {"mynode": ws}
+
+        result = await self.runner.execute_daemon_command_with_ack(
+            "s1", "daemon_mynode", "do_thing", {"val": 1}, timeout=0.05,
+        )
+        assert result["success"] is False
+        assert "did not acknowledge" in result["error"]
 
     async def test_anti_loop_guidance_attached_at_streak_3(self):
         skill = MagicMock()

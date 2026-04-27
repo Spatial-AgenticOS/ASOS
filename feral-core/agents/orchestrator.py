@@ -29,6 +29,8 @@ from fastapi import WebSocket
 from models.protocol import (
     FeralMessage,
     SDUIPayload,
+    ToolResultPayload,
+    ToolStartPayload,
     VisionRequestPayload,
 )
 from models.skill_manifest import SkillManifest
@@ -547,6 +549,61 @@ class Orchestrator:
         except Exception:
             pass
 
+    async def _emit_tool_start(self, session_id: str, tool_call: dict) -> None:
+        """Notify the UI a tool call is starting (chip affordance)."""
+        try:
+            name = str(tool_call.get("name", "tool"))
+            parts = name.split("__", 1)
+            skill_id = parts[0] if len(parts) == 2 else name
+            endpoint_id = parts[1] if len(parts) == 2 else ""
+            preview = ""
+            try:
+                args = tool_call.get("args") or {}
+                if isinstance(args, dict) and args:
+                    preview = json.dumps(args, default=str)[:160]
+            except Exception:
+                preview = ""
+            await self.send(session_id, FeralMessage(
+                session_id=session_id, hop="brain", type="tool_start",
+                payload=ToolStartPayload(
+                    tool=name,
+                    call_id=str(tool_call.get("id", "")),
+                    skill_id=skill_id,
+                    endpoint_id=endpoint_id,
+                    args_preview=preview,
+                ).model_dump(),
+            ))
+        except Exception:
+            pass
+
+    async def _emit_tool_result(
+        self,
+        session_id: str,
+        tool_call: dict,
+        result_data: dict,
+        latency_ms: float,
+    ) -> None:
+        """Notify the UI a tool call has finished (clears the chip)."""
+        try:
+            success = bool(
+                (isinstance(result_data, dict) and (result_data.get("success") or result_data.get("status") == "command_sent_to_hardware_daemon"))
+            )
+            err = ""
+            if isinstance(result_data, dict):
+                err = str(result_data.get("error") or "")[:240]
+            await self.send(session_id, FeralMessage(
+                session_id=session_id, hop="brain", type="tool_result",
+                payload=ToolResultPayload(
+                    tool=str(tool_call.get("name", "tool")),
+                    call_id=str(tool_call.get("id", "")),
+                    success=success,
+                    error=err,
+                    latency_ms=float(latency_ms or 0.0),
+                ).model_dump(),
+            ))
+        except Exception:
+            pass
+
     # ─────────────────────────────────────────────
     # Core Command Handler
     # ─────────────────────────────────────────────
@@ -815,12 +872,15 @@ class Orchestrator:
 
                 async def _run_tool(tc: dict) -> dict:
                     async with sem:
+                        await self._emit_tool_start(session_id, tc)
                         t_start = time.time()
                         result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
+                        latency_ms = (time.time() - t_start) * 1000
+                        await self._emit_tool_result(session_id, tc, result_data, latency_ms)
                         return {
                             "tc": tc,
                             "result": result_data,
-                            "latency_ms": (time.time() - t_start) * 1000,
+                            "latency_ms": latency_ms,
                         }
 
                 tool_outputs = await asyncio.gather(*[_run_tool(tc) for tc in tool_calls])
@@ -972,6 +1032,7 @@ class Orchestrator:
         from models.protocol import StreamDeltaPayload
 
         got_final_text = False
+        any_tool_ran = False
         refusal_retry_used = False
         empty_retry_used = False
         pending_retry_addition: Optional[str] = None
@@ -1023,6 +1084,17 @@ class Orchestrator:
                         return
             except Exception as e:
                 logger.error(f"Streaming failed, falling back: {e}")
+                # The stream path already appended this turn's user
+                # row to ``conversation_history``. ``handle_command``
+                # will append it again, duplicating the turn. Drop
+                # the trailing user row here so the non-stream
+                # fallback re-adds exactly one copy.
+                try:
+                    hist = self.conversation_history.get(session_id) or []
+                    if hist and hist[-1].get("role") == "user":
+                        hist.pop()
+                except Exception:
+                    pass
                 await self.handle_command(session_id, text, context)
                 return
 
@@ -1091,12 +1163,15 @@ class Orchestrator:
                 history.append(assistant_msg)
 
             if normalized_tool_calls:
+                any_tool_ran = True
                 for tc in normalized_tool_calls:
+                    await self._emit_tool_start(session_id, tc)
                     t_start = time.time()
                     result_data = await self._execute_tool_call_for_llm(session_id, tc, relevant_skills)
                     latency_ms = (time.time() - t_start) * 1000
 
                     stream_tool_success = bool(result_data.get("success") or result_data.get("status") == "command_sent_to_hardware_daemon")
+                    await self._emit_tool_result(session_id, tc, result_data, latency_ms)
                     await self._emit_brain_event(session_id, "tool_exec", {"tool": tc["name"], "success": stream_tool_success})
 
                     if self._tool_genesis:
@@ -1153,7 +1228,12 @@ class Orchestrator:
 
             break
 
-        if not got_final_text:
+        if not got_final_text and not any_tool_ran:
+            # Only surface the placeholder when the turn truly
+            # produced nothing — no streamed text AND no tool
+            # execution. Tool-only turns already emitted tool_start /
+            # tool_result chips plus any SDUI from results, so a
+            # canned "no text response" bubble would be noise.
             await self._send_text(session_id, "I processed your request but have no text response.")
 
         self.conversation_history[session_id] = history[-self._conversation_max_per_session:]

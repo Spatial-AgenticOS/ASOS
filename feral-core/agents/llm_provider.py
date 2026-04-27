@@ -14,9 +14,10 @@ import logging
 import time
 import httpx
 from enum import Enum
-from typing import Optional, AsyncGenerator
+from typing import Any, Optional, AsyncGenerator
 
 from config.runtime import ollama_base_url, ollama_openai_base_url
+from agents.chat_sanitizer import sanitize_assistant_display_text
 
 logger = logging.getLogger("feral.llm")
 
@@ -192,6 +193,122 @@ def apply_reasoning_fork(provider: str, model: str, body: dict) -> dict:
         return _apply_anthropic_reasoning_fork(model, body)
     if pid == "groq":
         return _apply_groq_reasoning_fork(model, body)
+    return body
+
+
+# ── A5: Anthropic request-shape helpers ──────────────────────
+#
+# ``_build_anthropic_body`` (non-stream) and ``_chat_stream_anthropic``
+# both accept OpenAI-flavoured transcripts from upstream callers. The
+# OpenAI schema uses ``role: "tool"`` messages carrying a
+# ``tool_call_id`` and the raw string output; Anthropic's Messages API
+# instead expects tool results to be packaged as a ``user`` message with
+# a ``tool_result`` content block, and assistant tool invocations as an
+# ``assistant`` message with a ``tool_use`` content block.
+#
+# Before A5 the dispatcher forwarded the OpenAI shape as-is and
+# Anthropic 400'd with
+# ``messages.N.role: Input should be 'user' or 'assistant'`` on every
+# failover that replayed a tool-using transcript. Converting at the
+# build site keeps the rest of the dispatcher provider-agnostic.
+
+
+_ANTHROPIC_THINKING_RESPONSE_ROOM = 1024  # mirrors AnthropicProvider.chat
+
+
+def _convert_messages_for_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
+    """Return ``(system_text, anthropic_messages)`` for the Messages API.
+
+    * ``role: "system"`` → concatenated into the top-level ``system``
+      field.
+    * ``role: "tool"`` → emitted as a ``user`` message with a single
+      ``tool_result`` content block. The upstream ``tool_call_id`` maps
+      to Anthropic's ``tool_use_id``.
+    * ``role: "assistant"`` with ``tool_calls`` → emitted with a list
+      of content blocks: optional leading ``text`` block, then one
+      ``tool_use`` block per call (OpenAI ``function.arguments`` JSON
+      string is parsed to dict for Anthropic's ``input``).
+    * Everything else passes through with its content unchanged.
+    """
+    system_text = ""
+    out: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content", "")
+        if role == "system":
+            if isinstance(content, str):
+                system_text += content + "\n"
+            else:
+                system_text += str(content) + "\n"
+            continue
+        if role == "tool":
+            tool_call_id = m.get("tool_call_id") or m.get("id") or ""
+            if not tool_call_id:
+                # Fail fast with a clear error instead of silently
+                # letting Anthropic reject the message — we can't
+                # reconstruct a ``tool_use_id`` from thin air.
+                raise ValueError(
+                    "Anthropic request build: tool-result message missing "
+                    "'tool_call_id'; cannot convert to tool_result block"
+                )
+            result_text = content if isinstance(content, str) else json.dumps(content)
+            out.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": str(tool_call_id),
+                        "content": result_text,
+                    }
+                ],
+            })
+            continue
+        if role == "assistant" and m.get("tool_calls"):
+            blocks: list[dict] = []
+            if isinstance(content, str) and content:
+                blocks.append({"type": "text", "text": content})
+            for call in m["tool_calls"]:
+                fn = call.get("function", {}) if isinstance(call, dict) else {}
+                raw_args = fn.get("arguments", "{}")
+                if isinstance(raw_args, str):
+                    try:
+                        parsed_args = json.loads(raw_args) if raw_args else {}
+                    except json.JSONDecodeError:
+                        parsed_args = {"_raw": raw_args}
+                else:
+                    parsed_args = raw_args
+                blocks.append({
+                    "type": "tool_use",
+                    "id": str(call.get("id") or ""),
+                    "name": str(fn.get("name") or ""),
+                    "input": parsed_args,
+                })
+            out.append({"role": "assistant", "content": blocks or content})
+            continue
+        out.append({"role": role, "content": content})
+    return system_text, out
+
+
+def _enforce_anthropic_thinking_max_tokens(body: dict) -> dict:
+    """Enforce Anthropic's ``max_tokens > thinking.budget_tokens`` invariant.
+
+    Matches ``AnthropicProvider.chat``: when the reasoning fork set a
+    ``thinking.budget_tokens`` block, the dispatcher's default
+    ``max_tokens=1024`` is smaller than every non-trivial budget
+    (16k / 32k) and Anthropic 400s. Bump to
+    ``budget + _ANTHROPIC_THINKING_RESPONSE_ROOM`` so there's room for
+    the post-thinking answer. Mutates and returns ``body``.
+    """
+    thinking = body.get("thinking")
+    if not isinstance(thinking, dict):
+        return body
+    budget = thinking.get("budget_tokens")
+    if not isinstance(budget, int) or budget <= 0:
+        return body
+    required = budget + _ANTHROPIC_THINKING_RESPONSE_ROOM
+    existing = body.get("max_tokens") or 0
+    if existing < required:
+        body["max_tokens"] = required
     return body
 
 
@@ -920,13 +1037,11 @@ class LLMProvider:
         temperature: float, max_tokens: int,
     ) -> dict:
         """Anthropic Messages API → normalized to OpenAI format."""
-        system_text = ""
-        conv_messages = []
-        for m in messages:
-            if m["role"] == "system":
-                system_text += m.get("content", "") + "\n"
-            else:
-                conv_messages.append({"role": m["role"], "content": m.get("content", "")})
+        # A5: route OpenAI-shape transcripts through the conversion
+        # helper so ``role: "tool"`` and assistant ``tool_calls`` are
+        # lifted into Anthropic's content-block shape before the wire
+        # request.
+        system_text, conv_messages = _convert_messages_for_anthropic(messages)
 
         body: dict = {
             "model": self.model,
@@ -952,6 +1067,7 @@ class LLMProvider:
 
         # Reasoning-family fork for Claude thinking-capable models.
         apply_reasoning_fork("anthropic", self.model, body)
+        _enforce_anthropic_thinking_max_tokens(body)
 
         try:
             async def _do_anthropic():
@@ -1089,7 +1205,9 @@ class LLMProvider:
         text, tool_calls = self.extract_response(result)
         events: list[dict] = []
         if text:
-            events.append({"type": "text_delta", "content": text})
+            clean = sanitize_assistant_display_text(text)
+            if clean:
+                events.append({"type": "text_delta", "content": clean})
         for tc in tool_calls:
             events.append({"type": "tool_call_delta", "tool_call": tc})
         events.append({"type": "done"})
@@ -1223,8 +1341,10 @@ class LLMProvider:
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
 
                 if delta.get("content"):
-                    streamed_text = True
-                    yield {"type": "text_delta", "content": delta["content"]}
+                    piece = sanitize_assistant_display_text(delta["content"])
+                    if piece:
+                        streamed_text = True
+                        yield {"type": "text_delta", "content": piece}
 
                 for tc_delta in delta.get("tool_calls", []):
                     idx = tc_delta.get("index", 0)
@@ -1291,13 +1411,10 @@ class LLMProvider:
     ) -> AsyncGenerator[dict, None]:
         """Native Anthropic Messages API streaming via SSE."""
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
-        system_prompt = ""
-        anthropic_messages = []
-        for m in messages:
-            if m["role"] == "system":
-                system_prompt = m["content"] if isinstance(m["content"], str) else str(m["content"])
-            else:
-                anthropic_messages.append({"role": m["role"], "content": m["content"]})
+        # A5: same OpenAI → Anthropic conversion as the non-stream path.
+        # Streaming previously forwarded ``role: "tool"`` as-is and
+        # produced the same 400 on tool-using transcripts.
+        system_prompt, anthropic_messages = _convert_messages_for_anthropic(messages)
 
         body: dict = {
             "model": self.model,
@@ -1306,12 +1423,13 @@ class LLMProvider:
             "temperature": temperature,
             "stream": True,
         }
-        if system_prompt:
-            body["system"] = system_prompt
+        if system_prompt.strip():
+            body["system"] = system_prompt.strip()
         # Thinking-capable Claude models demand ``thinking`` + drop
         # ``temperature`` when streaming; adaptive (Opus 4.7) passes
         # through unchanged.
         apply_reasoning_fork("anthropic", self.model, body)
+        _enforce_anthropic_thinking_max_tokens(body)
         if tools:
             body["tools"] = [
                 {
@@ -1362,7 +1480,9 @@ class LLMProvider:
                         elif event_type == "content_block_delta":
                             delta = event.get("delta", {})
                             if delta.get("type") == "text_delta":
-                                yield {"type": "text_delta", "content": delta.get("text", "")}
+                                piece = sanitize_assistant_display_text(delta.get("text", ""))
+                                if piece:
+                                    yield {"type": "text_delta", "content": piece}
                             elif delta.get("type") == "input_json_delta":
                                 if current_tool_id in accumulated_tool_calls:
                                     accumulated_tool_calls[current_tool_id]["arguments"] += delta.get("partial_json", "")
@@ -1718,13 +1838,7 @@ class LLMProvider:
         temperature: float, max_tokens: int,
     ) -> dict:
         """Build Anthropic Messages API request body."""
-        system_text = ""
-        conv: list[dict] = []
-        for m in messages:
-            if m["role"] == "system":
-                system_text += m.get("content", "") + "\n"
-            else:
-                conv.append({"role": m["role"], "content": m.get("content", "")})
+        system_text, conv = _convert_messages_for_anthropic(messages)
         body: dict = {
             "model": model,
             "max_tokens": max_tokens,
@@ -1746,6 +1860,7 @@ class LLMProvider:
             if anthropic_tools:
                 body["tools"] = anthropic_tools
         apply_reasoning_fork("anthropic", model, body)
+        _enforce_anthropic_thinking_max_tokens(body)
         return body
 
     async def _call_provider(
@@ -1909,7 +2024,48 @@ class LLMProvider:
                 increment("feral.llm.errors_total", attributes={"provider": provider_name})
                 reason = classify_error(e)
                 self._cooldown.record_failure(provider_name, reason)
-                logger.warning("Provider %s failed (%s): %s", provider_name, reason.value, e)
+                # A5: surface the upstream HTTP body (status + JSON
+                # ``error.message`` / ``type`` / ``code`` / ``param``)
+                # instead of opaque ``str(e)`` which for
+                # ``httpx.HTTPStatusError`` is just the status line. The
+                # structured ``extra`` fields make the full body
+                # searchable in the ops log / metrics backend; the
+                # primary log line stays human-readable.
+                detail = _describe_error(e)
+                http_status: Any = ""
+                error_type = ""
+                error_code = ""
+                error_param = ""
+                body_snippet = ""
+                if isinstance(e, httpx.HTTPStatusError):
+                    http_status = getattr(e.response, "status_code", "")
+                    try:
+                        payload = e.response.json()
+                    except Exception:
+                        payload = {}
+                    if isinstance(payload, dict):
+                        err_obj = payload.get("error", payload)
+                        if isinstance(err_obj, dict):
+                            error_type = str(err_obj.get("type", "") or "")
+                            error_code = str(err_obj.get("code", "") or "")
+                            error_param = str(err_obj.get("param", "") or "")
+                    try:
+                        body_snippet = (e.response.text or "")[:2048]
+                    except Exception:
+                        body_snippet = ""
+                logger.warning(
+                    "Provider %s failed (%s): %s",
+                    provider_name, reason.value, detail,
+                    extra={
+                        "provider": provider_name,
+                        "failover_reason": reason.value,
+                        "http_status": http_status,
+                        "error_type": error_type,
+                        "error_code": error_code,
+                        "error_param": error_param,
+                        "body_snippet": body_snippet,
+                    },
+                )
                 last_error = e
                 if reason == FailoverReason.CONTEXT_OVERFLOW:
                     raise

@@ -385,29 +385,97 @@ class BrowserController:
             self._console_logs = self._console_logs[-500:]
 
     async def navigate(self, url: str, wait_until: str = "domcontentloaded") -> dict:
-        """Navigate with configurable wait strategy: load, domcontentloaded, networkidle."""
+        """Navigate and verify the browser actually loaded ``url``.
+
+        Previously the CDP-only branch returned ``success: True`` immediately
+        after ``Page.navigate`` without observing any page event — so if Chrome
+        was frozen, the tab was unchanged, or the navigation was blocked, logs
+        still said "navigated successfully" while the user saw nothing move.
+
+        The new contract:
+          * Playwright path uses ``page.goto`` (unchanged; it already waits).
+          * CDP path subscribes to ``Page.loadEventFired`` BEFORE issuing the
+            navigate, polls the current URL as a fallback signal, and returns
+            ``success: False`` on timeout with an actionable error.
+          * If the browser is not connected at all, we fail loudly instead of
+            faking success.
+        """
         try:
             if wait_until not in ("load", "domcontentloaded", "networkidle", "commit"):
                 wait_until = "domcontentloaded"
+
             if self._page:
                 resp = await self._page.goto(url, wait_until=wait_until, timeout=30000)
                 status = resp.status if resp else 0
-            else:
+                title = await self._get_title()
+                final_url = ""
+                try:
+                    final_url = self._page.url or url
+                except Exception:
+                    final_url = url
+                return {
+                    "success": True,
+                    "url": final_url or url,
+                    "requested_url": url,
+                    "status": status,
+                    "title": title,
+                }
+
+            if not self._cdp.connected:
+                return {
+                    "success": False,
+                    "error": (
+                        "Browser not running. Start Chrome with "
+                        "--remote-debugging-port=9222 or install Playwright."
+                    ),
+                    "requested_url": url,
+                }
+
+            load_future: asyncio.Future = asyncio.get_event_loop().create_future()
+
+            def _on_event(msg: dict):
+                method = msg.get("method", "")
+                if method == "Page.loadEventFired" and not load_future.done():
+                    load_future.set_result(True)
+
+            self._cdp.add_event_listener(_on_event)
+            try:
                 await self._cdp.send_command("Page.enable")
                 await self._cdp.send_command("Page.navigate", {"url": url})
-                # Wait for Page.loadEventFired or timeout
                 try:
-                    await asyncio.wait_for(
-                        self._cdp.send_command("Page.getNavigationHistory"),
-                        timeout=10.0,
-                    )
+                    await asyncio.wait_for(load_future, timeout=15.0)
                 except asyncio.TimeoutError:
+                    return {
+                        "success": False,
+                        "error": f"Navigation to {url} did not fire Page.loadEventFired within 15s.",
+                        "requested_url": url,
+                    }
+            finally:
+                try:
+                    self._cdp._event_listeners.remove(_on_event)
+                except (ValueError, AttributeError):
                     pass
-                status = 200
+
+            final_url = url
+            try:
+                info = await self._cdp.send_command("Runtime.evaluate", {
+                    "expression": "window.location.href",
+                    "returnByValue": True,
+                })
+                final_url = info.get("result", {}).get("value", url) or url
+            except Exception:
+                pass
+
             title = await self._get_title()
-            return {"success": True, "url": url, "status": status, "title": title}
+            return {
+                "success": True,
+                "url": final_url,
+                "requested_url": url,
+                "status": 200,
+                "title": title,
+            }
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": str(e), "requested_url": url}
 
     async def _get_title(self) -> str:
         try:

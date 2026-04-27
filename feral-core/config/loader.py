@@ -136,6 +136,15 @@ class ConfigLoader:
         # Layer 4: Environment variable overrides
         self._apply_env_overrides()
 
+        # Unify vision flag: the settings UI historically wrote to
+        # ``features.vision`` while the env/export path read from
+        # ``vision.enabled``. Treat either being truthy as "on" and mirror
+        # the coalesced value back into BOTH keys so the rest of the
+        # system sees a single source of truth regardless of which path
+        # the operator used. Same for ``features.proactive`` (kept in
+        # sync with itself, but we formalise the contract).
+        self._unify_feature_flags()
+
         # Load credentials separately
         self._load_credentials()
 
@@ -170,6 +179,9 @@ class ConfigLoader:
             "FERAL_LLM_PROVIDER": ("llm", "provider"),
             "FERAL_LLM_MODEL": ("llm", "model"),
             "FERAL_LLM_BASE_URL": ("llm", "base_url"),
+            # ``FERAL_VISION_ENABLED`` is applied to ``vision.enabled``
+            # here; ``_unify_feature_flags`` mirrors it into
+            # ``features.vision`` so every consumer sees the same truth.
             "FERAL_VISION_ENABLED": ("vision", "enabled"),
             "FERAL_VISION_MAX_FRAME_KB": ("vision", "max_frame_kb"),
             "FERAL_STREAMING": ("features", "streaming"),
@@ -201,6 +213,39 @@ class ConfigLoader:
                     pass
             else:
                 self._merged[section][key] = value
+
+    def _unify_feature_flags(self):
+        """Coalesce ``features.vision`` and ``vision.enabled`` into one truth.
+
+        Before W-A6 the settings UI wrote ``features.vision`` while the
+        boot-time ``export_as_env()`` read ``vision.enabled``. That drift
+        meant toggling vision off in the UI persisted, but the next
+        restart exported ``FERAL_VISION_ENABLED=false`` based on the
+        OTHER key and still started the ScreenLoop. We now take the
+        logical OR of the two on read and mirror the result back into
+        both, so whichever path the operator uses, the runtime agrees.
+        """
+        features = self._merged.setdefault("features", {})
+        vision = self._merged.setdefault("vision", {})
+
+        features_vision = features.get("vision")
+        vision_enabled = vision.get("enabled")
+
+        def _truthy(v):
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, str):
+                return v.lower() in ("true", "1", "yes", "on")
+            return bool(v)
+
+        # If either key is explicitly set, prefer the truthy one.
+        if features_vision is None and vision_enabled is None:
+            unified = False
+        else:
+            unified = _truthy(features_vision) or _truthy(vision_enabled)
+
+        features["vision"] = unified
+        vision["enabled"] = unified
 
     def _load_credentials(self):
         """Load credentials from a separate file (never merged into settings)."""
@@ -404,6 +449,17 @@ class ConfigLoader:
         if section not in user_settings:
             user_settings[section] = {}
         user_settings[section][key] = value
+
+        # Keep ``features.vision`` and ``vision.enabled`` in lockstep on
+        # write so the next ``discover()`` cannot observe split truth
+        # (see ``_unify_feature_flags``).
+        if section == "features" and key == "vision":
+            user_settings.setdefault("vision", {})["enabled"] = bool(value)
+            self._merged.setdefault("vision", {})["enabled"] = bool(value)
+        elif section == "vision" and key == "enabled":
+            user_settings.setdefault("features", {})["vision"] = bool(value)
+            self._merged.setdefault("features", {})["vision"] = bool(value)
+
         self.save_user_settings(user_settings)
 
     def mark_setup_complete(self):
@@ -460,10 +516,14 @@ class ConfigLoader:
             env["FERAL_TTS_VOICE"] = str(audio["tts_voice"])
 
         vision = self._merged.get("vision", {})
-        env["FERAL_VISION_ENABLED"] = str(vision.get("enabled", False)).lower()
+        features = self._merged.get("features", {})
+        # Vision flag is coalesced by ``_unify_feature_flags`` but we
+        # re-apply the OR here defensively so a caller that skipped
+        # discover() still exports a sensible value.
+        vision_on = bool(vision.get("enabled", False)) or bool(features.get("vision", False))
+        env["FERAL_VISION_ENABLED"] = str(vision_on).lower()
         env["FERAL_VISION_MAX_FRAME_KB"] = str(vision.get("max_frame_kb", 512))
 
-        features = self._merged.get("features", {})
         env["FERAL_STREAMING"] = str(features.get("streaming", False)).lower()
         env["FERAL_PROACTIVE"] = str(features.get("proactive", False)).lower()
         env["FERAL_MULTI_AGENT"] = str(features.get("multi_agent", True)).lower()

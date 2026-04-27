@@ -262,6 +262,17 @@ async def handle_daemon_result(orchestrator, node_id: str, result: dict, session
     status = "success" if success else result.get("status", "error")
     logger.info(f"Daemon {node_id} -> {status}: {str(output)[:200]}")
 
+    ack_payload = {
+        "success": bool(success),
+        "status_code": 200 if success else 500,
+        "data": {"output": output} if output else (data if isinstance(data, dict) else None),
+        "error": error or None,
+    }
+    try:
+        orchestrator.tool_runner.resolve_daemon_ack(request_id, ack_payload)
+    except Exception:
+        pass
+
     daemon_session_map = orchestrator.tool_runner._daemon_session_map
     if not session_id:
         if request_id and request_id in daemon_session_map:

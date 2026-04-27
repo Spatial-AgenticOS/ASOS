@@ -216,8 +216,12 @@ class TestRecordFire:
 
 class TestStopStart:
     def test_stop_sets_flag(self, engine):
+        import asyncio
+
         engine._running = True
-        engine.stop()
+        # A7: stop() is now ``async def`` so it can cancel the running
+        # evaluation task rather than merely flagging _running=False.
+        asyncio.run(engine.stop())
         assert engine._running is False
 
 

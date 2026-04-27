@@ -130,6 +130,48 @@ class TestBrowserController:
         assert out["failed"]["#missing"] == "not found"
 
 
+class TestBrowserNavigate:
+    """A2 — navigate must report real execution state, never fake success."""
+
+    @pytest.mark.asyncio
+    async def test_navigate_returns_failure_when_browser_not_running(self) -> None:
+        """With no Playwright ``_page`` and CDP disconnected, navigate must
+        surface an actionable ``success: False`` — not claim success."""
+        ctrl = BrowserController()
+        assert ctrl.connected is False
+        assert ctrl._page is None
+
+        result = await ctrl.navigate("https://example.com")
+        assert result["success"] is False
+        assert "Browser not running" in result["error"]
+        assert result["requested_url"] == "https://example.com"
+
+    @pytest.mark.asyncio
+    async def test_navigate_via_cdp_times_out_without_load_event(self) -> None:
+        """If Chrome never fires ``Page.loadEventFired``, navigate must
+        time out with a useful error — no silent stub success."""
+        import asyncio
+
+        ctrl = BrowserController()
+        ctrl._cdp._connected = True
+
+        async def _send_command(method, params=None, timeout=30.0):
+            return {}
+
+        ctrl._cdp.send_command = _send_command  # type: ignore[assignment]
+
+        orig_wait_for = asyncio.wait_for
+
+        async def _fast_wait_for(awaitable, timeout):
+            return await orig_wait_for(awaitable, timeout=0.05)
+
+        with patch("skills.impl.browser_use.asyncio.wait_for", _fast_wait_for):
+            result = await ctrl.navigate("https://example.com")
+
+        assert result["success"] is False
+        assert "Page.loadEventFired" in result["error"]
+
+
 class TestBrowserSkillManifest:
     """Tests for the exported manifest helper."""
 

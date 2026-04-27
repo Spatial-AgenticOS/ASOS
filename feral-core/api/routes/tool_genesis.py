@@ -75,7 +75,7 @@ async def approve_tool(body: dict):
         raise HTTPException(status_code=400, detail="tool_id required")
     if not engine.approve_tool(tool_id):
         raise HTTPException(status_code=404, detail=f"No tool {tool_id}")
-    result = engine.promote(tool_id, skill_registry=state.skills)
+    result = engine.promote(tool_id, skill_registry=state.skill_registry)
     return {"success": bool(result.get("promoted")), **result}
 
 

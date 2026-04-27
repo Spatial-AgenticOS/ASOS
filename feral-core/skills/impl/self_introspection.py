@@ -60,10 +60,23 @@ class SelfIntrospectionSkill(BaseSkill):
     # Handlers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _skill_registry(state):
+        """Return the live SkillRegistry regardless of legacy attribute name.
+
+        Historically callers used ``state.skills``; canonical is
+        ``state.skill_registry``. BrainState now exposes both, but we
+        still probe defensively so this skill works against older
+        snapshots + tests that mock only one of the two.
+        """
+        return getattr(state, "skill_registry", None) or getattr(state, "skills", None)
+
     def _list_capabilities(self, state) -> Dict[str, Any]:
         skills_out = []
+        registry = self._skill_registry(state)
+        skill_map = getattr(registry, "skills", {}) if registry is not None else {}
         try:
-            for skill in state.skills.skills.values():
+            for skill in skill_map.values():
                 endpoints = []
                 for ep in getattr(skill, "endpoints", []) or []:
                     endpoints.append({
@@ -92,7 +105,9 @@ class SelfIntrospectionSkill(BaseSkill):
         target = (args.get("skill_id") or "").strip()
         if not target:
             return {"success": False, "status_code": 400, "data": None, "error": "skill_id required"}
-        skill = state.skills.skills.get(target) if getattr(state, "skills", None) else None
+        registry = self._skill_registry(state)
+        skill_map = getattr(registry, "skills", {}) if registry is not None else {}
+        skill = skill_map.get(target)
         if skill is None:
             return {"success": False, "status_code": 404, "data": None, "error": f"No skill named {target!r}"}
         endpoints = []
@@ -149,7 +164,7 @@ class SelfIntrospectionSkill(BaseSkill):
     def _list_specialists(self, state) -> Dict[str, Any]:
         specialists = []
         try:
-            engine = getattr(state, "mitosis_engine", None)
+            engine = getattr(state, "agent_mitosis", None) or getattr(state, "mitosis_engine", None)
             if engine and hasattr(engine, "list_specialists"):
                 for sp in engine.list_specialists():
                     specialists.append({
@@ -200,32 +215,52 @@ class SelfIntrospectionSkill(BaseSkill):
 
     @staticmethod
     def _connected_devices_payload(state) -> list[dict]:
+        """Return a compact view of devices known to ``state.device_registry``.
+
+        Falls back to legacy ``node_registry`` / ``nodes`` attributes for
+        any caller that still exposes them. The canonical path uses
+        ``DeviceRegistry.list_devices()`` (see ``hardware/protocol.py``);
+        anything else is best-effort.
+        """
         try:
-            registry = getattr(state, "node_registry", None) or getattr(state, "nodes", None)
+            registry = (
+                getattr(state, "device_registry", None)
+                or getattr(state, "node_registry", None)
+                or getattr(state, "nodes", None)
+            )
             if not registry:
                 return []
-            if hasattr(registry, "list_nodes"):
+            if hasattr(registry, "list_devices"):
+                raw = registry.list_devices()
+            elif hasattr(registry, "list_nodes"):
                 raw = registry.list_nodes()
             elif hasattr(registry, "all"):
                 raw = registry.all()
             elif hasattr(registry, "nodes"):
                 raw = list(registry.nodes.values())
+            elif hasattr(registry, "_devices"):
+                raw = list(registry._devices.values())
             else:
                 return []
             devices = []
             for node in raw:
                 if isinstance(node, dict):
+                    caps = node.get("capabilities") or []
                     devices.append({
-                        "node_id": node.get("node_id") or node.get("id"),
-                        "type": node.get("type") or node.get("device_type"),
-                        "capabilities": node.get("capabilities") or [],
+                        "node_id": node.get("device_id") or node.get("node_id") or node.get("id"),
+                        "type": node.get("device_type") or node.get("type"),
+                        "name": node.get("name"),
+                        "capabilities": [getattr(c, "category", c) if not isinstance(c, str) else c for c in caps],
                         "last_seen": node.get("last_seen"),
                     })
                 else:
+                    caps_raw = list(getattr(node, "capabilities", []) or [])
+                    caps = [getattr(c, "category", None) or getattr(c, "name", None) or str(c) for c in caps_raw]
                     devices.append({
-                        "node_id": getattr(node, "node_id", None) or getattr(node, "id", None),
-                        "type": getattr(node, "type", None) or getattr(node, "device_type", None),
-                        "capabilities": list(getattr(node, "capabilities", []) or []),
+                        "node_id": getattr(node, "device_id", None) or getattr(node, "node_id", None) or getattr(node, "id", None),
+                        "type": getattr(node, "device_type", None) or getattr(node, "type", None),
+                        "name": getattr(node, "name", None),
+                        "capabilities": caps,
                         "last_seen": getattr(node, "last_seen", None),
                     })
             return devices

@@ -655,18 +655,39 @@ class ProviderCatalog:
         """
         if provider_id not in self._descriptors:
             return ""
+        # A5 (audit-v2026.5.5): refuse to resolve a raw sorted ``[0]``
+        # from ``/v1/models`` as the chat default. Sorted alphabetically,
+        # OpenAI's live list starts with ``babbage-002`` (completion-only)
+        # and OpenRouter's starts with ``ai21/jamba-large-1.7``; shipping
+        # either as the chat default produced the v2026.5.0 "chat + tools
+        # returns 404 / 400 after a live refresh" regression. We now
+        # walk the list through (a) recommended shortlist (first tier),
+        # (b) chat-class filter, (c) unfiltered raw list — in that order
+        # — and only fall back to ``[0]`` when every filter is empty.
+        from .model_classes import filter_models
+        from .recommended import recommended_for
+
         cached = self._models.get(provider_id)
+        base_models: list[str] = []
         if cached and cached.models:
-            return cached.models[0]
-        adapter = self._adapters.get(provider_id)
-        if adapter is not None:
-            try:
-                models = list(adapter.list_models() or [])
-            except Exception:
-                models = []
-            if models:
-                return models[0]
-        return ""
+            base_models = list(cached.models)
+        else:
+            adapter = self._adapters.get(provider_id)
+            if adapter is not None:
+                try:
+                    base_models = list(adapter.list_models() or [])
+                except Exception:
+                    base_models = []
+        if not base_models:
+            return ""
+
+        pick = recommended_for(provider_id, base_models)
+        if pick:
+            return pick[0]
+        chat_only = filter_models(provider_id, base_models, model_class="chat")
+        if chat_only:
+            return chat_only[0]
+        return base_models[0]
 
     async def refresh_async(
         self,

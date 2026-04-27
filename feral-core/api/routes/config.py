@@ -113,9 +113,21 @@ async def update_config(body: dict):
             os.environ["FERAL_PROACTIVE"] = str(enabled).lower()
             if hasattr(state, 'proactive') and state.proactive:
                 if enabled:
-                    import asyncio
-                    asyncio.create_task(state.proactive.start())
+                    # ``ProactiveEngine.start`` schedules its internal
+                    # ``_run_loop`` task on ``self._task`` and returns
+                    # fast, so awaiting it here is non-blocking. The
+                    # inner task is forwarded into the central registry
+                    # so shutdown can cancel it cleanly.
+                    await state.proactive.start()
+                    if getattr(state.proactive, "_task", None) is not None:
+                        state.register_background_task(state.proactive._task)
                 else:
+                    # A6 — ``ProactiveEngine.stop`` is ``async def``
+                    # (it awaits task cancellation). It MUST be
+                    # awaited here: the pre-A6 route called it without
+                    # await, which was silently discarding the
+                    # coroutine and leaving the loop running for a
+                    # full interval afterwards.
                     await state.proactive.stop()
         elif key == "vision":
             os.environ["FERAL_VISION_ENABLED"] = str(enabled).lower()
@@ -123,10 +135,21 @@ async def update_config(body: dict):
                 state.orchestrator._vision_enabled = enabled
             if hasattr(state, 'screen_loop') and state.screen_loop:
                 if enabled:
-                    import asyncio
-                    asyncio.create_task(state.screen_loop.start())
+                    # ``ScreenLoop.start`` schedules its own capture
+                    # task on ``self._task`` and returns fast, so
+                    # awaiting it is non-blocking. We forward that
+                    # inner task into the central registry.
+                    await state.screen_loop.start()
+                    if getattr(state.screen_loop, "_task", None) is not None:
+                        state.register_background_task(state.screen_loop._task)
                 else:
-                    state.screen_loop.stop()
+                    # A6 — ``ScreenLoop.stop`` is ``async def`` and
+                    # cancels the capture task. Previously the route
+                    # called ``state.screen_loop.stop()`` without
+                    # awaiting it, producing a "coroutine was never
+                    # awaited" warning while the loop kept burning
+                    # vision-model API quota every interval.
+                    await state.screen_loop.stop()
         elif key == "self_learning":
             os.environ["FERAL_SELF_LEARNING"] = str(enabled).lower()
 
@@ -152,6 +175,14 @@ _EXTRA_PROVIDER_ENV_VARS: frozenset[str] = frozenset({
     "FERAL_TELEGRAM_BOT_TOKEN",
     "FERAL_DISCORD_BOT_TOKEN",
     "FERAL_SLACK_BOT_TOKEN",
+    "FERAL_SLACK_APP_TOKEN",
+    # WhatsApp Cloud API (Meta) — none end in _API_KEY, so they would be
+    # silently rejected by ``_is_accepted_env_key`` without an explicit
+    # allowlist entry here.
+    "FERAL_WHATSAPP_ACCESS_TOKEN",
+    "FERAL_WHATSAPP_PHONE_NUMBER_ID",
+    "FERAL_WHATSAPP_APP_SECRET",
+    "FERAL_WHATSAPP_VERIFY_TOKEN",
 })
 
 
@@ -245,11 +276,29 @@ async def save_credentials(body: dict):
             "FERAL_DISCORD_BOT_TOKEN": "discord",
             "FERAL_SLACK_BOT_TOKEN": "slack",
         }
+        import asyncio
         for env_key, channel_type in channel_keys.items():
+            # Only act on keys that were part of *this* save so a
+            # partial Settings write (e.g. just OPENAI_API_KEY) doesn't
+            # spuriously bounce every messaging channel.
+            if env_key not in creds:
+                continue
             token = os.environ.get(env_key, "")
-            if token and channel_type not in [ch for ch in state.channel_manager._channels]:
-                import asyncio
-                asyncio.create_task(state.channel_manager.start_channel(channel_type, {"bot_token": token, "enabled": True}))
+            if not token:
+                continue
+            existing = state.channel_manager._channels.get(channel_type)
+            existing_cfg = getattr(existing, "config", {}) if existing else {}
+            existing_token = (existing_cfg or {}).get("bot_token", "") if isinstance(existing_cfg, dict) else ""
+            # If the channel isn't running yet, start it. If it IS running
+            # but the token actually changed, restart so the new token
+            # takes effect (``start_channel`` now stops the old instance
+            # before creating the new one).
+            if existing is None or existing_token.strip() != token.strip():
+                asyncio.create_task(
+                    state.channel_manager.start_channel(
+                        channel_type, {"bot_token": token, "enabled": True},
+                    ),
+                )
 
     return {
         "ok": True,
