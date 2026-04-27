@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+# Concurrency: for pull-request events, cancel the prior run on the
+# same PR when a new push arrives. For pushes to main we don't cancel
+# (we want every merge-commit's CI result on record). Net effect:
+# a PR with 5 rapid pushes runs CI 1× instead of 5×.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     name: Brain — ruff lint
