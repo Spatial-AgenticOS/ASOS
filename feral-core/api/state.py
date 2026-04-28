@@ -79,6 +79,29 @@ logger = logging.getLogger("feral.brain")
 
 VISION_MAX_FRAME_KB = int(os.environ.get("FERAL_VISION_MAX_FRAME_KB", "512"))
 
+# W3-A13: avoid exporting channel/webhook secrets into process-global env
+# when applying ConfigLoader/export_as_env at boot. These credentials are
+# passed explicitly via config objects / channel configs instead.
+_SENSITIVE_ENV_EXPORT_KEYS = frozenset({
+    "FERAL_TELEGRAM_BOT_TOKEN",
+    "FERAL_SLACK_BOT_TOKEN",
+    "FERAL_SLACK_APP_TOKEN",
+    "FERAL_SLACK_SIGNING_SECRET",
+    "FERAL_DISCORD_BOT_TOKEN",
+    "FERAL_WHATSAPP_PHONE_NUMBER_ID",
+    "FERAL_WHATSAPP_ACCESS_TOKEN",
+    "FERAL_WHATSAPP_VERIFY_TOKEN",
+    "FERAL_WHATSAPP_APP_SECRET",
+})
+
+
+def _should_export_runtime_env_key(key: str) -> bool:
+    if not isinstance(key, str):
+        return False
+    if key.startswith("FERAL_KEY_"):
+        return False
+    return key not in _SENSITIVE_ENV_EXPORT_KEYS
+
 
 def _feature_flag_enabled(env_key: str) -> bool:
     """Return True when ``os.environ[env_key]`` holds a truthy flag value.
@@ -127,7 +150,8 @@ class BrainState:
         self.config = ConfigLoader()
         self.config.discover()
         for env_key, env_value in self.config.export_as_env().items():
-            os.environ[env_key] = env_value
+            if _should_export_runtime_env_key(env_key):
+                os.environ[env_key] = env_value
         self.sessions: dict[str, WebSocket] = {}
         self.daemons: dict[str, WebSocket] = {}
         self.devices: dict[str, dict] = {}
@@ -491,6 +515,10 @@ class BrainState:
             self.taskflows = TaskFlowRuntime(memory_store=self.memory)
             await self.taskflows.start()
 
+        with boot_subsystem(self._boot_report, "ApprovalManager"):
+            from security.exec_approvals import ApprovalManager
+            self.approval_manager = ApprovalManager()
+
         with boot_subsystem(self._boot_report, "Orchestrator", optional=False):
             self.orchestrator = Orchestrator(
                 skill_registry=self.skill_registry,
@@ -501,6 +529,7 @@ class BrainState:
                 perception=self.perception,
                 learner=self.learner,
                 taskflows=self.taskflows,
+                approval_manager=self.approval_manager,
             )
             self.orchestrator.set_llm(_shared_llm)
             if self.vault:
@@ -509,10 +538,6 @@ class BrainState:
                 self.orchestrator.executor.set_wasm_sandbox(self.wasm_sandbox)
             if self.mcp_client:
                 self.orchestrator.set_mcp_client(self.mcp_client)
-            if self.tool_genesis:
-                self.orchestrator.set_tool_genesis(self.tool_genesis)
-            if self.agent_mitosis:
-                self.orchestrator.set_mitosis_engine(self.agent_mitosis)
 
         with boot_subsystem(self._boot_report, "Supervisor"):
             # One seat that sees every input the Brain acts on. Wraps the
@@ -654,10 +679,6 @@ class BrainState:
         with boot_subsystem(self._boot_report, "BrowserController"):
             self.browser = BrowserController()
             self._register_browser_skill()
-
-        with boot_subsystem(self._boot_report, "ApprovalManager"):
-            from security.exec_approvals import ApprovalManager
-            self.approval_manager = ApprovalManager()
 
         with boot_subsystem(self._boot_report, "DockerSandbox"):
             from security.docker_sandbox import get_sandbox
@@ -976,26 +997,50 @@ class BrainState:
         self.channel_manager.set_handler(_channel_message_handler)
 
         def _cred(key: str) -> str:
-            """Read a channel credential from env, falling back to credentials.json."""
-            v = os.environ.get(key, "")
-            if v:
-                return v
+            """Resolve a channel credential without mutating ``os.environ``.
+
+            W3-A13 — channel tokens are read in priority order:
+            1. ``self.config._credentials`` (the in-process source of
+               truth, populated from the encrypted vault and from
+               ``credentials.json`` at boot).
+            2. Process env (operator may set FERAL_TELEGRAM_BOT_TOKEN
+               etc. directly for headless deployments).
+            3. ``credentials.json`` on disk as a last-ditch fallback for
+               very old layouts where neither the vault nor the merged
+               config reached the in-memory ``_credentials`` dict.
+
+            Previously this helper exported the resolved value into
+            ``os.environ`` so subsequent reads would see it, which made
+            two BrainState init cycles (e.g. test-suite teardown / setup)
+            silently leak channel tokens into the process env. The token
+            now flows explicitly through the channel config dict below;
+            no global env mutation is required.
+            """
             try:
                 if self.config and hasattr(self.config, "get_credential"):
                     v = self.config.get_credential(key) or ""
                     if v:
-                        os.environ[key] = v
                         return v
             except Exception:
                 pass
+            v = os.environ.get(key, "") or ""
+            if v:
+                return v
             try:
                 import json as _json
                 creds_path = feral_home() / "credentials.json"
                 if creds_path.exists():
                     creds = _json.loads(creds_path.read_text())
                     v = creds.get(key) or ""
-                    if v:
-                        os.environ[key] = v
+            except Exception:
+                pass
+            if v:
+                return v
+            # Final fallback for vault-only installs (v2026.5.0+). This
+            # keeps channel startup independent of ``os.environ`` export.
+            try:
+                if self.vault and hasattr(self.vault, "retrieve"):
+                    v = self.vault.retrieve(key) or ""
             except Exception:
                 pass
             return v
@@ -1017,6 +1062,7 @@ class BrainState:
             "whatsapp": {
                 "access_token": _cred("FERAL_WHATSAPP_ACCESS_TOKEN"),
                 "phone_number_id": _cred("FERAL_WHATSAPP_PHONE_NUMBER_ID"),
+                "app_secret": _cred("FERAL_WHATSAPP_APP_SECRET"),
                 "enabled": bool(_cred("FERAL_WHATSAPP_ACCESS_TOKEN") and _cred("FERAL_WHATSAPP_PHONE_NUMBER_ID")),
             },
         }
@@ -1162,7 +1208,7 @@ class BrainState:
 
     @staticmethod
     def _load_stored_credentials():
-        """Load API keys from ~/.feral/credentials.json into environment.
+        """Load legacy SDK credential keys into process environment.
 
         If ``credentials.json`` is missing OR corrupt we fall back to
         reading every known env var out of the BlindVault directly.
@@ -1181,12 +1227,6 @@ class BrainState:
             "SERPER_API_KEY", "GITHUB_TOKEN", "SPOTIFY_CLIENT_ID",
             "PERPLEXITY_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CSE_ID",
             "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
-            # Messaging channels
-            "FERAL_TELEGRAM_BOT_TOKEN",
-            "FERAL_SLACK_BOT_TOKEN", "FERAL_SLACK_APP_TOKEN", "FERAL_SLACK_SIGNING_SECRET",
-            "FERAL_DISCORD_BOT_TOKEN",
-            "FERAL_WHATSAPP_PHONE_NUMBER_ID", "FERAL_WHATSAPP_ACCESS_TOKEN",
-            "FERAL_WHATSAPP_VERIFY_TOKEN", "FERAL_WHATSAPP_APP_SECRET",
         ]
         loaded: list[str] = []
         creds: dict = {}

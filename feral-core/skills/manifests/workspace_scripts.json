@@ -79,5 +79,6 @@
     "triggers": [],
     "permissions": ["filesystem", "execute"],
     "requires_daemon": false,
+    "requires_sandbox": true,
     "max_calls_per_hour": 200
 }

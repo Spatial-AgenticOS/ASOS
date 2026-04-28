@@ -62,6 +62,9 @@ class SkillEndpoint(BaseModel):
     params: list[EndpointParam] = []
     returns_description: str = ""  # What the response contains
     ui_hint: Optional[str] = None  # "grid_cards", "detail_card", "map", "list", "metric"
+    # If True, this endpoint must run in an execution sandbox and must not
+    # silently fall back to host in-process execution.
+    requires_sandbox: bool = False
 
 
 class FlowStep(BaseModel):
@@ -132,6 +135,9 @@ class SkillManifest(BaseModel):
     # Hardware requirements (for hardware skills)
     requires_daemon: bool = False
     daemon_node_type: Optional[str] = None  # "desktop", "rpi", "robot"
+    # If True, every endpoint in this skill must execute inside a sandbox.
+    # Runtime enforcement lives in `skills/executor.py`.
+    requires_sandbox: bool = False
     
     # Rate limits
     max_calls_per_hour: int = 1000

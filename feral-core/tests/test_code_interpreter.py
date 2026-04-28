@@ -40,3 +40,21 @@ async def test_code_interpreter_captures_csv_artifact(tmp_path, monkeypatch) -> 
     assert out["success"] is True
     artifacts = out["data"]["artifacts"]
     assert any(a["name"] == "out.csv" for a in artifacts)
+
+
+@pytest.mark.asyncio
+async def test_code_interpreter_strict_mode_refuses_unsandboxed_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "skills.impl.code_interpreter.DOCKER_AVAILABLE", False, raising=False
+    )
+    skill = CodeInterpreterSkill()
+    out = await skill.execute(
+        "run_python",
+        {"code": "print('hi')", "_feral_require_sandbox": True},
+        {},
+    )
+    assert out["success"] is False
+    assert out["status_code"] == 503
+    assert "Sandbox required" in (out.get("error") or "")

@@ -13,11 +13,41 @@ import json
 import logging
 import time
 import httpx
-from enum import Enum
 from typing import Any, Optional, AsyncGenerator
 
 from config.runtime import ollama_base_url, ollama_openai_base_url
 from agents.chat_sanitizer import sanitize_assistant_display_text
+
+# W3-A15: failover/retry, reasoning request-body shaping, and Anthropic
+# transcript shaping live in focused sibling modules. They are imported
+# (and re-exported below) so the public API of ``agents.llm_provider``
+# is unchanged for existing callers and tests.
+from agents.llm_failover import (
+    MAX_RETRIES,
+    RETRY_DELAYS,
+    _RETRIABLE_CODES,
+    _SSE_KEEPALIVE_PREFIXES,
+    _retry_llm_call,
+    FailoverReason,
+    classify_error,
+    _describe_http_status_error,
+    _describe_error,
+    _chat_completions_model_guard,
+    ProviderCooldownTracker,
+)
+from agents.llm_reasoning import (
+    _apply_openai_reasoning_fork,
+    _apply_deepseek_reasoning_fork,
+    _apply_gemini_reasoning_fork,
+    _apply_anthropic_reasoning_fork,
+    _apply_groq_reasoning_fork,
+    apply_reasoning_fork,
+)
+from agents.llm_anthropic_shape import (
+    _ANTHROPIC_THINKING_RESPONSE_ROOM,
+    _convert_messages_for_anthropic,
+    _enforce_anthropic_thinking_max_tokens,
+)
 
 logger = logging.getLogger("feral.llm")
 
@@ -26,25 +56,6 @@ def _gemini_api_key() -> str | None:
     """Return Gemini API key. Prefers GEMINI_API_KEY; falls back to GOOGLE_API_KEY."""
     return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 
-
-MAX_RETRIES = 3
-RETRY_DELAYS = [1, 2, 4]  # seconds
-_RETRIABLE_CODES = ("429", "500", "502", "503", "504", "timeout", "connection")
-
-
-async def _retry_llm_call(coro_factory):
-    """Retry an LLM HTTP call with exponential backoff on transient errors."""
-    for attempt in range(MAX_RETRIES):
-        try:
-            return await coro_factory()
-        except Exception as e:
-            err_str = str(e).lower()
-            retriable = any(code in err_str for code in _RETRIABLE_CODES)
-            if not retriable or attempt == MAX_RETRIES - 1:
-                raise
-            logger.warning("LLM call failed (attempt %d/%d): %s — retrying in %ds",
-                           attempt + 1, MAX_RETRIES, e, RETRY_DELAYS[attempt])
-            await asyncio.sleep(RETRY_DELAYS[attempt])
 
 VISION_READY_OLLAMA_MODELS = (
     "llava",
@@ -56,267 +67,6 @@ VISION_READY_OLLAMA_MODELS = (
 )
 
 
-def _apply_openai_reasoning_fork(model: str, body: dict) -> dict:
-    """Rewrite *body* for OpenAI's reasoning-family contract.
-
-    gpt-5, gpt-5.4*, gpt-5.5*, o1/o3/o4: Chat Completions rejects
-    ``max_tokens`` and non-1 ``temperature`` / ``top_p`` / penalty
-    params with a 400 (this is the exact shape of the v2026.5.0 shipped
-    400s). The fix: rename to ``max_completion_tokens`` and strip.
-    Non-reasoning models (gpt-4o, gpt-4.1) pass through untouched.
-
-    Imported locally to keep module-load order simple — providers.model_classes
-    has no side-effects beyond regex compilation.
-    """
-    from providers.model_classes import classify
-    if classify("openai", model) != "reasoning":
-        return body
-    if "max_tokens" in body and "max_completion_tokens" not in body:
-        body["max_completion_tokens"] = body.pop("max_tokens")
-    else:
-        body.pop("max_tokens", None)
-    temp = body.get("temperature")
-    if temp is not None and temp != 1 and temp != 1.0:
-        body.pop("temperature", None)
-    for key in ("top_p", "presence_penalty", "frequency_penalty"):
-        body.pop(key, None)
-    body.setdefault("reasoning_effort", "medium")
-    return body
-
-
-def _apply_deepseek_reasoning_fork(model: str, body: dict) -> dict:
-    """Rewrite *body* for DeepSeek's thinking-mode contract.
-
-    v4-pro / deepseek-reasoner demand ``extra_body.thinking`` enabled
-    and reject sampling params in strict mode. v4-flash / deepseek-chat
-    are pass-through.
-    """
-    from providers.model_classes import classify
-    if classify("deepseek", model) != "reasoning":
-        return body
-    extra = body.setdefault("extra_body", {})
-    if not isinstance(extra, dict):
-        extra = {}
-        body["extra_body"] = extra
-    extra.setdefault("thinking", {"type": "enabled"})
-    body.setdefault("reasoning_effort", "high")
-    for key in ("temperature", "top_p", "presence_penalty", "frequency_penalty"):
-        body.pop(key, None)
-    return body
-
-
-def _apply_gemini_reasoning_fork(model: str, body: dict) -> dict:
-    """Rewrite *body* for Gemini's thinkingConfig contract.
-
-    ``-thinking`` variants accept ``generationConfig.thinkingConfig.enabled=true``.
-    Non-thinking Gemini 3.x rejects the block with a 400.
-    """
-    from providers.model_classes import classify
-    if classify("gemini", model) != "reasoning":
-        return body
-    gen_cfg = body.setdefault("generationConfig", {})
-    thinking_cfg = gen_cfg.setdefault("thinkingConfig", {})
-    thinking_cfg.setdefault("enabled", True)
-    return body
-
-
-def _apply_anthropic_reasoning_fork(model: str, body: dict) -> dict:
-    """Rewrite *body* for Anthropic's thinking contract.
-
-    Extended-thinking models (Sonnet 4.6, Haiku 4.5, Sonnet / Opus 4.5)
-    accept ``thinking={"type":"enabled","budget_tokens":N}`` and require
-    ``temperature=1``. Adaptive-thinking models (Opus 4.7) decline the
-    explicit block — the model chooses its own depth.
-    """
-    from providers.model_classes import classify
-    if classify("anthropic", model) != "reasoning":
-        return body
-    # Import lazily to avoid circular import at module load.
-    from providers.anthropic_provider import (
-        AnthropicProvider,
-        _default_budget_tokens,
-    )
-    probe = AnthropicProvider(api_key="_probe_")
-    if probe.supports_extended_thinking(model):
-        budget = _default_budget_tokens(model)
-        if budget:
-            body.setdefault("thinking", {
-                "type": "enabled",
-                "budget_tokens": int(budget),
-            })
-            body.pop("temperature", None)
-    elif probe.supports_adaptive_thinking(model):
-        body.pop("thinking", None)
-        # Live smoke on 2026-04-26 confirmed: claude-opus-4-7 returns
-        # 400 ``temperature is deprecated for this model`` when any
-        # temperature value is sent. The adaptive-thinking contract
-        # says the model chooses its own behaviour; temperature is no
-        # longer a caller-controlled knob for this class. Drop it.
-        body.pop("temperature", None)
-    return body
-
-
-def _apply_groq_reasoning_fork(model: str, body: dict) -> dict:
-    """Mirror the OpenAI fork for Groq-hosted reasoning models."""
-    from providers.model_classes import classify
-    if classify("groq", model) != "reasoning":
-        return body
-    if "max_tokens" in body and "max_completion_tokens" not in body:
-        body["max_completion_tokens"] = body.pop("max_tokens")
-    temp = body.get("temperature")
-    if temp is not None and temp != 1 and temp != 1.0:
-        body.pop("temperature", None)
-    for key in ("top_p", "presence_penalty", "frequency_penalty"):
-        body.pop(key, None)
-    body.setdefault("reasoning_effort", "medium")
-    return body
-
-
-def apply_reasoning_fork(provider: str, model: str, body: dict) -> dict:
-    """Provider-router wrapper around the per-provider reasoning forks.
-
-    Called at every chat-body assembly site in this module so the
-    outbound wire-shape matches the selected model's reasoning contract.
-    Non-reasoning models pass through untouched. ``body`` is mutated
-    in-place AND returned for caller convenience. See
-    ``docs/mintlify/providers/reasoning-models.mdx`` for the full
-    per-provider param table.
-    """
-    pid = (provider or "").lower()
-    if pid == "openai":
-        return _apply_openai_reasoning_fork(model, body)
-    if pid == "deepseek":
-        return _apply_deepseek_reasoning_fork(model, body)
-    if pid == "gemini":
-        return _apply_gemini_reasoning_fork(model, body)
-    if pid == "anthropic":
-        return _apply_anthropic_reasoning_fork(model, body)
-    if pid == "groq":
-        return _apply_groq_reasoning_fork(model, body)
-    return body
-
-
-# ── A5: Anthropic request-shape helpers ──────────────────────
-#
-# ``_build_anthropic_body`` (non-stream) and ``_chat_stream_anthropic``
-# both accept OpenAI-flavoured transcripts from upstream callers. The
-# OpenAI schema uses ``role: "tool"`` messages carrying a
-# ``tool_call_id`` and the raw string output; Anthropic's Messages API
-# instead expects tool results to be packaged as a ``user`` message with
-# a ``tool_result`` content block, and assistant tool invocations as an
-# ``assistant`` message with a ``tool_use`` content block.
-#
-# Before A5 the dispatcher forwarded the OpenAI shape as-is and
-# Anthropic 400'd with
-# ``messages.N.role: Input should be 'user' or 'assistant'`` on every
-# failover that replayed a tool-using transcript. Converting at the
-# build site keeps the rest of the dispatcher provider-agnostic.
-
-
-_ANTHROPIC_THINKING_RESPONSE_ROOM = 1024  # mirrors AnthropicProvider.chat
-
-
-def _convert_messages_for_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
-    """Return ``(system_text, anthropic_messages)`` for the Messages API.
-
-    * ``role: "system"`` → concatenated into the top-level ``system``
-      field.
-    * ``role: "tool"`` → emitted as a ``user`` message with a single
-      ``tool_result`` content block. The upstream ``tool_call_id`` maps
-      to Anthropic's ``tool_use_id``.
-    * ``role: "assistant"`` with ``tool_calls`` → emitted with a list
-      of content blocks: optional leading ``text`` block, then one
-      ``tool_use`` block per call (OpenAI ``function.arguments`` JSON
-      string is parsed to dict for Anthropic's ``input``).
-    * Everything else passes through with its content unchanged.
-    """
-    system_text = ""
-    out: list[dict] = []
-    for m in messages:
-        role = m.get("role")
-        content = m.get("content", "")
-        if role == "system":
-            if isinstance(content, str):
-                system_text += content + "\n"
-            else:
-                system_text += str(content) + "\n"
-            continue
-        if role == "tool":
-            tool_call_id = m.get("tool_call_id") or m.get("id") or ""
-            if not tool_call_id:
-                # Fail fast with a clear error instead of silently
-                # letting Anthropic reject the message — we can't
-                # reconstruct a ``tool_use_id`` from thin air.
-                raise ValueError(
-                    "Anthropic request build: tool-result message missing "
-                    "'tool_call_id'; cannot convert to tool_result block"
-                )
-            result_text = content if isinstance(content, str) else json.dumps(content)
-            out.append({
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": str(tool_call_id),
-                        "content": result_text,
-                    }
-                ],
-            })
-            continue
-        if role == "assistant" and m.get("tool_calls"):
-            blocks: list[dict] = []
-            if isinstance(content, str) and content:
-                blocks.append({"type": "text", "text": content})
-            for call in m["tool_calls"]:
-                fn = call.get("function", {}) if isinstance(call, dict) else {}
-                raw_args = fn.get("arguments", "{}")
-                if isinstance(raw_args, str):
-                    try:
-                        parsed_args = json.loads(raw_args) if raw_args else {}
-                    except json.JSONDecodeError:
-                        parsed_args = {"_raw": raw_args}
-                else:
-                    parsed_args = raw_args
-                blocks.append({
-                    "type": "tool_use",
-                    "id": str(call.get("id") or ""),
-                    "name": str(fn.get("name") or ""),
-                    "input": parsed_args,
-                })
-            out.append({"role": "assistant", "content": blocks or content})
-            continue
-        out.append({"role": role, "content": content})
-    return system_text, out
-
-
-def _enforce_anthropic_thinking_max_tokens(body: dict) -> dict:
-    """Enforce Anthropic's ``max_tokens > thinking.budget_tokens`` invariant.
-
-    Matches ``AnthropicProvider.chat``: when the reasoning fork set a
-    ``thinking.budget_tokens`` block, the dispatcher's default
-    ``max_tokens=1024`` is smaller than every non-trivial budget
-    (16k / 32k) and Anthropic 400s. Bump to
-    ``budget + _ANTHROPIC_THINKING_RESPONSE_ROOM`` so there's room for
-    the post-thinking answer. Mutates and returns ``body``.
-    """
-    thinking = body.get("thinking")
-    if not isinstance(thinking, dict):
-        return body
-    budget = thinking.get("budget_tokens")
-    if not isinstance(budget, int) or budget <= 0:
-        return body
-    required = budget + _ANTHROPIC_THINKING_RESPONSE_ROOM
-    existing = body.get("max_tokens") or 0
-    if existing < required:
-        body["max_tokens"] = required
-    return body
-
-
-# DeepSeek's streaming SSE keeps the connection open by sending
-# ``: keep-alive`` comment lines (per the 2026-04-26 spec, the
-# connection may stay open up to 10 minutes during thinking). The
-# streaming path must treat these as liveness signals, not terminators.
-_SSE_KEEPALIVE_PREFIXES = (": ", ":", ": keep-alive", ":OPENROUTER PROCESSING")
 
 
 def _openrouter_route_supports_vision(model: str) -> tuple[bool, str]:
@@ -374,160 +124,6 @@ LLM_PRESETS = {
     },
 }
 
-
-# ── Failover Error Classification ─────────────────────────────
-
-
-class FailoverReason(str, Enum):
-    RATE_LIMIT = "rate_limit"
-    AUTH = "auth"
-    AUTH_PERMANENT = "auth_permanent"
-    BILLING = "billing"
-    MODEL_NOT_FOUND = "model_not_found"
-    CONTEXT_OVERFLOW = "context_overflow"
-    TIMEOUT = "timeout"
-    OVERLOADED = "overloaded"
-    UNKNOWN = "unknown"
-
-
-def classify_error(error: Exception) -> FailoverReason:
-    """Classify an LLM error into a failover reason for routing decisions."""
-    err_str = str(error).lower()
-    status = getattr(error, "status_code", 0) or 0
-    if hasattr(error, "response"):
-        status = getattr(error.response, "status_code", status) or status
-
-    if status == 429 or "rate" in err_str or "quota" in err_str:
-        return FailoverReason.RATE_LIMIT
-    # 401/403 with an explicit "invalid" or "incorrect" API-key message is a
-    # permanent-while-current-key-is-in-place failure. Promote so the cooldown
-    # tracker keeps the broken provider out of rotation for 24 h — otherwise
-    # we'd probe it every 30 s and the user would see an error log stream.
-    hard_key = (
-        "invalid api key" in err_str
-        or "incorrect api key" in err_str
-        or "invalid_api_key" in err_str
-        or "api key not valid" in err_str
-    )
-    if status in (401, 403) and hard_key:
-        return FailoverReason.AUTH_PERMANENT
-    if status in (401, 403) or "unauthorized" in err_str or "invalid api key" in err_str:
-        return FailoverReason.AUTH
-    if "billing" in err_str or "payment" in err_str or "insufficient" in err_str:
-        return FailoverReason.BILLING
-    if status == 404 or ("model" in err_str and "not found" in err_str):
-        return FailoverReason.MODEL_NOT_FOUND
-    if "context" in err_str and ("length" in err_str or "overflow" in err_str or "too long" in err_str):
-        return FailoverReason.CONTEXT_OVERFLOW
-    if "timeout" in err_str or status == 408 or "timed out" in err_str:
-        return FailoverReason.TIMEOUT
-    if status in (500, 502, 503) or "overloaded" in err_str or "server error" in err_str:
-        return FailoverReason.OVERLOADED
-    return FailoverReason.UNKNOWN
-
-
-def _describe_http_status_error(error: httpx.HTTPStatusError) -> str:
-    """Return a safe, structured summary for an HTTP status failure."""
-    status = getattr(error.response, "status_code", "unknown")
-    try:
-        payload = error.response.json()
-    except Exception:
-        payload = {}
-
-    detail = ""
-    if isinstance(payload, dict):
-        err = payload.get("error", payload)
-        if isinstance(err, dict):
-            parts: list[str] = []
-            if err.get("type"):
-                parts.append(str(err["type"]))
-            if err.get("code"):
-                parts.append(f"code={err['code']}")
-            if err.get("param"):
-                parts.append(f"param={err['param']}")
-            msg = str(err.get("message", "")).strip()
-            if parts and msg:
-                detail = f"{', '.join(parts)}: {msg}"
-            elif parts:
-                detail = ", ".join(parts)
-            elif msg:
-                detail = msg
-
-    if not detail:
-        try:
-            detail = (error.response.text or "").strip()[:500]
-        except Exception:
-            detail = str(error)
-
-    if detail:
-        return f"HTTP {status} — {detail}"
-    return f"HTTP {status}"
-
-
-def _describe_error(error: Exception) -> str:
-    if isinstance(error, httpx.HTTPStatusError):
-        return _describe_http_status_error(error)
-    return str(error)
-
-
-def _chat_completions_model_guard(provider: str, model: str) -> str:
-    """Return a guardrail error string for non-chat model classes.
-
-    Empty string means "no guard hit".
-    """
-    if not provider or not model:
-        return ""
-    try:
-        from providers.model_classes import classify
-        model_class = classify(provider, model)
-    except Exception:
-        return ""
-
-    incompatible = {"completion-only", "embedding", "audio", "image", "video", "realtime"}
-    if model_class in incompatible:
-        return (
-            f"Model {model!r} for provider {provider!r} is classified as "
-            f"{model_class!r} and is not valid for chat completions. "
-            "Pick a chat or reasoning model in Settings -> Providers."
-        )
-    return ""
-
-
-class ProviderCooldownTracker:
-    """Tracks per-provider cooldown state for failover decisions."""
-
-    _COOLDOWN_MAP: dict[FailoverReason, int] = {
-        FailoverReason.RATE_LIMIT: 60,
-        FailoverReason.AUTH: 300,
-        FailoverReason.AUTH_PERMANENT: 86400,
-        FailoverReason.BILLING: 3600,
-        FailoverReason.OVERLOADED: 30,
-        FailoverReason.TIMEOUT: 15,
-    }
-    _PROBE_INTERVAL = 30.0
-
-    def __init__(self):
-        self._cooldowns: dict[str, float] = {}
-        self._last_probe: dict[str, float] = {}
-
-    def record_failure(self, provider: str, reason: FailoverReason):
-        cooldown_seconds = self._COOLDOWN_MAP.get(reason, 10)
-        self._cooldowns[provider] = time.time() + cooldown_seconds
-
-    def is_available(self, provider: str) -> bool:
-        return time.time() >= self._cooldowns.get(provider, 0)
-
-    def should_probe(self, provider: str) -> bool:
-        if self.is_available(provider):
-            return True
-        last = self._last_probe.get(provider, 0)
-        if time.time() - last >= self._PROBE_INTERVAL:
-            self._last_probe[provider] = time.time()
-            return True
-        return False
-
-    def record_success(self, provider: str):
-        self._cooldowns.pop(provider, None)
 
 
 # Per-provider HTTP base URL + credential env var. Default model used to

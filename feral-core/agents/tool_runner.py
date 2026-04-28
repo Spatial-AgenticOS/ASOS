@@ -40,7 +40,12 @@ class SafetyLevel:
 class ToolRunner:
     """Encapsulates all tool-call execution, safety gating, and anti-loop logic."""
 
-    def __init__(self, orchestrator: "Orchestrator", autonomy_mode: str = "hybrid"):
+    def __init__(
+        self,
+        orchestrator: "Orchestrator",
+        autonomy_mode: str = "hybrid",
+        approval_manager: Optional[ApprovalManager] = None,
+    ):
         self._orch = orchestrator
         self._tool_repeat_state: dict[str, dict] = {}
         self._active_subagent_tasks = 0
@@ -51,7 +56,10 @@ class ToolRunner:
         # success. Resolved from ``ui_handlers.handle_daemon_result``.
         self._pending_daemon_acks: dict[str, asyncio.Future] = {}
         self._pending_approvals: dict[str, dict] = {}
-        self._approval_mgr = ApprovalManager()
+        # W3-A9: approval state must be shared across BrainState/API +
+        # ToolRunner. If no manager is injected (legacy/tests), fall back
+        # to local construction.
+        self._approval_mgr = approval_manager or ApprovalManager()
 
         raw_mode = os.environ.get("FERAL_AUTONOMY", "").strip().lower() or autonomy_mode
         self._autonomy_mode = raw_mode if raw_mode in VALID_AUTONOMY_MODES else "hybrid"
@@ -137,6 +145,16 @@ class ToolRunner:
             logger.info(f"Standing approval for {tool_name}: {reason}")
             return None
 
+        # Reuse any identical pending approval so repeated retries by the
+        # model keep the same request_id instead of spawning fresh entries.
+        for pending in self._pending_approvals.values():
+            if (
+                pending.get("session_id") == session_id
+                and pending.get("tool_name") == tool_name
+                and pending.get("args") == args
+            ):
+                return pending
+
         request_id = str(uuid4())
         pending = {
             "status": "pending_approval",
@@ -145,12 +163,39 @@ class ToolRunner:
             "request_id": request_id,
             "session_id": session_id,
             "safety_level": level,
+            "created_at": time.time(),
         }
         self._pending_approvals[request_id] = pending
         logger.info(f"Approval required ({self._autonomy_mode}): {tool_name} → request_id={request_id}")
         return pending
 
     # ─── Approval lifecycle ───
+
+    def pending_for_session(self, session_id: str) -> list[dict]:
+        """Return pending approvals for a session, oldest first."""
+        rows = [
+            p for p in self._pending_approvals.values()
+            if p.get("session_id") == session_id
+        ]
+        rows.sort(key=lambda p: float(p.get("created_at", 0.0)))
+        return rows
+
+    def latest_pending_for_session(self, session_id: str) -> Optional[dict]:
+        rows = self.pending_for_session(session_id)
+        return rows[-1] if rows else None
+
+    def pop_latest_pending_for_session(self, session_id: str) -> Optional[dict]:
+        latest = self.latest_pending_for_session(session_id)
+        if not latest:
+            return None
+        req_id = latest.get("request_id")
+        if not req_id:
+            return None
+        return self._pending_approvals.pop(req_id, None)
+
+    def grant_session_approval(self, tool_name: str, session_id: str) -> None:
+        """Persist a per-session approval used to execute a confirmed call."""
+        self._approval_mgr.grant_approval(tool_name, session_id, scope="session")
 
     def approve_pending(self, request_id: str) -> Optional[dict]:
         """Approve a pending request; returns tool_name + args for re-execution."""

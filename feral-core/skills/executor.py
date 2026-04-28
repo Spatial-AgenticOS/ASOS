@@ -41,8 +41,14 @@ import httpx
 
 from config.loader import feral_home
 from models.skill_manifest import SkillManifest, SkillEndpoint
+from skills.sandbox_ports import SandboxPort, default_sandbox_port
 
 logger = logging.getLogger("feral.executor")
+
+# W3-A12: dangerous runners must not silently fall back to host execution.
+# Keep a hardcoded fallback set so legacy manifests still get protected even
+# before they add explicit `requires_sandbox: true`.
+SANDBOX_REQUIRED_SKILL_IDS = {"workspace_scripts", "code_interpreter"}
 
 
 class SkillExecutor:
@@ -58,7 +64,12 @@ class SkillExecutor:
     6. LLM NEVER sees the raw API key
     """
 
-    def __init__(self, daemons: dict = None):
+    def __init__(
+        self,
+        daemons: dict = None,
+        *,
+        sandbox_port: Optional[SandboxPort] = None,
+    ):
         self.client = httpx.AsyncClient(timeout=15.0)
         self._daemons = daemons or {}
         self._daemon_types: dict[str, str] = {}
@@ -66,6 +77,13 @@ class SkillExecutor:
         self._blind_vault = None
         self._pending_results: dict[str, asyncio.Future] = {}
         self._wasm_sandbox = None
+        # W3-A14: prefer narrow facade over a direct ``api.state`` import so
+        # tests can inject and so global-state coupling shrinks.
+        self._sandbox_port: SandboxPort = sandbox_port or default_sandbox_port()
+
+    def set_sandbox_port(self, port: SandboxPort) -> None:
+        """Replace the sandbox facade (used for tests/embedding scenarios)."""
+        self._sandbox_port = port
 
     def load_vault_from_env(self):
         """Load API keys from environment variables."""
@@ -86,6 +104,60 @@ class SkillExecutor:
     def set_wasm_sandbox(self, sandbox):
         """Connect the WASM sandbox for skill execution."""
         self._wasm_sandbox = sandbox
+
+    @staticmethod
+    def _is_sandbox_required(skill: SkillManifest, endpoint: SkillEndpoint) -> bool:
+        if bool(getattr(endpoint, "requires_sandbox", False)):
+            return True
+        if bool(getattr(skill, "requires_sandbox", False)):
+            return True
+        return str(getattr(skill, "skill_id", "") or "") in SANDBOX_REQUIRED_SKILL_IDS
+
+    def _sandbox_requirement_status(
+        self,
+        skill: SkillManifest,
+        endpoint: SkillEndpoint,
+    ) -> tuple[bool, str]:
+        runtime = getattr(skill, "runtime", None) or getattr(endpoint, "runtime", None)
+        if runtime == "wasm":
+            wasm = self._wasm_sandbox
+            if wasm is None:
+                # W3-A14: support the narrow facade for WASM too so callers that
+                # inject ``SandboxPort`` can fully avoid global state.
+                try:
+                    wasm = self._sandbox_port.get_wasm_sandbox()
+                except Exception:
+                    wasm = None
+            if not wasm:
+                return False, "WASM sandbox not configured"
+            available_attr = getattr(wasm, "available", False)
+            available = available_attr() if callable(available_attr) else bool(available_attr)
+            if not available:
+                return False, "WASM sandbox unavailable"
+            return True, "ok"
+
+        # Default strict boundary is Docker sandbox for host-code runners.
+        try:
+            docker_sandbox = self._sandbox_port.get_docker_sandbox()
+        except Exception as exc:
+            return False, f"sandbox port unavailable: {exc}"
+
+        if docker_sandbox is None:
+            return False, "Docker sandbox unavailable"
+
+        try:
+            available_attr = getattr(docker_sandbox, "available", None)
+            available = (
+                bool(available_attr())
+                if callable(available_attr)
+                else bool(available_attr)
+            )
+        except Exception as exc:
+            return False, f"Docker sandbox health check failed: {exc}"
+
+        if not available:
+            return False, "Docker sandbox is not healthy"
+        return True, "ok"
 
     def _get_key(self, skill_id: str) -> Optional[str]:
         """Get API key — checks BlindVault first, then env cache."""
@@ -121,13 +193,40 @@ class SkillExecutor:
     async def _execute_inner(
         self, tool_name: str, args: dict, skill: SkillManifest, endpoint: SkillEndpoint,
     ) -> dict:
+        sandbox_required = self._is_sandbox_required(skill, endpoint)
+        if sandbox_required:
+            sandbox_ok, sandbox_reason = self._sandbox_requirement_status(skill, endpoint)
+            if not sandbox_ok:
+                msg = (
+                    f"Sandbox required for '{skill.skill_id}__{endpoint.id}' "
+                    f"but unavailable: {sandbox_reason}"
+                )
+                logger.warning(msg)
+                return {
+                    "success": False,
+                    "status_code": 503,
+                    "data": None,
+                    "error": msg,
+                }
+
         # 1. Check if there's a Python implementation backing this skill
         from skills.impl import get_implementation
         impl = get_implementation(skill.skill_id)
         if impl:
             logger.info(f"Executing via Python backing class: {impl.__class__.__name__}")
+            # W3-A14: keep backing implementations on the same sandbox facade
+            # as the executor (avoids split-brain in tests/embedding).
+            if hasattr(impl, "set_sandbox_port"):
+                try:
+                    impl.set_sandbox_port(self._sandbox_port)
+                except Exception as exc:
+                    logger.debug("impl sandbox-port injection skipped: %s", exc)
+            exec_args = dict(args or {})
+            if sandbox_required:
+                # Let backing implementations know host fallback is forbidden.
+                exec_args["_feral_require_sandbox"] = True
             try:
-                result = await impl.execute(endpoint.id, args, self._vault)
+                result = await impl.execute(endpoint.id, exec_args, self._vault)
                 if isinstance(result, dict) and "success" in result:
                     return {
                         "success": result["success"],

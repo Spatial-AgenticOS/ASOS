@@ -547,6 +547,59 @@ async def test_channel_manager_stop_all_clears_channels():
     assert mgr.stats["channel_count"] == 0
 
 
+def test_channel_runtime_failure_fuse_disables_broken_instance():
+    ch = TelegramChannel({"bot_token": "tok"})
+    ch._running = True
+    ch._runtime_failure_fuse = 2
+
+    ch._record_runtime_failure("unit-test", "boom-1")
+    assert ch._running is True
+    assert ch._degraded is False
+
+    ch._record_runtime_failure("unit-test", "boom-2")
+    assert ch._running is False
+    assert ch._degraded is True
+    assert "unit-test" in ch._degraded_reason
+
+
+@pytest.mark.asyncio
+async def test_channel_manager_does_not_register_degraded_channel():
+    mgr = ChannelManager()
+
+    class _BrokenChannel:
+        def __init__(self, config: dict):
+            self.config = config
+            self._running = False
+            self._connected = False
+            self._degraded = True
+            self._degraded_reason = "startup fuse open"
+            self._known_chat_ids = set()
+
+        def set_handler(self, handler):
+            self._handler = handler
+
+        async def start(self):
+            return None
+
+        async def stop(self):
+            return None
+
+        async def send(self, channel_id: str, response: ChannelResponse):
+            return None
+
+        @property
+        def channel_type(self) -> str:
+            return "broken_unit"
+
+    mgr.CHANNEL_TYPES["broken_unit"] = _BrokenChannel
+    try:
+        await mgr.start_channel("broken_unit", {"enabled": True})
+        assert mgr.get_channel("broken_unit") is None
+        assert "broken_unit" not in mgr.active_channels
+    finally:
+        mgr.CHANNEL_TYPES.pop("broken_unit", None)
+
+
 # ── A3 — Wave 2 hardening regressions ───────────────────────────────────────
 
 

@@ -2,8 +2,7 @@
 Workspace Scripts — the FERAL never-say-no escape hatch.
 
 Writes ad-hoc scripts to ~/.feral/workspace/scripts/, executes them in the
-Docker sandbox when available (falls back to host subprocess with a short
-timeout when Docker is not running), and maintains a catalog.json so past
+Docker sandbox, and maintains a catalog.json so past
 successful scripts are reusable on later turns.
 
 This is FERAL's workspace-scoped `exec` surface, persistent and
@@ -25,6 +24,7 @@ from typing import Any, Dict, Optional
 from config.loader import feral_home
 from skills.base import BaseSkill
 from skills.impl import register_skill
+from skills.sandbox_ports import SandboxPort, default_sandbox_port
 
 logger = logging.getLogger("feral.skill.workspace_scripts")
 
@@ -61,8 +61,15 @@ _EXT_MAP = {"python": ".py", "bash": ".sh", "node": ".js"}
 
 @register_skill
 class WorkspaceScriptsSkill(BaseSkill):
-    def __init__(self):
+    def __init__(self, sandbox_port: Optional[SandboxPort] = None):
         super().__init__("workspace_scripts")
+        # W3-A14: depend on a narrow facade instead of pulling from the
+        # global ``api.state`` import on every script execution.
+        self._sandbox_port: SandboxPort = sandbox_port or default_sandbox_port()
+
+    def set_sandbox_port(self, port: SandboxPort) -> None:
+        """Override the sandbox facade (used for tests/embedding scenarios)."""
+        self._sandbox_port = port
 
     async def execute(
         self, endpoint_id: str, args: Dict[str, Any], vault: Dict[str, str]
@@ -85,6 +92,7 @@ class WorkspaceScriptsSkill(BaseSkill):
         name = (args.get("name") or "").strip() or f"script_{int(time.time())}"
         timeout = int(args.get("timeout") or 30)
         forwarded_args = args.get("args") or ""
+        require_sandbox = bool(args.get("_feral_require_sandbox"))
         if language not in _EXT_MAP:
             return {"success": False, "status_code": 400, "data": None,
                     "error": f"Unsupported language {language!r} (python|bash|node)"}
@@ -100,7 +108,13 @@ class WorkspaceScriptsSkill(BaseSkill):
         except Exception as exc:
             return {"success": False, "status_code": 500, "data": None, "error": f"write failed: {exc}"}
 
-        exec_result = await self._execute_script(language, script_path, timeout, forwarded_args)
+        exec_result = await self._execute_script(
+            language,
+            script_path,
+            timeout,
+            forwarded_args,
+            require_sandbox=require_sandbox,
+        )
         catalog_entry = None
         if exec_result.get("exit_code") == 0:
             catalog_entry = self._record_success(script_id, name, language, script_path, args)
@@ -136,7 +150,14 @@ class WorkspaceScriptsSkill(BaseSkill):
         language = entry.get("language") or "python"
         timeout = int(args.get("timeout") or 30)
         forwarded_args = args.get("args") or ""
-        exec_result = await self._execute_script(language, path, timeout, forwarded_args)
+        require_sandbox = bool(args.get("_feral_require_sandbox"))
+        exec_result = await self._execute_script(
+            language,
+            path,
+            timeout,
+            forwarded_args,
+            require_sandbox=require_sandbox,
+        )
         entry["last_run"] = int(time.time())
         entry["runs"] = int(entry.get("runs") or 0) + 1
         _save_catalog(cat)
@@ -183,12 +204,34 @@ class WorkspaceScriptsSkill(BaseSkill):
     # ------------------------------------------------------------------
 
     async def _execute_script(
-        self, language: str, path: Path, timeout: int, forwarded_args: str
+        self,
+        language: str,
+        path: Path,
+        timeout: int,
+        forwarded_args: str,
+        *,
+        require_sandbox: bool = False,
     ) -> Dict[str, Any]:
+        sandbox = None
         try:
-            from api.state import state
-            sandbox = getattr(state, "sandbox", None) or getattr(state, "docker_sandbox", None)
-            if sandbox and sandbox.available():
+            sandbox = self._sandbox_port.get_docker_sandbox()
+        except Exception as exc:
+            logger.debug("docker sandbox lookup failed: %s", exc)
+
+        sandbox_available = False
+        if sandbox is not None:
+            try:
+                available_attr = getattr(sandbox, "available", None)
+                sandbox_available = (
+                    bool(available_attr())
+                    if callable(available_attr)
+                    else bool(available_attr)
+                )
+            except Exception as exc:
+                logger.debug("docker sandbox health check failed: %s", exc)
+
+        if sandbox is not None and sandbox_available:
+            try:
                 code_text = path.read_text()
                 result = await sandbox.execute(code_text, language=language)
                 return {
@@ -197,8 +240,23 @@ class WorkspaceScriptsSkill(BaseSkill):
                     "exit_code": result.get("exit_code", -1),
                     "sandboxed": True,
                 }
-        except Exception as exc:
-            logger.debug("sandbox execute failed, falling back to host: %s", exc)
+            except Exception as exc:
+                logger.debug("sandbox execute failed: %s", exc)
+                if require_sandbox:
+                    return {
+                        "stdout": "",
+                        "stderr": f"Sandbox execution failed: {exc}",
+                        "exit_code": 1,
+                        "sandboxed": False,
+                    }
+
+        if require_sandbox:
+            return {
+                "stdout": "",
+                "stderr": "Sandbox required but Docker sandbox is unavailable.",
+                "exit_code": 1,
+                "sandboxed": False,
+            }
 
         return await self._run_on_host(language, path, timeout, forwarded_args)
 

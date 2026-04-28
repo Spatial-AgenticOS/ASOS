@@ -359,6 +359,74 @@ class TestApprovalLifecycle:
         self.runner.approve_pending(req_id)
         assert self.runner.approve_pending(req_id) is None
 
+    def test_duplicate_pending_reuses_existing_request_id(self):
+        first = self.runner.enforce_safety(
+            "messaging__send_sms", {"to": "+1"}, session_id="s1",
+        )
+        assert first is not None
+        second = self.runner.enforce_safety(
+            "messaging__send_sms", {"to": "+1"}, session_id="s1",
+        )
+        assert second is not None
+        assert second["request_id"] == first["request_id"]
+
+    def test_pending_for_session_helpers_order_and_pop_latest(self):
+        self.runner.enforce_safety("messaging__send_sms", {"to": "+1"}, session_id="s1")
+        self.runner.enforce_safety("desktop_control__open_app", {"app": "Safari"}, session_id="s1")
+        rows = self.runner.pending_for_session("s1")
+        assert len(rows) == 2
+        latest = self.runner.latest_pending_for_session("s1")
+        assert latest is not None
+        popped = self.runner.pop_latest_pending_for_session("s1")
+        assert popped is not None
+        assert popped["request_id"] == latest["request_id"]
+        assert len(self.runner.pending_for_session("s1")) == 1
+
+
+def test_tool_runner_uses_injected_approval_manager():
+    orch = MagicMock()
+    orch.daemons = {}
+    orch.skills = MagicMock()
+    orch.executor = AsyncMock()
+    orch.llm = MagicMock()
+    orch._mcp_client = None
+    orch._send_text = AsyncMock()
+    orch._max_iterations = 8
+    mgr = ApprovalManager(db_path=":memory:")
+    runner = ToolRunner(orch, autonomy_mode="hybrid", approval_manager=mgr)
+    assert runner._approval_mgr is mgr
+
+
+def test_external_approval_grant_is_seen_by_tool_runner():
+    orch = MagicMock()
+    orch.daemons = {}
+    orch.skills = MagicMock()
+    orch.executor = AsyncMock()
+    orch.llm = MagicMock()
+    orch._mcp_client = None
+    orch._send_text = AsyncMock()
+    orch._max_iterations = 8
+    mgr = ApprovalManager(db_path=":memory:")
+    runner = ToolRunner(orch, autonomy_mode="hybrid", approval_manager=mgr)
+
+    first = runner.enforce_safety(
+        "browser__navigate",
+        {"url": "https://google.com"},
+        session_id="s-approve",
+    )
+    assert first is not None
+    assert first["status"] == "pending_approval"
+
+    # Simulates an external grant path (e.g. REST/controller) writing
+    # into the shared ApprovalManager instance.
+    mgr.grant_approval("browser__navigate", "s-approve", scope="session")
+    second = runner.enforce_safety(
+        "browser__navigate",
+        {"url": "https://google.com"},
+        session_id="s-approve",
+    )
+    assert second is None
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Autonomy Mode
