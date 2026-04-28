@@ -84,6 +84,24 @@ class Channel(ABC):
         self._bot_username: Optional[str] = None
         # Populated to True once the channel has successfully talked to its API
         self._connected: bool = False
+        # W3-A11 runtime containment: repeated loop failures trip a fuse so
+        # a broken channel instance disables itself cleanly instead of
+        # wedging forever and spamming logs.
+        try:
+            self._runtime_failure_fuse = max(
+                1, int(os.environ.get("FERAL_CHANNEL_FAILURE_FUSE", "8"))
+            )
+        except Exception:
+            self._runtime_failure_fuse = 8
+        try:
+            self._runtime_backoff_cap_sec = max(
+                1, int(os.environ.get("FERAL_CHANNEL_BACKOFF_CAP_SEC", "60"))
+            )
+        except Exception:
+            self._runtime_backoff_cap_sec = 60
+        self._runtime_failures: int = 0
+        self._degraded: bool = False
+        self._degraded_reason: str = ""
 
     async def send_direct(self, to: str, text: str, reply_to: Optional[str] = None) -> dict:
         """Outbound send used by the messaging_channels skill.
@@ -161,6 +179,38 @@ class Channel(ABC):
     def active_chat_ids(self) -> list[str]:
         return list(self._known_chat_ids)
 
+    def _reset_runtime_health(self) -> None:
+        self._runtime_failures = 0
+        self._degraded = False
+        self._degraded_reason = ""
+
+    def _record_runtime_success(self) -> None:
+        self._runtime_failures = 0
+
+    def _next_backoff_seconds(self) -> float:
+        streak = max(1, int(self._runtime_failures or 1))
+        return float(min(self._runtime_backoff_cap_sec, 2 ** min(streak, 6)))
+
+    def _record_runtime_failure(self, context: str, error: Exception | str) -> None:
+        self._runtime_failures += 1
+        logger.warning(
+            "Channel runtime failure: channel=%s context=%s failures=%d/%d error=%s",
+            self.channel_type,
+            context,
+            self._runtime_failures,
+            self._runtime_failure_fuse,
+            error,
+        )
+        if self._runtime_failures >= self._runtime_failure_fuse:
+            self._degraded = True
+            self._degraded_reason = f"{context}: {error}"
+            self._running = False
+            logger.error(
+                "Channel fuse opened: channel=%s reason=%s",
+                self.channel_type,
+                self._degraded_reason,
+            )
+
     @staticmethod
     async def _http_with_retry(client, method: str, url: str, **kw):
         """Exponential-backoff retry for 429 / 503 responses (up to 3 attempts)."""
@@ -203,6 +253,7 @@ class TelegramChannel(Channel):
             self.config["bot_token"] = token
 
         import httpx
+        self._reset_runtime_health()
         self._running = True
         self._http = httpx.AsyncClient(timeout=35.0)
         self._base_url = f"https://api.telegram.org/bot{token}"
@@ -241,6 +292,7 @@ class TelegramChannel(Channel):
             if me_data.get("ok"):
                 self._bot_username = me_data.get("result", {}).get("username")
                 self._connected = True
+                self._record_runtime_success()
                 logger.info("Telegram channel started (bot: @%s)", self._bot_username)
             else:
                 # Authoritative negative from Telegram (e.g. 401 "Unauthorized"
@@ -320,7 +372,16 @@ class TelegramChannel(Channel):
                     logger.warning(
                         "Telegram getUpdates HTTP %s; snippet=%r", status, snippet,
                     )
-                    await asyncio.sleep(5 if status != 429 else 10)
+                    if status != 429:
+                        self._record_runtime_failure(
+                            "telegram_getupdates_http",
+                            f"HTTP {status}",
+                        )
+                        if not self._running:
+                            break
+                        await asyncio.sleep(self._next_backoff_seconds())
+                    else:
+                        await asyncio.sleep(10)
                     continue
                 ctype = ""
                 try:
@@ -339,18 +400,30 @@ class TelegramChannel(Channel):
                         "Telegram getUpdates non-JSON body (content-type=%r, status=%s): %s; snippet=%r",
                         ctype, status, je, snippet,
                     )
-                    await asyncio.sleep(5)
+                    self._record_runtime_failure("telegram_getupdates_non_json", je)
+                    if not self._running:
+                        break
+                    await asyncio.sleep(self._next_backoff_seconds())
                     continue
                 if not isinstance(data, dict):
                     logger.warning(
                         "Telegram getUpdates unexpected payload shape: %r", type(data).__name__,
                     )
-                    await asyncio.sleep(5)
+                    self._record_runtime_failure(
+                        "telegram_getupdates_shape",
+                        f"type={type(data).__name__}",
+                    )
+                    if not self._running:
+                        break
+                    await asyncio.sleep(self._next_backoff_seconds())
                     continue
                 if data.get("ok") is False:
                     desc = data.get("description") or "unknown"
                     logger.warning("Telegram getUpdates not ok: %s", desc)
-                    await asyncio.sleep(5)
+                    self._record_runtime_failure("telegram_getupdates_not_ok", desc)
+                    if not self._running:
+                        break
+                    await asyncio.sleep(self._next_backoff_seconds())
                     continue
 
                 for update in data.get("result", []):
@@ -362,12 +435,15 @@ class TelegramChannel(Channel):
                         await self._handle_callback(callback)
                     elif message and self._handler:
                         await self._handle_message(message)
+                self._record_runtime_success()
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Telegram poll error: {e}")
-                await asyncio.sleep(5)
+                self._record_runtime_failure("telegram_poll_exception", e)
+                if not self._running:
+                    break
+                await asyncio.sleep(self._next_backoff_seconds())
 
     async def _handle_message(self, message: dict):
         chat_id = str(message.get("chat", {}).get("id", ""))
@@ -561,6 +637,7 @@ class DiscordChannel(Channel):
             return
 
         import httpx
+        self._reset_runtime_health()
         self._running = True
         self._token = token
         self._http = httpx.AsyncClient(
@@ -596,6 +673,7 @@ class DiscordChannel(Channel):
                 }))
 
                 asyncio.ensure_future(self._heartbeat_loop(ws, heartbeat_interval))
+                self._record_runtime_success()
 
                 async for raw in ws:
                     if not self._running:
@@ -606,8 +684,10 @@ class DiscordChannel(Channel):
 
         except Exception as e:
             if self._running:
-                logger.error(f"Discord gateway error: {e}")
-                await asyncio.sleep(10)
+                self._record_runtime_failure("discord_gateway", e)
+                if not self._running:
+                    return
+                await asyncio.sleep(self._next_backoff_seconds())
                 if self._running:
                     asyncio.ensure_future(self._gateway_connect())
 
@@ -726,6 +806,7 @@ class SlackChannel(Channel):
             return
 
         import httpx
+        self._reset_runtime_health()
         self._running = True
         self._http = httpx.AsyncClient(
             headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
@@ -775,6 +856,7 @@ class SlackChannel(Channel):
             for _attempt in range(3):
                 try:
                     async with websockets.connect(ws_url) as ws:
+                        self._record_runtime_success()
                         async for raw in ws:
                             if not self._running:
                                 break
@@ -795,8 +877,10 @@ class SlackChannel(Channel):
 
         except Exception as e:
             if self._running:
-                logger.error(f"Slack Socket Mode error: {e}")
-                await asyncio.sleep(10)
+                self._record_runtime_failure("slack_socket_mode", e)
+                if not self._running:
+                    return
+                await asyncio.sleep(self._next_backoff_seconds())
                 if self._running:
                     asyncio.ensure_future(self._socket_mode(app_token))
 
@@ -901,6 +985,7 @@ class WhatsAppChannel(Channel):
             return
 
         import httpx
+        self._reset_runtime_health()
         self._running = True
         self._http = httpx.AsyncClient(timeout=10.0)
         self._connected = bool(self._access_token and self._phone_id)
@@ -1060,6 +1145,21 @@ class ChannelManager:
             channel.set_handler(self._handler)
 
         await channel.start()
+        if getattr(channel, "_degraded", False):
+            logger.error(
+                "Channel %s entered DEGRADED state at start: %s",
+                channel_type,
+                getattr(channel, "_degraded_reason", ""),
+            )
+            return
+        if not bool(getattr(channel, "_running", False)) and not bool(getattr(channel, "_connected", False)):
+            logger.warning(
+                "Channel %s did not start cleanly (running=%s connected=%s); not activating",
+                channel_type,
+                bool(getattr(channel, "_running", False)),
+                bool(getattr(channel, "_connected", False)),
+            )
+            return
         self._channels[channel_type] = channel
 
     async def stop_all(self):
@@ -1097,7 +1197,11 @@ class ChannelManager:
                 "running": bool(getattr(ch, "_running", False)),
                 "connected": bool(getattr(ch, "_connected", False)),
                 "known_chats": len(getattr(ch, "_known_chat_ids", []) or []),
+                "degraded": bool(getattr(ch, "_degraded", False)),
+                "failure_count": int(getattr(ch, "_runtime_failures", 0) or 0),
             }
+            if row["degraded"]:
+                row["degraded_reason"] = str(getattr(ch, "_degraded_reason", "") or "")
             bot_username = getattr(ch, "_bot_username", None)
             if bot_username:
                 row["bot_username"] = bot_username

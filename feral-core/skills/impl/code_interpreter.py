@@ -1,8 +1,7 @@
 """
 FERAL Code Interpreter Skill
 =============================
-Run Python/Node snippets in a Docker sandbox (preferred) or with
-host-level resource limits, and capture generated artifacts.
+Run Python/Node snippets in a Docker sandbox and capture generated artifacts.
 """
 
 from __future__ import annotations
@@ -35,10 +34,24 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 DOCKER_AVAILABLE = bool(shutil.which("docker"))
 
 
-async def _run_sandboxed(code: str, language: str, work_dir: str, timeout: int = 300) -> dict:
+async def _run_sandboxed(
+    code: str,
+    language: str,
+    work_dir: str,
+    timeout: int = 300,
+    *,
+    allow_unsandboxed_fallback: bool = True,
+) -> dict:
     """Run code in Docker container with strict isolation."""
     if not DOCKER_AVAILABLE:
-        return await _run_unsandboxed(code, language, work_dir, timeout)
+        if allow_unsandboxed_fallback:
+            return await _run_unsandboxed(code, language, work_dir, timeout)
+        return {
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "Sandbox required but Docker is unavailable.",
+            "sandboxed": False,
+        }
 
     image = "python:3.12-slim" if language == "python" else "node:22-slim"
     script_name = "script.py" if language == "python" else "script.js"
@@ -67,8 +80,15 @@ async def _run_sandboxed(code: str, language: str, work_dir: str, timeout: int =
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         stderr_str = stderr.decode(errors="replace")[:10000]
         if proc.returncode != 0 and ("docker" in stderr_str.lower() and ("daemon" in stderr_str.lower() or "connect" in stderr_str.lower())):
-            logger.warning("Docker daemon not reachable — falling back to unsandboxed execution")
-            return await _run_unsandboxed(code, language, work_dir, timeout)
+            if allow_unsandboxed_fallback:
+                logger.warning("Docker daemon not reachable — falling back to unsandboxed execution")
+                return await _run_unsandboxed(code, language, work_dir, timeout)
+            return {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "Sandbox required but Docker daemon is not reachable.",
+                "sandboxed": False,
+            }
         return {
             "exit_code": proc.returncode,
             "stdout": stdout.decode(errors="replace")[:50000],
@@ -79,8 +99,15 @@ async def _run_sandboxed(code: str, language: str, work_dir: str, timeout: int =
         if isinstance(e, asyncio.TimeoutError):
             proc.kill()
             return {"exit_code": -1, "stdout": "", "stderr": "Execution timed out", "sandboxed": True}
-        logger.warning(f"Docker execution failed: {e} — falling back to unsandboxed")
-        return await _run_unsandboxed(code, language, work_dir, timeout)
+        if allow_unsandboxed_fallback:
+            logger.warning(f"Docker execution failed: {e} — falling back to unsandboxed")
+            return await _run_unsandboxed(code, language, work_dir, timeout)
+        return {
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": f"Sandbox required but Docker execution failed: {e}",
+            "sandboxed": False,
+        }
 
 
 async def _run_unsandboxed(code: str, language: str, work_dir: str, timeout: int = 300) -> dict:
@@ -154,12 +181,19 @@ class CodeInterpreterSkill(BaseSkill):
             return {"success": False, "status_code": 400, "data": None, "error": "code is required"}
 
         timeout = max(1, min(int(args.get("timeout", 45) or 45), 300))
+        require_sandbox = bool(args.get("_feral_require_sandbox"))
         run_id = str(uuid.uuid4())[:10]
         temp_dir = Path(tempfile.mkdtemp(prefix=f"feral_code_{run_id}_"))
         script_name = "script.py" if language == "python" else "script.js"
 
         try:
-            result = await _run_sandboxed(code, language, str(temp_dir), timeout)
+            result = await _run_sandboxed(
+                code,
+                language,
+                str(temp_dir),
+                timeout,
+                allow_unsandboxed_fallback=not require_sandbox,
+            )
 
             stdout = result.get("stdout", "")[:MAX_OUTPUT]
             stderr = result.get("stderr", "")[:MAX_OUTPUT]
@@ -167,9 +201,12 @@ class CodeInterpreterSkill(BaseSkill):
             sandboxed = result.get("sandboxed", False)
 
             artifacts = self._collect_artifacts(temp_dir, script_name=script_name, run_id=run_id)
+            status_code = 200
+            if require_sandbox and not sandboxed:
+                status_code = 503
             return {
                 "success": exit_code == 0,
-                "status_code": 200,
+                "status_code": status_code,
                 "data": {
                     "language": language,
                     "run_id": run_id,

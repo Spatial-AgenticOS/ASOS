@@ -113,6 +113,7 @@ class Orchestrator:
         perception: PerceptionEngine = None,
         learner: "Learner" = None,
         taskflows=None,
+        approval_manager=None,
     ):
         self.skills = skill_registry
         self.send = send_to_client
@@ -133,7 +134,7 @@ class Orchestrator:
         self._mitosis_engine = None  # set via set_mitosis_engine() from BrainState
 
         # Delegate sub-modules
-        self.tool_runner = ToolRunner(self)
+        self.tool_runner = ToolRunner(self, approval_manager=approval_manager)
         self.context_manager = ContextManager(max_messages=15)
         self.refusal_handler = RefusalHandler(self)
         self.identity_loader = IdentityLoader(memory=memory)
@@ -510,6 +511,85 @@ class Orchestrator:
         return RefusalHandler.summarize_action_result(tool_call, result_data)
 
     @staticmethod
+    def _is_reject_execution_ack(user_text: str) -> bool:
+        if not user_text:
+            return False
+        normalized = user_text.strip().lower()
+        normalized = normalized.rstrip("!?.,;:").strip()
+        return normalized in {
+            "no",
+            "nope",
+            "nah",
+            "cancel",
+            "stop",
+            "don't",
+            "dont",
+            "do not",
+            "reject",
+            "deny",
+        }
+
+    async def _maybe_handle_pending_tool_approval_text(
+        self,
+        session_id: str,
+        text: str,
+    ) -> bool:
+        """Consume plain-text yes/no replies for pending tool approvals.
+
+        The v2 UI can render explicit approval cards, but users also
+        frequently type short acknowledgements ("approved", "no").
+        When a pending tool approval exists for this session, bind those
+        short replies directly to that pending request so the tool run
+        proceeds (or is cancelled) instead of generating a fresh
+        approval-loop request.
+        """
+        pending = self.tool_runner.latest_pending_for_session(session_id)
+        if not pending:
+            return False
+
+        if self.refusal_handler.is_ack_execution(text):
+            approved = self.tool_runner.pop_latest_pending_for_session(session_id)
+            if not approved:
+                return False
+            tool_name = str(approved.get("tool_name", ""))
+            args = approved.get("args") or {}
+            if not tool_name:
+                return False
+
+            # Persist session-scoped grant so the re-run below does not
+            # trip the same gate again.
+            self.tool_runner.grant_session_approval(tool_name, session_id)
+            tool_call = {
+                "name": tool_name,
+                "args": args,
+                "id": str(approved.get("request_id", "")),
+            }
+            await self._emit_tool_start(session_id, tool_call)
+            t_start = time.time()
+            result_data = await self._execute_tool_call_for_llm(session_id, tool_call, [])
+            latency_ms = (time.time() - t_start) * 1000
+            await self._emit_tool_result(session_id, tool_call, result_data, latency_ms)
+            await self._try_genui_for_result(session_id, tool_call, result_data)
+            summary = self._summarize_action_result(tool_call, result_data)
+            await self._send_text(session_id, summary)
+            if self.memory:
+                self.memory.working_push(
+                    session_id,
+                    {"role": "assistant", "text": summary[:300]},
+                )
+            return True
+
+        if self._is_reject_execution_ack(text):
+            denied = self.tool_runner.pop_latest_pending_for_session(session_id)
+            if not denied:
+                return False
+            tool_name = str(denied.get("tool_name", "that action"))
+            await self._send_text(session_id, f"Cancelled `{tool_name}`.")
+            return True
+
+        return False
+
+    @staticmethod
     def _capability_key(text: str) -> str:
         return RefusalHandler.capability_key(text)
 
@@ -645,6 +725,9 @@ class Orchestrator:
         """Real body of handle_command. Guarded by the session lock above."""
         logger.info(f"[{session_id[:8]}] Command: {text}")
         self._session_finalized.discard(session_id)
+
+        if await self._maybe_handle_pending_tool_approval_text(session_id, text):
+            return
 
         if self.taskflows and isinstance(context, dict):
             taskflow_spec = context.get("taskflow")
@@ -972,6 +1055,9 @@ class Orchestrator:
         so the client gets token-by-token output.
         Falls back to non-streaming if LLM doesn't support it.
         """
+        if await self._maybe_handle_pending_tool_approval_text(session_id, text):
+            return
+
         if not self._streaming_enabled or not self.llm.available:
             await self.handle_command(session_id, text, context)
             return

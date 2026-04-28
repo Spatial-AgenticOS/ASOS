@@ -160,6 +160,47 @@ async def update_config(body: dict):
     return {"ok": True, "section": section, "key": key, "value": value}
 
 
+# W3-A13 — Reduce global env mutation blast radius. Only legacy SDKs that
+# read API keys directly from ``os.environ`` (openai, anthropic, boto3, …)
+# need their credentials exported. Everything else (channel bot tokens,
+# webhook secrets, FERAL_KEY_<skill>) flows through the in-process
+# ``ConfigLoader._credentials`` / vault path so two sequential test cases
+# or two sequential ``/api/config/credentials`` writes can't leak state
+# at one another via process-global env vars.
+_LEGACY_ENV_EXPORT_KEYS: frozenset[str] = frozenset({
+    # LLM SDKs that read keys from os.environ at import / client time
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "OPENROUTER_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "MOONSHOT_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "TOGETHER_API_KEY",
+    "FIREWORKS_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "MISTRAL_API_KEY",
+    "COHERE_API_KEY",
+    "XAI_API_KEY",
+    # boto3 reads these from env if no profile/explicit creds passed
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    # Web-search SDKs/clients that historically read from env
+    "TAVILY_API_KEY",
+    "BRAVE_API_KEY",
+    "EXA_API_KEY",
+    "SERPER_API_KEY",
+})
+
+
+def _should_export_to_env(key: str) -> bool:
+    """Return True only for keys legacy SDKs explicitly read from env."""
+    return key in _LEGACY_ENV_EXPORT_KEYS
+
+
 _KEY_ENV_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*_API_KEY$")
 
 # Extra env vars providers use that DON'T end in _API_KEY — we still want
@@ -228,8 +269,10 @@ async def save_credentials(body: dict):
     for key, value in (body or {}).items():
         if key == "skill_keys" and isinstance(value, dict):
             creds["skill_keys"] = value
-            for skill_id, api_key in value.items():
-                os.environ[f"FERAL_KEY_{skill_id}"] = api_key
+            # Skill keys are read from the in-process registry / vault at
+            # call time (see ``skills/executor.py``); we no longer push
+            # them through ``os.environ`` because that leaked test-case
+            # state across the entire process.
             continue
         if not _is_accepted_env_key(key):
             rejected.append(key)
@@ -237,7 +280,13 @@ async def save_credentials(body: dict):
         if not isinstance(value, str) or not value:
             continue
         creds[key] = value
-        os.environ[key] = value
+        # W3-A13 — only mutate the global env for keys legacy SDKs
+        # actually read from ``os.environ``. Channel tokens, webhook
+        # secrets, etc. are passed explicitly to their consumers below
+        # (channel_manager.start_channel) instead of relying on a
+        # process-global side channel.
+        if _should_export_to_env(key):
+            os.environ[key] = value
 
     persisted_to_creds = False
     try:
@@ -271,34 +320,84 @@ async def save_credentials(body: dict):
                 break
 
     if state.channel_manager:
-        channel_keys = {
-            "FERAL_TELEGRAM_BOT_TOKEN": "telegram",
-            "FERAL_DISCORD_BOT_TOKEN": "discord",
-            "FERAL_SLACK_BOT_TOKEN": "slack",
-        }
         import asyncio
-        for env_key, channel_type in channel_keys.items():
-            # Only act on keys that were part of *this* save so a
-            # partial Settings write (e.g. just OPENAI_API_KEY) doesn't
-            # spuriously bounce every messaging channel.
+
+        def _existing_cfg(channel_type: str) -> dict:
+            existing = state.channel_manager._channels.get(channel_type)
+            cfg = getattr(existing, "config", {}) if existing else {}
+            return cfg if isinstance(cfg, dict) else {}
+
+        # Telegram / Discord: single bot token.
+        for env_key, channel_type in (
+            ("FERAL_TELEGRAM_BOT_TOKEN", "telegram"),
+            ("FERAL_DISCORD_BOT_TOKEN", "discord"),
+        ):
             if env_key not in creds:
                 continue
-            token = os.environ.get(env_key, "")
+            token = creds.get(env_key) or os.environ.get(env_key, "")
             if not token:
                 continue
-            existing = state.channel_manager._channels.get(channel_type)
-            existing_cfg = getattr(existing, "config", {}) if existing else {}
-            existing_token = (existing_cfg or {}).get("bot_token", "") if isinstance(existing_cfg, dict) else ""
-            # If the channel isn't running yet, start it. If it IS running
-            # but the token actually changed, restart so the new token
-            # takes effect (``start_channel`` now stops the old instance
-            # before creating the new one).
-            if existing is None or existing_token.strip() != token.strip():
+            existing_cfg = _existing_cfg(channel_type)
+            if existing_cfg.get("bot_token", "").strip() != token.strip():
                 asyncio.create_task(
                     state.channel_manager.start_channel(
-                        channel_type, {"bot_token": token, "enabled": True},
+                        channel_type,
+                        {"bot_token": token, "enabled": True},
                     ),
                 )
+
+        # Slack: either bot/app token update should refresh channel config.
+        if "FERAL_SLACK_BOT_TOKEN" in creds or "FERAL_SLACK_APP_TOKEN" in creds:
+            existing_cfg = _existing_cfg("slack")
+            bot_token = creds.get("FERAL_SLACK_BOT_TOKEN") or existing_cfg.get("bot_token", "")
+            app_token = creds.get("FERAL_SLACK_APP_TOKEN") or existing_cfg.get("app_token", "")
+            if bot_token:
+                changed = (
+                    existing_cfg.get("bot_token", "").strip() != bot_token.strip()
+                    or existing_cfg.get("app_token", "").strip() != app_token.strip()
+                )
+                if changed:
+                    asyncio.create_task(
+                        state.channel_manager.start_channel(
+                            "slack",
+                            {
+                                "bot_token": bot_token,
+                                "app_token": app_token,
+                                "enabled": True,
+                            },
+                        ),
+                    )
+
+        # WhatsApp: access token + phone id are required; app secret is optional
+        # but should trigger restart when changed so signature verification
+        # updates without process restart.
+        if (
+            "FERAL_WHATSAPP_ACCESS_TOKEN" in creds
+            or "FERAL_WHATSAPP_PHONE_NUMBER_ID" in creds
+            or "FERAL_WHATSAPP_APP_SECRET" in creds
+        ):
+            existing_cfg = _existing_cfg("whatsapp")
+            access_token = creds.get("FERAL_WHATSAPP_ACCESS_TOKEN") or existing_cfg.get("access_token", "")
+            phone_number_id = creds.get("FERAL_WHATSAPP_PHONE_NUMBER_ID") or existing_cfg.get("phone_number_id", "")
+            app_secret = creds.get("FERAL_WHATSAPP_APP_SECRET") or existing_cfg.get("app_secret", "")
+            if access_token and phone_number_id:
+                changed = (
+                    existing_cfg.get("access_token", "").strip() != str(access_token).strip()
+                    or existing_cfg.get("phone_number_id", "").strip() != str(phone_number_id).strip()
+                    or existing_cfg.get("app_secret", "").strip() != str(app_secret).strip()
+                )
+                if changed:
+                    asyncio.create_task(
+                        state.channel_manager.start_channel(
+                            "whatsapp",
+                            {
+                                "access_token": access_token,
+                                "phone_number_id": phone_number_id,
+                                "app_secret": app_secret,
+                                "enabled": True,
+                            },
+                        ),
+                    )
 
     return {
         "ok": True,
