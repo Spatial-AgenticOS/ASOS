@@ -89,6 +89,75 @@ typically be closed as `invalid` / `no-action`:
   or a similar break-glass flag. Those are explicit operator-selected
   trade-offs.
 
+## Pairing access posture (Mode A / B / C)
+
+FERAL distinguishes three reachability stances; the operator picks one
+in `/setup` or in Settings → Access. Each has a different network
+attack surface.
+
+**Mode A — Local (LAN, "same WiFi").** Brain binds `0.0.0.0`; pair
+URL is `http://<lan-ip>:<port>/pair?t=<token>`. Anyone on the same
+LAN can reach the brain socket. Defenses:
+
+- The pair URL embeds a single Argon2id-hashed pairing token (24h
+  sliding TTL). Without the token, even an on-LAN attacker cannot
+  open `/v1/node`.
+- HTTP routes outside the open allowlist (`/health`, `/api/devices/pair/{url,qr,complete,announce,status,code/claim}`,
+  `/install-phone-bridge.sh`, `/pair`, `/v2/pair`, hashed `/assets/*`)
+  return 401 to non-loopback clients without a Bearer.
+- The browser-served `/pair?t=…` page is intentionally open so a
+  freshly scanned phone can land on it without a pre-existing token;
+  it MUST then be redeemed via the WebSocket handshake which calls
+  `verify_device(token)` against the Argon2id verifier.
+- Mode A is appropriate for trusted LANs (home, single-tenant office).
+  It is **not** appropriate on coffee-shop / hotel / conference WiFi;
+  the pair modal surfaces the AP-isolation caveat verbatim.
+
+**Mode B — Localhost.** Brain binds `127.0.0.1`. The dashboard, the
+desktop wrapper, and the CLI talk to it; **no pair URL is emitted**.
+The "Pair Device" button is disabled with a tooltip. This is the
+default for fresh installs.
+
+**Mode C — Remote (Tailscale Funnel).** Brain binds `0.0.0.0`;
+public URL is the Tailscale Funnel URL (`https://<machine>.<tailnet>.ts.net`).
+Tailscale handles transport encryption (WireGuard) and tailnet ACLs;
+the brain still requires a valid pair token at the application layer.
+Notable properties:
+
+- No port-forwarding, no domain registration, no certificate the
+  operator manages.
+- Tailscale's relay network proxies through CGNAT.
+- Operator authenticates to Tailscale once via OAuth (Google / GitHub
+  / Apple / email) — FERAL never sees the credential.
+- Remote-mode pair URLs that resolve to a loopback address (operator
+  misconfiguration) are **rejected** at emit time with a 409 telling
+  the user to run `feral access remote-up` or set
+  `FERAL_PUBLIC_BASE_URL` correctly.
+
+### Pair-code flow brute-force resistance
+
+The `POST /api/devices/pair/code/claim` endpoint accepts an 8-character
+base32 code (~38 bits of entropy). With:
+
+- 600-second TTL on each pending code,
+- 5 wrong attempts per source IP per 15 minutes (sliding window;
+  see `feral-core/api/middleware/rate_limit.py`),
+- 10 wrong attempts per code → server-side invalidation (anti-correlation),
+
+the expected cost to brute-force a single live code is on the order
+of decades of sustained traffic, well beyond any single-trusted-operator
+deployment's threat profile. The limiter is process-local in memory;
+brain restart resets counters.
+
+### `?api_key=` query authentication is deprecated
+
+The brain still accepts `/v1/node?api_key=<token>` for the deprecation
+window (sunset `2026.7.0`); each accept logs a structured
+`feral.security.deprecated_query_auth` warning. Web-side history caches
+that include the URL leak the token; that is the deprecation rationale.
+All in-tree clients (web, extension, phone-bridge, both SDKs, both
+mobile apps of record) are migrated to `Authorization: Bearer`.
+
 ## Threat model — single-trusted-operator boundary
 
 FERAL runs on **one** machine for **one** operator. That operator's OS

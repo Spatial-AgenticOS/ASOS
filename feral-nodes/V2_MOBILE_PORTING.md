@@ -11,6 +11,67 @@
 > running on those toolchains, per the "never claim something works until
 > you've verified end-to-end" rule in `ASOS/AGENT_PROMPT.md`.
 
+## 0. Mobile consolidation outcome (2026.5.8)
+
+Until 2026.5.8 the tree carried four mobile codebases with three
+different auth schemes and four different QR shapes. A short audit
+confirmed none of them were published on any store. They are now
+consolidated to one app per platform:
+
+| Platform | Canonical path | Bundle / `applicationId` | Wire auth | QR decoder |
+|---|---|---|---|---|
+| iOS | `feral-nodes/ios-app/` | `ai.feral.node` *(via `$(PRODUCT_BUNDLE_IDENTIFIER)`; project-defined)* | `Authorization: Bearer <token>` over `wss://` (TLS) or `ws://` (Mode A LAN only) | `FeralBrainClient.parsePairingPayload(Data)` |
+| Android | `feral-nodes/android-bridge/sample/` (uses `bridge/` library) | `ai.feral.app` *(promoted from `ai.feral.sample`)* | `Authorization: Bearer <token>` over `wss://` / `ws://` | `PairingManager.parsePayload(String)` |
+
+Deleted in 2026.5.8 (none ever published anywhere — verified zero CI
+publish workflows, no `.xcodeproj`, no signing keys, no `fastlane`):
+
+- `apps/ios/` — `ws://?api_key=`, no QR scanner, no plist deep link.
+- `apps/android/` — `ws://?api_key=`, broken cleartext config.
+- `feral-nodes/android-app/` — gradle subtree incomplete; never
+  constructed a WebSocket. Was a stub.
+
+### Unified QR v1 schema accepted by both surviving apps
+
+Both `parsePairingPayload` (Swift) and `parsePayload` (Kotlin) accept
+five payload shapes and normalize them to the same struct
+(`PairingDecoded { brainURL, token, brainId?, name?, isLegacy }`):
+
+1. **Unified v1** (preferred, emitted by brains ≥ 2026.5.8):
+   `{v:1, mode, url, token, brain_id, expires, name?}`.
+2. Legacy `{host, port, apiKey, nodeName}` (pre-2026.5.8 iOS QR).
+3. Legacy `{host, port, token, name}` (pre-2026.5.8 brain `mode=app`).
+4. Deep-link URL form: `feral://pair?p=<base64url-json-payload>`.
+5. Plain web URL: `https://<brain>/pair?t=<token>`.
+
+Cases 2 and 3 log a deprecation warning and set `isLegacy = true`. Both
+shapes are removed from the decoder in `2026.7.0`.
+
+### `feral://` deep link
+
+iOS: registered in `Info.plist` `CFBundleURLTypes` (name
+`ai.feral.deeplink`, scheme `feral`, role `Viewer`).
+
+Android: registered in `sample/src/main/AndroidManifest.xml`
+`<intent-filter android:autoVerify="false">` with
+`<data android:scheme="feral" android:host="pair" />` plus
+`android.intent.category.{DEFAULT,BROWSABLE}`.
+
+### Build limitation acknowledged
+
+This commit ships the code edits + the unit tests
+(`UnifiedPairPayloadTests.swift`, `PairingManagerTest.kt`). Producing
+binaries — `xcodebuild` for the IPA, `gradle assembleRelease` for the
+APK/AAB — requires the Xcode signing identity and Android SDK that
+are NOT in the repo. Mobile binaries are built by a developer running
+on those toolchains.
+
+The Swift test target compiles for iOS only (`Package.swift` declares
+`platforms: [.iOS(.v16)]`) and references UIKit / CoreImage; running
+it via `swift test` from a plain macOS shell is not supported. Open
+the Xcode project to execute. The Kotlin test similarly needs the
+Android SDK (`testRuntimeOnly` of the JUnit + Android test runner).
+
 ## 1. Token parity (shipped in this commit)
 
 | Web token file | iOS token file | Android token file |
