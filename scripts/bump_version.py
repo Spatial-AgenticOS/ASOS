@@ -176,12 +176,13 @@ VERSION_LOCATIONS: tuple[VersionLocation, ...] = (
         replacement='"version": "{version}"',
         description="FERAL desktop Tauri app version",
     ),
-    VersionLocation(
-        path="feral-nodes/android-bridge/sample/build.gradle.kts",
-        pattern=_p(rf'versionName\s*=\s*"{VERSION_PATTERN}"'),
-        replacement='versionName = "{version}"',
-        description="Android app versionName (canonical sample)",
-    ),
+    # The Android app under feral-nodes/android-bridge/sample/ tracks its
+    # own version (currently "1.0.0"); it does NOT mirror the brain
+    # CalVer because mobile binaries are released independently. The
+    # entry that was here previously (pointing at the deleted
+    # feral-nodes/android-app/) was removed in 2026.5.8 along with that
+    # tree. If we ever align the mobile + brain CalVer, add the entry
+    # back here.
 )
 
 

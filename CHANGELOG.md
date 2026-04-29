@@ -1,10 +1,10 @@
 # Changelog
 
-<!-- feral-version: 2026.5.7 -->
+<!-- feral-version: 2026.5.8 -->
 
 All notable changes to FERAL are documented here.
 
-## [Unreleased] — pairing access modes, PWA, mobile consolidation, HUP fixes
+## [2026.5.8] - 2026-04-28 — pairing access modes, PWA, mobile consolidation, HUP fixes
 
 ### Added
 
