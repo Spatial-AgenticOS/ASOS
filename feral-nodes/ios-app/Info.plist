@@ -42,5 +42,25 @@
     <string>FERAL Node connects to FERAL Glasses via Bluetooth for sensor data.</string>
     <key>NSHealthShareUsageDescription</key>
     <string>FERAL Node reads health data to forward to the Brain for health monitoring.</string>
+    <!--
+        feral:// URL scheme. Pair pages on the brain emit a
+        feral://pair?p=<base64url-encoded-json-payload> link as an
+        alternative to the QR for desktops that share a deep link by
+        text message. This handler routes the URL into the same QR
+        decoder so behavior is identical.
+    -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>ai.feral.deeplink</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>feral</string>
+            </array>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+        </dict>
+    </array>
 </dict>
 </plist>

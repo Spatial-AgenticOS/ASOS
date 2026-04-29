@@ -99,11 +99,46 @@ class FeralLocationManager: NSObject, CLLocationManagerDelegate {
 
 // MARK: - QR Code Pairing
 
+/// Legacy QR JSON shape (pre-2026.5.8). Preserved for backward
+/// compatibility — when a user re-scans an old QR that was issued by a
+/// brain still emitting `mode=app`, we want to pair successfully and
+/// log a deprecation warning. New brains emit `UnifiedPairPayload`
+/// (see below) and we prefer that path.
 struct PairingInfo: Codable {
     let host: String
     let port: Int
     let apiKey: String
     let nodeName: String
+}
+
+/// Unified v1 pair payload — emitted by every brain ≥ 2026.5.8.
+/// Schema lives at `.internal/audit-v2026.5.5/A4-pairing-redesign.md` §4
+/// and is also documented in `feral-nodes/HUP_SPEC.md`.
+struct UnifiedPairPayload: Codable {
+    let v: Int
+    let mode: String
+    let url: String
+    let token: String
+    let brainId: String
+    let expires: Int
+    let name: String?
+
+    enum CodingKeys: String, CodingKey {
+        case v, mode, url, token
+        case brainId = "brain_id"
+        case expires, name
+    }
+}
+
+/// Result of `parsePairingPayload`: a normalized `(brain_url, token,
+/// brain_id?, name?)` tuple regardless of which legacy or unified
+/// shape was scanned. Callers don't need to care which shape it was.
+struct PairingDecoded {
+    let brainURL: URL
+    let token: String
+    let brainId: String?
+    let name: String?
+    let isLegacy: Bool
 }
 
 // MARK: - Client
@@ -303,6 +338,93 @@ class FeralBrainClient: NSObject {
     
     static func parsePairingQR(_ data: Data) -> PairingInfo? {
         return try? JSONDecoder().decode(PairingInfo.self, from: data)
+    }
+
+    /// Decode any supported QR or deep-link payload into a uniform
+    /// `PairingDecoded`. Accepts:
+    ///
+    /// 1. The unified v1 JSON `{v:1, mode, url, token, brain_id, …}`
+    ///    emitted by brains ≥ 2026.5.8 (preferred).
+    /// 2. Legacy `{host, port, apiKey, nodeName}` (pre-2026.5.8 iOS QR).
+    /// 3. Legacy `{host, port, token, name}` (pre-2026.5.8 brain `mode=app`).
+    /// 4. URL form `feral://pair?p=<base64url-json-payload>` (deep-link entry).
+    /// 5. Plain `https://<brain>/pair?t=<token>` URLs (web QR scanned by
+    ///    the iOS camera and routed back into the app).
+    ///
+    /// Returns `nil` if the payload is unrecognised. Logs a deprecation
+    /// warning on legacy shapes so we can sunset them in 2026.7.0.
+    static func parsePairingPayload(_ data: Data) -> PairingDecoded? {
+        // 1. Unified v1.
+        if let unified = try? JSONDecoder().decode(UnifiedPairPayload.self, from: data),
+           unified.v == 1, let url = URL(string: unified.url) {
+            return PairingDecoded(
+                brainURL: url,
+                token: unified.token,
+                brainId: unified.brainId.isEmpty ? nil : unified.brainId,
+                name: unified.name,
+                isLegacy: false
+            )
+        }
+        // 2 + 3. Legacy {host, port, apiKey|token, nodeName|name}. Try
+        // both key sets without erroring out on the absent one.
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let host = json["host"] as? String,
+           let port = (json["port"] as? Int) ?? Int(json["port"] as? String ?? "") {
+            let token = (json["token"] as? String) ?? (json["apiKey"] as? String) ?? ""
+            let name = (json["name"] as? String) ?? (json["nodeName"] as? String)
+            if !token.isEmpty,
+               let url = URL(string: "http://\(host):\(port)") {
+                NSLog("[FERAL] parsePairingPayload: accepted legacy {host,port,*} shape; sunset 2026.7.0")
+                return PairingDecoded(
+                    brainURL: url,
+                    token: token,
+                    brainId: nil,
+                    name: name,
+                    isLegacy: true
+                )
+            }
+        }
+        // 4. feral:// URL form.
+        if let raw = String(data: data, encoding: .utf8),
+           let url = URL(string: raw),
+           url.scheme == "feral", url.host == "pair",
+           let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let pParam = comps.queryItems?.first(where: { $0.name == "p" })?.value,
+           let jsonData = decodeBase64URL(pParam) {
+            return parsePairingPayload(jsonData)
+        }
+        // 5. https://<brain>/pair?t=<token>. Treat as v1 with synthesized fields.
+        if let raw = String(data: data, encoding: .utf8),
+           let url = URL(string: raw),
+           let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let token = comps.queryItems?.first(where: { $0.name == "t" })?.value,
+           !token.isEmpty,
+           let scheme = url.scheme, (scheme == "https" || scheme == "http"),
+           let host = url.host {
+            // Reconstruct the brain-base URL (drop /pair path).
+            var base = URLComponents()
+            base.scheme = scheme
+            base.host = host
+            base.port = url.port
+            if let baseURL = base.url {
+                return PairingDecoded(
+                    brainURL: baseURL,
+                    token: token,
+                    brainId: nil,
+                    name: nil,
+                    isLegacy: false
+                )
+            }
+        }
+        return nil
+    }
+
+    private static func decodeBase64URL(_ s: String) -> Data? {
+        var t = s.replacingOccurrences(of: "-", with: "+")
+                 .replacingOccurrences(of: "_", with: "/")
+        let pad = (4 - t.count % 4) % 4
+        t += String(repeating: "=", count: pad)
+        return Data(base64Encoded: t)
     }
     
     // MARK: - Camera Frames //

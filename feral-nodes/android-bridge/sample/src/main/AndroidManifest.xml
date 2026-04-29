@@ -1,14 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+        Internet permission is implicit on Android API 23+ but declared
+        explicitly because the app talks to the brain over WS/HTTPS.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
-        android:label="FERAL Sample"
-        android:theme="@style/Theme.MaterialComponents.DayNight.DarkActionBar">
+        android:label="FERAL"
+        android:theme="@style/Theme.MaterialComponents.DayNight.DarkActionBar"
+        android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!--
+                feral:// deep link. Brain pair pages emit
+                feral://pair?p=<base64url-encoded-json-payload> as a
+                share-by-message alternative to the QR. The intent
+                filter routes the URL into the same QR decoder.
+            -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="feral" android:host="pair" />
             </intent-filter>
         </activity>
     </application>
