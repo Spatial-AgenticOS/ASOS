@@ -18,7 +18,7 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse, HTMLResponse, FileResponse
+from starlette.responses import JSONResponse, HTMLResponse, FileResponse, RedirectResponse
 
 from version import VERSION as __version__
 from models.protocol import (
@@ -1775,6 +1775,20 @@ a{color:#06b6d4}p{line-height:1.6}</style></head>
 <a href="/skills">Skills</a> &middot;
 <a href="/health">Health</a></p>
 </div></body></html>"""
+
+
+@app.get("/setup/legacy")
+async def setup_legacy_redirect():
+    """Hard-redirect the deleted /setup/legacy route to /setup.
+
+    The legacy wizard (SetupWizard.jsx) was removed in 2026.5.8.
+    A server-side 301 (rather than the App.jsx <Navigate>) is required
+    because the bundled UI uses relative asset paths (Vite ``base: './'``
+    so the /v2/ alias works), which means depth-2 SPA routes can't
+    boot React on a direct URL load — assets resolve to /setup/assets/*
+    which doesn't exist. The redirect bypasses that entirely.
+    """
+    return RedirectResponse(url="/setup", status_code=301)
 
 
 @app.get("/{full_path:path}")

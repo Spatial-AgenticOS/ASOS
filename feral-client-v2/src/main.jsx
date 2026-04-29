@@ -19,6 +19,23 @@ import { bootstrapLocalApiKey, maybeRedirectToSetup } from './bootstrap';
 bootstrapLocalApiKey();
 maybeRedirectToSetup();
 
+// PWA service worker — register after first paint so the SW install
+// never blocks the SPA boot. Skipped in dev (Vite injects HMR in dev
+// and SW caching would interfere with hot reloads).
+if (
+  typeof window !== 'undefined' &&
+  'serviceWorker' in navigator &&
+  window.location.protocol !== 'file:' &&
+  !import.meta.env?.DEV
+) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn('[FERAL] SW registration failed:', err);
+    });
+  });
+}
+
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
