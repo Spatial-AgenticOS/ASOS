@@ -363,7 +363,21 @@ def dispatch_install(
         _maybe_post("/api/mitosis/reload", {"agent_id": str(agent_id)})
         return
 
-    print(f"  Unknown item kind '{kind}'. Supported: skill, daemon, mcp, channel, provider, memory, workflow, agent.")
+    if kind == "app":
+        # GenUI app — extracts to ~/.feral/apps/<app_id>/ to match the
+        # brain's AppRegistry default install dir
+        # (see agents/app_registry.py default_apps_dir). The brain's
+        # AppRegistry indexes installed apps in apps.db on next boot;
+        # if a brain is running we POST /api/apps/install with the
+        # extracted path so it indexes immediately.
+        app_id = manifest.get("app_id") or manifest.get("id") or item_id
+        dest = home / "apps" / str(app_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        _safe_extract(tarball, dest)
+        _maybe_post("/api/apps/install", {"path": str(dest)})
+        return
+
+    print(f"  Unknown item kind '{kind}'. Supported: skill, daemon, mcp, channel, provider, memory, workflow, agent, app.")
     sys.exit(1)
 
 

@@ -133,19 +133,46 @@ function InstalledTab() {
   const [busy, setBusy] = useState(null);
 
   const refresh = useCallback(async () => {
+    setLoading(true);
     try {
-      const d = await apiJson('/api/marketplace/installed');
-      setItems(d.installed || d.items || d || []);
+      // GenUI apps install through AppRegistry; the marketplace's
+      // installed-list endpoint only returns skills/daemons/etc.
+      // Merge both lists so the user sees a single Installed tab
+      // (per GENUI_PLATFORM_BUILD_SPEC §G4).
+      const [marketplace, apps] = await Promise.allSettled([
+        apiJson('/api/marketplace/installed'),
+        apiJson('/api/apps'),
+      ]);
+      const market = marketplace.status === 'fulfilled'
+        ? (marketplace.value?.installed || marketplace.value?.items || marketplace.value || [])
+        : [];
+      const installedApps = apps.status === 'fulfilled'
+        ? (apps.value?.apps || []).map((a) => ({
+            id: a.app_id,
+            skill_id: a.app_id,
+            name: a.brand?.name || a.app_id,
+            kind: 'app',
+            version: a.version,
+            description: a.description,
+            installed_at: a.installed_at,
+          }))
+        : [];
+      setItems([...installedApps, ...market]);
     } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const uninstall = async (id) => {
+  const uninstall = async (id, kind) => {
     if (!window.confirm(`Uninstall ${id}?`)) return;
     setBusy(id);
     try {
-      await apiFetch(`/api/marketplace/uninstall/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      // GenUI apps live under /api/apps/{id}; everything else goes
+      // through /api/marketplace/uninstall/{id}.
+      const url = kind === 'app'
+        ? `/api/apps/${encodeURIComponent(id)}`
+        : `/api/marketplace/uninstall/${encodeURIComponent(id)}`;
+      await apiFetch(url, { method: 'DELETE' });
       refresh();
     } finally { setBusy(null); }
   };
@@ -173,8 +200,10 @@ function InstalledTab() {
                   <div className="v2-flow-card-status">{it.kind} · v{it.version}</div>
                 </div>
                 <div className="v2-forge-actions">
-                  <button type="button" className="v2-btn" onClick={() => update(id)} disabled={busy === id}>Update</button>
-                  <button type="button" className="v2-btn" onClick={() => uninstall(id)} disabled={busy === id}><Trash2 size={12} /> Uninstall</button>
+                  {it.kind !== 'app' && (
+                    <button type="button" className="v2-btn" onClick={() => update(id)} disabled={busy === id}>Update</button>
+                  )}
+                  <button type="button" className="v2-btn" onClick={() => uninstall(id, it.kind)} disabled={busy === id}><Trash2 size={12} /> Uninstall</button>
                 </div>
               </Glass>
             </li>
