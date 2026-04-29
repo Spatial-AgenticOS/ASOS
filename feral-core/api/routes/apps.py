@@ -253,13 +253,93 @@ async def install_app(req: InstallRequest, unsigned: Optional[bool] = None):
             shutil.rmtree(tmp, ignore_errors=True)
 
     if req.registry_id:
-        # Registry install lands in commit 6 once the CLI + Kind.app
-        # publish flow exists. Report honestly until then so callers
-        # can branch on the status code.
-        raise HTTPException(
-            status_code=501,
-            detail="registry_id install requires registry.feral.sh Kind.app; ship feral-registry commit 6 first",
+        # Registry install — fetch the item descriptor, verify signature,
+        # extract to a temp dir, then hand off to the same path-install
+        # flow (signing + policy + supervisor audit parity).
+        from config.runtime import market_registry_url
+        from services.registry_client import (
+            RegistryDependencyMissing,
+            RegistryError,
+            RegistryNotFound,
+            RegistryUnavailable,
+            RegistryVerificationError,
+            fetch_and_extract,
         )
+
+        registry_base = (
+            os.environ.get("FERAL_REGISTRY_URL")
+            or market_registry_url().rstrip("/api/v1").rstrip("/")
+        )
+        if not registry_base:
+            raise HTTPException(
+                status_code=503,
+                detail="FERAL_REGISTRY_URL is not configured; cannot install by registry_id",
+            )
+
+        tmp_extract = Path(tempfile.mkdtemp(prefix="feral-app-registry-"))
+        try:
+            try:
+                item = fetch_and_extract(
+                    registry_base, req.registry_id, tmp_extract
+                )
+            except RegistryDependencyMissing as exc:
+                raise HTTPException(status_code=503, detail=str(exc))
+            except RegistryNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc))
+            except RegistryVerificationError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "signature_verification_failed",
+                        "message": str(exc),
+                        "remediation": (
+                            "Confirm the publisher's pubkey is registered with "
+                            "the registry and that the bundle has not been tampered "
+                            "with. Re-publish via `feral app publish` if needed."
+                        ),
+                    },
+                )
+            except RegistryUnavailable as exc:
+                raise HTTPException(status_code=502, detail=str(exc))
+            except RegistryError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+            # Sanity-check this is actually an app bundle before handing
+            # to install_app — refusing here avoids the install_app
+            # error path being the source of truth for "wrong kind".
+            kind = (item.get("kind") or "").lower() or (
+                (item.get("manifest") or {}).get("kind", "")
+            ).lower()
+            if kind and kind != "app":
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"registry_id {req.registry_id!r} is kind={kind!r}; "
+                        "POST /api/apps/install only handles GenUI apps. "
+                        "Use `feral install <id>` for skills / daemons / mcp / etc."
+                    ),
+                )
+
+            # The unpacked tarball usually contains a single top-level
+            # directory. Hand the deepest single-folder ancestor to
+            # install_app so manifest.yaml resolves cleanly.
+            install_root = tmp_extract
+            entries = [p for p in install_root.iterdir() if p.is_dir()]
+            files = [p for p in install_root.iterdir() if p.is_file()]
+            if len(entries) == 1 and not files:
+                install_root = entries[0]
+
+            try:
+                app = _install_with_signing(
+                    registry, str(install_root), req=req
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=str(exc))
+            return {"success": True, "app": _manifest_summary(app)}
+        finally:
+            shutil.rmtree(tmp_extract, ignore_errors=True)
 
 
 @router.delete("/api/apps/{app_id}")

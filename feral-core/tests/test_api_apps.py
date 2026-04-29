@@ -106,10 +106,27 @@ def test_install_rejects_multiple_sources(client):
     assert r.status_code == 400
 
 
-def test_install_registry_id_returns_501(client):
+def test_install_registry_id_routes_through_registry_client(client, monkeypatch):
+    """``registry_id`` install no longer returns 501 — it's wired to
+    ``services.registry_client.fetch_and_extract`` per
+    GENUI_PLATFORM_BUILD_SPEC §G1. Detailed behavior covered in
+    ``tests/test_apps_registry_install.py``; here we just confirm the
+    501 stub is gone."""
+    from unittest.mock import patch
+    from services.registry_client import RegistryNotFound
+
     c, _registry, _tmp = client
-    r = c.post("/api/apps/install", json={"registry_id": "some-id"})
-    assert r.status_code == 501
+    # Force a fast 404 path so we don't depend on a live registry.
+    monkeypatch.setenv("FERAL_REGISTRY_URL", "https://registry.test")
+    with patch(
+        "services.registry_client.fetch_and_extract",
+        side_effect=RegistryNotFound("not found"),
+    ):
+        r = c.post("/api/apps/install", json={"registry_id": "some-id"})
+    # Anything except 501 — the stub is gone. The route returns a
+    # specific status per upstream error class (404 here).
+    assert r.status_code != 501
+    assert r.status_code == 404
 
 
 def test_install_invalid_manifest_returns_400(client, tmp_path):
