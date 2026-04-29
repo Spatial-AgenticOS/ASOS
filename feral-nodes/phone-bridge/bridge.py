@@ -8,7 +8,7 @@ returns {"success": false, "reason": "..."}.
 
 For full phone capabilities (HealthKit, Health Connect, motion, camera),
 use the native FERAL Node apps for iOS and Android in feral-nodes/ios-app/
-and feral-nodes/android-app/.
+and feral-nodes/android-bridge/sample/.
 """
 
 from __future__ import annotations

@@ -47,7 +47,12 @@ client.sendSensorTelemetry(heartRate = 72, spo2 = 98)
 - `bridge/` — Library module (AAR) with `FeralBrainClient` WebSocket client
 - `sample/` — Demo app implementing `FeralBrainDelegate`
 
-The bridge connects to `ws://host:port/v1/node?api_key=...` and handles:
+As of 2026.5.8 the bridge authenticates via the `Authorization: Bearer
+<token>` header (matching `TheoraBrainClient.kt`). The legacy
+`?api_key=` query auth is accepted by brains during the deprecation
+window (sunset `2026.7.0`). The bridge connects to
+`wss://host[:port]/v1/node` (or `ws://` for Mode A LAN with explicit
+opt-in) and handles:
 - Voice (PCM16 audio chunks)
 - Text commands
 - SDUI rendering

@@ -177,10 +177,10 @@ VERSION_LOCATIONS: tuple[VersionLocation, ...] = (
         description="FERAL desktop Tauri app version",
     ),
     VersionLocation(
-        path="feral-nodes/android-app/build.gradle.kts",
+        path="feral-nodes/android-bridge/sample/build.gradle.kts",
         pattern=_p(rf'versionName\s*=\s*"{VERSION_PATTERN}"'),
         replacement='versionName = "{version}"',
-        description="Android app versionName",
+        description="Android app versionName (canonical sample)",
     ),
 )
 
