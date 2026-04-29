@@ -299,15 +299,18 @@ class ToolRunner:
         ws = daemons[actual_node_id]
         request_id = str(uuid4())[:8]
         daemon_msg = {
-            "type": "command",
-            "request_id": request_id,
-            "command": action,
-            "args": args,
+            "type": "hup_action_request",
+            "payload": {
+                "action_id": request_id,
+                "name": action,
+                "params": args,
+                "timeout_ms": 30000,
+            },
         }
 
         self._daemon_session_map[request_id] = session_id
         await ws.send_json(daemon_msg)
-        await self._orch._send_text(session_id, f"Command sent to node '{actual_node_id}'...")
+        await self._orch._send_text(session_id, f"Action sent to node '{actual_node_id}'...")
 
     async def execute_daemon_command_with_ack(
         self,
@@ -345,10 +348,13 @@ class ToolRunner:
         ws = daemons[actual_node_id]
         request_id = str(uuid4())[:8]
         daemon_msg = {
-            "type": "command",
-            "request_id": request_id,
-            "command": action,
-            "args": args,
+            "type": "hup_action_request",
+            "payload": {
+                "action_id": request_id,
+                "name": action,
+                "params": args,
+                "timeout_ms": int(timeout * 1000),
+            },
         }
 
         loop = asyncio.get_event_loop()
@@ -362,7 +368,7 @@ class ToolRunner:
             return {
                 "success": False,
                 "status_code": 500,
-                "error": f"Failed to send command to daemon '{actual_node_id}': {exc}",
+                "error": f"Failed to send action to daemon '{actual_node_id}': {exc}",
                 "data": None,
             }
 

@@ -286,6 +286,29 @@ class DevicePairingStore:
                     "CREATE INDEX IF NOT EXISTS idx_pd_expires_at "
                     "ON paired_devices(expires_at)"
                 )
+
+                # Pending pair codes — the SDK code-pair flow:
+                #   daemon emits an 8-char base32 code, dashboard claims
+                #   it. ``token`` is null until ``claim_pending_code``
+                #   mints a real device-pairing token and writes it
+                #   back. ``claim_attempts`` lets the rate limiter
+                #   anti-correlate brute force against a single code.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS pending_pair_codes (
+                        code            TEXT PRIMARY KEY,
+                        node_id         TEXT NOT NULL,
+                        name            TEXT NOT NULL,
+                        created_at      REAL NOT NULL,
+                        expires_at      REAL NOT NULL,
+                        token           TEXT,
+                        device_id       TEXT,
+                        claim_attempts  INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_ppc_expires_at "
+                    "ON pending_pair_codes(expires_at)"
+                )
                 conn.commit()
 
                 # Migrate any pre-W9 rows: copy to needs_rotation_log,
@@ -839,6 +862,176 @@ class DevicePairingStore:
                 len(to_prune), older_than_seconds,
             )
         return {"pruned": len(to_prune), "kept": kept, "rows": to_prune}
+
+
+    # ── Pending pair codes (SDK code-pair flow) ──────────────────────
+
+    PENDING_PAIR_CODE_TTL_SECONDS = 600
+    PENDING_PAIR_CODE_PER_CODE_MAX_ATTEMPTS = 10
+
+    def announce_pending_code(self, *, code: str, node_id: str, name: str) -> None:
+        """A daemon advertises a freshly generated pair code.
+
+        ``code`` is an 8-char base32 string the daemon prints to the
+        operator; the operator types it into the dashboard "Type a pair
+        code" field. The brain issues a real device token at claim time,
+        not at announce time, so an unclaimed code is harmless.
+        """
+        if not code or not node_id:
+            raise ValueError("code and node_id are required")
+        now = time.time()
+        expires_at = now + self.PENDING_PAIR_CODE_TTL_SECONDS
+        with self._lock:
+            conn = self._conn()
+            try:
+                # Upsert by code: a daemon that re-announces the same
+                # code (e.g. on retry) gets its ``created_at`` refreshed
+                # but does NOT bump claim_attempts.
+                conn.execute(
+                    """INSERT INTO pending_pair_codes
+                          (code, node_id, name, created_at, expires_at,
+                           token, device_id, claim_attempts)
+                       VALUES (?, ?, ?, ?, ?, NULL, NULL, 0)
+                       ON CONFLICT(code) DO UPDATE SET
+                           node_id=excluded.node_id,
+                           name=excluded.name,
+                           created_at=excluded.created_at,
+                           expires_at=excluded.expires_at""",
+                    (code, node_id, name, now, expires_at),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def lookup_pending_code(self, *, code: str, node_id: str) -> Optional[dict]:
+        """Status poll for the daemon. Returns:
+
+            ``None``  — code unknown (use 404 in the route)
+            ``{"_now": <float>, "expires_at": ..., "token": "..."}``
+
+        The daemon decides ``pending`` vs ``paired`` vs ``expired``
+        based on the ``token`` field and ``expires_at`` clock — the
+        store does not pre-compute that label so tests stay legible.
+        """
+        if not code or not node_id:
+            return None
+        now = time.time()
+        with self._lock:
+            conn = self._conn()
+            try:
+                row = conn.execute(
+                    """SELECT code, node_id, name, created_at, expires_at,
+                              token, device_id, claim_attempts
+                       FROM pending_pair_codes
+                       WHERE code = ? AND node_id = ?""",
+                    (code, node_id),
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None:
+            return None
+        return {
+            "_now": now,
+            "code": row["code"],
+            "node_id": row["node_id"],
+            "name": row["name"],
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"],
+            "token": row["token"],
+            "device_id": row["device_id"],
+        }
+
+    def claim_pending_code(self, *, code: str) -> Optional[dict]:
+        """Operator types the code into the dashboard.
+
+        On match we mint a real device-pairing token (kind="hup",
+        node_id from the announce row) and write it back. On mismatch
+        we increment ``claim_attempts``; if the per-code cap (10) is
+        exceeded the row is invalidated server-side. Returns the token
+        record or ``None``.
+        """
+        if not code:
+            return None
+        now = time.time()
+        with self._lock:
+            conn = self._conn()
+            try:
+                row = conn.execute(
+                    """SELECT code, node_id, name, expires_at,
+                              token, claim_attempts
+                       FROM pending_pair_codes
+                       WHERE code = ?""",
+                    (code,),
+                ).fetchone()
+                if row is None:
+                    return None
+                if row["expires_at"] <= now:
+                    return None
+                if row["token"]:
+                    # Already claimed; idempotent return so a flaky
+                    # network does not lock the daemon out.
+                    return {
+                        "token": row["token"],
+                        "device_id": row["device_id"] if "device_id" in row.keys() else "",
+                        "expires_at": int(row["expires_at"]),
+                    }
+            finally:
+                conn.close()
+
+        # Mint the real token via the existing pair_device path. We do
+        # this OUTSIDE the lock because pair_device acquires it itself.
+        result = self.pair_device(
+            row["name"],
+            kind="hup",
+            node_id=row["node_id"],
+        )
+
+        with self._lock:
+            conn = self._conn()
+            try:
+                conn.execute(
+                    """UPDATE pending_pair_codes
+                       SET token = ?, device_id = ?
+                       WHERE code = ?""",
+                    (result["token"], result["device_id"], code),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+        return {
+            "token": result["token"],
+            "device_id": result["device_id"],
+            "expires_at": int(result["expires_at"]),
+        }
+
+    def expire_pending_codes(self) -> int:
+        """Sweep expired pending codes. Returns the number deleted.
+
+        Called opportunistically by the brain's pruning loop. Codes
+        that were already claimed (``token IS NOT NULL``) are kept
+        for one extra TTL window so a flaky daemon can re-poll and
+        get an idempotent paired response.
+        """
+        now = time.time()
+        cutoff = now - self.PENDING_PAIR_CODE_TTL_SECONDS
+        with self._lock:
+            conn = self._conn()
+            try:
+                cursor = conn.execute(
+                    """DELETE FROM pending_pair_codes
+                       WHERE token IS NULL AND expires_at <= ?""",
+                    (now,),
+                )
+                also = conn.execute(
+                    """DELETE FROM pending_pair_codes
+                       WHERE token IS NOT NULL AND expires_at <= ?""",
+                    (cutoff,),
+                )
+                conn.commit()
+                return int(cursor.rowcount) + int(also.rowcount)
+            finally:
+                conn.close()
 
 
 _store: Optional[DevicePairingStore] = None

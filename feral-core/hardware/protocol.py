@@ -278,15 +278,13 @@ class WebSocketDeviceAdapter(DeviceAdapter):
         self._node_id = node_id
 
     async def execute(self, action: HUPAction) -> dict:
-        import json
         msg = {
             "hop": "brain",
-            "type": "hup_execute",
+            "type": "hup_action_request",
             "payload": {
                 "action_id": action.action_id,
-                "capability_id": action.capability_id,
-                "action_type": action.action_type.value,
-                "parameters": action.parameters,
+                "name": action.capability_id,
+                "params": action.parameters,
                 "timeout_ms": action.timeout_ms,
             }
         }

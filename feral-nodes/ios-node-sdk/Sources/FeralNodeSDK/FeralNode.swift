@@ -62,6 +62,18 @@ public actor FeralNode {
         connected = false
     }
 
+    /// Send a node_bye frame for graceful shutdown.
+    public func sendNodeBye(reason: String = "shutdown") async throws {
+        guard let socket, connected else { throw FeralNodeError.notConnected }
+        try await socket.send(HUPFrame(
+            type: "node_bye",
+            payload: [
+                "reason": .string(reason),
+                "restart_in_s": .int(0),
+            ]
+        ))
+    }
+
     /// Used by adapters to emit a ``device_event`` frame.
     public func emit(eventType: String, data: [String: AnyCodable]) async throws {
         guard let socket, connected else { throw FeralNodeError.notConnected }
@@ -112,9 +124,15 @@ public actor FeralNode {
     }
 
     private func handleInbound(_ frame: HUPFrame) async {
-        // Inbound hup_action_request is routed to the first adapter
-        // whose capability prefix matches the action name. Adapters
-        // that don't handle the action return without doing anything.
+        if frame.type == "node_ack" {
+            var intervalMs = 10000
+            if case .int(let ms) = frame.payload["heartbeat_ms"] {
+                intervalMs = ms
+            }
+            await socket?.startHeartbeat(intervalMs: intervalMs)
+            return
+        }
+
         if frame.type == "hup_action_request" {
             let actionName: String? = {
                 if case .string(let s) = frame.payload["name"] ?? .null { return s }

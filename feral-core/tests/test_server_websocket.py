@@ -443,8 +443,8 @@ class TestNodeWebSocket:
                     }
                 )
                 ack = ws.receive_json()
-                assert ack["type"] == "text_response"
-                assert "node-a" in ack["payload"]["text"]
+                assert ack["type"] == "node_ack"
+                assert ack["payload"]["node_id"] == "node-a"
 
             assert "node-a" not in ws_mock_state.daemons
 
@@ -463,7 +463,7 @@ class TestNodeWebSocket:
                     }
                 )
                 ws.receive_json()
-                ws.send_json({"type": "heartbeat", "payload": {}})
+                ws.send_json({"type": "node_heartbeat", "payload": {"ts": 1234567890.0}})
 
             ws_mock_state.hardware_mesh.node_health.record_heartbeat.assert_called_with("hb-node")
 

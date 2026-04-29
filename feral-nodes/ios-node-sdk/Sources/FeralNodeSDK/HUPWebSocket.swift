@@ -11,6 +11,8 @@ public actor HUPWebSocket {
     private var onMessage: ((HUPFrame) -> Void)?
     private var connected = false
     private let session: URLSession
+    private var heartbeatTask: Task<Void, Never>?
+    private var heartbeatIntervalMs: Int = 10000
 
     public init(url: URL, apiKey: String? = nil, session: URLSession = .shared) {
         self.url = url
@@ -32,6 +34,8 @@ public actor HUPWebSocket {
     }
 
     public func disconnect() async {
+        stopHeartbeat()
+        try? await sendNodeBye(reason: "shutdown")
         task?.cancel(with: .goingAway, reason: nil)
         connected = false
     }
@@ -42,6 +46,41 @@ public actor HUPWebSocket {
         encoder.keyEncodingStrategy = .useDefaultKeys
         let data = try encoder.encode(frame)
         try await task.send(.data(data))
+    }
+
+    /// Start the heartbeat loop with the interval from node_ack.
+    public func startHeartbeat(intervalMs: Int) {
+        stopHeartbeat()
+        heartbeatIntervalMs = max(1000, intervalMs)
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let ms = await self?.heartbeatIntervalMs ?? 10000
+                try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
+                guard !Task.isCancelled else { return }
+                let frame = HUPFrame(
+                    type: "node_heartbeat",
+                    payload: ["ts": .double(Date().timeIntervalSince1970)]
+                )
+                try? await self?.send(frame)
+            }
+        }
+    }
+
+    /// Stop the heartbeat timer.
+    public func stopHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+    }
+
+    private func sendNodeBye(reason: String) async throws {
+        let frame = HUPFrame(
+            type: "node_bye",
+            payload: [
+                "reason": .string(reason),
+                "restart_in_s": .int(0),
+            ]
+        )
+        try await send(frame)
     }
 
     private func receiveLoop() async {
@@ -58,8 +97,6 @@ public actor HUPWebSocket {
                     continue
                 }
             } catch {
-                // On error the caller's reconnect loop will re-invoke
-                // connect(); nothing useful to do here beyond logging.
                 connected = false
                 return
             }
@@ -71,8 +108,7 @@ public actor HUPWebSocket {
             let frame = try JSONDecoder().decode(HUPFrame.self, from: data)
             onMessage?(frame)
         } catch {
-            // Malformed frames are logged by the caller via onMessage
-            // — we only decode here.
+            // Malformed frames are logged by the caller via onMessage.
         }
     }
 }
