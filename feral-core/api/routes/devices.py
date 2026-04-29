@@ -1,15 +1,176 @@
 """Device mesh, session handoff, command ledger, node health, and pairing endpoints."""
 
 import io
-import json
+import logging
 import socket
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from api.middleware.rate_limit import code_claim_limiter
 from api.state import state
+from config.runtime import brain_port, brain_public_base_url
 
+logger = logging.getLogger("feral.pair")
 router = APIRouter()
+
+
+# ─────────────────────────────────────────────
+# Pair URL resolver — Mode A (LAN) / B (localhost) / C (remote)
+# ─────────────────────────────────────────────
+
+
+def _is_loopback_host(host: str) -> bool:
+    h = (host or "").strip().lower().strip("[]")
+    return h in {"", "localhost", "::1", "0.0.0.0"} or h.startswith("127.")
+
+
+def _detect_lan_ip() -> str:
+    """Return this machine's outbound LAN IP, or "" if it cannot be
+    determined. Uses the kernel's UDP-connect trick — no packet is sent
+    on the wire, the call only asks "if I were to send to 8.8.8.8, which
+    interface address would you use?".
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            if ip and not _is_loopback_host(ip):
+                return ip
+    except OSError:
+        pass
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip and not _is_loopback_host(ip):
+            return ip
+    except OSError:
+        pass
+    return ""
+
+
+def _normalize_origin(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    host = parsed.hostname or ""
+    if not host:
+        return ""
+    default_port = 443 if parsed.scheme == "https" else 80
+    port = parsed.port
+    suffix = "" if port in (None, default_port) else f":{port}"
+    return f"{parsed.scheme}://{host}{suffix}"
+
+
+class PairUnavailable(Exception):
+    """Raised when the configured access mode cannot emit a pair URL."""
+
+
+def _resolve_pair_origin() -> str:
+    """Pick the pair-URL origin based on the configured access mode.
+
+    Mode A "local"     → http://<lan-ip>:<brain-port>
+    Mode B "localhost" → unavailable; pairing requires network exposure
+    Mode C "remote"    → access.tailscale.tailnet_url, falling back to
+                         FERAL_PUBLIC_BASE_URL
+
+    Never falls back to a loopback URL silently — emitting
+    http://127.0.0.1:9090 to a phone is the bug we are killing.
+    """
+    cfg = getattr(state, "config", None)
+    mode = cfg.access_pairing_mode if cfg else "localhost"
+
+    if mode == "localhost":
+        raise PairUnavailable(
+            "Mode B (localhost) does not expose pairing. "
+            "Switch to LAN or remote in Settings to pair phones."
+        )
+
+    if mode == "remote":
+        configured = cfg.access_remote_url if cfg else ""
+        url = _normalize_origin(configured) or _normalize_origin(brain_public_base_url())
+        if not url:
+            raise PairUnavailable(
+                "Mode C (remote) is selected but no public URL is configured. "
+                "Run `feral access remote-up` to bring up Tailscale Funnel, "
+                "or set FERAL_PUBLIC_BASE_URL."
+            )
+        # Reject loopback in remote mode (can happen if FERAL_PUBLIC_BASE_URL
+        # was left on a default and the operator forgot to override it).
+        host = (urlparse(url).hostname or "").lower()
+        if _is_loopback_host(host):
+            raise PairUnavailable(
+                "Mode C (remote) resolved to a loopback URL. "
+                "Configure FERAL_PUBLIC_BASE_URL or run `feral access remote-up`."
+            )
+        return url
+
+    # Mode A — LAN
+    ip = _detect_lan_ip()
+    if not ip:
+        raise PairUnavailable(
+            "LAN IP not detected. Are you connected to a network? "
+            "Switch to localhost or remote mode if not."
+        )
+    return f"http://{ip}:{brain_port()}"
+
+
+def _build_diagnostic(origin_url: str) -> dict:
+    """Honest reachability diagnostic for the pair modal.
+
+    The brain CANNOT test from the phone's perspective. We only report
+    what we know — that we successfully resolved a URL — and surface
+    common failure modes (AP isolation, CGNAT, Funnel propagation) as
+    text the UI shows verbatim.
+    """
+    cfg = getattr(state, "config", None)
+    mode = cfg.access_pairing_mode if cfg else "localhost"
+    parsed = urlparse(origin_url)
+    diagnostic = {
+        "mode": mode,
+        "advertised_url": origin_url,
+        "advertised_lan_ip": parsed.hostname or "",
+        "honest_caveats": [],
+    }
+    if mode == "local":
+        diagnostic["honest_caveats"].append(
+            "I cannot test from your phone's perspective."
+        )
+        diagnostic["honest_caveats"].append(
+            "If your phone gets connection refused, your WiFi may have "
+            "AP / client isolation enabled (common in coffee shops and hotels)."
+        )
+    elif mode == "remote":
+        diagnostic["honest_caveats"].append(
+            "Funnel URLs may take up to 30 seconds to propagate after first enable."
+        )
+    return diagnostic
+
+
+def _pair_payload(result: dict) -> dict:
+    """Build the unified v1 pair payload (single shape for QR + URL).
+
+    See ``A4-pairing-redesign.md`` §4. Replaces the legacy mode=app /
+    mode=web fork; clients always get the same JSON.
+    """
+    origin = _resolve_pair_origin()
+    cfg = getattr(state, "config", None)
+    mode = cfg.access_pairing_mode if cfg else "localhost"
+    brain_id = cfg.brain_id if cfg else ""
+    return {
+        "v": 1,
+        "mode": mode,
+        "url": f"{origin.rstrip('/')}/pair?t={result['token']}",
+        "token": result["token"],
+        "brain_id": brain_id,
+        "expires": int(result.get("expires_at") or 0),
+        "name": "FERAL Brain",
+        "device_id": result["device_id"],
+        "diagnostic": _build_diagnostic(origin),
+    }
 
 
 def _infer_node_type(node_id: str, ws) -> str:
@@ -286,69 +447,38 @@ async def pair_device(request: Request):
     )
 
 
-def _pair_payload(result: dict, *, mode: str, request_origin: str = "") -> dict:
-    """Build the JSON encoded into the pair QR.
-
-    When ``mode="app"`` we emit the historical shape:
-        {host, port, token, name}  — parsed by the native iOS / Android app.
-    When ``mode="web"`` we emit a single pair URL that a plain phone camera
-    can scan without any app installed:
-        {url: "<origin>/pair?t=<token>"}
-    """
-    if mode == "web":
-        origin = request_origin or ""
-        if not origin:
-            hostname = socket.gethostname()
-            try:
-                ip = socket.gethostbyname(hostname)
-            except OSError:
-                ip = "127.0.0.1"
-            origin = f"http://{ip}:9090"
-        return {
-            "mode": "web",
-            "url": f"{origin.rstrip('/')}/pair?t={result['token']}",
-            "token": result["token"],
-            "device_id": result["device_id"],
-        }
-    hostname = socket.gethostname()
-    try:
-        ip = socket.gethostbyname(hostname)
-    except OSError:
-        ip = "127.0.0.1"
-    port = 9090
-    return {
-        "mode": "app",
-        "host": ip,
-        "port": port,
-        "token": result["token"],
-        "name": "FERAL Brain",
-    }
-
-
 @router.get("/api/devices/pair/qr")
-async def pair_device_qr(request: Request, name: str = "unnamed", mode: str = "app"):
-    """Generate a QR code PNG for a new device.
+async def pair_device_qr(request: Request, name: str = "unnamed", mode: str = "web"):
+    """Generate a QR code PNG that encodes the unified v1 pair payload.
 
-    ``mode=app`` (default) encodes ``{host, port, token, name}`` JSON for
-    the native iOS / Android app. ``mode=web`` encodes ``<origin>/pair?t=<token>``
-    so ANY phone camera app can scan it and land on the browser-side pairing
-    page — no app install required.
+    The ``mode`` query parameter is **deprecated**. Both ``mode=app``
+    and ``mode=web`` now emit the same v1 JSON; the old ``app``-shape
+    ``{host, port, token, name}`` is no longer emitted. The legacy
+    decoder in mobile clients accepts the old shape during the
+    deprecation window (sunset 2026.7.0). When ``mode=app`` is passed
+    we log so operators can find their stale callers.
     """
     store = state.device_pairing_store
     if not store:
         raise HTTPException(status_code=503, detail="Pairing store not initialized")
     if mode not in {"app", "web"}:
         raise HTTPException(status_code=400, detail="mode must be 'app' or 'web'")
-
-    kind = "browser" if mode == "web" else "name"
-    result = store.pair_device(name, kind=kind)
-
-    origin = str(request.base_url).rstrip("/")
-    payload = _pair_payload(result, mode=mode, request_origin=origin)
-    encoded = json.dumps(payload) if mode == "app" else payload["url"]
+    if mode == "app":
+        logger.warning(
+            "feral.pair.deprecated_mode_app_query — caller passed ?mode=app; "
+            "the legacy shape is gone, emitting unified v1 payload anyway. "
+            "Sunset: 2026.7.0."
+        )
 
     try:
-        import qrcode
+        result = store.pair_device(name, kind="browser")
+        payload = _pair_payload(result)
+    except PairUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    encoded = payload["url"]
+    try:
+        import qrcode  # type: ignore[import-not-found]
         qr = qrcode.QRCode(version=1, box_size=10, border=4)
         qr.add_data(encoded)
         qr.make(fit=True)
@@ -371,9 +501,112 @@ async def pair_device_url(request: Request, name: str = "unnamed"):
     store = state.device_pairing_store
     if not store:
         raise HTTPException(status_code=503, detail="Pairing store not initialized")
-    result = store.pair_device(name, kind="browser")
-    origin = str(request.base_url).rstrip("/")
-    return _pair_payload(result, mode="web", request_origin=origin)
+    try:
+        result = store.pair_device(name, kind="browser")
+        return _pair_payload(result)
+    except PairUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+# ─────────────────────────────────────────────
+# Code-pair flow (SDK polling)
+# ─────────────────────────────────────────────
+
+
+@router.post("/api/devices/pair/announce")
+async def pair_announce(request: Request):
+    """Daemon announces a 6-character base32 code it just generated.
+
+    Body: ``{"code": "...", "node_id": "...", "name": "..."}``. The
+    operator types the code into the dashboard "Type a pair code" field;
+    the dashboard then claims it and the daemon's polling
+    ``/api/devices/pair/status`` flips from ``pending`` → ``paired``
+    with the issued token.
+
+    The 8-char base32 code (~38 bits of entropy) plus the 600s TTL plus
+    the 5-attempt-per-IP rate limit on ``/code/claim`` make brute force
+    infeasible.
+    """
+    body = await request.json() if await request.body() else {}
+    code = (body or {}).get("code", "").strip()
+    node_id = (body or {}).get("node_id", "").strip()
+    name = (body or {}).get("name", "").strip() or node_id or "unnamed"
+    if not code or not node_id:
+        raise HTTPException(status_code=400, detail="code and node_id required")
+
+    store = state.device_pairing_store
+    if not store:
+        raise HTTPException(status_code=503, detail="Pairing store not initialized")
+    store.announce_pending_code(code=code, node_id=node_id, name=name)
+    return {"accepted": True}
+
+
+@router.get("/api/devices/pair/status")
+async def pair_status(code: str = "", node_id: str = ""):
+    """Daemon polls this until the operator claims the announced code.
+
+    Returns ``{"status": "pending" | "paired" | "expired", "token"?: ...}``.
+    Honest 404 if the code is unknown — no SPA-HTML masking.
+    """
+    code = (code or "").strip()
+    node_id = (node_id or "").strip()
+    if not code or not node_id:
+        raise HTTPException(status_code=400, detail="code and node_id required")
+
+    store = state.device_pairing_store
+    if not store:
+        raise HTTPException(status_code=503, detail="Pairing store not initialized")
+    record = store.lookup_pending_code(code=code, node_id=node_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="unknown pairing code")
+    if record["expires_at"] <= record["_now"]:
+        return {"status": "expired"}
+    if record.get("token"):
+        return {"status": "paired", "token": record["token"]}
+    return {"status": "pending"}
+
+
+@router.post("/api/devices/pair/code/claim")
+async def pair_code_claim(request: Request):
+    """Operator claims an announced code from the dashboard.
+
+    Body: ``{"code": "..."}``. On match: mints a real device-pairing
+    token, writes it back to the pending row, returns the token.
+
+    Rate-limited to 5 wrong attempts per source IP per 15 minutes; on
+    over-cap the IP gets a 429 with a Retry-After header. >10 wrong
+    attempts against a single code → server-side invalidates the code
+    (anti-correlation).
+    """
+    client_host = request.client.host if request.client else "unknown"
+    if not code_claim_limiter.allow(client_host):
+        retry_after = code_claim_limiter.retry_after(client_host)
+        raise HTTPException(
+            status_code=429,
+            detail="too many pair-code claim attempts; try again later",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    body = await request.json() if await request.body() else {}
+    code = (body or {}).get("code", "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="code required")
+
+    store = state.device_pairing_store
+    if not store:
+        raise HTTPException(status_code=503, detail="Pairing store not initialized")
+
+    outcome = store.claim_pending_code(code=code)
+    if outcome is None:
+        # Wrong code → bump per-IP counter; surface honest 404 not 401
+        # (avoids leaking whether a code exists in any state).
+        code_claim_limiter.record_failure(client_host)
+        raise HTTPException(status_code=404, detail="unknown or expired pairing code")
+    return {
+        "token": outcome["token"],
+        "device_id": outcome["device_id"],
+        "expires_at": outcome["expires_at"],
+    }
 
 
 @router.post("/api/devices/pair/prune")

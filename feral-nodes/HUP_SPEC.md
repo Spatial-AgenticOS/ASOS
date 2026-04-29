@@ -1,6 +1,6 @@
 # Hardware Unification Protocol (HUP) — Public Specification
 
-**Version:** `HUP v1.1.0`
+**Version:** `HUP v1.2.0`
 **Status:** Stable
 **License:** Apache-2.0
 **Canonical schemas:** this file (normative) + Pydantic mirror in
@@ -226,11 +226,14 @@ gating. Each capability string maps to a **tier** for policy purposes:
 | `active_actuator`   | haptic, buzzer, led, display              | yes, rate-limited |
 | `motor`             | motor, relay, valve, vehicle              | off by default — per-command confirmation |
 
-### 5.2 `node_ack` (brain → daemon)
+### 5.2 `node_ack` (brain → daemon, REQUIRED)
+
+Brain MUST reply to every valid `node_register` with a `node_ack`
+within 5 seconds, or close the socket with an error code from §8.
 
 ```json
 {
-  "hup_version": "1.0.0",
+  "hup_version": "1.2.0",
   "type": "node_ack",
   "ts": 1734369920.040,
   "payload": {
@@ -244,7 +247,7 @@ gating. Each capability string maps to a **tier** for policy purposes:
 }
 ```
 
-### 5.3 `node_heartbeat` (daemon → brain, every `heartbeat_ms`)
+### 5.3 `node_heartbeat` (daemon → brain, every `heartbeat_ms`, canonical)
 
 ```json
 {
@@ -393,11 +396,14 @@ keyframe of an H.264 stream. Route every decoded frame into
 vision-LLM caption on the most recent frame and store it in episodic
 memory.
 
-### 5.5 `hup_action_request` (brain → daemon)
+### 5.5 `hup_action_request` (brain → daemon, canonical)
+
+Canonical name since v1.2.0. Legacy aliases `command`, `execute`, and
+`hup_execute` are deprecated (see §5.8) and sunset in 2026.7.0.
 
 ```json
 {
-  "hup_version": "1.0.0",
+  "hup_version": "1.2.0",
   "type": "hup_action_request",
   "ts": 1734369940.000,
   "payload": {
@@ -433,11 +439,14 @@ and `timeout_ms` correspond to `HUPAction.action_id`,
 `HUPAction.capability_id`, `HUPAction.parameters`, and
 `HUPAction.timeout_ms` respectively.
 
-### 5.6 `hup_action_response` (daemon → brain)
+### 5.6 `hup_action_response` (daemon → brain, canonical)
+
+Canonical name since v1.2.0. Brain MUST consume `hup_action_response`
+frames and resolve the matching mesh action future by `action_id`.
 
 ```json
 {
-  "hup_version": "1.0.0",
+  "hup_version": "1.2.0",
   "type": "hup_action_response",
   "ts": 1734369940.180,
   "payload": {
@@ -483,6 +492,30 @@ mapping is: `success = (HUPResult.status == "success")`,
 ```
 
 After sending `node_bye`, the sender SHOULD close the socket within 2 s.
+
+### 5.8 Deprecation Policy
+
+Legacy message type names are accepted as aliases for a deprecation
+window spanning two minor versions (≈ two months under CalVer).
+
+| Deprecated alias | Canonical type | Sunset version |
+|---|---|---|
+| `command` | `hup_action_request` | 2026.7.0 |
+| `execute` | `hup_action_request` | 2026.7.0 |
+| `hup_execute` | `hup_action_request` | 2026.7.0 |
+| `heartbeat` | `node_heartbeat` | 2026.7.0 |
+
+Brain behaviour during the deprecation window:
+- Brain MUST accept the alias and treat it identically to the canonical
+  type.
+- Brain MUST log a structured `feral.hup.deprecated_alias` warning on
+  each occurrence, including the alias used and the canonical
+  replacement.
+- After the sunset version, brain MAY reject the alias with error code
+  `1002 bad_schema`.
+
+SDK behaviour: SDKs SHOULD emit only canonical types. SDKs SHOULD
+consume both canonical and aliased types during the window.
 
 ---
 
@@ -652,6 +685,26 @@ Deltas from the current `/v1/node` handler are tracked in
 ---
 
 ## Appendix B — Version Changelog
+
+### v1.2.0 (2026-04-28)
+
+- **Added** `node_ack` as REQUIRED brain response to `node_register`
+  (§5.2). Payload: `node_id`, `session_token`, `heartbeat_ms`,
+  `hup_version`, `capabilities`, `granted_capabilities`.
+- **Canonical** `node_heartbeat` (§5.3) — brain handler now uses the
+  canonical name. Legacy `heartbeat` alias deprecated, sunset 2026.7.0.
+- **Canonical** `hup_action_request` (§5.5) / `hup_action_response`
+  (§5.6) — brain emits and consumes the canonical names. Legacy
+  `command`, `execute`, `hup_execute` aliases deprecated, sunset
+  2026.7.0.
+- **Added** `node_bye` handling in brain — graceful WS close with code
+  1000 on receipt.
+- **Added** `error` frame emission per §8 on protocol violations.
+- **Added** §5.8 deprecation policy for type aliases.
+- **iOS SDK** now sends `node_heartbeat` on the interval from
+  `node_ack.heartbeat_ms` and `node_bye` on disconnect.
+- **Backward-compat:** strictly additive. v1.1.0 daemons remain
+  conformant via the alias window.
 
 ### v1.1.0 (2026-04-21)
 

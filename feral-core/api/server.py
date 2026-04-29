@@ -15,7 +15,7 @@ import collections
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, HTMLResponse, FileResponse
@@ -281,6 +281,14 @@ _OPEN_PATHS = frozenset({
     "/api/devices/pair/url",
     "/api/devices/pair/qr",
     "/api/devices/pair/complete",
+    # Code-pair flow (SDK ↔ dashboard typed pair code).
+    # Daemon announces an 8-char base32 code, dashboard claims it.
+    # Codes have ~38 bits of entropy, 600s TTL, and /code/claim is
+    # rate-limited to 5 wrong attempts per IP per 15 minutes — see
+    # ``feral-core/api/middleware/rate_limit.py``.
+    "/api/devices/pair/announce",
+    "/api/devices/pair/status",
+    "/api/devices/pair/code/claim",
 })
 
 _OPEN_PATH_PREFIXES = (
@@ -1009,6 +1017,25 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
 NODE_API_KEY = os.environ.get("NODE_API_KEY", "")
 
 
+async def _send_protocol_error(ws: WebSocket, code: int, message: str, *, name: str = "bad_schema") -> None:
+    """Emit an HUP §8 error frame to the daemon."""
+    try:
+        await ws.send_json({
+            "hup_version": "1.2.0",
+            "type": "error",
+            "ts": __import__("time").time(),
+            "payload": {
+                "code": code,
+                "name": name,
+                "message": message,
+                "recoverable": False,
+                "ref_action_id": None,
+            },
+        })
+    except Exception:
+        pass
+
+
 @app.websocket("/v1/node")
 async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
     if not api_key:
@@ -1034,7 +1061,11 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
 
     try:
         while True:
-            raw = await ws.receive_json()
+            try:
+                raw = await ws.receive_json()
+            except (ValueError, KeyError):
+                await _send_protocol_error(ws, 1002, "Malformed JSON frame")
+                continue
             msg, payload = parse_message(raw)
 
             if msg.type in ("node_register", "register") and isinstance(payload, NodeRegisterPayload):
@@ -1068,10 +1099,22 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         "capabilities": payload.capabilities,
                     })
 
-                await ws.send_json(FeralMessage(
-                    hop="brain", type="text_response",
-                    payload=TextResponsePayload(text=f"Node '{node_id}' registered successfully.").model_dump(),
-                ).model_dump())
+                session_token = str(__import__("uuid").uuid4())
+                await ws.send_json({
+                    "hup_version": "1.2.0",
+                    "type": "node_ack",
+                    "ts": __import__("time").time(),
+                    "payload": {
+                        "node_id": node_id,
+                        "session_token": session_token,
+                        "hup_version": "1.2.0",
+                        "heartbeat_ms": 10000,
+                        "server_time": __import__("time").time(),
+                        "capabilities": list(payload.capabilities),
+                        "granted_capabilities": list(payload.capabilities),
+                        "denied_capabilities": [],
+                    },
+                })
 
             elif msg.type == "execute_result":
                 logger.info(f"Daemon result from {node_id}")
@@ -1192,7 +1235,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                             await state.orchestrator._emit_brain_event(sid, "device_telemetry", {"source": node_id, "sensors": list(readings.keys())})
                 _record_biometrics_to_baseline(readings)
 
-            elif msg.type == "heartbeat":
+            elif msg.type == "node_heartbeat":
                 if node_id and state.hardware_mesh:
                     state.hardware_mesh.node_health.record_heartbeat(node_id)
                     pending = state.hardware_mesh.ledger.get_pending(node_id)
@@ -1206,6 +1249,29 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                                 "type": "pending_commands",
                                 "payload": {"command_ids": unacked_ids},
                             })
+
+            elif msg.type == "hup_action_response":
+                result_payload = raw.get("payload", {})
+                action_id = result_payload.get("action_id", "") or result_payload.get("request_id", "")
+                if state.hardware_mesh and action_id:
+                    state.hardware_mesh.resolve_invoke(action_id, result_payload)
+                if state.orchestrator:
+                    await state.orchestrator.handle_daemon_result(
+                        node_id=node_id,
+                        result=result_payload,
+                        session_id=msg.session_id,
+                    )
+
+            elif msg.type == "node_bye":
+                logger.info("node_bye from %s: %s", node_id, raw.get("payload", {}).get("reason", ""))
+                if node_id:
+                    state.daemons.pop(node_id, None)
+                    if state.skill_executor:
+                        state.skill_executor.unregister_daemon(node_id)
+                    if state.hardware_mesh:
+                        state.hardware_mesh.on_node_disconnected(node_id)
+                await ws.close(code=1000)
+                return
 
             elif msg.type == "glasses_status":
                 payload_dict = raw.get("payload", {})
@@ -1318,6 +1384,10 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         "Ignoring unknown device_event event_type=%r from %s",
                         ev_type, node_id,
                     )
+
+            else:
+                logger.debug("Unknown HUP msg type=%r from %s", msg.type, node_id)
+                await _send_protocol_error(ws, 1002, f"Unknown message type: {msg.type}")
 
     except WebSocketDisconnect:
         if node_id:
@@ -1709,6 +1779,19 @@ a{color:#06b6d4}p{line-height:1.6}</style></head>
 
 @app.get("/{full_path:path}")
 async def serve_webui_or_fallback(full_path: str = ""):
+    # Honest 404 for unknown API and protocol paths. Until this guard
+    # was added the catch-all returned 200 SPA HTML for any unknown
+    # ``/api/...`` GET, which silently broke SDKs that polled missing
+    # endpoints (parsers crashed on HTML; flows hung indefinitely).
+    if (
+        full_path.startswith("api/")
+        or full_path.startswith("v1/")
+        or full_path.startswith("v2/api/")
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "no_such_route", "path": "/" + full_path},
+        )
     if _webui_ready:
         file_path = (_webui_dir / full_path).resolve()
         if not file_path.is_relative_to(_webui_dir.resolve()):

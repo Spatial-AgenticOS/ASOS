@@ -2,7 +2,7 @@ import Foundation
 
 public enum FeralNodeSDKInfo {
     public static let version = "0.1.0-scaffold"
-    public static let hupVersion = "1.1.0"
+    public static let hupVersion = "1.2.0"
 }
 
 public enum FeralNodeError: Error, LocalizedError {

@@ -339,6 +339,50 @@ class HandoffRequestPayload(BaseModel):
 # Message Type Registry — Maps type strings to payload models
 # ─────────────────────────────────────────────
 
+class NodeAckPayload(BaseModel):
+    """Brain acknowledges a node_register (HUP_SPEC §5.2)."""
+    node_id: str = ""
+    session_token: str = ""
+    hup_version: str = "1.2.0"
+    heartbeat_ms: int = 10000
+    server_time: float = Field(default_factory=time)
+    capabilities: list[str] = []
+    granted_capabilities: list[str] = []
+    denied_capabilities: list[str] = []
+
+
+class HUPActionRequestPayload(BaseModel):
+    """Brain dispatches an action to a daemon (HUP_SPEC §5.5)."""
+    action_id: str = Field(default_factory=lambda: str(uuid4())[:8])
+    name: str = ""
+    params: dict = Field(default_factory=dict)
+    timeout_ms: int = 5000
+    requires_confirmation: bool = False
+
+
+class HUPActionResponsePayload(BaseModel):
+    """Daemon responds to an hup_action_request (HUP_SPEC §5.6)."""
+    action_id: str = ""
+    request_id: str = ""
+    success: bool = True
+    result: dict = Field(default_factory=dict)
+    error: Optional[str] = None
+    duration_ms: int = 0
+
+
+class NodeHeartbeatPayload(BaseModel):
+    """Daemon heartbeat (HUP_SPEC §5.3)."""
+    ts: float = Field(default_factory=time)
+    battery_pct: Optional[int] = None
+    rssi: Optional[int] = None
+
+
+class NodeByePayload(BaseModel):
+    """Graceful disconnect (HUP_SPEC §5.7)."""
+    reason: str = "shutdown"
+    restart_in_s: int = 0
+
+
 MESSAGE_TYPES = {
     # Client → Brain
     "audio_chunk": AudioChunkPayload,
@@ -360,9 +404,14 @@ MESSAGE_TYPES = {
     "gesture": GesturePayload,
     "error": ErrorPayload,
 
-    # Brain ↔ Daemon / Phone Bridge
+    # Brain ↔ Daemon (HUP canonical)
     "register": NodeRegisterPayload,
     "node_register": NodeRegisterPayload,
+    "node_ack": NodeAckPayload,
+    "node_heartbeat": NodeHeartbeatPayload,
+    "hup_action_request": HUPActionRequestPayload,
+    "hup_action_response": HUPActionResponsePayload,
+    "node_bye": NodeByePayload,
     "execute": ExecuteCommandPayload,
     "execute_result": ExecuteResultPayload,
 
@@ -384,6 +433,14 @@ MESSAGE_TYPES = {
     "audio_response": AudioResponsePayload,
     "vision_query": VisionQueryPayload,
 }
+
+DEPRECATED_TYPE_ALIASES: dict[str, str] = {
+    "command": "hup_action_request",
+    "execute": "hup_action_request",
+    "hup_execute": "hup_action_request",
+    "heartbeat": "node_heartbeat",
+}
+DEPRECATED_ALIAS_SUNSET = "2026.7.0"
 
 
 def parse_message(raw: dict) -> tuple[FeralMessage, BaseModel | None]:
