@@ -8,7 +8,11 @@ Usage
 
 The config key is ``memory.backend`` in ``~/.feral/settings.json``.
 Switching is cheap: it's just a config change. The brain reloads the
-backend on next start, or on ``POST /api/memory/reload`` if running.
+backend on next start. There is no live-reload endpoint today: until
+the vector-adapter wiring lands (MEMORY_SYSTEM_FIX_PLAN Phase 1A) the
+brain stores chunk embeddings in ``memory.db`` regardless of this
+setting. ``GET /api/memory/backend`` exposes ``active_store`` +
+``pending_unapplied`` so dashboards can surface the gap honestly.
 """
 
 from __future__ import annotations
