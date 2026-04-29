@@ -20,13 +20,23 @@ bootstrapLocalApiKey();
 maybeRedirectToSetup();
 
 // PWA service worker — register after first paint so the SW install
-// never blocks the SPA boot. Skipped in dev (Vite injects HMR in dev
-// and SW caching would interfere with hot reloads).
+// never blocks the SPA boot. Skipped in:
+//   - Dev (Vite injects HMR; SW caching interferes with hot reloads).
+//   - The /pair landing. Pairing is a one-shot unauthenticated flow:
+//     a fresh phone visits /pair?t=<token>, opens a WebSocket to
+//     /v1/node, then either becomes a paired browser_node or
+//     navigates away. SW caching brings no benefit, and the
+//     activate-time clients.claim() in sw.js is known to trigger an
+//     iOS Safari page reload on first SW takeover, which silently
+//     kills the in-flight WebSocket. See A4 live phone-pair test.
+const _swPath = typeof window !== 'undefined' ? (window.location.pathname || '') : '';
+const _swPathIsPair = _swPath.startsWith('/pair') || _swPath.startsWith('/v2/pair');
 if (
   typeof window !== 'undefined' &&
   'serviceWorker' in navigator &&
   window.location.protocol !== 'file:' &&
-  !import.meta.env?.DEV
+  !import.meta.env?.DEV &&
+  !_swPathIsPair
 ) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {

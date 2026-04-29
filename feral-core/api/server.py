@@ -308,11 +308,22 @@ _OPEN_PATH_PREFIXES = (
 _OPEN_GET_PATHS = frozenset({
     "/pair",
     "/v2/pair",
+    # PWA + browser metadata. A phone scanning a Mode-A LAN pair URL
+    # is not on loopback and does not yet have an API key; the bundle
+    # fetches these eagerly during boot. Without them in the GET
+    # allowlist the pair flow worked but PWA install was silently
+    # broken (manifest 401 → no "Add to Home Screen" prompt; favicon
+    # 401 → red console errors that look scary). They are static and
+    # carry no secrets.
+    "/manifest.webmanifest",
+    "/favicon.ico",
+    "/sw.js",
 })
 
 _OPEN_GET_PATH_PREFIXES = (
     "/assets/",
     "/v2/assets/",
+    "/icons/",
 )
 
 
@@ -1066,7 +1077,25 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
             except (ValueError, KeyError):
                 await _send_protocol_error(ws, 1002, "Malformed JSON frame")
                 continue
-            msg, payload = parse_message(raw)
+            try:
+                msg, payload = parse_message(raw)
+            except Exception as exc:  # noqa: BLE001 — pydantic ValidationError + others
+                # A typed-payload mismatch (e.g. an unknown node_type Literal,
+                # missing required field) used to bubble out of parse_message
+                # → out of daemon_session → silent WS close, leaving the
+                # phone with "connecting…" forever. Now we surface a real
+                # HUP §8 error frame and keep the loop alive so the daemon
+                # sees what's wrong.
+                logger.warning(
+                    "daemon_session: malformed payload from device_id=%s: %s",
+                    paired_device_id, exc,
+                )
+                await _send_protocol_error(
+                    ws, 1003,
+                    f"payload validation failed: {exc.__class__.__name__}: {exc}",
+                    name="bad_payload",
+                )
+                continue
 
             if msg.type in ("node_register", "register") and isinstance(payload, NodeRegisterPayload):
                 node_id = payload.node_id

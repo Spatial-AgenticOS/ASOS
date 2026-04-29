@@ -33,6 +33,14 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
+  // Intentionally NO ``self.clients.claim()`` here. Calling claim()
+  // makes the SW take over all open pages immediately on first
+  // activation, which iOS Safari has historically translated into a
+  // forced reload of the page. On the /pair landing, that reload
+  // arrived between the WS open and the node_register completing —
+  // silently killing the pairing flow with a "connecting…" hang.
+  // The SW becomes active on the next navigation; that's good enough
+  // for a PWA install and avoids the reload race entirely.
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
@@ -40,7 +48,7 @@ self.addEventListener('activate', (event) => {
           .filter((k) => k !== STATIC_CACHE && k !== RUNTIME_CACHE)
           .map((k) => caches.delete(k)),
       ),
-    ).then(() => self.clients.claim()),
+    ),
   );
 });
 
