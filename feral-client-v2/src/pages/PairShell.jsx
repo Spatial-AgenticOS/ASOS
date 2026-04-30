@@ -3,7 +3,18 @@ import { Navigate, Outlet, useNavigate, useParams } from "react-router-dom";
 import BrowserNode from "../node/BrowserNode";
 import Glass from "../ui/Glass";
 import Pane from "../ui/Pane";
-import LiveOpsStream from "../shell/LiveOpsStream";
+// LiveOpsStream intentionally NOT imported here. It uses useFeralSocket()
+// which opens a singleton WebSocket to /v1/session — the dashboard's
+// chat WS that authenticates with the dashboard API key from
+// localStorage. The phone doesn't have that key (it has a phone_bearer
+// in IndexedDB), so /v1/session auth-fails and the singleton retries
+// forever — surfaced in the live phone test as a connect/disconnect
+// storm in the brain log.
+//
+// The phone already has its own connection (BrowserNode → /v1/node)
+// for live events. A future "phone-side ops stream" component can
+// subscribe to BrowserNode's frame stream directly without touching
+// the dashboard socket.
 import PairTopBar from "./PairTopBar";
 import CapabilityTabs from "./CapabilityTabs";
 import {
@@ -365,7 +376,6 @@ export default function PairShell() {
           <Pane padding="md">
             <Outlet context={shellContext} />
           </Pane>
-          <LiveOpsStream active={isConnectedPhase(status)} />
         </div>
       </Glass>
     </div>
