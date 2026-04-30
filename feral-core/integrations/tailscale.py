@@ -37,9 +37,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pathlib
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -83,6 +87,26 @@ class TailscalePermissionDenied(TailscaleError):
 class TailscaleSubprocessFailure(TailscaleError):
     """The CLI returned a non-zero exit and the error wasn't classified
     above. Carries stdout + stderr for the operator to inspect."""
+
+
+class TailscaleNoVarRootInUserspace(TailscaleError):
+    """Daemon runs in single-file ``--state=<file>`` mode → no cert
+    storage path → Funnel TLS can't provision Let's Encrypt certs.
+
+    The fix is :func:`migrate_userspace_to_statedir`, which moves the
+    state file into a directory and restarts tailscaled with
+    ``--statedir=<dir>``.
+    """
+
+
+class TailscaleMigrationFailed(TailscaleError):
+    """``migrate_userspace_to_statedir`` could not complete safely.
+
+    The caller is expected to surface this verbatim — the operator
+    needs to know if their tailscaled state was preserved or whether
+    they have to re-authenticate. The exception message always
+    documents the recovery state.
+    """
 
 
 # ── Status data class ─────────────────────────────────────────────
@@ -292,7 +316,7 @@ def funnel_url(port: int, *, dns_name: Optional[str] = None) -> str:
     return f"https://{dns_name}"
 
 
-def funnel_enable(port: int) -> dict:
+def funnel_enable(port: int, *, auto_migrate: bool = True) -> dict:
     """Enable Tailscale Funnel for ``port`` (background, HTTPS on 443).
 
     Tailscale 1.66+ replaced the old ``funnel <port> on`` UX with
@@ -302,10 +326,38 @@ def funnel_enable(port: int) -> dict:
     error (e.g. Funnel-not-enabled-in-tailnet), we re-raise so the
     caller surfaces a remediation URL.
 
-    Returns ``{enabled: bool, url: str, port: int}`` on success.
+    ``auto_migrate=True`` (default): when the running tailscaled is in
+    single-file ``--state=<file>`` mode, certificate provisioning
+    cannot work (no TailscaleVarRoot). Before enabling Funnel we
+    detect this and migrate the daemon to ``--statedir=<dir>`` mode
+    in-place (preserves auth). Set ``auto_migrate=False`` to skip
+    this and surface :class:`TailscaleNoVarRootInUserspace` instead.
+
+    Returns ``{enabled: bool, url: str, port: int, migrated?: dict}``.
     """
     if port <= 0 or port > 65535:
         raise ValueError(f"port must be 1..65535 (got {port})")
+
+    # Pre-flight: detect the userspace single-file state mode that
+    # would silently break TLS handshakes after Funnel goes "on".
+    # We deliberately fail FAST here rather than after Funnel starts
+    # accepting traffic, because partial state (Funnel on, certs
+    # missing) is the worst UX — phones see ERR_SSL_PROTOCOL_ERROR.
+    info = inspect_tailscaled_process()
+    migration_record: Optional[dict] = None
+    if info.needs_migration:
+        if not auto_migrate:
+            raise TailscaleNoVarRootInUserspace(
+                "tailscaled is running in single-file state mode "
+                f"(--state={info.state_file}); Funnel cert provisioning "
+                "would fail. Re-run with auto_migrate=True or migrate "
+                "manually with `migrate_userspace_to_statedir()`."
+            )
+        logger.info(
+            "tailscale: pre-Funnel migration triggered "
+            "(userspace state-file mode detected)"
+        )
+        migration_record = migrate_userspace_to_statedir(info=info)
 
     # Modern syntax (1.66+): `tailscale funnel --bg <port>`. The
     # `--bg` flag returns immediately after persisting the serve
@@ -336,13 +388,16 @@ def funnel_enable(port: int) -> dict:
             )
 
     snap = status()
-    return {
+    result = {
         "enabled": True,
         "url": funnel_url(port, dns_name=snap.dns_name),
         "port": port,
         "tailnet": snap.tailnet_name,
         "dns_name": snap.dns_name,
     }
+    if migration_record is not None:
+        result["migrated"] = migration_record
+    return result
 
 
 def funnel_disable(port: int) -> dict:
@@ -445,6 +500,350 @@ def funnel_status() -> dict:
     return {"active": bool(ports), "ports": sorted(ports)}
 
 
+# ── Userspace-tailscaled migration (cert storage gap) ────────────
+
+
+@dataclass(frozen=True)
+class TailscaledProcessInfo:
+    """What we know about the currently-running tailscaled.
+
+    Used to detect the "userspace-with-only-a-state-file" pattern that
+    Funnel cert provisioning trips on (``no TailscaleVarRoot``). When
+    ``is_userspace`` is True AND ``state_dir`` is None AND ``state_file``
+    is set, the daemon needs migration to ``--statedir`` mode.
+    """
+    running: bool
+    pid: int = 0
+    binary: str = ""
+    args: tuple[str, ...] = ()
+    socket_path: str = ""
+    state_file: str = ""        # value of --state=
+    state_dir: str = ""         # value of --statedir=
+    tun_mode: str = ""          # value of --tun=
+    parent_pid: int = 0
+
+    @property
+    def is_userspace(self) -> bool:
+        return self.tun_mode == "userspace-networking"
+
+    @property
+    def needs_migration(self) -> bool:
+        """True iff this process WILL fail Funnel cert provisioning."""
+        return (
+            self.running
+            and self.is_userspace
+            and bool(self.state_file)
+            and not self.state_dir
+        )
+
+
+def inspect_tailscaled_process() -> TailscaledProcessInfo:
+    """Locate the running ``tailscaled`` and return its launch flags.
+
+    Reads ``ps -axo pid,ppid,command`` and picks the first row whose
+    command starts with ``tailscaled`` (or ends with that basename).
+    Returns ``running=False`` when no such process exists.
+    """
+    try:
+        proc = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return TailscaledProcessInfo(running=False)
+
+    target_pid = 0
+    target_ppid = 0
+    target_args: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid_i = int(parts[0])
+            ppid_i = int(parts[1])
+        except ValueError:
+            continue
+        cmd = parts[2]
+        # The first token is the binary path; we accept either a path
+        # ending in /tailscaled or the bare name.
+        try:
+            tokens = shlex.split(cmd)
+        except ValueError:
+            continue
+        if not tokens:
+            continue
+        binary = tokens[0]
+        basename = os.path.basename(binary)
+        if basename != "tailscaled":
+            continue
+        target_pid = pid_i
+        target_ppid = ppid_i
+        target_args = tokens
+        break
+
+    if not target_args:
+        return TailscaledProcessInfo(running=False)
+
+    state_file = ""
+    state_dir = ""
+    socket_path = ""
+    tun_mode = ""
+    for arg in target_args[1:]:
+        if arg.startswith("--state="):
+            state_file = arg[len("--state="):]
+        elif arg.startswith("--statedir="):
+            state_dir = arg[len("--statedir="):]
+        elif arg.startswith("--socket="):
+            socket_path = arg[len("--socket="):]
+        elif arg.startswith("--tun="):
+            tun_mode = arg[len("--tun="):]
+
+    return TailscaledProcessInfo(
+        running=True,
+        pid=target_pid,
+        binary=target_args[0],
+        args=tuple(target_args),
+        socket_path=socket_path,
+        state_file=state_file,
+        state_dir=state_dir,
+        tun_mode=tun_mode,
+        parent_pid=target_ppid,
+    )
+
+
+def _wait_for_socket_gone(path: str, *, timeout: float = 10.0) -> bool:
+    """Wait until ``path`` no longer exists. Returns True on success."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not os.path.exists(path):
+            return True
+        time.sleep(0.2)
+    return not os.path.exists(path)
+
+
+def _wait_for_socket_present(path: str, *, timeout: float = 15.0) -> bool:
+    """Wait until ``path`` exists and is a socket. Returns True on success."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.exists(path):
+            return True
+        time.sleep(0.2)
+    return os.path.exists(path)
+
+
+def migrate_userspace_to_statedir(
+    *,
+    info: Optional[TailscaledProcessInfo] = None,
+    dry_run: bool = False,
+) -> dict:
+    """Migrate a userspace tailscaled from ``--state=<file>`` to
+    ``--statedir=<dir>`` mode IN-PLACE, preserving auth.
+
+    Without this, Funnel cert provisioning fails with::
+
+        500 Internal Server Error: no TailscaleVarRoot
+
+    because tailscaled has no directory to persist Let's Encrypt
+    certs into. The migration:
+
+      1. Inspects the running tailscaled (must be userspace + state-file mode).
+      2. Computes a sibling directory next to the state file:
+         ``<state_dir>/tailscaled.d/`` is the new home.
+      3. Sends SIGTERM to the daemon, waits up to 10s for the socket
+         to disappear (then SIGKILL as last resort).
+      4. ``mv <state_file> <new_dir>/tailscaled.state`` — Tailscale's
+         expected filename inside a statedir.
+      5. Restarts tailscaled with the same flags BUT replaces
+         ``--state=<file>`` with ``--statedir=<new_dir>`` and detaches
+         (Popen, no parent dependency, stdout/stderr to a log file).
+      6. Waits up to 15s for the socket to come back.
+      7. Verifies ``tailscale status`` reports logged_in (auth must
+         have survived the move; if not, raises).
+
+    On any failure the function raises :class:`TailscaleMigrationFailed`
+    with a message documenting the current state of the user's data
+    so they can recover manually.
+
+    ``dry_run=True`` returns the planned commands without executing.
+    """
+    if info is None:
+        info = inspect_tailscaled_process()
+    if not info.running:
+        raise TailscaleMigrationFailed(
+            "No running tailscaled to migrate. State preserved (no changes made)."
+        )
+    if not info.needs_migration:
+        return {
+            "migrated": False,
+            "reason": "already_in_statedir_mode_or_not_userspace",
+            "info": {
+                "is_userspace": info.is_userspace,
+                "state_dir": info.state_dir,
+                "state_file": info.state_file,
+            },
+        }
+
+    state_path = pathlib.Path(info.state_file)
+    if not state_path.exists():
+        raise TailscaleMigrationFailed(
+            f"--state path {state_path} doesn't exist on disk; refusing to "
+            "migrate (state preserved, no changes made)."
+        )
+
+    new_dir = state_path.parent / "tailscaled.d"
+    new_state_file = new_dir / "tailscaled.state"
+
+    # Plan the new ProgramArguments. Replace --state with --statedir.
+    new_args: list[str] = [info.binary]
+    for arg in info.args[1:]:
+        if arg.startswith("--state="):
+            continue  # replaced below
+        new_args.append(arg)
+    new_args.append(f"--statedir={new_dir}")
+
+    plan = {
+        "stop_pid": info.pid,
+        "socket_path": info.socket_path,
+        "old_state_file": str(state_path),
+        "new_state_dir": str(new_dir),
+        "new_state_file": str(new_state_file),
+        "restart_argv": new_args,
+    }
+    if dry_run:
+        plan["migrated"] = False
+        plan["dry_run"] = True
+        return plan
+
+    # ── Step 1: stop the daemon ──────────────────────────────
+    logger.info(
+        "tailscale: migrating userspace daemon (pid=%s) to statedir mode "
+        "(state_file=%s → state_dir=%s)",
+        info.pid, state_path, new_dir,
+    )
+    try:
+        os.kill(info.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except PermissionError as exc:
+        raise TailscaleMigrationFailed(
+            f"cannot signal pid {info.pid}: {exc}. "
+            "Is tailscaled running as a different user? State preserved "
+            "(no changes made)."
+        ) from exc
+
+    socket_path = info.socket_path or "/var/run/tailscale/tailscaled.sock"
+    if not _wait_for_socket_gone(socket_path, timeout=10.0):
+        # Escalate to SIGKILL.
+        try:
+            os.kill(info.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if not _wait_for_socket_gone(socket_path, timeout=5.0):
+            raise TailscaleMigrationFailed(
+                f"tailscaled (pid {info.pid}) didn't release socket {socket_path} "
+                f"after SIGKILL. State preserved at {state_path}; restart your "
+                "Mac to clear the stale daemon, then retry."
+            )
+
+    # ── Step 2: prepare new directory + move state ───────────
+    try:
+        new_dir.mkdir(parents=True, exist_ok=True)
+        # Permissions match what tailscaled itself uses.
+        os.chmod(new_dir, 0o700)
+    except OSError as exc:
+        raise TailscaleMigrationFailed(
+            f"could not create statedir {new_dir}: {exc}. "
+            f"State preserved at {state_path}; daemon stopped. "
+            "Re-run when the directory is writable."
+        ) from exc
+
+    # If a previous failed migration left a partial file, back it up.
+    if new_state_file.exists():
+        backup = new_dir / f"tailscaled.state.bak.{int(time.time())}"
+        try:
+            new_state_file.rename(backup)
+        except OSError:
+            pass
+
+    try:
+        shutil.move(str(state_path), str(new_state_file))
+    except OSError as exc:
+        raise TailscaleMigrationFailed(
+            f"could not move {state_path} → {new_state_file}: {exc}. "
+            f"State preserved at {state_path}; daemon stopped. "
+            "Restart tailscaled manually with the original args to recover."
+        ) from exc
+
+    # ── Step 3: restart with --statedir ──────────────────────
+    log_path = new_dir / "tailscaled.log"
+    try:
+        log_fh = open(log_path, "ab", buffering=0)
+        # Detached child; if our process exits it lives on under launchd.
+        subprocess.Popen(
+            new_args,
+            stdout=log_fh,
+            stderr=log_fh,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError as exc:
+        raise TailscaleMigrationFailed(
+            f"could not restart tailscaled with --statedir: {exc}. "
+            f"State has been moved to {new_state_file}; restart manually with: "
+            f"{shlex.join(new_args)}"
+        ) from exc
+
+    # ── Step 4: wait for new socket + verify auth ────────────
+    if not _wait_for_socket_present(socket_path, timeout=15.0):
+        raise TailscaleMigrationFailed(
+            f"tailscaled didn't reopen socket {socket_path} within 15s. "
+            f"State at {new_state_file}; check log at {log_path}."
+        )
+
+    # Status probe — verify auth survived. Allow up to 5s for the
+    # daemon to finish initialising before we give up.
+    deadline = time.time() + 5.0
+    snap = None
+    while time.time() < deadline:
+        try:
+            snap = status()
+            if snap.logged_in:
+                break
+        except TailscaleError:
+            pass
+        time.sleep(0.5)
+
+    if snap is None or not snap.logged_in:
+        raise TailscaleMigrationFailed(
+            f"tailscaled restarted but is not logged in. "
+            f"State at {new_state_file}; you may need to run "
+            f"`tailscale --socket={socket_path} login` to re-authenticate. "
+            f"See log at {log_path}."
+        )
+
+    logger.info(
+        "tailscale: migration complete; new statedir=%s, dns_name=%s",
+        new_dir, snap.dns_name,
+    )
+    return {
+        "migrated": True,
+        "old_state_file": str(state_path),
+        "new_state_dir": str(new_dir),
+        "new_state_file": str(new_state_file),
+        "restart_argv": new_args,
+        "log": str(log_path),
+        "post_migration_status": {
+            "logged_in": snap.logged_in,
+            "dns_name": snap.dns_name,
+        },
+    }
+
+
 __all__ = [
     "TailscaleError",
     "TailscaleNotInstalled",
@@ -453,7 +852,10 @@ __all__ = [
     "TailscaleFunnelDisabledInTailnet",
     "TailscalePermissionDenied",
     "TailscaleSubprocessFailure",
+    "TailscaleNoVarRootInUserspace",
+    "TailscaleMigrationFailed",
     "TailscaleStatus",
+    "TailscaledProcessInfo",
     "is_installed",
     "status",
     "status_json",
@@ -461,4 +863,6 @@ __all__ = [
     "funnel_disable",
     "funnel_status",
     "funnel_url",
+    "inspect_tailscaled_process",
+    "migrate_userspace_to_statedir",
 ]
