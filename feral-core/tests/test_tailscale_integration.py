@@ -428,6 +428,57 @@ def test_funnel_enable_skips_migration_when_auto_migrate_false(monkeypatch, tmp_
             tailscale.funnel_enable(9090, auto_migrate=False)
 
 
+def test_extract_listener_ports_finds_socks5_and_http_proxy_ports():
+    from integrations import tailscale
+    args = (
+        "tailscaled",
+        "--tun=userspace-networking",
+        "--state=/x/state",
+        "--socket=/tmp/x.sock",
+        "--socks5-server=localhost:1055",
+        "--outbound-http-proxy-listen=localhost:1056",
+    )
+    ports = tailscale._extract_listener_ports(args)
+    assert sorted(ports) == [1055, 1056]
+
+
+def test_extract_listener_ports_handles_no_listener_flags():
+    from integrations import tailscale
+    args = ("tailscaled", "--state=/x", "--socket=/y")
+    assert tailscale._extract_listener_ports(args) == []
+
+
+def test_wait_for_tcp_port_free_returns_true_when_port_unbound():
+    """Sanity: a port that nothing is bound to should be reclaimable
+    immediately."""
+    from integrations import tailscale
+    import socket as _s
+    # Pick an ephemeral port that the OS confirms is free.
+    s = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    free_port = s.getsockname()[1]
+    s.close()
+    assert tailscale._wait_for_tcp_port_free(free_port, timeout=2.0) is True
+
+
+def test_wait_for_tcp_port_free_times_out_when_port_bound():
+    """Sanity: if a process IS holding the port, the wait times out."""
+    from integrations import tailscale
+    import socket as _s
+    holder = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+    holder.setsockopt(_s.SOL_SOCKET, _s.SO_REUSEADDR, 1)
+    holder.bind(("127.0.0.1", 0))
+    held_port = holder.getsockname()[1]
+    holder.listen(1)
+    try:
+        # SO_REUSEADDR prevents trivial re-bind blocking, but bind
+        # to a port that has an active LISTENER will still fail.
+        # Test with a very short timeout to keep the test fast.
+        assert tailscale._wait_for_tcp_port_free(held_port, timeout=0.5) is False
+    finally:
+        holder.close()
+
+
 def test_funnel_enable_skips_migration_when_already_in_statedir_mode(monkeypatch):
     """Default flow when daemon doesn't need migration: no migrate call."""
     monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/local/bin/tailscale")

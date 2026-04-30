@@ -635,6 +635,62 @@ def _wait_for_socket_present(path: str, *, timeout: float = 15.0) -> bool:
     return os.path.exists(path)
 
 
+def _extract_listener_ports(args: tuple[str, ...]) -> list[int]:
+    """Pull localhost listener ports from tailscaled launch flags.
+
+    The userspace daemon binds extra TCP listeners that DON'T live in
+    the unix socket (SOCKS5 + HTTP proxy). After SIGTERM these ports
+    take a few seconds to release from TIME_WAIT — if we restart the
+    daemon before then, it crashes with::
+
+        proxy listener: listen tcp 127.0.0.1:1055: bind: address already in use
+
+    This helper extracts those ports so the restart loop can wait
+    for them to be reclaimable. Recognised flags:
+      --socks5-server=<host>:<port>
+      --outbound-http-proxy-listen=<host>:<port>
+    """
+    ports: list[int] = []
+    for arg in args:
+        for prefix in (
+            "--socks5-server=",
+            "--outbound-http-proxy-listen=",
+        ):
+            if arg.startswith(prefix):
+                tail = arg[len(prefix):]
+                if ":" in tail:
+                    port_str = tail.rsplit(":", 1)[-1]
+                    try:
+                        ports.append(int(port_str))
+                    except ValueError:
+                        pass
+    return ports
+
+
+def _wait_for_tcp_port_free(port: int, *, timeout: float = 10.0) -> bool:
+    """Block until ``localhost:<port>`` can be bound by a fresh listener.
+
+    Returns True when the port is reclaimable, False on timeout. We
+    test this the way tailscaled itself will: open a SOCK_STREAM,
+    set SO_REUSEADDR, bind to 127.0.0.1:port. If bind succeeds the
+    port is genuinely free (not in TIME_WAIT).
+    """
+    import socket as _socket
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        try:
+            s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            time.sleep(0.25)
+            continue
+        finally:
+            s.close()
+        return True
+    return False
+
+
 def migrate_userspace_to_statedir(
     *,
     info: Optional[TailscaledProcessInfo] = None,
@@ -747,6 +803,23 @@ def migrate_userspace_to_statedir(
                 f"tailscaled (pid {info.pid}) didn't release socket {socket_path} "
                 f"after SIGKILL. State preserved at {state_path}; restart your "
                 "Mac to clear the stale daemon, then retry."
+            )
+
+    # Beyond the unix socket, the userspace daemon binds TCP listeners
+    # (SOCKS5 + HTTP proxy on localhost:1055 by default). The unix
+    # socket is closed instantly on process exit, but TCP ports linger
+    # in TIME_WAIT for a few seconds. Restarting too early crashes
+    # the new daemon with `bind: address already in use`. We poll
+    # each listener port until it can be re-bound (matches what the
+    # restarted daemon will do).
+    listener_ports = _extract_listener_ports(info.args)
+    for p in listener_ports:
+        if not _wait_for_tcp_port_free(p, timeout=15.0):
+            raise TailscaleMigrationFailed(
+                f"tailscaled (pid {info.pid}) is gone but localhost:{p} "
+                f"is still bound after 15s (TIME_WAIT). State preserved "
+                f"at {state_path}; wait ~30s and retry, or run "
+                f"`lsof -i:{p}` to see the holder."
             )
 
     # ── Step 2: prepare new directory + move state ───────────
