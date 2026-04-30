@@ -69,11 +69,25 @@ def _do_remote_up() -> int:
     except HTTPException as exc:
         detail: Any = exc.detail
         if isinstance(detail, dict):
-            print(f"\n  Failed: {detail.get('code', 'unknown')}")
+            code = detail.get("code", "unknown")
+            print(f"\n  Failed: {code}")
             print(f"  → {detail.get('message', '')}")
             rem = detail.get("remediation")
             if rem:
-                print(f"  Remediation: {rem}")
+                # Highlight the activation URL specifically since that's
+                # the most actionable case.
+                if code == "funnel_disabled_in_tailnet" and rem.startswith(
+                    "https://login.tailscale.com/f/funnel"
+                ):
+                    print()
+                    print("  → ONE-CLICK ENABLE (free, ~5 seconds):")
+                    print(f"     {rem}")
+                    print(
+                        "  → After clicking, re-run "
+                        "`feral access remote-up`."
+                    )
+                else:
+                    print(f"  Remediation: {rem}")
         else:
             print(f"\n  Failed: {detail}")
         print()
