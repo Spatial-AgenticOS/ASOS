@@ -3,13 +3,20 @@
  *
  * The QR a user scans on their phone encodes <origin>/pair?t=<TOKEN>.
  * Opening that URL (on ANY phone, no app needed) renders this page.
- * One tap on "Pair this phone" instantiates BrowserNode which opens
- * /v1/node?api_key=<TOKEN>, registers as a browser_node, and starts
+ * On pair success we claim a runtime phone bearer, persist it in IndexedDB,
+ * then instantiate BrowserNode which connects to /v1/node using that bearer,
+ * registers as a browser_node, and starts
  * streaming sensors back to the Brain.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Smartphone, ShieldCheck, Zap, AlertTriangle } from "lucide-react";
+import { Navigate } from "react-router-dom";
 import BrowserNode from "../node/BrowserNode";
+import {
+  clearPhoneBearer,
+  getLatestPhoneBearer,
+  setPhoneBearer,
+} from "../lib/phoneBearerStore";
 
 function useToken() {
   return useMemo(() => {
@@ -23,12 +30,15 @@ export default function Pair() {
   const token = useToken();
   const [phase, setPhase] = useState("idle");
   const [error, setError] = useState(null);
+  const [isBootstrapped, setIsBootstrapped] = useState(false);
+  const [resumeRecord, setResumeRecord] = useState(null);
   const [permissions, setPermissions] = useState({
     location: true,
     camera: false,
     mic: false,
   });
   const [node, setNode] = useState(null);
+  const connectInFlightRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -36,37 +46,153 @@ export default function Pair() {
     };
   }, [node]);
 
-  const canPair = !!token && phase === "idle";
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const existing = await getLatestPhoneBearer();
+        if (cancelled) return;
+        if (
+          existing
+          && existing.phone_bearer
+          && existing.paired_device_id
+          && existing.pair_claim_marker
+        ) {
+          setResumeRecord(existing);
+          setPhase("restoring");
+        } else {
+          setPhase("idle");
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setError(err?.message || String(err));
+        setPhase(token ? "idle" : "failed");
+      } finally {
+        if (!cancelled) setIsBootstrapped(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const connectWithBearer = useCallback(async (bearer, onPhase) => {
+    const n = new BrowserNode({
+      token: bearer,
+      onPhase: (p) => {
+        setPhase(p);
+        onPhase?.(p);
+      },
+      onError: (e) => setError(e?.message || String(e)),
+    });
+    await n.connect();
+    await n.startSensors(permissions);
+    setNode(n);
+    setPhase("live");
+    return n;
+  }, [permissions]);
+
+  useEffect(() => {
+    if (!isBootstrapped || !resumeRecord || node || connectInFlightRef.current) return;
+    if (!resumeRecord.phone_bearer || !resumeRecord.paired_device_id) return;
+
+    let cancelled = false;
+    connectInFlightRef.current = true;
+    setError(null);
+    setPhase("restoring");
+
+    connectWithBearer(resumeRecord.phone_bearer)
+      .catch(async (err) => {
+        if (cancelled) return;
+        setError(err?.message || String(err));
+        await clearPhoneBearer(resumeRecord.paired_device_id);
+        setResumeRecord(null);
+        setPhase(token ? "idle" : "failed");
+      })
+      .finally(() => {
+        connectInFlightRef.current = false;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connectWithBearer, isBootstrapped, node, resumeRecord, token]);
+
+  const canPair = !!token && isBootstrapped && !resumeRecord && phase === "idle";
 
   const pair = useCallback(async () => {
-    if (!canPair) return;
+    if (!canPair || connectInFlightRef.current) return;
     setError(null);
-    setPhase("connecting");
+    setPhase("claiming");
+    let saved = null;
     try {
-      const n = new BrowserNode({
-        token,
-        onPhase: (p) => setPhase(p),
-        onError: (e) => setError(e?.message || String(e)),
+      const claimRes = await fetch(
+        new URL("/api/devices/pair/complete", window.location.origin).toString(),
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token, kind: "browser_node_v2" }),
+        },
+      );
+      if (!claimRes.ok) {
+        const details = await claimRes.text().catch(() => "");
+        throw new Error(
+          `pair claim failed (${claimRes.status})${details ? `: ${details}` : ""}`,
+        );
+      }
+      const claim = await claimRes.json();
+      const phoneBearer = claim.phone_bearer || "";
+      const pairedDeviceId = claim.paired_device_id || claim.device_id || "";
+      const pairClaimMarker = claim.pair_claim_marker || "";
+      if (!phoneBearer || !pairedDeviceId || !pairClaimMarker) {
+        throw new Error("pair claim response missing phone bearer metadata");
+      }
+
+      saved = await setPhoneBearer({
+        paired_device_id: pairedDeviceId,
+        phone_bearer: phoneBearer,
+        pair_claim_marker: pairClaimMarker,
       });
-      await n.connect();
-      await n.startSensors(permissions);
-      setNode(n);
-      setPhase("live");
+      setResumeRecord(saved);
+
+      connectInFlightRef.current = true;
+      await connectWithBearer(phoneBearer);
+      connectInFlightRef.current = false;
     } catch (err) {
+      connectInFlightRef.current = false;
+      if (saved?.paired_device_id) {
+        await clearPhoneBearer(saved.paired_device_id);
+      }
+      setResumeRecord(null);
       setError(err?.message || String(err));
-      setPhase("failed");
+      setPhase("idle");
     }
-  }, [canPair, token, permissions]);
+  }, [canPair, connectWithBearer, token]);
 
   const disconnect = useCallback(async () => {
     if (node) {
       await node.stop();
       setNode(null);
     }
-    setPhase("idle");
-  }, [node]);
+    if (resumeRecord?.paired_device_id) {
+      await clearPhoneBearer(resumeRecord.paired_device_id);
+    }
+    setResumeRecord(null);
+    setPhase(token ? "idle" : "failed");
+  }, [node, resumeRecord, token]);
 
-  if (!token) {
+  if (!isBootstrapped) {
+    return (
+      <Frame>
+        <Card>
+          <Header icon={Smartphone} title="Restoring pairing" />
+          <p>Checking for an existing paired session on this device...</p>
+        </Card>
+      </Frame>
+    );
+  }
+
+  if (!token && !resumeRecord) {
     return (
       <Frame>
         <Card>
@@ -88,6 +214,25 @@ export default function Pair() {
   const isLive = phase === "live" || phase === "registered"
     || phase === "acknowledged" || phase === "mic_streaming"
     || phase === "camera_streaming" || phase === "voice_config";
+
+  if (resumeRecord && !isLive) {
+    return (
+      <Frame>
+        <Card>
+          <Header icon={Smartphone} title="Restoring paired session" />
+          <p>
+            Reconnecting to your paired FERAL session using the saved
+            phone bearer.
+          </p>
+          {error && (
+            <div style={errorBox}>
+              <AlertTriangle size={13} aria-hidden="true" /> {error}
+            </div>
+          )}
+        </Card>
+      </Frame>
+    );
+  }
 
   const toggleMic = async () => {
     if (!node) return;
@@ -112,6 +257,12 @@ export default function Pair() {
   };
 
   if (isLive) {
+    const pairedDeviceId = resumeRecord?.paired_device_id
+      || (typeof localStorage !== "undefined" ? localStorage.getItem("feral.paired_device_id") : "");
+    if (pairedDeviceId) {
+      return <Navigate to={`/pair/${encodeURIComponent(pairedDeviceId)}/chat`} replace />;
+    }
+
     return (
       <Frame>
         <Card>

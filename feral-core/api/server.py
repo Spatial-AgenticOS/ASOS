@@ -1047,28 +1047,103 @@ async def _send_protocol_error(ws: WebSocket, code: int, message: str, *, name: 
         pass
 
 
+def _extract_protocol_bearer(protocols_header: str) -> str:
+    """Return ``feral-token-...`` bearer from Sec-WebSocket-Protocol."""
+    for candidate in (protocols_header or "").split(","):
+        value = candidate.strip()
+        if value.startswith("feral-token-"):
+            return value.replace("feral-token-", "", 1).strip()
+    return ""
+
+
+def _verify_credential(store: DevicePairingStore, credential: str):
+    """Try pair token first, then phone bearer."""
+    if not store or not credential:
+        return None, None
+    pair_device_id = store.verify_device(credential)
+    if pair_device_id:
+        return pair_device_id, "pair_token"
+    verify_phone_bearer = getattr(store, "verify_phone_bearer", None)
+    if callable(verify_phone_bearer):
+        phone_device_id = verify_phone_bearer(credential)
+        if phone_device_id:
+            return phone_device_id, "phone_bearer"
+    return None, None
+
+
 @app.websocket("/v1/node")
 async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
-    if not api_key:
-        api_key = ws.headers.get("authorization", "").replace("Bearer ", "")
-    if not api_key:
-        api_key = ws.headers.get("x-api-key", "")
-    if not api_key:
-        protocols = ws.headers.get("sec-websocket-protocol", "")
-        if protocols.startswith("feral-token-"):
-            api_key = protocols.replace("feral-token-", "")
+    credential_source = ""
+    credential = ""
+
+    auth_header = ws.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        credential = auth_header[7:].strip()
+        credential_source = "authorization"
+    if not credential:
+        credential = (ws.headers.get("x-api-key", "") or "").strip()
+        if credential:
+            credential_source = "x-api-key"
+    if not credential:
+        credential = _extract_protocol_bearer(
+            ws.headers.get("sec-websocket-protocol", "")
+        )
+        if credential:
+            credential_source = "sec-websocket-protocol"
+    if not credential:
+        credential = (api_key or "").strip()
+        if credential:
+            credential_source = "query"
 
     store = state.device_pairing_store
-    paired_device_id = store.verify_device(api_key) if api_key else None
+    paired_device_id, bearer_kind = _verify_credential(store, credential)
 
     await ws.accept()
 
-    if paired_device_id is None and api_key != NODE_API_KEY:
+    if credential_source == "query" and credential:
+        logger.warning(
+            "feral.security.deprecated_query_auth: source=query path=/v1/node "
+            "sunset=2026.7.0"
+        )
+
+    if paired_device_id is None and credential != NODE_API_KEY:
         logger.warning("Unauthorized daemon connection attempt rejected")
         await ws.close(code=4003, reason="Unauthorized Edge Node API Key")
         return
     node_id = None
-    logger.info("Daemon connecting (device_id=%s)...", paired_device_id or "legacy-key")
+    from models.protocol import HUP_VERSION as _HUP_VERSION  # local to keep daemon_session self-contained
+    logger.info(
+        "Daemon connecting (device_id=%s bearer_kind=%s auth_source=%s)...",
+        paired_device_id or "legacy-key",
+        bearer_kind or ("legacy_node_api_key" if credential == NODE_API_KEY else "unknown"),
+        credential_source or "none",
+    )
+
+    def _record_phone_envelope(
+        decision: str,
+        message_type: str,
+        *,
+        detail: dict | None = None,
+        payload_for_hash=None,
+    ) -> None:
+        supervisor = getattr(state, "supervisor", None)
+        if supervisor is None:
+            return
+        info = {"message_type": message_type}
+        if isinstance(detail, dict):
+            info.update(detail)
+        try:
+            supervisor.record(
+                source="phone",
+                kind="phone_envelope",
+                session_id=str(node_id or paired_device_id or ""),
+                actor="phone",
+                payload=payload_for_hash if payload_for_hash is not None else {"type": message_type},
+                decision=decision,
+                detail=info,
+            )
+        except Exception as exc:
+            logger.debug("phone_envelope supervisor record failed: %s", exc)
 
     try:
         while True:
@@ -1317,6 +1392,371 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         state.voice_router.bind_node_to_session(node_id, sid)
                     supports_rt = payload_dict.get("supports_realtime", False)
                     logger.info(f"Voice config from {node_id}: realtime={supports_rt}")
+
+            elif msg.type == "chat_request":
+                payload_dict = raw.get("payload", {})
+                text = payload_dict.get("text", "")
+                channel = payload_dict.get("channel", "chat")
+                reply_mode = payload_dict.get("reply_mode", "final")
+                reply_to = payload_dict.get("reply_to")
+                target_sid = payload_dict.get("session_id", "") or f"phone-{node_id or paired_device_id or 'session'}"
+
+                if not text or not state.orchestrator:
+                    _record_phone_envelope(
+                        "denied",
+                        "chat_request",
+                        detail={"reason": "missing_text_or_orchestrator"},
+                        payload_for_hash=payload_dict,
+                    )
+                    await ws.send_json({
+                        "hup_version": _HUP_VERSION,
+                        "type": "chat_response",
+                        "ts": time.time(),
+                        "payload": {
+                            "session_id": target_sid,
+                            "text": "",
+                            "reply_mode": reply_mode,
+                            "channel": channel,
+                            "reply_to": reply_to,
+                        },
+                    })
+                    continue
+
+                if target_sid not in state.sessions:
+                    state.sessions[target_sid] = ws
+                if node_id:
+                    state.bind_session_to_daemon(target_sid, node_id)
+
+                if state.memory:
+                    state.memory.working_push(target_sid, {"role": "user", "text": text})
+
+                context = {
+                    "source": "phone_surface",
+                    "mode": "phone_surface",
+                    "channel": channel,
+                    "reply_mode": reply_mode,
+                    "source_node": node_id or "",
+                    "paired_device_id": paired_device_id or "",
+                }
+                if reply_to:
+                    context["reply_to"] = reply_to
+
+                response_text = ""
+                try:
+                    result = await state.orchestrator.handle_command(
+                        session_id=target_sid,
+                        text=text,
+                        context=context,
+                    )
+                    if isinstance(result, str):
+                        response_text = result
+                    elif isinstance(result, dict):
+                        response_text = str(result.get("text") or result.get("message") or "")
+                    if not response_text and state.memory:
+                        history = state.memory.working_get(target_sid) or []
+                        for item in reversed(history):
+                            if item.get("role") == "assistant" and item.get("text"):
+                                response_text = str(item["text"])
+                                break
+                    _record_phone_envelope(
+                        "allowed",
+                        "chat_request",
+                        detail={
+                            "session_id": target_sid,
+                            "channel": channel,
+                            "reply_mode": reply_mode,
+                            "text_len": len(text),
+                        },
+                        payload_for_hash=payload_dict,
+                    )
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "chat_request",
+                        detail={"reason": "orchestrator_error", "error": str(exc)[:200]},
+                        payload_for_hash=payload_dict,
+                    )
+                    response_text = ""
+
+                await ws.send_json({
+                    "hup_version": _HUP_VERSION,
+                    "type": "chat_response",
+                    "ts": time.time(),
+                    "payload": {
+                        "session_id": target_sid,
+                        "text": response_text,
+                        "reply_mode": reply_mode,
+                        "channel": channel,
+                        "reply_to": reply_to,
+                    },
+                })
+
+            elif msg.type == "chat_response":
+                _record_phone_envelope(
+                    "denied",
+                    "chat_response",
+                    detail={"reason": "brain_emitted_only"},
+                    payload_for_hash=raw.get("payload", {}),
+                )
+                await _send_protocol_error(
+                    ws,
+                    1003,
+                    "chat_response is brain->phone only",
+                    name="capability_denied",
+                )
+
+            elif msg.type == "voice_session_start":
+                payload_dict = raw.get("payload", {})
+                stream_id = payload_dict.get("stream_id", "")
+                if not node_id or not state.voice_router:
+                    _record_phone_envelope(
+                        "denied",
+                        "voice_session_start",
+                        detail={"reason": "missing_node_or_voice_router"},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+                session_id = stream_id or f"voice-{node_id}"
+                if session_id not in state.sessions:
+                    state.sessions[session_id] = ws
+                state.bind_session_to_daemon(session_id, node_id)
+                state.voice_router.bind_node_to_session(node_id, session_id)
+                state.voice_router.register_voice_config(
+                    node_id,
+                    {
+                        "node_id": node_id,
+                        "mode": "realtime",
+                        "supports_realtime": True,
+                        "sample_rate": payload_dict.get("sample_rate", 24000),
+                        "channels": payload_dict.get("channels", 1),
+                        "language_hint": payload_dict.get("language_hint", "en-US"),
+                        "interrupt_policy": payload_dict.get("interrupt_policy", "barge_in"),
+                        "camera_linked": bool(payload_dict.get("camera_linked", False)),
+                        "phone_mode": payload_dict.get("mode", "push_to_talk"),
+                    },
+                )
+                _record_phone_envelope(
+                    "allowed",
+                    "voice_session_start",
+                    detail={"stream_id": stream_id, "session_id": session_id},
+                    payload_for_hash=payload_dict,
+                )
+
+            elif msg.type == "voice_interrupt":
+                payload_dict = raw.get("payload", {})
+                stream_id = payload_dict.get("stream_id", "")
+                if not node_id or not state.voice_router:
+                    _record_phone_envelope(
+                        "denied",
+                        "voice_interrupt",
+                        detail={"reason": "missing_node_or_voice_router"},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+
+                cancelled = False
+                try:
+                    realtime = getattr(state.voice_router, "_realtime", None)
+                    if realtime:
+                        rs = realtime.get_session(node_id)
+                        if rs and hasattr(rs, "cancel_response"):
+                            await rs.cancel_response()
+                            cancelled = True
+                    gemini = getattr(state.voice_router, "_gemini", None)
+                    if gemini and not cancelled:
+                        sid = getattr(gemini, "_node_to_session", {}).get(node_id)
+                        if sid:
+                            await gemini.stop_session(sid)
+                            cancelled = True
+                    if not cancelled and realtime:
+                        sid = getattr(realtime, "_node_to_session", {}).get(node_id)
+                        if sid:
+                            await realtime.stop_session(sid)
+                            cancelled = True
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "voice_interrupt",
+                        detail={"reason": "interrupt_failed", "error": str(exc)[:200], "stream_id": stream_id},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+
+                _record_phone_envelope(
+                    "allowed" if cancelled else "denied",
+                    "voice_interrupt",
+                    detail={"stream_id": stream_id, "cancelled": cancelled},
+                    payload_for_hash=payload_dict,
+                )
+
+            elif msg.type == "genui_event":
+                payload_dict = raw.get("payload", {})
+                if not state.orchestrator:
+                    _record_phone_envelope(
+                        "denied",
+                        "genui_event",
+                        detail={"reason": "missing_orchestrator"},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+                try:
+                    from agents.ui_handlers import _handle_app_action
+
+                    app_id = payload_dict.get("app_id", "")
+                    surface_id = payload_dict.get("surface_id", "")
+                    event_type = payload_dict.get("event_type", "tap")
+                    action_id = payload_dict.get("action_id", "")
+                    value = payload_dict.get("value")
+                    target_sid = next(iter(state.get_sessions_for_daemon(node_id)), "") if node_id else ""
+                    if not target_sid:
+                        target_sid = f"phone-{node_id or paired_device_id or 'session'}"
+                        state.sessions[target_sid] = ws
+                        if node_id:
+                            state.bind_session_to_daemon(target_sid, node_id)
+                    screen_id = payload_dict.get("screen_id") or f"{app_id}:{surface_id}:{target_sid}"
+                    await _handle_app_action(
+                        state.orchestrator,
+                        session_id=target_sid,
+                        app_id=app_id,
+                        action_id=action_id,
+                        event=event_type,
+                        value=value,
+                        screen_id=screen_id,
+                    )
+                    _record_phone_envelope(
+                        "allowed",
+                        "genui_event",
+                        detail={
+                            "session_id": target_sid,
+                            "app_id": app_id,
+                            "surface_id": surface_id,
+                            "action_id": action_id,
+                        },
+                        payload_for_hash=payload_dict,
+                    )
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "genui_event",
+                        detail={"reason": "dispatch_failed", "error": str(exc)[:200]},
+                        payload_for_hash=payload_dict,
+                    )
+
+            elif msg.type == "peripheral_bridge_register":
+                payload_dict = raw.get("payload", {})
+                if not state.device_registry:
+                    _record_phone_envelope(
+                        "denied",
+                        "peripheral_bridge_register",
+                        detail={"reason": "missing_device_registry"},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+                try:
+                    from hardware.protocol import DeviceManifest
+
+                    registered_ids: list[str] = []
+                    bridge_id = payload_dict.get("bridge_id", "")
+                    platform = payload_dict.get("platform", "")
+                    expires_at = payload_dict.get("expires_at", "")
+                    devices = payload_dict.get("devices", []) or []
+                    for entry in devices:
+                        manifest_dict = dict(entry.get("manifest") or {})
+                        device_id = entry.get("device_id", "")
+                        if not manifest_dict.get("device_id"):
+                            manifest_dict["device_id"] = device_id
+                        if not manifest_dict.get("device_type"):
+                            manifest_dict["device_type"] = entry.get("kind", "sensor_hub")
+                        if not manifest_dict.get("name"):
+                            manifest_dict["name"] = device_id or "phone-bridge-device"
+                        if not manifest_dict.get("connection_type"):
+                            manifest_dict["connection_type"] = entry.get("protocol", "websocket")
+                        if not isinstance(manifest_dict.get("capabilities"), list):
+                            manifest_dict["capabilities"] = []
+                        elif manifest_dict["capabilities"] and not isinstance(manifest_dict["capabilities"][0], dict):
+                            manifest_dict["capabilities"] = []
+                        if not isinstance(manifest_dict.get("sensors"), list):
+                            manifest_dict["sensors"] = list(entry.get("capabilities", []) or [])
+                        if not isinstance(manifest_dict.get("actuators"), list):
+                            manifest_dict["actuators"] = []
+                        manifest = DeviceManifest(**manifest_dict)
+                        state.device_registry.register_device(manifest)
+                        if manifest.device_id:
+                            registered_ids.append(manifest.device_id)
+                    state.devices[bridge_id] = {
+                        "node_id": node_id,
+                        "bridge_id": bridge_id,
+                        "platform": platform,
+                        "expires_at": expires_at,
+                        "devices": registered_ids,
+                    }
+                    _record_phone_envelope(
+                        "allowed",
+                        "peripheral_bridge_register",
+                        detail={
+                            "bridge_id": bridge_id,
+                            "platform": platform,
+                            "device_count": len(registered_ids),
+                        },
+                        payload_for_hash=payload_dict,
+                    )
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "peripheral_bridge_register",
+                        detail={"reason": "registry_write_failed", "error": str(exc)[:200]},
+                        payload_for_hash=payload_dict,
+                    )
+
+            elif msg.type == "backchannel_request":
+                payload_dict = raw.get("payload", {})
+                import json as _json
+                import sqlite3 as _sqlite3
+                from config.loader import feral_home as _feral_home
+
+                request_id = payload_dict.get("request_id") or str(uuid4())
+                req_ts = float(raw.get("ts") or time.time())
+                device_id = payload_dict.get("device_id") or node_id or str(paired_device_id or "")
+                kind = payload_dict.get("kind", "general")
+                status = payload_dict.get("status", "pending")
+                payload_json = _json.dumps(payload_dict, sort_keys=True, default=str)
+                db_path = _feral_home() / "backchannel_requests.db"
+                try:
+                    with _sqlite3.connect(str(db_path)) as conn:
+                        conn.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS backchannel_requests (
+                                id TEXT PRIMARY KEY,
+                                ts REAL NOT NULL,
+                                device_id TEXT NOT NULL,
+                                kind TEXT NOT NULL,
+                                payload_json TEXT NOT NULL,
+                                status TEXT NOT NULL
+                            )
+                            """
+                        )
+                        conn.execute(
+                            """
+                            INSERT OR REPLACE INTO backchannel_requests
+                            (id, ts, device_id, kind, payload_json, status)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (request_id, req_ts, device_id, kind, payload_json, status),
+                        )
+                        conn.commit()
+                    _record_phone_envelope(
+                        "allowed",
+                        "backchannel_request",
+                        detail={"id": request_id, "device_id": device_id, "kind": kind, "status": status},
+                        payload_for_hash=payload_dict,
+                    )
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "backchannel_request",
+                        detail={"reason": "sqlite_persist_failed", "error": str(exc)[:200]},
+                        payload_for_hash=payload_dict,
+                    )
 
             elif msg.type == "audio_chunk" and node_id:
                 payload_dict = raw.get("payload", {})

@@ -12,6 +12,8 @@ from typing import Optional, Literal, Any
 from uuid import uuid4
 from time import time
 
+HUP_VERSION = "1.3.0"
+
 
 # ─────────────────────────────────────────────
 # The Universal Message Envelope
@@ -72,6 +74,100 @@ class UIEventPayload(BaseModel):
     action_id: str
     value: Optional[Any] = None
     app_id: Optional[str] = None
+
+
+# ─────────────────────────────────────────────
+# Payload Models — Phone-as-peer Envelopes (HUP v1.3)
+# ─────────────────────────────────────────────
+
+class ChatRequestPayload(BaseModel):
+    """Phone text/vision query request routed through the orchestrator."""
+    session_id: str
+    text: str
+    reply_mode: Literal["stream", "final"] = "final"
+    channel: Literal["chat", "vision_ask"] = "chat"
+    reply_to: Optional[str] = None
+
+
+class ChatResponsePayload(BaseModel):
+    """Brain response envelope for phone chat requests."""
+    session_id: str
+    text: str
+    reply_mode: Literal["stream", "final"] = "final"
+    channel: Literal["chat", "vision_ask"] = "chat"
+    reply_to: Optional[str] = None
+
+
+class VoiceSessionStartPayload(BaseModel):
+    """Phone voice session bootstrap metadata."""
+    stream_id: str
+    sample_rate: int
+    channels: int
+    language_hint: str = "en-US"
+    mode: Literal["push_to_talk", "hold_to_talk", "vad"] = "push_to_talk"
+    interrupt_policy: Literal["barge_in", "strict_turn"] = "barge_in"
+    camera_linked: bool = False
+
+
+class VoiceInterruptPayload(BaseModel):
+    """Signal from phone to cut in-flight TTS on the active stream."""
+    stream_id: str
+    reason: str = "user_interrupt"
+
+
+class GenUIPushActionPayload(BaseModel):
+    """Action button attached to a GenUI push card."""
+    id: str
+    label: str
+    value: dict = Field(default_factory=dict)
+
+
+class GenUIPushPayload(BaseModel):
+    """Brain-originated mobile GenUI push payload."""
+    kind: Literal["notification", "interactive"]
+    app_id: str
+    surface_id: str
+    title: str
+    body: str = ""
+    actions: list[GenUIPushActionPayload] = Field(default_factory=list)
+    sdui: Optional[dict] = None
+
+
+class GenUIEventPayload(BaseModel):
+    """Phone-originated GenUI interaction routed to app action handlers."""
+    app_id: str
+    surface_id: str
+    event_type: str
+    action_id: str
+    value: Optional[Any] = None
+    screen_id: Optional[str] = None
+
+
+class PeripheralBridgeDevicePayload(BaseModel):
+    """One bridged peripheral exposed by the phone peer."""
+    device_id: str
+    kind: Literal["glasses", "watch", "band"]
+    protocol: Literal["web_bluetooth", "native_bridge", "none"]
+    capabilities: list[str] = Field(default_factory=list)
+    status: Literal["connected", "connecting", "disconnected"] = "connecting"
+    manifest: dict = Field(default_factory=dict)
+
+
+class PeripheralBridgeRegisterPayload(BaseModel):
+    """Phone bridge registration/update payload."""
+    bridge_id: str
+    platform: Literal["ios", "android"]
+    devices: list[PeripheralBridgeDevicePayload]
+    expires_at: str
+
+
+class BackchannelRequestPayload(BaseModel):
+    """Structured operator-review request from phone."""
+    device_id: str
+    kind: str
+    payload: dict = Field(default_factory=dict)
+    request_id: str = Field(default_factory=lambda: str(uuid4()))
+    status: str = "pending"
 
 
 # ─────────────────────────────────────────────
@@ -343,7 +439,7 @@ class NodeAckPayload(BaseModel):
     """Brain acknowledges a node_register (HUP_SPEC §5.2)."""
     node_id: str = ""
     session_token: str = ""
-    hup_version: str = "1.2.0"
+    hup_version: str = HUP_VERSION
     heartbeat_ms: int = 10000
     server_time: float = Field(default_factory=time)
     capabilities: list[str] = []
@@ -391,6 +487,12 @@ MESSAGE_TYPES = {
     "ui_event": UIEventPayload,
     "device_register": DeviceRegisterPayload,
     "handoff_request": HandoffRequestPayload,
+    "chat_request": ChatRequestPayload,
+    "voice_session_start": VoiceSessionStartPayload,
+    "voice_interrupt": VoiceInterruptPayload,
+    "genui_event": GenUIEventPayload,
+    "peripheral_bridge_register": PeripheralBridgeRegisterPayload,
+    "backchannel_request": BackchannelRequestPayload,
 
     # Brain → Client
     "transcript": TranscriptPayload,
@@ -403,6 +505,8 @@ MESSAGE_TYPES = {
     "tool_result": ToolResultPayload,
     "gesture": GesturePayload,
     "error": ErrorPayload,
+    "chat_response": ChatResponsePayload,
+    "genui_push": GenUIPushPayload,
 
     # Brain ↔ Daemon (HUP canonical)
     "register": NodeRegisterPayload,

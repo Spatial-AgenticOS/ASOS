@@ -1,6 +1,6 @@
 # Hardware Unification Protocol (HUP) — Public Specification
 
-**Version:** `HUP v1.2.0`
+**Version:** `HUP v1.3.0`
 **Status:** Stable
 **License:** Apache-2.0
 **Canonical schemas:** this file (normative) + Pydantic mirror in
@@ -33,6 +33,11 @@ If you can terminate TLS and speak JSON over WebSocket, you can speak HUP.
   error code `1002 bad_schema`.
 - **Backward-compat rule:** once a field is published in a minor version, it
   stays. New fields MUST be optional.
+
+| Version | Status | Additions |
+|---|---|---|
+| `v1.3.0` | Stable | Phone-as-peer envelopes: `chat_request`, `chat_response`, `voice_session_start`, `voice_interrupt`, `genui_push`, `genui_event`, `peripheral_bridge_register`, `backchannel_request` (§5.9). |
+| `v1.2.0` | Stable | Canonical `node_ack`, `node_heartbeat`, `hup_action_request`, `hup_action_response`, and `node_bye` handling (§5.2-§5.8). |
 
 ---
 
@@ -517,6 +522,166 @@ Brain behaviour during the deprecation window:
 SDK behaviour: SDKs SHOULD emit only canonical types. SDKs SHOULD
 consume both canonical and aliased types during the window.
 
+### 5.9 Phone-as-peer envelopes (v1.3.0)
+
+The v1.3.0 release adds phone-specific envelopes while reusing the
+existing `/v1/node` transport and authentication model. Directionality:
+
+- `chat_request` (phone → brain)
+- `chat_response` (brain → phone)
+- `voice_session_start` (phone → brain)
+- `voice_interrupt` (phone → brain)
+- `genui_push` (brain → phone)
+- `genui_event` (phone → brain)
+- `peripheral_bridge_register` (phone → brain)
+- `backchannel_request` (phone → brain)
+
+`chat_request`:
+
+```json
+{
+  "type": "chat_request",
+  "hup_version": "1.3.0",
+  "message_id": "uuid",
+  "node_id": "phone-<id>",
+  "ts": 1234567890.123,
+  "payload": {
+    "session_id": "phone-session-uuid",
+    "text": "what is that object?",
+    "reply_mode": "stream|final",
+    "channel": "chat|vision_ask",
+    "reply_to": "hup-msg-id|null"
+  }
+}
+```
+
+`chat_response`:
+
+```json
+{
+  "type": "chat_response",
+  "hup_version": "1.3.0",
+  "message_id": "uuid",
+  "node_id": "brain",
+  "ts": 1234567890.456,
+  "payload": {
+    "session_id": "phone-session-uuid",
+    "text": "I can help with that.",
+    "reply_mode": "stream|final",
+    "channel": "chat|vision_ask",
+    "reply_to": "hup-msg-id|null"
+  }
+}
+```
+
+`voice_session_start`:
+
+```json
+{
+  "type": "voice_session_start",
+  "hup_version": "1.3.0",
+  "payload": {
+    "stream_id": "phone-voice-uuid",
+    "sample_rate": 16000,
+    "channels": 1,
+    "language_hint": "en-US",
+    "mode": "push_to_talk|hold_to_talk|vad",
+    "interrupt_policy": "barge_in|strict_turn",
+    "camera_linked": true
+  }
+}
+```
+
+`voice_interrupt`:
+
+```json
+{
+  "type": "voice_interrupt",
+  "hup_version": "1.3.0",
+  "payload": {
+    "stream_id": "phone-voice-uuid",
+    "reason": "user_interrupt"
+  }
+}
+```
+
+`genui_push`:
+
+```json
+{
+  "type": "genui_push",
+  "hup_version": "1.3.0",
+  "payload": {
+    "kind": "notification|interactive",
+    "app_id": "feral.notes",
+    "surface_id": "today",
+    "title": "Door cam needs permission",
+    "body": "Open live view?",
+    "actions": [
+      {"id": "approve", "label": "Approve", "value": {"action":"approve"}},
+      {"id": "dismiss", "label": "Dismiss", "value": {"action":"dismiss"}}
+    ],
+    "sdui": {"...": "full SDUI tree if kind=interactive"}
+  }
+}
+```
+
+`genui_event`:
+
+```json
+{
+  "type": "genui_event",
+  "hup_version": "1.3.0",
+  "payload": {
+    "app_id": "feral.notes",
+    "surface_id": "today",
+    "event_type": "tap|toggle|submit|dismiss",
+    "action_id": "approve",
+    "value": {"action":"approve"}
+  }
+}
+```
+
+`peripheral_bridge_register`:
+
+```json
+{
+  "type": "peripheral_bridge_register",
+  "hup_version": "1.3.0",
+  "payload": {
+    "bridge_id": "phone-bridge-id",
+    "platform": "ios|android",
+    "devices": [
+      {
+        "device_id": "smart_glasses_01",
+        "kind": "glasses|watch|band",
+        "protocol": "web_bluetooth|native_bridge|none",
+        "capabilities": ["imu","notifications","button"],
+        "status": "connected|connecting|disconnected",
+        "manifest": {"...": "full HUP DeviceManifest"}
+      }
+    ],
+    "expires_at": "2026-04-30T12:00:00Z"
+  }
+}
+```
+
+`backchannel_request`:
+
+```json
+{
+  "type": "backchannel_request",
+  "hup_version": "1.3.0",
+  "payload": {
+    "request_id": "uuid",
+    "device_id": "phone-<id>",
+    "kind": "bug|feature|note",
+    "payload": {"summary": "fix/add this"},
+    "status": "pending"
+  }
+}
+```
+
 ---
 
 ## 6. Capability Allowlist and Security
@@ -685,6 +850,16 @@ Deltas from the current `/v1/node` handler are tracked in
 ---
 
 ## Appendix B — Version Changelog
+
+### v1.3.0 (2026-04-29)
+
+- **Added** phone-as-peer envelopes (§5.9): `chat_request`,
+  `chat_response`, `voice_session_start`, `voice_interrupt`,
+  `genui_push`, `genui_event`, `peripheral_bridge_register`,
+  `backchannel_request`.
+- **Added** explicit directionality and payload schemas for every
+  phone-as-peer message type.
+- **Backward-compat:** strictly additive to v1.2.0.
 
 ### v1.2.0 (2026-04-28)
 

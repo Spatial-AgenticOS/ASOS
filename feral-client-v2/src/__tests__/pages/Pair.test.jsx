@@ -42,25 +42,26 @@ function renderAt(url) {
 }
 
 describe('Pair page', () => {
-  it('shows a warning when no token is in the URL', () => {
-    const { getByText } = renderAt('/pair');
-    expect(getByText(/No pairing token/i)).toBeInTheDocument();
+  it('shows a warning when no token is in the URL', async () => {
+    const { findByText } = renderAt('/pair');
+    expect(await findByText(/No pairing token/i)).toBeInTheDocument();
   });
 
-  it('renders the pair UI when a token is present', () => {
-    const { getByText, getByRole } = renderAt('/pair?t=abc12345deadbeef');
+  it('renders the pair UI when a token is present', async () => {
+    const { findByText, findByRole } = renderAt('/pair?t=abc12345deadbeef');
     // "Pair this device" appears as both a heading and a button — the
     // heading lookup via getByRole passes as long as either matches.
-    expect(getByRole('heading', { name: /Pair this device/i })).toBeInTheDocument();
-    expect(getByRole('button', { name: /Pair this device/i })).toBeInTheDocument();
+    expect(await findByRole('heading', { name: /Pair this device/i })).toBeInTheDocument();
+    expect(await findByRole('button', { name: /Pair this device/i })).toBeInTheDocument();
     // Permission toggles
-    expect(getByText(/Share location/i)).toBeInTheDocument();
-    expect(getByText(/Share camera/i)).toBeInTheDocument();
-    expect(getByText(/Share microphone/i)).toBeInTheDocument();
+    expect(await findByText(/Share location/i)).toBeInTheDocument();
+    expect(await findByText(/Share camera/i)).toBeInTheDocument();
+    expect(await findByText(/Share microphone/i)).toBeInTheDocument();
   });
 
-  it('permission toggles are interactive', () => {
-    const { getByLabelText, container } = renderAt('/pair?t=xyzxyzxyz');
+  it('permission toggles are interactive', async () => {
+    const { container, findByRole } = renderAt('/pair?t=xyzxyzxyz');
+    await findByRole('button', { name: /Pair this device/i });
     const checkboxes = container.querySelectorAll('input[type="checkbox"]');
     // 3 toggles by default (location on, camera off, mic off).
     expect(checkboxes).toHaveLength(3);
@@ -70,10 +71,10 @@ describe('Pair page', () => {
     expect(checkboxes[2].checked).toBe(true);
   });
 
-  it('short token is truncated in the footer chip', () => {
+  it('short token is truncated in the footer chip', async () => {
     const longToken = 'abcd1234efgh5678ijkl9012';
-    const { getByText } = renderAt(`/pair?t=${longToken}`);
+    const { findByText } = renderAt(`/pair?t=${longToken}`);
     // Footer shows first 8 chars + "..." — find "abcd1234".
-    expect(getByText(/abcd1234/)).toBeInTheDocument();
+    expect(await findByText(/abcd1234/)).toBeInTheDocument();
   });
 });
