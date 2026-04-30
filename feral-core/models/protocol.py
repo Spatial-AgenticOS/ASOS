@@ -12,7 +12,7 @@ from typing import Optional, Literal, Any
 from uuid import uuid4
 from time import time
 
-HUP_VERSION = "1.3.0"
+HUP_VERSION = "1.3.1"
 
 
 # ─────────────────────────────────────────────
@@ -141,6 +141,29 @@ class GenUIEventPayload(BaseModel):
     action_id: str
     value: Optional[Any] = None
     screen_id: Optional[str] = None
+
+
+class LocationUpdatePayload(BaseModel):
+    """Phone-originated geolocation update streamed over the same HUP
+    WebSocket as other peer envelopes.
+
+    Replaces the legacy ``POST /api/location/update`` HTTP path that
+    relied on dashboard API key auth — phones authenticate with
+    ``phone_bearer`` over WS subprotocol, so the HTTP path returned
+    401 for them. Sending location as a HUP envelope gets free auth
+    + lifecycle alignment with the rest of the peer streams.
+
+    HUP v1.3.1 addition.
+    """
+    node_id: str
+    lat: float
+    lon: float
+    accuracy_m: Optional[float] = None
+    altitude_m: Optional[float] = None
+    heading_deg: Optional[float] = None
+    speed_mps: Optional[float] = None
+    source: str = "browser_node"
+    ts: Optional[float] = None
 
 
 class PeripheralBridgeDevicePayload(BaseModel):
@@ -491,6 +514,7 @@ MESSAGE_TYPES = {
     "voice_session_start": VoiceSessionStartPayload,
     "voice_interrupt": VoiceInterruptPayload,
     "genui_event": GenUIEventPayload,
+    "location_update": LocationUpdatePayload,
     "peripheral_bridge_register": PeripheralBridgeRegisterPayload,
     "backchannel_request": BackchannelRequestPayload,
 
