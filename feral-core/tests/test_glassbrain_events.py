@@ -141,6 +141,10 @@ async def test_openai_voice_proxy_emits_voice_session_start():
     proxy._sessions = {}
     proxy._node_to_session = {}
     proxy._api_key = "test-key"
+    # GA migration (Subagent A) added self._voice as a default voice
+    # threaded into each RealtimeSession; tests that bypass __init__
+    # via __new__ must seed it explicitly.
+    proxy._voice = "marin"
     proxy._voice_personality = MagicMock()
     proxy._voice_personality.current_time_of_day = MagicMock(return_value="morning")
     proxy._voice_personality.get_voice_instructions = MagicMock(return_value="test")

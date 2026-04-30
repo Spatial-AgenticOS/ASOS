@@ -1,127 +1,180 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Mic, Send } from 'lucide-react';
+import { useWebSpeech } from '../../hooks/useWebSpeech';
 
-function extractChatText(payload) {
-  if (!payload) return "";
-  if (typeof payload.text === "string" && payload.text.trim()) return payload.text.trim();
-  if (typeof payload.message === "string" && payload.message.trim()) return payload.message.trim();
-  if (typeof payload.content === "string" && payload.content.trim()) return payload.content.trim();
-  return "";
+const LONG_PRESS_MS = 400;
+
+function newId() {
+  return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function makeMessage(role, text) {
-  return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    role,
-    text,
-  };
-}
+export default function ChatPanel({ shell, messages: propMessages, onSend }) {
+  const [localMessages, setLocalMessages] = useState([
+    { id: 'hello', role: 'assistant', text: 'How can I help?' },
+  ]);
+  const messages = propMessages || localMessages;
+  const [input, setInput] = useState('');
+  const [voiceFullscreenOpen, setVoiceFullscreenOpen] = useState(false);
+  const [dictationError, setDictationError] = useState(null);
 
-export default function ChatPanel({ shell: shellProp }) {
-  const outletShell = useOutletContext();
-  const shell = shellProp || outletShell || {};
-  const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState([]);
-  const historyRef = useRef(null);
+  const longPressTimerRef = useRef(null);
+  const longPressTriggeredRef = useRef(false);
+  const bottomRef = useRef(null);
 
-  const canSend = useMemo(() => {
-    return !!shell?.sendFrame && draft.trim().length > 0;
-  }, [draft, shell]);
+  const speech = useWebSpeech({ continuous: false, interimResults: true });
+  const VoiceFullscreenRef = useRef(null);
 
   useEffect(() => {
-    if (!shell?.subscribeFrame) return () => {};
-    return shell.subscribeFrame((frame) => {
-      if (frame?.type !== "chat_response") return;
-      const text = extractChatText(frame.payload);
-      if (!text) return;
-      setMessages((prev) => [...prev, makeMessage("assistant", text)]);
-    });
-  }, [shell]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const mod = await import(/* @vite-ignore */ './VoiceFullscreen');
+        if (!cancelled) VoiceFullscreenRef.current = mod.default || mod;
+      } catch { /* VoiceFullscreen not available yet (Subagent C) */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
-    if (!historyRef.current) return;
-    historyRef.current.scrollTop = historyRef.current.scrollHeight;
+    if (speech.transcript) setInput(speech.transcript);
+  }, [speech.transcript]);
+
+  useEffect(() => {
+    if (speech.interimTranscript && !speech.transcript) setInput(speech.interimTranscript);
+  }, [speech.interimTranscript, speech.transcript]);
+
+  useEffect(() => {
+    if (speech.error) setDictationError(speech.error);
+  }, [speech.error]);
+
+  useEffect(() => {
+    const el = bottomRef.current;
+    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const send = () => {
-    const text = draft.trim();
-    if (!text || !shell?.sendFrame) return;
-    shell.sendFrame("chat_request", {
-      session_id: `phone-${shell.deviceId || "session"}`,
-      text,
-      reply_mode: "stream",
-      channel: "chat",
-      reply_to: null,
-    });
-    setMessages((prev) => [...prev, makeMessage("user", text)]);
-    setDraft("");
-  };
+  const handleSend = useCallback((e) => {
+    e?.preventDefault?.();
+    const text = input.trim();
+    if (!text) return;
+    if (onSend) {
+      onSend(text);
+    } else if (shell?.send) {
+      setLocalMessages((prev) => [...prev, { id: newId(), role: 'user', text }]);
+      shell.send({ type: 'chat_request', payload: { text } });
+    }
+    setInput('');
+    if (speech.listening) speech.stop();
+  }, [input, onSend, shell, speech]);
 
-  const onSubmit = (event) => {
-    event.preventDefault();
-    send();
-  };
+  const toggleDictation = useCallback(() => {
+    if (speech.listening) {
+      speech.stop();
+    } else {
+      setDictationError(null);
+      speech.start();
+    }
+  }, [speech]);
+
+  const handleMicPointerDown = useCallback(() => {
+    longPressTriggeredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      if (speech.listening) speech.stop();
+      setVoiceFullscreenOpen(true);
+    }, LONG_PRESS_MS);
+  }, [speech]);
+
+  const handleMicPointerUp = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    if (!longPressTriggeredRef.current) toggleDictation();
+  }, [toggleDictation]);
+
+  const handleMicPointerLeave = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
+  const retryDictation = useCallback(() => {
+    setDictationError(null);
+    speech.reset();
+    speech.start();
+  }, [speech]);
+
+  const VoiceFullscreen = VoiceFullscreenRef.current;
 
   return (
-    <section data-testid="chat-panel" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div
-        ref={historyRef}
-        aria-live="polite"
-        style={{
-          minHeight: 220,
-          maxHeight: 360,
-          overflowY: "auto",
-          borderRadius: 10,
-          border: "1px solid rgba(255,255,255,0.08)",
-          background: "rgba(255,255,255,0.02)",
-          padding: 10,
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-        }}
-      >
-        {messages.length === 0 ? (
-          <p className="v2-p v2-p--muted" style={{ margin: 0 }}>
-            Ask anything to the paired brain. Responses stream back here as
-            <code style={{ margin: "0 4px" }}>chat_response</code>
-            frames.
-          </p>
-        ) : (
-          messages.map((message) => (
-            <div
-              key={message.id}
-              style={{
-                alignSelf: message.role === "user" ? "flex-end" : "flex-start",
-                maxWidth: "85%",
-                padding: "8px 10px",
-                borderRadius: 10,
-                background: message.role === "user"
-                  ? "rgba(10,132,255,0.24)"
-                  : "rgba(255,255,255,0.08)",
-                border: "1px solid rgba(255,255,255,0.08)",
-              }}
-            >
-              {message.text}
-            </div>
-          ))
-        )}
+    <div className="phone-chat-panel" data-testid="phone-chat-panel">
+      <div className="phone-chat-log" data-testid="chat-log">
+        {messages.map((m) => (
+          <div key={m.id} className={`phone-chat-row phone-chat-row--${m.role}`}>
+            <div className="phone-chat-bubble">{m.text}</div>
+          </div>
+        ))}
+        <div ref={bottomRef} />
       </div>
-      <form onSubmit={onSubmit} style={{ display: "flex", gap: 8 }}>
-        <input
-          className="v2-input"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="Type a message"
-          aria-label="Chat input"
-        />
+
+      <form className="phone-chat-composer" onSubmit={handleSend} data-testid="chat-composer">
+        <div className="phone-chat-input-wrap">
+          {speech.listening && (
+            <span className="phone-chat-recording-dot" aria-hidden="true" data-testid="recording-dot" />
+          )}
+          <input
+            className="phone-chat-input"
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Type a message..."
+            data-testid="chat-input"
+          />
+        </div>
+
+        <button
+          type="button"
+          className={`phone-chat-mic${speech.listening ? ' is-listening' : ''}${!speech.supported ? ' is-disabled' : ''}`}
+          disabled={!speech.supported}
+          onPointerDown={speech.supported ? handleMicPointerDown : undefined}
+          onPointerUp={speech.supported ? handleMicPointerUp : undefined}
+          onPointerLeave={speech.supported ? handleMicPointerLeave : undefined}
+          aria-label="Dictate message"
+          aria-pressed={speech.listening}
+          title={!speech.supported ? 'Dictation not supported on this browser; long-press for voice mode' : undefined}
+          data-testid="mic-button"
+        >
+          <Mic size={18} />
+        </button>
+
         <button
           type="submit"
-          className="v2-btn v2-btn--primary"
-          disabled={!canSend}
+          className="phone-chat-send"
+          disabled={!input.trim()}
+          aria-label="Send"
+          data-testid="send-button"
         >
-          Send
+          <Send size={18} />
         </button>
       </form>
-    </section>
+
+      {dictationError && (
+        <div className="phone-chat-error" role="alert" data-testid="dictation-error">
+          <span>{dictationError.message}</span>
+          <button type="button" onClick={retryDictation} data-testid="retry-link">
+            Retry
+          </button>
+        </div>
+      )}
+
+      {voiceFullscreenOpen && VoiceFullscreen && (
+        <VoiceFullscreen
+          open={voiceFullscreenOpen}
+          onClose={() => setVoiceFullscreenOpen(false)}
+          initialMode="listening"
+        />
+      )}
+    </div>
   );
 }

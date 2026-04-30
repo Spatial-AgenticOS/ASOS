@@ -80,6 +80,8 @@ from api.routes.apps import router as apps_router
 from api.routes.supervisor import router as supervisor_router
 from api.routes.twin import router as twin_router
 from api.routes.sessions import router as sessions_router  # W17
+# --- Subagent A (realtime GA) additions ---
+from api.routes.realtime_client_secret import router as realtime_client_secret_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -418,6 +420,8 @@ app.include_router(apps_router)
 app.include_router(supervisor_router)
 app.include_router(twin_router)
 app.include_router(sessions_router)  # W17
+# --- Subagent A (realtime GA) additions ---
+app.include_router(realtime_client_secret_router)
 
 
 # ─────────────────────────────────────────────
