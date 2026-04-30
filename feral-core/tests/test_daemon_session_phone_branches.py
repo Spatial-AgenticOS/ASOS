@@ -99,6 +99,11 @@ def test_chat_request_routes_to_orchestrator_and_responds():
 def test_voice_session_start_registers_voice_session():
     mock = _mock_state_with_supervisor()
     mock.voice_router = MagicMock()
+    # PR #61 wire-up: daemon_session now awaits
+    # voice_router.open_session(mode=...) to dispatch to the selected
+    # voice backend. MagicMock's default return isn't awaitable, so
+    # explicitly stub it as AsyncMock returning None.
+    mock.voice_router.open_session = AsyncMock(return_value=None)
 
     with _node_client(mock) as client:
         with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:

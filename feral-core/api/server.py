@@ -1548,10 +1548,65 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         "phone_mode": payload_dict.get("mode", "push_to_talk"),
                     },
                 )
+
+                # PR #61 (voice-v2) wire-up: dispatch to the user-selected
+                # voice mode (openai_realtime / gemini_live / chained) via
+                # VoiceRouter.open_session. Phone emits the selected mode
+                # in the `voice_mode` payload field; falls back to the
+                # operator's configured default when absent.
+                selected_mode = (
+                    payload_dict.get("voice_mode")
+                    or payload_dict.get("provider_mode")
+                )
+                if not selected_mode:
+                    cfg = getattr(state, "config", None)
+                    voice_cfg = (
+                        (cfg._merged.get("voice") or {}) if cfg else {}
+                    )
+                    selected_mode = voice_cfg.get("mode", "openai_realtime")
+                if selected_mode not in (
+                    "openai_realtime", "gemini_live", "chained",
+                ):
+                    logger.warning(
+                        "voice_session_start: unknown voice_mode=%r, "
+                        "defaulting to openai_realtime",
+                        selected_mode,
+                    )
+                    selected_mode = "openai_realtime"
+
+                try:
+                    await state.voice_router.open_session(
+                        session_id=session_id,
+                        mode=selected_mode,
+                        provider_opts={
+                            "node_id": node_id,
+                            **(payload_dict.get("provider_opts") or {}),
+                        },
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "voice_router.open_session failed for mode=%s: %s",
+                        selected_mode, exc,
+                    )
+                    _record_phone_envelope(
+                        "error",
+                        "voice_session_start",
+                        detail={
+                            "mode": selected_mode,
+                            "error": str(exc)[:200],
+                        },
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+
                 _record_phone_envelope(
                     "allowed",
                     "voice_session_start",
-                    detail={"stream_id": stream_id, "session_id": session_id},
+                    detail={
+                        "stream_id": stream_id,
+                        "session_id": session_id,
+                        "voice_mode": selected_mode,
+                    },
                     payload_for_hash=payload_dict,
                 )
 
