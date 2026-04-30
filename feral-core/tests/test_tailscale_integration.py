@@ -222,6 +222,242 @@ def test_funnel_disable_idempotent_when_already_off(monkeypatch):
     assert result["enabled"] is False
 
 
+# ── Userspace-tailscaled inspector + migration ───────────────────
+
+
+def _ps_output(rows: list[tuple[int, int, str]]) -> str:
+    """Compose `ps -axo pid=,ppid=,command=` output from row tuples."""
+    return "\n".join(f"{pid:>5} {ppid:>5} {cmd}" for pid, ppid, cmd in rows)
+
+
+def test_inspect_tailscaled_process_finds_userspace_state_file_mode():
+    from integrations import tailscale
+    rows = [
+        (1, 0, "/sbin/launchd"),
+        (
+            69323, 1,
+            "tailscaled --tun=userspace-networking "
+            "--state=/Users/me/.feral/tailscaled-userspace.state "
+            "--socket=/tmp/tailscaled-userspace.sock "
+            "--socks5-server=localhost:1055",
+        ),
+    ]
+    with patch.object(
+        tailscale.subprocess, "run",
+        return_value=_fake_proc(0, stdout=_ps_output(rows)),
+    ):
+        info = tailscale.inspect_tailscaled_process()
+    assert info.running is True
+    assert info.pid == 69323
+    assert info.is_userspace is True
+    assert info.state_file == "/Users/me/.feral/tailscaled-userspace.state"
+    assert info.state_dir == ""
+    assert info.socket_path == "/tmp/tailscaled-userspace.sock"
+    assert info.tun_mode == "userspace-networking"
+    # The whole point: this state would fail Funnel cert provisioning.
+    assert info.needs_migration is True
+
+
+def test_inspect_tailscaled_process_no_migration_when_already_statedir():
+    from integrations import tailscale
+    rows = [
+        (
+            12345, 1,
+            "/opt/homebrew/bin/tailscaled --tun=userspace-networking "
+            "--statedir=/Users/me/.feral/tailscaled.d "
+            "--socket=/tmp/tailscaled-userspace.sock",
+        ),
+    ]
+    with patch.object(
+        tailscale.subprocess, "run",
+        return_value=_fake_proc(0, stdout=_ps_output(rows)),
+    ):
+        info = tailscale.inspect_tailscaled_process()
+    assert info.running is True
+    assert info.state_dir.endswith("tailscaled.d")
+    assert info.needs_migration is False  # already in statedir mode
+
+
+def test_inspect_tailscaled_process_handles_no_running_daemon():
+    from integrations import tailscale
+    with patch.object(
+        tailscale.subprocess, "run",
+        return_value=_fake_proc(0, stdout="    1     0 /sbin/launchd\n"),
+    ):
+        info = tailscale.inspect_tailscaled_process()
+    assert info.running is False
+    assert info.needs_migration is False
+
+
+def test_migrate_userspace_dry_run_returns_plan_no_mutations(tmp_path):
+    from integrations import tailscale
+    state_file = tmp_path / "tailscaled-userspace.state"
+    state_file.write_bytes(b"FAKE_STATE")
+    fake_info = tailscale.TailscaledProcessInfo(
+        running=True,
+        pid=12345,
+        binary="/opt/homebrew/bin/tailscaled",
+        args=(
+            "/opt/homebrew/bin/tailscaled",
+            "--tun=userspace-networking",
+            f"--state={state_file}",
+            "--socket=/tmp/tailscaled-userspace.sock",
+        ),
+        socket_path="/tmp/tailscaled-userspace.sock",
+        state_file=str(state_file),
+        tun_mode="userspace-networking",
+        parent_pid=1,
+    )
+    plan = tailscale.migrate_userspace_to_statedir(info=fake_info, dry_run=True)
+    assert plan["dry_run"] is True
+    assert plan["stop_pid"] == 12345
+    assert plan["new_state_dir"].endswith("tailscaled.d")
+    assert plan["new_state_file"].endswith("/tailscaled.d/tailscaled.state")
+    assert "--statedir=" in " ".join(plan["restart_argv"])
+    assert "--state=" not in " ".join(plan["restart_argv"])
+    # State file untouched on dry run.
+    assert state_file.exists()
+    assert state_file.read_bytes() == b"FAKE_STATE"
+
+
+def test_migrate_userspace_skips_when_already_in_statedir_mode():
+    from integrations import tailscale
+    fake_info = tailscale.TailscaledProcessInfo(
+        running=True,
+        pid=12345,
+        binary="tailscaled",
+        args=("tailscaled", "--statedir=/x", "--socket=/y"),
+        state_dir="/x",
+        socket_path="/y",
+        tun_mode="userspace-networking",
+    )
+    result = tailscale.migrate_userspace_to_statedir(info=fake_info)
+    assert result["migrated"] is False
+    assert result["reason"] == "already_in_statedir_mode_or_not_userspace"
+
+
+def test_migrate_userspace_raises_when_state_file_missing(tmp_path):
+    from integrations import tailscale
+    fake_info = tailscale.TailscaledProcessInfo(
+        running=True,
+        pid=12345,
+        binary="tailscaled",
+        args=("tailscaled", "--tun=userspace-networking",
+              f"--state={tmp_path / 'missing.state'}",
+              "--socket=/tmp/x.sock"),
+        socket_path="/tmp/x.sock",
+        state_file=str(tmp_path / "missing.state"),
+        tun_mode="userspace-networking",
+    )
+    with pytest.raises(tailscale.TailscaleMigrationFailed) as exc:
+        tailscale.migrate_userspace_to_statedir(info=fake_info)
+    assert "doesn't exist" in str(exc.value)
+    assert "no changes made" in str(exc.value)
+
+
+def test_funnel_enable_triggers_auto_migration_when_state_file_mode(monkeypatch, tmp_path):
+    """When inspect_tailscaled_process reports needs_migration=True,
+    funnel_enable MUST run the migration BEFORE issuing
+    `funnel --bg <port>` — otherwise the user gets a half-broken state
+    where Funnel is on but TLS handshakes fail."""
+    monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/local/bin/tailscale")
+    from integrations import tailscale
+
+    pre_migration_info = tailscale.TailscaledProcessInfo(
+        running=True,
+        pid=99,
+        binary="tailscaled",
+        args=("tailscaled", "--tun=userspace-networking",
+              f"--state={tmp_path / 'state'}",
+              "--socket=/tmp/x.sock"),
+        socket_path="/tmp/x.sock",
+        state_file=str(tmp_path / "state"),
+        tun_mode="userspace-networking",
+    )
+    # The migration is what we're asserting got called; stub it out.
+    migrate_calls: list[dict] = []
+
+    def fake_migrate(*, info=None, dry_run=False):
+        migrate_calls.append({"info_pid": info.pid, "dry_run": dry_run})
+        return {
+            "migrated": True,
+            "old_state_file": str(tmp_path / "state"),
+            "new_state_dir": str(tmp_path / "tailscaled.d"),
+        }
+
+    def fake_run(cmd, **kwargs):
+        if "funnel" in cmd and "--bg" in cmd:
+            return _fake_proc(0)
+        if "status" in cmd and "--json" in cmd:
+            return _fake_proc(0, stdout=SAMPLE_STATUS_JSON)
+        return _fake_proc(0)
+
+    with (
+        patch.object(tailscale, "inspect_tailscaled_process",
+                     return_value=pre_migration_info),
+        patch.object(tailscale, "migrate_userspace_to_statedir",
+                     side_effect=fake_migrate),
+        patch.object(tailscale.subprocess, "run", side_effect=fake_run),
+    ):
+        result = tailscale.funnel_enable(9090)
+
+    # Migration was called with the inspected info BEFORE Funnel.
+    assert len(migrate_calls) == 1
+    assert migrate_calls[0]["info_pid"] == 99
+    assert migrate_calls[0]["dry_run"] is False
+    assert result["enabled"] is True
+    assert result["migrated"]["migrated"] is True
+
+
+def test_funnel_enable_skips_migration_when_auto_migrate_false(monkeypatch, tmp_path):
+    """auto_migrate=False MUST raise NoVarRootInUserspace instead of
+    silently leaving the daemon broken."""
+    monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/local/bin/tailscale")
+    from integrations import tailscale
+
+    needs_migration_info = tailscale.TailscaledProcessInfo(
+        running=True, pid=99, binary="tailscaled",
+        args=("tailscaled", "--tun=userspace-networking",
+              f"--state={tmp_path / 'state'}", "--socket=/tmp/x.sock"),
+        socket_path="/tmp/x.sock", state_file=str(tmp_path / "state"),
+        tun_mode="userspace-networking",
+    )
+    with patch.object(tailscale, "inspect_tailscaled_process",
+                      return_value=needs_migration_info):
+        with pytest.raises(tailscale.TailscaleNoVarRootInUserspace):
+            tailscale.funnel_enable(9090, auto_migrate=False)
+
+
+def test_funnel_enable_skips_migration_when_already_in_statedir_mode(monkeypatch):
+    """Default flow when daemon doesn't need migration: no migrate call."""
+    monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/local/bin/tailscale")
+    from integrations import tailscale
+
+    healthy_info = tailscale.TailscaledProcessInfo(
+        running=True, pid=99, binary="tailscaled",
+        args=("tailscaled", "--statedir=/x"), state_dir="/x",
+        tun_mode="userspace-networking",
+    )
+
+    def fake_run(cmd, **kwargs):
+        if "funnel" in cmd and "--bg" in cmd:
+            return _fake_proc(0)
+        if "status" in cmd and "--json" in cmd:
+            return _fake_proc(0, stdout=SAMPLE_STATUS_JSON)
+        return _fake_proc(0)
+
+    with (
+        patch.object(tailscale, "inspect_tailscaled_process",
+                     return_value=healthy_info),
+        patch.object(tailscale, "migrate_userspace_to_statedir") as mig_mock,
+        patch.object(tailscale.subprocess, "run", side_effect=fake_run),
+    ):
+        result = tailscale.funnel_enable(9090)
+    mig_mock.assert_not_called()
+    assert result["enabled"] is True
+    assert "migrated" not in result
+
+
 # ── REST endpoint tests ──────────────────────────────────────────
 
 
