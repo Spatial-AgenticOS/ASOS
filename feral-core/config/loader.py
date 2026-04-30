@@ -387,6 +387,37 @@ class ConfigLoader:
     def get(self, section: str, key: str, default=None):
         return self._merged.get(section, {}).get(key, default)
 
+    @property
+    def access_pairing_mode(self) -> str:
+        """Resolved pairing access mode (Mode A "local" / Mode B
+        "localhost" / Mode C "remote").
+
+        Defaults to "localhost" when not set so legacy installs (no
+        access namespace in settings.json) keep their existing
+        loopback-only behavior. Idempotent with the same property
+        added in PR #55 / phone-as-peer; whichever PR merges first,
+        the other rebases cleanly because the implementation is
+        identical.
+        """
+        mode = self._merged.get("access", {}).get("pairing_mode", "localhost")
+        if mode not in ("local", "localhost", "remote"):
+            return "localhost"
+        return mode
+
+    @property
+    def access_remote_url(self) -> str:
+        """Public-reachable URL for Mode C (Tailscale Funnel).
+
+        Populated by ``feral access remote-up`` after running
+        ``tailscale funnel <port> on``. Empty string means Mode C is
+        configured but not yet live; the pair URL resolver MUST treat
+        empty as "remote unavailable" rather than emitting a loopback
+        URL silently.
+        """
+        access = self._merged.get("access", {}) or {}
+        ts = access.get("tailscale", {}) or {}
+        return str(ts.get("tailnet_url", "") or "")
+
     def get_credential(self, key: str, default: str = "") -> str:
         return self._credentials.get(key, default)
 

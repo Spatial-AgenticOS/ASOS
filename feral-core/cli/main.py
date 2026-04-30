@@ -1433,6 +1433,25 @@ def main():
     twin_revoke.add_argument("domain")
     twin_sub.add_parser("pending", help="List pending twin-approval queue rows")
 
+    # feral access — Tailscale Mode C (remote pairing) management
+    access_p = sub.add_parser(
+        "access",
+        help="Manage pairing access mode (LAN / localhost / Tailscale Funnel)",
+    )
+    access_sub = access_p.add_subparsers(dest="action")
+    access_sub.add_parser(
+        "status",
+        help="Show current pairing mode + Tailscale status",
+    )
+    access_sub.add_parser(
+        "remote-up",
+        help="Enable Tailscale Funnel + switch pairing mode to remote",
+    )
+    access_sub.add_parser(
+        "remote-down",
+        help="Disable Tailscale Funnel + revert to localhost mode",
+    )
+
     # feral bridge install — wraps scripts/install-phone-bridge.sh
     bridge_p = sub.add_parser("bridge", help="Install the FERAL phone-bridge daemon on this host")
     bridge_sub = bridge_p.add_subparsers(dest="action")
@@ -1527,6 +1546,9 @@ def main():
     elif args.subcommand == "bridge":
         from cli.bridge_commands import cmd_bridge
         cmd_bridge(args)
+    elif args.subcommand == "access":
+        from cli.access_commands import cmd_access
+        sys.exit(cmd_access(args))
     elif args.subcommand == "twin":
         from cli.twin_commands import cmd_twin
         cmd_twin(args)
