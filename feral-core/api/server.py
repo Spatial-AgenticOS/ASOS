@@ -1642,6 +1642,62 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         payload_for_hash=payload_dict,
                     )
 
+            elif msg.type == "location_update":
+                # Phone-as-peer: location streamed over the same HUP
+                # WebSocket as audio/video/etc. Replaces the legacy
+                # POST /api/location/update HTTP path that returned
+                # 401 for phones (they have phone_bearer in IDB, not
+                # the dashboard API key the HTTP endpoint required).
+                # HUP v1.3.1.
+                payload_dict = raw.get("payload", {})
+                if not state.location_engine:
+                    _record_phone_envelope(
+                        "denied",
+                        "location_update",
+                        detail={"reason": "missing_location_engine"},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+                try:
+                    lat = float(payload_dict.get("lat") or 0)
+                    lon = float(payload_dict.get("lon") or 0)
+                    src = (
+                        payload_dict.get("source")
+                        or payload_dict.get("node_id")
+                        or "browser_node"
+                    )
+                    if lat == 0 and lon == 0:
+                        # Browser geolocation can briefly emit (0,0)
+                        # before the GPS fix lands; ignore so it
+                        # doesn't poison geofence checks at Null Island.
+                        _record_phone_envelope(
+                            "skipped",
+                            "location_update",
+                            detail={"reason": "null_island"},
+                            payload_for_hash=payload_dict,
+                        )
+                        continue
+                    triggered = await state.location_engine.update_location(
+                        lat, lon, source=str(src)[:64],
+                    )
+                    _record_phone_envelope(
+                        "accepted",
+                        "location_update",
+                        detail={
+                            "lat": lat, "lon": lon,
+                            "source": src,
+                            "geofence_events": len(triggered),
+                        },
+                        payload_for_hash=payload_dict,
+                    )
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "location_update",
+                        detail={"reason": "update_failed", "error": str(exc)[:200]},
+                        payload_for_hash=payload_dict,
+                    )
+
             elif msg.type == "peripheral_bridge_register":
                 payload_dict = raw.get("payload", {})
                 if not state.device_registry:

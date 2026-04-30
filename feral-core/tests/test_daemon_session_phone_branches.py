@@ -288,3 +288,98 @@ def test_malformed_phone_payload_sends_protocol_error(message_type, malformed_pa
             assert err["type"] == "error"
             assert err["payload"]["code"] == 1003
             assert "payload validation failed" in err["payload"]["message"]
+
+
+# ── HUP v1.3.1: location_update over the daemon WS ───────────────
+
+
+def test_location_update_routes_to_location_engine():
+    """Phone-streamed location should reach LocationEngine.update_location
+    and increment the geofence-event count returned in audit detail."""
+    mock = _mock_state_with_supervisor()
+    mock.location_engine = MagicMock()
+    mock.location_engine.update_location = AsyncMock(
+        return_value=[{"fence_id": "home", "event": "enter"}],
+    )
+
+    with _node_client(mock) as client:
+        with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+            _register_node(
+                ws,
+                node_id="phone-loc-1",
+                node_type="phone",
+                capabilities=["location"],
+            )
+            ws.send_json({
+                "type": "location_update",
+                "hup_version": "1.3.1",
+                "ts": 1734369999.0,
+                "payload": {
+                    "node_id": "phone-loc-1",
+                    "lat": 37.7749,
+                    "lon": -122.4194,
+                    "accuracy_m": 12.5,
+                    "source": "browser_node",
+                },
+            })
+
+    mock.location_engine.update_location.assert_awaited_once()
+    args, kwargs = mock.location_engine.update_location.await_args
+    assert args[0] == 37.7749
+    assert args[1] == -122.4194
+    assert kwargs.get("source") == "browser_node"
+    assert _phone_recorded(mock, "location_update", decision="accepted")
+
+
+def test_location_update_skips_null_island():
+    """(0, 0) is browser-geolocation's pre-fix sentinel; we MUST NOT
+    pass it through to LocationEngine or every phone enters/exits a
+    Null Island geofence at startup."""
+    mock = _mock_state_with_supervisor()
+    mock.location_engine = MagicMock()
+    mock.location_engine.update_location = AsyncMock(return_value=[])
+
+    with _node_client(mock) as client:
+        with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+            _register_node(
+                ws,
+                node_id="phone-loc-2",
+                node_type="phone",
+                capabilities=["location"],
+            )
+            ws.send_json({
+                "type": "location_update",
+                "hup_version": "1.3.1",
+                "ts": 1734369999.0,
+                "payload": {"node_id": "phone-loc-2", "lat": 0, "lon": 0},
+            })
+
+    mock.location_engine.update_location.assert_not_called()
+    assert _phone_recorded(mock, "location_update", decision="skipped")
+
+
+def test_location_update_denies_when_engine_missing():
+    """If LocationEngine isn't initialised on the brain, the envelope
+    is rejected cleanly (audited as denied), not 500'd."""
+    mock = _mock_state_with_supervisor()
+    mock.location_engine = None
+
+    with _node_client(mock) as client:
+        with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+            _register_node(
+                ws,
+                node_id="phone-loc-3",
+                node_type="phone",
+                capabilities=["location"],
+            )
+            ws.send_json({
+                "type": "location_update",
+                "hup_version": "1.3.1",
+                "ts": 1734369999.0,
+                "payload": {
+                    "node_id": "phone-loc-3",
+                    "lat": 1.0, "lon": 2.0,
+                },
+            })
+
+    assert _phone_recorded(mock, "location_update", decision="denied")

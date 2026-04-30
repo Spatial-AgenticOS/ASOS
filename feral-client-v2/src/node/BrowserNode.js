@@ -9,7 +9,7 @@
  * Brain. No app install needed.
  *
  * Frames the Brain understands:
- *   • location — navigator.geolocation.watchPosition → POST /api/location/update
+ *   • location — navigator.geolocation.watchPosition → WS `location_update`
  *   • mic      — AudioWorklet PCM16 @ 16kHz → WS `audio_chunk`
  *                 {data_b64, chunk_index, is_final, encoding, sample_rate}
  *   • camera   — canvas.toBlob('image/jpeg') → WS `frame`
@@ -402,20 +402,26 @@ export class BrowserNode {
 
   _pushLocation(pos) {
     if (!pos?.coords) return;
-    fetch(
-      new URL("/api/location/update", window.location.origin).toString(),
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          lat: pos.coords.latitude,
-          lon: pos.coords.longitude,
-          accuracy_m: pos.coords.accuracy,
-          source: "browser_node",
-          node_id: this.nodeId,
-        }),
-      },
-    ).catch((err) => this.onError(err));
+    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+    // HUP v1.3.1: stream location over the existing authenticated
+    // WebSocket instead of HTTP POSTing to /api/location/update.
+    // The HTTP path required a dashboard API key, which the phone
+    // never has — it authenticates with phone_bearer over the WS
+    // subprotocol. Sending over WS reuses the same auth + lifecycle.
+    const c = pos.coords;
+    this._send("location_update", {
+      node_id: this.nodeId,
+      lat: c.latitude,
+      lon: c.longitude,
+      accuracy_m: typeof c.accuracy === "number" ? c.accuracy : null,
+      altitude_m: typeof c.altitude === "number" ? c.altitude : null,
+      heading_deg: typeof c.heading === "number" ? c.heading : null,
+      speed_mps: typeof c.speed === "number" ? c.speed : null,
+      source: "browser_node",
+      ts: typeof pos.timestamp === "number"
+        ? pos.timestamp / 1000
+        : Date.now() / 1000,
+    });
   }
 
   _pushAudioChunk(float32) {
