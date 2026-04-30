@@ -59,6 +59,7 @@ from api.routes.genui import router as genui_router
 from api.routes.mcp import router as mcp_router
 from api.routes.channels import router as channels_router
 from api.routes.conversations import router as conversations_router
+from api.routes.access import router as access_router
 from api.routes.devices import router as devices_router
 from api.routes.timeline import router as timeline_router
 from api.routes.brain_rest import router as brain_rest_router
@@ -371,6 +372,7 @@ app.include_router(mcp_router)
 app.include_router(channels_router)
 app.include_router(conversations_router)
 app.include_router(devices_router)
+app.include_router(access_router)
 app.include_router(timeline_router)
 app.include_router(brain_rest_router)
 app.include_router(baseline_router)
