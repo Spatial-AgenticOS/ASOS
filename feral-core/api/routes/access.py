@@ -158,12 +158,24 @@ async def access_remote_up():
     try:
         result = tailscale.funnel_enable(port)
     except tailscale.TailscaleFunnelDisabledInTailnet as exc:
+        # The integration extracts the per-node enable URL from the
+        # CLI's stderr when present (Tailscale 1.66+) and embeds it in
+        # the exception message. Pull it back out for the dashboard so
+        # it can render a one-click button.
+        import re
+        msg = str(exc)
+        m = re.search(
+            r"https://login\.tailscale\.com/f/funnel\?node=\S+", msg,
+        )
+        remediation_url = m.group(0) if m else (
+            "https://login.tailscale.com/admin/settings/features"
+        )
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "funnel_disabled_in_tailnet",
-                "message": str(exc),
-                "remediation": "https://login.tailscale.com/admin/settings/features",
+                "message": msg,
+                "remediation": remediation_url,
             },
         )
     except tailscale.TailscalePermissionDenied as exc:
