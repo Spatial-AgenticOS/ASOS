@@ -78,6 +78,11 @@ BCRYPT_COST = 12
 # may override per-pair via ``pair_device(ttl_seconds=...)``.
 DEFAULT_TTL_SECONDS = 86_400
 
+# Runtime bearer for paired phone/browser clients. Kept separate from the
+# pair token so we can rotate runtime auth without touching pair claims.
+DEFAULT_PHONE_BEARER_TTL_SECONDS = 2_592_000  # 30 days
+PHONE_BEARER_KIND = "phone_bearer"
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Hash backend (argon2id primary, bcrypt fallback)
@@ -285,6 +290,31 @@ class DevicePairingStore:
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_pd_expires_at "
                     "ON paired_devices(expires_at)"
+                )
+
+                # Runtime credentials for paired devices (e.g. phone bearer).
+                # Separate table = separate lifecycle from pair tokens.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS device_credentials (
+                        credential_id  TEXT PRIMARY KEY,
+                        device_id      TEXT NOT NULL,
+                        bearer_kind    TEXT NOT NULL,
+                        token_lookup   TEXT NOT NULL UNIQUE,
+                        token_hash     TEXT NOT NULL,
+                        hash_algo      TEXT NOT NULL,
+                        ttl_seconds    INTEGER NOT NULL,
+                        expires_at     INTEGER NOT NULL,
+                        created_at     REAL NOT NULL,
+                        rotated_at     REAL NOT NULL
+                    )
+                """)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_dc_device_kind "
+                    "ON device_credentials(device_id, bearer_kind)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_dc_expires_at "
+                    "ON device_credentials(expires_at)"
                 )
 
                 # Pending pair codes — the SDK code-pair flow:
@@ -590,6 +620,8 @@ class DevicePairingStore:
         platform: str = "",
         capabilities: Optional[list[str]] = None,
         ttl_seconds: int = DEFAULT_TTL_SECONDS,
+        mint_phone_bearer: Optional[bool] = None,
+        phone_bearer_ttl_seconds: int = DEFAULT_PHONE_BEARER_TTL_SECONDS,
     ) -> dict:
         """Register a new device.
 
@@ -600,6 +632,8 @@ class DevicePairingStore:
                 with explicit node_id + capabilities). This is the
                 "typed body" the v2 PairDeviceModal needed for its HUP
                 tab.
+                ``"browser_node_v2"`` opts into issuing a runtime
+                phone bearer alongside the pair token.
             node_id: optional authoritative id the daemon will register
                 with on /v1/node (only used by kind="hup").
             platform: user-agent / platform hint for browser clients.
@@ -608,6 +642,10 @@ class DevicePairingStore:
             ttl_seconds: how long this pairing is valid for. Default
                 24h. Overridable per-pair (e.g. setup-wizard short-lived
                 tokens use 600s).
+            mint_phone_bearer: override for issuing a runtime phone bearer.
+                When ``None``, this is inferred from
+                ``kind == "browser_node_v2"``.
+            phone_bearer_ttl_seconds: runtime bearer TTL. Defaults to 30 days.
 
         Returns ``{device_id, token, name, paired_at, expires_at,
         ttl_seconds, kind, node_id?, …}``. The plaintext ``token`` is
@@ -619,6 +657,13 @@ class DevicePairingStore:
         if ttl_seconds <= 0:
             raise ValueError(
                 f"ttl_seconds must be positive (got {ttl_seconds})"
+            )
+        if mint_phone_bearer is None:
+            mint_phone_bearer = kind == "browser_node_v2"
+        if mint_phone_bearer and phone_bearer_ttl_seconds <= 0:
+            raise ValueError(
+                "phone_bearer_ttl_seconds must be positive when "
+                "mint_phone_bearer=True"
             )
 
         device_id = str(uuid4())
@@ -647,6 +692,13 @@ class DevicePairingStore:
                         int(ttl_seconds), expires_at,
                     ),
                 )
+                phone_bearer_record = None
+                if mint_phone_bearer:
+                    phone_bearer_record = self._issue_phone_bearer(
+                        conn,
+                        device_id=device_id,
+                        ttl_seconds=int(phone_bearer_ttl_seconds),
+                    )
                 conn.commit()
             finally:
                 conn.close()
@@ -655,7 +707,7 @@ class DevicePairingStore:
             "Paired device %s (%s, kind=%s, node=%s, ttl=%ss)",
             device_id, name, kind, node_id or "-", ttl_seconds,
         )
-        return {
+        result = {
             "device_id": device_id,
             "token": token,
             "name": name,
@@ -667,6 +719,151 @@ class DevicePairingStore:
             "platform": platform or "",
             "capabilities": list(capabilities or []),
         }
+        if phone_bearer_record:
+            result.update({
+                "phone_bearer": phone_bearer_record["phone_bearer"],
+                "phone_bearer_expires_at": phone_bearer_record["expires_at"],
+                "phone_bearer_ttl_seconds": phone_bearer_record["ttl_seconds"],
+            })
+        return result
+
+    def _issue_phone_bearer(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        device_id: str,
+        ttl_seconds: int = DEFAULT_PHONE_BEARER_TTL_SECONDS,
+    ) -> dict:
+        """Issue (or replace) the runtime phone bearer for *device_id*."""
+        if ttl_seconds <= 0:
+            raise ValueError(f"ttl_seconds must be positive (got {ttl_seconds})")
+        phone_bearer = secrets.token_hex(32)
+        now = time.time()
+        expires_at = int(now) + int(ttl_seconds)
+        backend = _get_backend()
+
+        conn.execute(
+            "DELETE FROM device_credentials WHERE device_id = ? AND bearer_kind = ?",
+            (device_id, PHONE_BEARER_KIND),
+        )
+        conn.execute(
+            """INSERT INTO device_credentials
+               (credential_id, device_id, bearer_kind, token_lookup, token_hash,
+                hash_algo, ttl_seconds, expires_at, created_at, rotated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(uuid4()),
+                device_id,
+                PHONE_BEARER_KIND,
+                _token_lookup(phone_bearer),
+                backend.hash(phone_bearer),
+                backend.name,
+                int(ttl_seconds),
+                expires_at,
+                now,
+                now,
+            ),
+        )
+        logger.info(
+            "Issued runtime credential (device_id=%s bearer_kind=%s ttl=%ss)",
+            device_id,
+            PHONE_BEARER_KIND,
+            ttl_seconds,
+        )
+        return {
+            "device_id": device_id,
+            "phone_bearer": phone_bearer,
+            "expires_at": expires_at,
+            "ttl_seconds": int(ttl_seconds),
+            "bearer_kind": PHONE_BEARER_KIND,
+        }
+
+    def verify_phone_bearer(self, bearer: str) -> Optional[str]:
+        """Return the ``device_id`` for a runtime phone bearer.
+
+        Behaves like :meth:`verify_device`: unknown/expired/invalid bearers
+        return ``None``; successful verification extends ``expires_at`` by the
+        bearer TTL (sliding window) and bumps ``last_seen`` on the paired
+        device row.
+        """
+        if not bearer:
+            return None
+        lookup = _token_lookup(bearer)
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                """SELECT credential_id, device_id, token_hash, expires_at, ttl_seconds
+                   FROM device_credentials
+                   WHERE token_lookup = ? AND bearer_kind = ?""",
+                (lookup, PHONE_BEARER_KIND),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            return None
+        if not _get_backend().verify(row["token_hash"], bearer):
+            return None
+        now = int(time.time())
+        if row["expires_at"] is not None and row["expires_at"] <= now:
+            logger.info(
+                "device_pairing.phone_bearer_expired: device_id=%s expires_at=%s (now=%s)",
+                row["device_id"],
+                row["expires_at"],
+                now,
+            )
+            return None
+
+        device_id = row["device_id"]
+        new_expiry = now + int(row["ttl_seconds"] or DEFAULT_PHONE_BEARER_TTL_SECONDS)
+        with self._lock:
+            conn = self._conn()
+            try:
+                conn.execute(
+                    "UPDATE device_credentials SET expires_at = ?, rotated_at = ? "
+                    "WHERE credential_id = ?",
+                    (new_expiry, time.time(), row["credential_id"]),
+                )
+                conn.execute(
+                    "UPDATE paired_devices SET last_seen = ? WHERE device_id = ?",
+                    (time.time(), device_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return device_id
+
+    def rotate_phone_bearer(
+        self,
+        device_id: str,
+        *,
+        ttl_seconds: int = DEFAULT_PHONE_BEARER_TTL_SECONDS,
+    ) -> Optional[dict]:
+        """Replace the active runtime phone bearer for *device_id*."""
+        if not device_id:
+            return None
+        if ttl_seconds <= 0:
+            raise ValueError(
+                f"ttl_seconds must be positive (got {ttl_seconds})"
+            )
+        with self._lock:
+            conn = self._conn()
+            try:
+                row = conn.execute(
+                    "SELECT device_id FROM paired_devices WHERE device_id = ?",
+                    (device_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                issued = self._issue_phone_bearer(
+                    conn,
+                    device_id=device_id,
+                    ttl_seconds=int(ttl_seconds),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return issued
 
     def mark_claimed(self, token: str) -> Optional[str]:
         """Set ``claimed_at`` once a daemon actually attaches with *token*.

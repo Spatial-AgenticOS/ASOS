@@ -3,7 +3,8 @@
  *
  * The phone scans the "Web phone" QR, lands on /pair?t=<TOKEN>, taps
  * "Pair this phone". Pair.jsx then instantiates this class, which opens
- * a WebSocket to /v1/node?api_key=<TOKEN>, sends a NodeRegisterPayload
+ * a WebSocket to /v1/node authenticated via
+ * Sec-WebSocket-Protocol: feral-token-<TOKEN>, sends a NodeRegisterPayload
  * with node_type="browser_node", and streams live sensor data back to the
  * Brain. No app install needed.
  *
@@ -122,7 +123,7 @@ registerProcessor("feral-capture", FeralCaptureProcessor);
 export class BrowserNode {
   /**
    * @param {object} opts
-   * @param {string} opts.token        — pairing token from /pair?t=
+   * @param {string} opts.token        — runtime bearer token for /v1/node
    * @param {string} [opts.brainUrl]   — ws://… prefix for /v1/node. Inferred
    *                                      from window.location when absent.
    * @param {string} [opts.nodeId]     — stable id (persisted in localStorage).
@@ -149,7 +150,8 @@ export class BrowserNode {
     );
     this.wsUrl = originHttp
       .replace(/^http/, "ws")
-      .replace(/\/$/, "") + `/v1/node?api_key=${encodeURIComponent(this.token)}`;
+      .replace(/\/$/, "") + "/v1/node";
+    this.wsProtocol = `feral-token-${this.token}`;
 
     this._ws = null;
     this._stopped = false;
@@ -169,7 +171,7 @@ export class BrowserNode {
     if (typeof WebSocket === "undefined") {
       throw new Error("WebSocket not available in this runtime");
     }
-    this._ws = new WebSocket(this.wsUrl);
+    this._ws = new WebSocket(this.wsUrl, [this.wsProtocol]);
 
     await new Promise((resolve, reject) => {
       this._ws.onopen = () => resolve();
@@ -195,19 +197,6 @@ export class BrowserNode {
     this._ws.onclose = () => {
       this.onPhase("closed");
     };
-
-    try {
-      await fetch(
-        new URL("/api/devices/pair/complete", window.location.origin).toString(),
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token: this.token }),
-        },
-      );
-    } catch (err) {
-      this.onError(err);
-    }
 
     this._visibilityHandler = () => {
       if (document.hidden) {

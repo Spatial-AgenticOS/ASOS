@@ -2,6 +2,7 @@
 
 import io
 import logging
+import secrets
 import socket
 from urllib.parse import urlparse
 
@@ -426,7 +427,7 @@ async def pair_device(request: Request):
     body = await request.json() if await request.body() else {}
     name = body.get("name", "unnamed")
     kind = (body.get("kind") or "name").lower()
-    if kind not in {"name", "hup", "browser"}:
+    if kind not in {"name", "hup", "browser", "browser_node_v2"}:
         raise HTTPException(status_code=400, detail=f"unknown pair kind: {kind}")
     node_id = body.get("node_id") or ""
     platform = body.get("platform") or ""
@@ -639,6 +640,7 @@ async def pair_device_complete(body: dict):
     "token issued, no attach yet".
     """
     token = (body or {}).get("token") or ""
+    kind = ((body or {}).get("kind") or "").strip().lower()
     if not token:
         raise HTTPException(status_code=400, detail="token required")
     store = state.device_pairing_store
@@ -647,7 +649,26 @@ async def pair_device_complete(body: dict):
     device_id = store.mark_claimed(token)
     if device_id is None:
         raise HTTPException(status_code=404, detail="unknown pairing token")
-    return {"success": True, "device_id": device_id}
+
+    response = {
+        "success": True,
+        "device_id": device_id,
+        "paired_device_id": device_id,
+        "pair_claim_marker": f"claim-{secrets.token_hex(12)}",
+    }
+    if kind == "browser_node_v2":
+        rotated = store.rotate_phone_bearer(device_id)
+        if not rotated:
+            raise HTTPException(
+                status_code=500,
+                detail="failed to issue phone bearer",
+            )
+        response.update({
+            "phone_bearer": rotated["phone_bearer"],
+            "phone_bearer_expires_at": rotated["expires_at"],
+            "phone_bearer_ttl_seconds": rotated["ttl_seconds"],
+        })
+    return response
 
 
 @router.delete("/api/devices/{device_id}")

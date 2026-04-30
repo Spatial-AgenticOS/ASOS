@@ -9,8 +9,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 class MockWebSocket {
   static OPEN = 1;
   static CLOSED = 3;
-  constructor(url) {
+  constructor(url, protocols = []) {
     this.url = url;
+    this.protocols = Array.isArray(protocols) ? protocols : [protocols];
     this.readyState = 0;
     this.sent = [];
     MockWebSocket.instances.push(this);
@@ -61,13 +62,14 @@ describe('BrowserNode', () => {
     const { BrowserNode } = await import('../node/BrowserNode.js');
     const node = new BrowserNode({ token: 'abc123', name: 'Test Phone' });
 
-    expect(node.wsUrl).toBe('ws://brain.local:9090/v1/node?api_key=abc123');
+    expect(node.wsUrl).toBe('ws://brain.local:9090/v1/node');
+    expect(node.wsProtocol).toBe('feral-token-abc123');
     expect(node.platform).toBe('ios-browser');
     expect(node.capabilities).toContain('location');
     expect(node.capabilities).toContain('display');
   });
 
-  it('sends node_register on connect and calls /api/devices/pair/complete', async () => {
+  it('sends node_register on connect using token subprotocol auth', async () => {
     const { BrowserNode } = await import('../node/BrowserNode.js');
     const phases = [];
     const node = new BrowserNode({
@@ -80,6 +82,7 @@ describe('BrowserNode', () => {
 
     expect(MockWebSocket.instances).toHaveLength(1);
     const ws = MockWebSocket.instances[0];
+    expect(ws.protocols).toContain('feral-token-TOKEN1');
     expect(ws.sent).toHaveLength(1);
     const frame = JSON.parse(ws.sent[0]);
     expect(frame.type).toBe('node_register');
@@ -87,14 +90,6 @@ describe('BrowserNode', () => {
     expect(frame.payload.node_type).toBe('browser_node');
     expect(frame.payload.name).toBe('My Phone');
     expect(frame.payload.capabilities).toContain('location');
-
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/devices/pair/complete'),
-      expect.objectContaining({
-        method: 'POST',
-        body: expect.stringContaining('TOKEN1'),
-      }),
-    );
 
     expect(phases).toContain('connected');
     expect(phases).toContain('registered');

@@ -1,0 +1,290 @@
+"""Daemon /v1/node phone-envelope branch coverage."""
+
+from __future__ import annotations
+
+import sqlite3
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from tests.test_hup_protocol import (
+    _TEST_NODE_KEY,
+    _make_mock_state,
+    _node_client,
+    _register_node,
+)
+
+pytestmark = pytest.mark.no_auto_feral_home
+
+
+def _configure_bindings(mock_state: MagicMock) -> None:
+    bindings: dict[str, set[str]] = {}
+
+    def _bind(session_id: str, node_id: str):
+        bindings.setdefault(node_id, set()).add(session_id)
+
+    def _sessions_for(node_id: str) -> set[str]:
+        return set(bindings.get(node_id, set()))
+
+    mock_state.bind_session_to_daemon = MagicMock(side_effect=_bind)
+    mock_state.get_sessions_for_daemon = MagicMock(side_effect=_sessions_for)
+
+
+def _flush_with_known_error(ws):
+    ws.send_json({"type": "totally_bogus_type", "payload": {}})
+    err = ws.receive_json()
+    assert err["type"] == "error"
+    assert err["payload"]["code"] == 1002
+
+
+def _phone_recorded(mock_state: MagicMock, message_type: str, decision: str | None = None) -> bool:
+    for c in mock_state.supervisor.record.call_args_list:
+        detail = c.kwargs.get("detail", {}) if c.kwargs else {}
+        if detail.get("message_type") != message_type:
+            continue
+        if decision is not None and c.kwargs.get("decision") != decision:
+            continue
+        if c.kwargs.get("kind") == "phone_envelope":
+            return True
+    return False
+
+
+def _mock_state_with_supervisor() -> MagicMock:
+    mock = _make_mock_state()
+    _configure_bindings(mock)
+    mock.supervisor = MagicMock()
+    mock.supervisor.record = MagicMock()
+    return mock
+
+
+def test_chat_request_routes_to_orchestrator_and_responds():
+    mock = _mock_state_with_supervisor()
+    mock.orchestrator.handle_command = AsyncMock(return_value={"text": "Chat acknowledged"})
+
+    with _node_client(mock) as client:
+        with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+            _register_node(
+                ws,
+                node_id="phone-chat",
+                node_type="phone",
+                capabilities=["voice", "genui"],
+            )
+            ws.send_json(
+                {
+                    "type": "chat_request",
+                    "hup_version": "1.3.0",
+                    "ts": 1734369922.123,
+                    "payload": {
+                        "session_id": "phone-session-1",
+                        "text": "what is this?",
+                        "reply_mode": "final",
+                        "channel": "chat",
+                        "reply_to": None,
+                    },
+                }
+            )
+            reply = ws.receive_json()
+            assert reply["type"] == "chat_response"
+            assert reply["payload"]["session_id"] == "phone-session-1"
+            assert reply["payload"]["text"] == "Chat acknowledged"
+
+    kwargs = mock.orchestrator.handle_command.call_args.kwargs
+    assert kwargs["session_id"] == "phone-session-1"
+    assert kwargs["text"] == "what is this?"
+    assert kwargs["context"]["mode"] == "phone_surface"
+    assert kwargs["context"]["source"] == "phone_surface"
+    assert _phone_recorded(mock, "chat_request", "allowed")
+
+
+def test_voice_session_start_registers_voice_session():
+    mock = _mock_state_with_supervisor()
+    mock.voice_router = MagicMock()
+
+    with _node_client(mock) as client:
+        with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+            _register_node(ws, node_id="phone-voice", node_type="phone")
+            ws.send_json(
+                {
+                    "type": "voice_session_start",
+                    "hup_version": "1.3.0",
+                    "ts": 1734369923.0,
+                    "payload": {
+                        "stream_id": "voice-stream-1",
+                        "sample_rate": 16000,
+                        "channels": 1,
+                        "language_hint": "en-US",
+                        "mode": "push_to_talk",
+                        "interrupt_policy": "barge_in",
+                        "camera_linked": True,
+                    },
+                }
+            )
+            _flush_with_known_error(ws)
+
+    cfg_call = mock.voice_router.register_voice_config.call_args
+    assert cfg_call.args[0] == "phone-voice"
+    assert cfg_call.args[1]["sample_rate"] == 16000
+    assert cfg_call.args[1]["channels"] == 1
+    mock.voice_router.bind_node_to_session.assert_called_with("phone-voice", "voice-stream-1")
+    assert _phone_recorded(mock, "voice_session_start", "allowed")
+
+
+def test_voice_interrupt_cancels_inflight_tts():
+    mock = _mock_state_with_supervisor()
+    realtime_session = MagicMock()
+    realtime_session.cancel_response = AsyncMock()
+    realtime = MagicMock()
+    realtime.get_session = MagicMock(return_value=realtime_session)
+    realtime._node_to_session = {}
+    voice_router = MagicMock()
+    voice_router._realtime = realtime
+    voice_router._gemini = None
+    mock.voice_router = voice_router
+
+    with _node_client(mock) as client:
+        with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+            _register_node(ws, node_id="phone-interrupt", node_type="phone")
+            ws.send_json(
+                {
+                    "type": "voice_interrupt",
+                    "hup_version": "1.3.0",
+                    "ts": 1734369924.0,
+                    "payload": {"stream_id": "voice-stream-1", "reason": "barge_in"},
+                }
+            )
+            _flush_with_known_error(ws)
+
+    assert realtime_session.cancel_response.await_count == 1
+    assert _phone_recorded(mock, "voice_interrupt", "allowed")
+
+
+def test_genui_event_routes_to_handle_app_action():
+    mock = _mock_state_with_supervisor()
+    app_action_mock = AsyncMock()
+
+    with patch("agents.ui_handlers._handle_app_action", app_action_mock):
+        with _node_client(mock) as client:
+            with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+                _register_node(ws, node_id="phone-genui", node_type="phone")
+                ws.send_json(
+                    {
+                        "type": "genui_event",
+                        "hup_version": "1.3.0",
+                        "ts": 1734369925.0,
+                        "payload": {
+                            "app_id": "feral.notes",
+                            "surface_id": "today",
+                            "event_type": "tap",
+                            "action_id": "approve",
+                            "value": {"action": "approve"},
+                        },
+                    }
+                )
+                _flush_with_known_error(ws)
+
+    kwargs = app_action_mock.await_args.kwargs
+    assert kwargs["app_id"] == "feral.notes"
+    assert kwargs["screen_id"].startswith("feral.notes:today:")
+    assert kwargs["action_id"] == "approve"
+    assert _phone_recorded(mock, "genui_event", "allowed")
+
+
+def test_peripheral_bridge_register_stores_devices():
+    mock = _mock_state_with_supervisor()
+
+    with _node_client(mock) as client:
+        with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+            _register_node(ws, node_id="phone-bridge", node_type="phone")
+            ws.send_json(
+                {
+                    "type": "peripheral_bridge_register",
+                    "hup_version": "1.3.0",
+                    "ts": 1734369926.0,
+                    "payload": {
+                        "bridge_id": "bridge-1",
+                        "platform": "android",
+                        "devices": [
+                            {
+                                "device_id": "smart_glasses_01",
+                                "kind": "glasses",
+                                "protocol": "web_bluetooth",
+                                "capabilities": ["imu", "notifications"],
+                                "status": "connected",
+                                "manifest": {},
+                            }
+                        ],
+                        "expires_at": "2026-04-30T12:00:00Z",
+                    },
+                }
+            )
+            _flush_with_known_error(ws)
+
+    assert mock.device_registry.register_device.called
+    assert mock.devices["bridge-1"]["devices"] == ["smart_glasses_01"]
+    assert _phone_recorded(mock, "peripheral_bridge_register", "allowed")
+
+
+def test_backchannel_request_persists_sqlite(tmp_path):
+    mock = _mock_state_with_supervisor()
+
+    with patch("config.loader.feral_home", return_value=tmp_path):
+        with _node_client(mock) as client:
+            with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+                _register_node(ws, node_id="phone-backchannel", node_type="phone")
+                ws.send_json(
+                    {
+                        "type": "backchannel_request",
+                        "hup_version": "1.3.0",
+                        "ts": 1734369927.0,
+                        "payload": {
+                            "request_id": "bc-1",
+                            "device_id": "phone-backchannel",
+                            "kind": "bug",
+                            "payload": {"summary": "voice dropped mid-turn"},
+                            "status": "pending",
+                        },
+                    }
+                )
+                _flush_with_known_error(ws)
+
+    db_path = tmp_path / "backchannel_requests.db"
+    assert db_path.exists()
+    with sqlite3.connect(str(db_path)) as conn:
+        row = conn.execute(
+            "SELECT id, device_id, kind, status FROM backchannel_requests WHERE id = ?",
+            ("bc-1",),
+        ).fetchone()
+    assert row == ("bc-1", "phone-backchannel", "bug", "pending")
+    assert _phone_recorded(mock, "backchannel_request", "allowed")
+
+
+@pytest.mark.parametrize(
+    "message_type,malformed_payload",
+    [
+        ("chat_request", {"text": "missing session_id"}),
+        ("chat_response", {"session_id": "phone-session-1"}),
+        ("voice_session_start", {"stream_id": "voice-stream-1"}),
+        ("voice_interrupt", {}),
+        ("genui_event", {"app_id": "feral.notes"}),
+        ("peripheral_bridge_register", {"bridge_id": "bridge-1", "platform": "android"}),
+        ("backchannel_request", {"kind": "bug"}),
+    ],
+)
+def test_malformed_phone_payload_sends_protocol_error(message_type, malformed_payload):
+    mock = _mock_state_with_supervisor()
+
+    with _node_client(mock) as client:
+        with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+            _register_node(ws, node_id="phone-malformed", node_type="phone")
+            ws.send_json(
+                {
+                    "type": message_type,
+                    "hup_version": "1.3.0",
+                    "ts": 1734369928.0,
+                    "payload": malformed_payload,
+                }
+            )
+            err = ws.receive_json()
+            assert err["type"] == "error"
+            assert err["payload"]["code"] == 1003
+            assert "payload validation failed" in err["payload"]["message"]

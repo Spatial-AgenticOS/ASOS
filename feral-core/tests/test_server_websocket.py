@@ -418,6 +418,14 @@ class TestSessionErrors:
 def pairing_store_mock():
     store = MagicMock()
     store.verify_device = MagicMock(return_value=None)
+    # P1 added a second credential surface (phone_bearer) on the
+    # DevicePairingStore. The brain's daemon_session credential
+    # resolver tries verify_phone_bearer if verify_device returns
+    # None. A bare MagicMock would auto-spawn a truthy callable that
+    # returns another MagicMock, which the resolver treats as "valid
+    # phone_bearer" — silently bypassing the close-with-4003 path.
+    # Pin the return so unauthorized credentials really reject.
+    store.verify_phone_bearer = MagicMock(return_value=None)
     return store
 
 
