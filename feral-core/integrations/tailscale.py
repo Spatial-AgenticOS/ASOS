@@ -145,24 +145,47 @@ def _run(args: list[str], *, timeout: float = 8.0) -> subprocess.CompletedProces
 
 def _classify_stderr(stderr: str) -> Optional[TailscaleError]:
     """Map common stderr patterns to typed exceptions."""
-    s = (stderr or "").strip().lower()
+    s = (stderr or "").strip()
     if not s:
         return None
+    low = s.lower()
     if (
-        "no such file or directory" in s
-        and ("tailscaled.sock" in s or "/var/run/tailscale" in s or "tailscaled" in s)
+        "no such file or directory" in low
+        and ("tailscaled.sock" in low or "/var/run/tailscale" in low or "tailscaled" in low)
     ):
-        return TailscaleDaemonUnreachable(stderr.strip())
-    if "logged out" in s or "not logged in" in s or "not authenticated" in s:
-        return TailscaleNotLoggedIn(stderr.strip())
-    if "funnel" in s and ("disable" in s or "not enabled" in s or "not allowed" in s):
+        return TailscaleDaemonUnreachable(s)
+    if "logged out" in low or "not logged in" in low or "not authenticated" in low:
+        return TailscaleNotLoggedIn(s)
+    # Tailscale 1.66+ emits this exact phrasing with the per-node enable URL:
+    #     "Funnel is not enabled on your tailnet.
+    #      To enable, visit: https://login.tailscale.com/f/funnel?node=…"
+    # We surface the per-node URL when present (it's a one-click enable
+    # specific to this tailnet); otherwise we fall back to the admin
+    # settings page.
+    if "funnel is not enabled" in low or (
+        "funnel" in low
+        and ("disable" in low or "not enabled" in low or "not allowed" in low)
+    ):
+        # Try to extract the activation URL the CLI printed.
+        import re
+        m = re.search(r"https://login\.tailscale\.com/f/funnel\?node=\S+", s)
+        if m:
+            return TailscaleFunnelDisabledInTailnet(
+                "Funnel is not enabled on your tailnet. "
+                f"Click this one-time enable link: {m.group(0)} "
+                "(it's free; takes 5 seconds), then retry."
+            )
         return TailscaleFunnelDisabledInTailnet(
-            "Funnel is not enabled in your tailnet. "
-            "Visit https://login.tailscale.com/admin/settings/features "
-            "and turn on Funnel, then retry."
+            "Funnel is not enabled on your tailnet. "
+            "Run `tailscale funnel <port>` once interactively to get the "
+            "per-tailnet enable URL, or visit "
+            "https://login.tailscale.com/admin/settings/features and "
+            "turn on Funnel."
         )
-    if "permission denied" in s or "must be run as root" in s or "not in" in s and "group" in s:
-        return TailscalePermissionDenied(stderr.strip())
+    if "permission denied" in low or "must be run as root" in low or (
+        "not in" in low and "group" in low
+    ):
+        return TailscalePermissionDenied(s)
     return None
 
 
@@ -270,35 +293,46 @@ def funnel_url(port: int, *, dns_name: Optional[str] = None) -> str:
 
 
 def funnel_enable(port: int) -> dict:
-    """Run ``tailscale funnel <port> on``. Idempotent — if Funnel is
-    already serving the port we return a success result without
-    reconfiguring.
+    """Enable Tailscale Funnel for ``port`` (background, HTTPS on 443).
+
+    Tailscale 1.66+ replaced the old ``funnel <port> on`` UX with
+    ``funnel --bg <port>`` (background) and ``funnel reset`` (off).
+    We try the modern form first and fall back to the legacy form
+    for very old daemons (<1.50). If both fail with a classified
+    error (e.g. Funnel-not-enabled-in-tailnet), we re-raise so the
+    caller surfaces a remediation URL.
 
     Returns ``{enabled: bool, url: str, port: int}`` on success.
-    Raises typed exceptions on classified failures.
     """
     if port <= 0 or port > 65535:
         raise ValueError(f"port must be 1..65535 (got {port})")
 
-    # Some `tailscale funnel` versions take "<port> on", others take
-    # "on --port=<port>". The "<port> on" form is widely supported on
-    # macOS and Linux 1.50+. Try it first; fall back if the binary
-    # rejects the syntax.
-    proc = _run(["funnel", str(port), "on"], timeout=15.0)
+    # Modern syntax (1.66+): `tailscale funnel --bg <port>`. The
+    # `--bg` flag returns immediately after persisting the serve
+    # config; without it the CLI blocks foreground forever (which is
+    # what trapped the live test).
+    proc = _run(["funnel", "--bg", str(port)], timeout=20.0)
     if proc.returncode != 0:
         classified = _classify_stderr(proc.stderr)
         if classified is not None:
             raise classified
-        # Try the alternate syntax.
-        proc2 = _run(["funnel", "--bg", "on", "--port", str(port)], timeout=15.0)
+        # Legacy fallback for <1.50 daemons that still accept
+        # `funnel <port> on`. Newer CLIs reject this syntax with a
+        # message about "the CLI for serve and funnel has changed",
+        # which we'll classify back to a clean error.
+        proc2 = _run(["funnel", str(port), "on"], timeout=15.0)
         if proc2.returncode != 0:
             classified2 = _classify_stderr(proc2.stderr)
             if classified2 is not None:
                 raise classified2
             raise TailscaleSubprocessFailure(
-                f"tailscale funnel {port} on failed:\n"
-                f"  primary stderr: {proc.stderr.strip()[:300]}\n"
-                f"  fallback stderr: {proc2.stderr.strip()[:300]}"
+                f"tailscale funnel could not be enabled on port {port}.\n"
+                f"  modern syntax (`funnel --bg {port}`) stderr: "
+                f"{proc.stderr.strip()[:300]}\n"
+                f"  legacy syntax (`funnel {port} on`) stderr: "
+                f"{proc2.stderr.strip()[:300]}\n"
+                f"Run `tailscale funnel --help` to inspect your CLI's "
+                f"current syntax."
             )
 
     snap = status()
@@ -312,57 +346,103 @@ def funnel_enable(port: int) -> dict:
 
 
 def funnel_disable(port: int) -> dict:
-    """Run ``tailscale funnel <port> off``. Idempotent."""
+    """Disable Funnel.
+
+    Tailscale 1.66+ uses ``funnel reset`` (clears ALL forwards) — there
+    is no per-port off in the modern CLI. We accept ``port`` as an
+    argument for symmetry with ``funnel_enable`` but it isn't passed
+    through. For older daemons we fall back to ``funnel <port> off``.
+
+    Idempotent: running this when Funnel is already off is a no-op.
+    """
     if port <= 0 or port > 65535:
         raise ValueError(f"port must be 1..65535 (got {port})")
-    proc = _run(["funnel", str(port), "off"], timeout=10.0)
-    if proc.returncode != 0:
-        classified = _classify_stderr(proc.stderr)
-        if classified is not None:
-            raise classified
-        # Most "off" failures mean Funnel was already off; treat as success.
-        if "no" in (proc.stderr or "").lower() and "funnel" in (proc.stderr or "").lower():
-            return {"enabled": False, "port": port}
-        raise TailscaleSubprocessFailure(
-            f"tailscale funnel {port} off failed: rc={proc.returncode} "
-            f"stderr={proc.stderr.strip()[:300]}"
-        )
-    return {"enabled": False, "port": port}
+
+    proc = _run(["funnel", "reset"], timeout=10.0)
+    if proc.returncode == 0:
+        return {"enabled": False, "port": port}
+
+    # Modern reset failed — try legacy "off" form for ancient daemons.
+    classified = _classify_stderr(proc.stderr)
+    proc2 = _run(["funnel", str(port), "off"], timeout=10.0)
+    if proc2.returncode == 0:
+        return {"enabled": False, "port": port}
+
+    # Both failed. If either looks like "Funnel was already off" (no
+    # serve config), treat as success — disabling something that's
+    # already disabled is the desired post-condition.
+    combined = (proc.stderr + " " + proc2.stderr).lower()
+    if (
+        "no serve config" in combined
+        or ("no" in combined and "funnel" in combined and "active" in combined)
+    ):
+        return {"enabled": False, "port": port}
+
+    if classified is not None:
+        raise classified
+    classified2 = _classify_stderr(proc2.stderr)
+    if classified2 is not None:
+        raise classified2
+    raise TailscaleSubprocessFailure(
+        f"tailscale funnel could not be disabled.\n"
+        f"  modern syntax (`funnel reset`) stderr: "
+        f"{proc.stderr.strip()[:300]}\n"
+        f"  legacy syntax (`funnel {port} off`) stderr: "
+        f"{proc2.stderr.strip()[:300]}"
+    )
 
 
 def funnel_status() -> dict:
-    """Read ``tailscale funnel status`` and parse the active forwards.
+    """Read ``tailscale funnel status --json`` and parse active forwards.
 
-    Returns ``{"active": bool, "ports": [int, ...]}``. We don't need
-    the per-port details right now; the brain only ever exposes one
-    port (the brain port).
+    Returns ``{"active": bool, "ports": [int, ...]}``.
+
+    Tailscale 1.66+ supports ``--json`` so we don't have to parse the
+    prose output (which has changed shape several times). The JSON
+    shape is::
+
+        {
+          "TCP": {"443": {"HTTPS": true}},
+          "Web": {"<host>:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:9090"}}}},
+          "AllowFunnel": {"<host>:443": true}
+        }
+
+    We extract the local proxy port from the ``Web.<host>.Handlers``
+    map. Empty ``{}`` JSON means "no serve config" → not active.
     """
-    proc = _run(["funnel", "status"])
+    proc = _run(["funnel", "status", "--json"])
     if proc.returncode != 0:
         classified = _classify_stderr(proc.stderr)
         if classified is not None:
             raise classified
-        # tailscale funnel status returns non-zero if Funnel is fully
-        # off; treat that as "no active ports" rather than an error.
         return {"active": False, "ports": []}
     out = (proc.stdout or "").strip()
-    if not out or "no funnels" in out.lower():
+    if not out:
         return {"active": False, "ports": []}
-    # Extremely lightweight parser: any line containing ":443" implies
-    # Funnel is forwarding 443 → some local port. Pull the local port.
-    ports: list[int] = []
-    for line in out.splitlines():
-        line = line.strip().lower()
-        if "127.0.0.1:" in line or "localhost:" in line:
-            # find last :digits substring
-            tail = line.rsplit(":", 1)[-1]
-            digits = "".join(ch for ch in tail if ch.isdigit())
-            if digits:
-                try:
-                    ports.append(int(digits))
-                except ValueError:
-                    pass
-    return {"active": bool(ports), "ports": ports}
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return {"active": False, "ports": []}
+    if not data:
+        return {"active": False, "ports": []}
+
+    ports: set[int] = set()
+    web = data.get("Web") or {}
+    for _host, conf in web.items():
+        handlers = (conf or {}).get("Handlers") or {}
+        for _path, h in handlers.items():
+            proxy = (h or {}).get("Proxy") or ""
+            # Proxy looks like "http://127.0.0.1:9090" or
+            # "http+insecure://localhost:8443".
+            if ":" in proxy:
+                tail = proxy.rsplit(":", 1)[-1].split("/")[0]
+                digits = "".join(ch for ch in tail if ch.isdigit())
+                if digits:
+                    try:
+                        ports.add(int(digits))
+                    except ValueError:
+                        pass
+    return {"active": bool(ports), "ports": sorted(ports)}
 
 
 __all__ = [

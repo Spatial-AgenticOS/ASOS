@@ -117,7 +117,12 @@ def test_funnel_url_composes_https(monkeypatch):
     assert url == "https://omars-macbook-air-2.tail035783.ts.net"
 
 
-def test_funnel_enable_happy_path(monkeypatch):
+def test_funnel_enable_modern_syntax_happy_path(monkeypatch):
+    """Tailscale 1.66+ syntax: ``tailscale funnel --bg <port>``.
+
+    Verifies the ``--bg`` flag is passed (without it the CLI blocks
+    forever foreground — the bug the live test surfaced).
+    """
     monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/local/bin/tailscale")
     from integrations import tailscale
 
@@ -125,8 +130,8 @@ def test_funnel_enable_happy_path(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        if "funnel" in cmd and "on" in cmd:
-            return _fake_proc(0, stdout="Available on the internet:\nhttps://example.ts.net\n")
+        if "funnel" in cmd and "--bg" in cmd:
+            return _fake_proc(0)
         if "status" in cmd and "--json" in cmd:
             return _fake_proc(0, stdout=SAMPLE_STATUS_JSON)
         return _fake_proc(0)
@@ -135,35 +140,86 @@ def test_funnel_enable_happy_path(monkeypatch):
         result = tailscale.funnel_enable(9090)
     assert result["enabled"] is True
     assert result["url"] == "https://omars-macbook-air-2.tail035783.ts.net"
-    # Verify the first attempt used "<port> on" syntax
-    assert any("on" in c and "9090" in c for c in calls)
+    # First call MUST use the modern --bg <port> form.
+    enable_calls = [c for c in calls if "funnel" in c and "--bg" in c]
+    assert enable_calls, f"expected funnel --bg call, got: {calls}"
+    assert "9090" in enable_calls[0]
+
+
+def test_funnel_enable_falls_back_to_legacy_for_old_daemons(monkeypatch):
+    """If `funnel --bg` is not recognised (theoretical pre-1.66 daemon),
+    fall back to the legacy ``funnel <port> on`` form."""
+    monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/local/bin/tailscale")
+    from integrations import tailscale
+
+    def fake_run(cmd, **kwargs):
+        if "--bg" in cmd:
+            return _fake_proc(1, stderr="Error: unknown flag: --bg")
+        if "on" in cmd and "9090" in cmd:
+            return _fake_proc(0)
+        if "status" in cmd and "--json" in cmd:
+            return _fake_proc(0, stdout=SAMPLE_STATUS_JSON)
+        return _fake_proc(0)
+
+    with patch.object(tailscale.subprocess, "run", side_effect=fake_run):
+        result = tailscale.funnel_enable(9090)
+    assert result["enabled"] is True
 
 
 def test_funnel_enable_funnel_disabled_in_tailnet(monkeypatch):
+    """The modern (1.66+) error format includes a per-node enable URL —
+    we MUST surface that URL in the exception so the operator can
+    one-click enable Funnel for their tailnet."""
     monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/local/bin/tailscale")
     from integrations import tailscale
     with patch.object(
         tailscale.subprocess, "run",
         return_value=_fake_proc(
             1,
-            stderr="error: Funnel is not enabled in your tailnet. enable Funnel in admin",
+            stderr=(
+                "Funnel is not enabled on your tailnet.\n"
+                "To enable, visit:\n\n"
+                "         https://login.tailscale.com/f/funnel?node=nuxis4cNFg11CNTRL\n"
+            ),
         ),
     ):
         with pytest.raises(tailscale.TailscaleFunnelDisabledInTailnet) as exc:
             tailscale.funnel_enable(9090)
-    assert "tailscale.com/admin" in str(exc.value)
+    msg = str(exc.value)
+    assert "https://login.tailscale.com/f/funnel?node=" in msg, (
+        f"per-node enable URL must be surfaced; got: {msg}"
+    )
 
 
-def test_funnel_disable_idempotent(monkeypatch):
+def test_funnel_disable_uses_funnel_reset(monkeypatch):
+    """Tailscale 1.66+: disable is `funnel reset` not `funnel <port> off`."""
     monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/local/bin/tailscale")
     from integrations import tailscale
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return _fake_proc(0)
+
+    with patch.object(tailscale.subprocess, "run", side_effect=fake_run):
+        result = tailscale.funnel_disable(9090)
+    assert result["enabled"] is False
+    assert any("reset" in c for c in calls), (
+        f"expected funnel reset; got calls: {calls}"
+    )
+
+
+def test_funnel_disable_idempotent_when_already_off(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/local/bin/tailscale")
+    from integrations import tailscale
+    # Both reset and legacy off return non-zero "no serve config".
     with patch.object(
         tailscale.subprocess, "run",
-        return_value=_fake_proc(0),
+        return_value=_fake_proc(1, stderr="no serve config"),
     ):
         result = tailscale.funnel_disable(9090)
     assert result["enabled"] is False
-    assert result["port"] == 9090
 
 
 # ── REST endpoint tests ──────────────────────────────────────────
