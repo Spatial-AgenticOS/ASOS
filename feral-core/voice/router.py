@@ -397,6 +397,29 @@ class VoiceRouter:
         self._session_voice_mode.pop(session_id, None)
         logger.info(f"Voice stopped for session {session_id[:8]}")
 
+    # --- Subagent A (realtime GA) additions ---
+    async def open_session(self, session_id: str, mode: str, provider_opts: dict | None = None):
+        """High-level entry point for opening a voice session by mode.
+
+        Dispatches ``mode="openai_realtime"`` to the updated GA proxy.
+        Other modes are wired by their respective subagents.
+        """
+        opts = provider_opts or {}
+        if mode == "openai_realtime":
+            if not self._realtime or not self._realtime.available:
+                logger.warning("openai_realtime requested but proxy unavailable")
+                return None
+            node_id = opts.get("node_id", f"webclient_{session_id[:8]}")
+            model = opts.get("model", "gpt-realtime")
+            voice = opts.get("voice", "marin")
+            rs = await self._realtime.start_session(
+                session_id, node_id, model=model, voice=voice,
+            )
+            return rs
+        logger.debug("open_session: mode=%s not handled by Subagent A", mode)
+        return None
+    # --- end Subagent A additions ---
+
     async def shutdown(self):
         if self._realtime:
             await self._realtime.shutdown()
