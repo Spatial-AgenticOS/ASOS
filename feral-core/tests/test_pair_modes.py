@@ -47,7 +47,7 @@ def env(tmp_path, monkeypatch):
         patch("api.routes.devices.state", mock_state),
     ):
         from api.server import app
-        yield TestClient(app, raise_server_exceptions=False), config, store
+        yield TestClient(app, raise_server_exceptions=True), config, store
 
 
 # ── default mode is localhost; pairing is unavailable ──────────────

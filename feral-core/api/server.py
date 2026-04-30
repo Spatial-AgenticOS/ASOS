@@ -289,6 +289,13 @@ _OPEN_PATHS = frozenset({
     "/api/devices/pair/announce",
     "/api/devices/pair/status",
     "/api/devices/pair/code/claim",
+    # PIN second-factor (pair-pin-confirm PR). The phone calls /check
+    # before rendering the form to learn whether a PIN is required;
+    # /verify_pin is how it submits the PIN before /complete is allowed
+    # to issue a phone_bearer. Both are open-listed because the phone
+    # has the URL token but no API key yet.
+    "/api/devices/pair/check",
+    "/api/devices/pair/verify_pin",
 })
 
 _OPEN_PATH_PREFIXES = (
