@@ -392,7 +392,7 @@ async def test_handle_event_audio_delta_invokes_callback():
         deltas.append((sid, b64, done))
 
     rs = RealtimeSession("sid", "nid", api_key="k", on_audio_delta=on_delta)
-    await rs._handle_event({"type": "response.audio.delta", "delta": "QQ=="})
+    await rs._handle_event({"type": "response.output_audio.delta", "delta": "QQ=="})
     assert deltas == [("sid", "QQ==", False)]
 
 
@@ -739,7 +739,7 @@ async def test_handle_event_audio_done_invokes_delta_with_done_flag():
         calls.append((sid, b64, done))
 
     rs = RealtimeSession("sid", "nid", api_key="k", on_audio_delta=on_delta)
-    await rs._handle_event({"type": "response.audio.done"})
+    await rs._handle_event({"type": "response.output_audio.done"})
     assert calls == [("sid", "", True)]
 
 
@@ -875,9 +875,9 @@ async def test_handle_event_transcript_deltas(monkeypatch):
         calls.append((sid, text, final))
 
     rs = RealtimeSession("sid", "nid", api_key="k", on_transcript=on_tr)
-    await rs._handle_event({"type": "response.audio_transcript.delta", "delta": "partial"})
+    await rs._handle_event({"type": "response.output_audio_transcript.delta", "delta": "partial"})
     await rs._handle_event({
-        "type": "response.audio_transcript.done",
+        "type": "response.output_audio_transcript.done",
         "transcript": "full",
     })
     assert ("sid", "partial", False) in calls

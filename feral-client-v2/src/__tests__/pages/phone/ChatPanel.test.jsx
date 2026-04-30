@@ -1,54 +1,170 @@
-import { describe, it, expect, vi } from "vitest";
-import { act, fireEvent, render } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import ChatPanel from "../../../pages/phone/ChatPanel";
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, fireEvent, act, waitFor } from '@testing-library/react';
+import ChatPanel from '../../../pages/phone/ChatPanel';
 
-function buildShell() {
-  const listeners = new Set();
+let mockSpeechState;
+const mockStart = vi.fn();
+const mockStop = vi.fn();
+const mockReset = vi.fn();
+
+vi.mock('../../../hooks/useWebSpeech', () => ({
+  useWebSpeech: () => mockSpeechState,
+  default: () => mockSpeechState,
+}));
+
+vi.mock('../../../pages/phone/VoiceFullscreen', () => ({
+  default: ({ open, onClose, initialMode }) => (
+    open ? <div data-testid="voice-fullscreen" data-mode={initialMode}>
+      <button onClick={onClose} data-testid="vf-close">Close</button>
+    </div> : null
+  ),
+}));
+
+function defaultSpeechState(overrides = {}) {
   return {
-    shell: {
-      deviceId: "device-1",
-      sendFrame: vi.fn(),
-      subscribeFrame: (listener) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
-    pushFrame: (frame) => {
-      listeners.forEach((listener) => listener(frame));
-    },
+    supported: true, listening: false, transcript: '', interimTranscript: '',
+    start: mockStart, stop: mockStop, reset: mockReset, error: null,
+    ...overrides,
   };
 }
 
-describe("ChatPanel", () => {
-  it("sends chat_request and renders incoming chat_response", async () => {
-    const { shell, pushFrame } = buildShell();
-    const { getByLabelText, getByRole, findByText } = render(
-      <MemoryRouter>
-        <ChatPanel shell={shell} />
-      </MemoryRouter>,
-    );
+describe('ChatPanel', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSpeechState = defaultSpeechState();
+    mockStart.mockClear();
+    mockStop.mockClear();
+    mockReset.mockClear();
+  });
 
-    fireEvent.change(getByLabelText(/chat input/i), {
-      target: { value: "hello brain" },
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('renders the chat log and input field', () => {
+    const { getByTestId } = render(<ChatPanel />);
+    expect(getByTestId('chat-log')).toBeTruthy();
+    expect(getByTestId('chat-input')).toBeTruthy();
+    expect(getByTestId('mic-button')).toBeTruthy();
+    expect(getByTestId('send-button')).toBeTruthy();
+  });
+
+  it('renders default greeting message', () => {
+    const { getByText } = render(<ChatPanel />);
+    expect(getByText('How can I help?')).toBeTruthy();
+  });
+
+  it('mic button has correct aria attributes', () => {
+    const { getByTestId } = render(<ChatPanel />);
+    const mic = getByTestId('mic-button');
+    expect(mic.getAttribute('aria-label')).toBe('Dictate message');
+    expect(mic.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('short-tap mic toggles dictation — starts listening', () => {
+    const { getByTestId } = render(<ChatPanel />);
+    const mic = getByTestId('mic-button');
+    fireEvent.pointerDown(mic);
+    act(() => { vi.advanceTimersByTime(100); });
+    fireEvent.pointerUp(mic);
+    expect(mockStart).toHaveBeenCalled();
+  });
+
+  it('short-tap mic when already listening calls stop', () => {
+    mockSpeechState = defaultSpeechState({ listening: true });
+    const { getByTestId } = render(<ChatPanel />);
+    const mic = getByTestId('mic-button');
+    fireEvent.pointerDown(mic);
+    act(() => { vi.advanceTimersByTime(100); });
+    fireEvent.pointerUp(mic);
+    expect(mockStop).toHaveBeenCalled();
+  });
+
+  it('dictation updates input field as transcript arrives', () => {
+    mockSpeechState = defaultSpeechState({ transcript: 'hello world' });
+    const { getByTestId } = render(<ChatPanel />);
+    expect(getByTestId('chat-input').value).toBe('hello world');
+  });
+
+  it('interim transcript shows in input when no final transcript', () => {
+    mockSpeechState = defaultSpeechState({ interimTranscript: 'hel' });
+    const { getByTestId } = render(<ChatPanel />);
+    expect(getByTestId('chat-input').value).toBe('hel');
+  });
+
+  it('long-press (400ms+) opens VoiceFullscreen', async () => {
+    vi.useRealTimers();
+    const { getByTestId, queryByTestId } = render(<ChatPanel />);
+    // Wait for the dynamic import of VoiceFullscreen to resolve
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(queryByTestId('voice-fullscreen')).toBeNull();
+    const mic = getByTestId('mic-button');
+    fireEvent.pointerDown(mic);
+    await act(async () => { await new Promise((r) => setTimeout(r, 450)); });
+    fireEvent.pointerUp(mic);
+    await waitFor(() => {
+      expect(queryByTestId('voice-fullscreen')).toBeTruthy();
     });
-    fireEvent.click(getByRole("button", { name: /send/i }));
+    expect(getByTestId('voice-fullscreen').getAttribute('data-mode')).toBe('listening');
+    vi.useFakeTimers();
+  });
 
-    expect(shell.sendFrame).toHaveBeenCalledWith(
-      "chat_request",
-      expect.objectContaining({
-        text: "hello brain",
-        channel: "chat",
-      }),
-    );
+  it('unsupported browser renders disabled mic button', () => {
+    mockSpeechState = defaultSpeechState({ supported: false });
+    const { getByTestId } = render(<ChatPanel />);
+    const mic = getByTestId('mic-button');
+    expect(mic.disabled).toBe(true);
+    expect(mic.getAttribute('title')).toContain('not supported');
+  });
 
-    act(() => {
-      pushFrame({
-        type: "chat_response",
-        payload: { text: "hello phone" },
-      });
+  it('recording dot appears when listening', () => {
+    mockSpeechState = defaultSpeechState({ listening: true });
+    const { getByTestId } = render(<ChatPanel />);
+    expect(getByTestId('recording-dot')).toBeTruthy();
+  });
+
+  it('error state shows dictation error with retry link', () => {
+    mockSpeechState = defaultSpeechState({
+      error: { code: 'not-allowed', message: 'Microphone permission denied.' },
     });
+    const { getByTestId, getByText } = render(<ChatPanel />);
+    expect(getByTestId('dictation-error')).toBeTruthy();
+    expect(getByText('Microphone permission denied.')).toBeTruthy();
+    expect(getByTestId('retry-link')).toBeTruthy();
+  });
 
-    expect(await findByText("hello phone")).toBeInTheDocument();
+  it('retry link calls reset and start', () => {
+    mockSpeechState = defaultSpeechState({
+      error: { code: 'not-allowed', message: 'Microphone permission denied.' },
+    });
+    const { getByTestId } = render(<ChatPanel />);
+    fireEvent.click(getByTestId('retry-link'));
+    expect(mockReset).toHaveBeenCalled();
+    expect(mockStart).toHaveBeenCalled();
+  });
+
+  it('sends message via shell.send on form submit', () => {
+    const shell = { send: vi.fn() };
+    const { getByTestId } = render(<ChatPanel shell={shell} />);
+    fireEvent.change(getByTestId('chat-input'), { target: { value: 'test message' } });
+    fireEvent.submit(getByTestId('chat-composer'));
+    expect(shell.send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'chat_request', payload: { text: 'test message' } })
+    );
+  });
+
+  it('calls onSend callback when provided', () => {
+    const onSend = vi.fn();
+    const { getByTestId } = render(<ChatPanel onSend={onSend} />);
+    fireEvent.change(getByTestId('chat-input'), { target: { value: 'callback test' } });
+    fireEvent.submit(getByTestId('chat-composer'));
+    expect(onSend).toHaveBeenCalledWith('callback test');
+  });
+
+  it('clears input after sending', () => {
+    const onSend = vi.fn();
+    const { getByTestId } = render(<ChatPanel onSend={onSend} />);
+    const input = getByTestId('chat-input');
+    fireEvent.change(input, { target: { value: 'clear me' } });
+    fireEvent.submit(getByTestId('chat-composer'));
+    expect(input.value).toBe('');
   });
 });

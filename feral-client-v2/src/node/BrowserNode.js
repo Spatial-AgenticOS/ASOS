@@ -132,6 +132,8 @@ export class BrowserNode {
    * @param {string} [opts.voiceProvider]  — "openai" | "gemini" | "whisper"
    * @param {(phase: string, detail?: any) => void} [opts.onPhase]
    * @param {(err: Error) => void} [opts.onError]
+   * @param {(err: {code: string, message: string, recoverable: boolean}) => void} [opts.onMicError]
+   * @param {(err: {code: string, message: string, recoverable: boolean}) => void} [opts.onVoiceError]
    */
   constructor(opts) {
     if (!opts?.token) throw new Error("BrowserNode: token is required");
@@ -144,6 +146,8 @@ export class BrowserNode {
     this.voiceProvider = opts.voiceProvider || "openai";
     this.onPhase = opts.onPhase || (() => {});
     this.onError = opts.onError || ((e) => console.warn("[BrowserNode]", e));
+    this.onMicError = opts.onMicError || null;
+    this.onVoiceError = opts.onVoiceError || null;
 
     const originHttp = opts.brainUrl || (
       typeof window !== "undefined" ? window.location.origin : ""
@@ -194,8 +198,15 @@ export class BrowserNode {
     });
 
     this._ws.onmessage = (e) => this._onFrame(e);
-    this._ws.onclose = () => {
+    this._ws.onclose = (event) => {
       this.onPhase("closed");
+      if (event.code !== 1000 && event.code !== 1005 && this.onVoiceError) {
+        this.onVoiceError({
+          code: 'WS_CLOSED',
+          message: event.reason || `WebSocket closed unexpectedly (code ${event.code})`,
+          recoverable: true,
+        });
+      }
     };
 
     this._visibilityHandler = () => {
@@ -247,19 +258,22 @@ export class BrowserNode {
   async startMic() {
     if (this._workletNode) return;
     if (!navigator.mediaDevices?.getUserMedia) {
-      this.onError(new Error("getUserMedia not available"));
+      const micErr = {
+        code: 'MIC_UNAVAILABLE',
+        message: 'getUserMedia not available on this device',
+        recoverable: false,
+      };
+      if (this.onMicError) this.onMicError(micErr);
+      this.onError(new Error(micErr.message));
       return;
     }
     if (!this._voiceConfigSent) {
-      // Always send voice_config before the first audio_chunk so the
-      // Brain knows which realtime provider to wire.
       await this.sendVoiceConfig();
     }
     try {
       this._mediaStream = this._mediaStream || await navigator.mediaDevices.getUserMedia({
         audio: true,
       });
-      // AudioContext + Worklet
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       this._audioContext = new AudioCtx();
       const blob = new Blob([WORKLET_SOURCE], { type: "application/javascript" });
@@ -276,12 +290,17 @@ export class BrowserNode {
       });
       this._workletNode.port.onmessage = (event) => this._pushAudioChunk(event.data);
       source.connect(this._workletNode);
-      // Connect to a silent gain so the graph actually runs in some browsers.
       const silent = this._audioContext.createGain();
       silent.gain.value = 0;
       this._workletNode.connect(silent).connect(this._audioContext.destination);
       this.onPhase("mic_streaming");
     } catch (err) {
+      const micErr = {
+        code: err.name === 'NotAllowedError' ? 'MIC_PERMISSION_DENIED' : 'MIC_START_FAILED',
+        message: err.message || 'Microphone failed to start',
+        recoverable: err.name !== 'NotAllowedError',
+      };
+      if (this.onMicError) this.onMicError(micErr);
       this.onError(err);
     }
   }
@@ -487,6 +506,16 @@ export class BrowserNode {
     if (type === "action") {
       this._handleAction(frame.payload || {});
       return;
+    }
+    if (type === "voice_error" || type === "error") {
+      const p = frame.payload || {};
+      if (this.onVoiceError && (type === "voice_error" || p.scope === "voice")) {
+        this.onVoiceError({
+          code: p.code || 'PROVIDER_ERROR',
+          message: p.message || 'Voice session error',
+          recoverable: p.recoverable !== false,
+        });
+      }
     }
     this.onPhase("frame", frame);
   }

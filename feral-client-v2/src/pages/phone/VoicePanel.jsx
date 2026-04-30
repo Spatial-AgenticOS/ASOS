@@ -1,122 +1,84 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { useOutletContext } from "react-router-dom";
-import StatusDot from "../../ui/StatusDot";
+/**
+ * VoicePanel — the "Voice" tab content on the phone.
+ *
+ * Shows a prominent "Start voice" button that opens VoiceFullscreen,
+ * plus a scrollable session transcript history below.
+ *
+ * Consumes the shell context from a parent provider (same pattern as
+ * ChatPanel / SettingsPanel). The shell must expose:
+ *   - shell.send(type, payload)
+ *   - shell.onFrame(cb) → unsubscribe fn
+ *   - shell.voice_config  (optional, for mode display)
+ *   - shell.node           (optional, BrowserNode instance)
+ */
+import { useState, useCallback } from 'react';
+import { VoiceFullscreen } from './VoiceFullscreen';
 
-function transcriptLineFromFrame(frame) {
-  const payload = frame?.payload || {};
-  if (typeof payload.transcript === "string" && payload.transcript.trim()) {
-    return payload.transcript.trim();
-  }
-  if (payload.channel === "voice" && typeof payload.text === "string" && payload.text.trim()) {
-    return payload.text.trim();
-  }
-  return "";
-}
+export default function VoicePanel({ shell }) {
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
+  const [history, setHistory] = useState([]);
 
-export default function VoicePanel({ shell: shellProp }) {
-  const outletShell = useOutletContext();
-  const shell = shellProp || outletShell || {};
-  const [toggleMic, setToggleMic] = useState(false);
-  const [holdMic, setHoldMic] = useState(false);
-  const [vadActive, setVadActive] = useState(false);
-  const [transcript, setTranscript] = useState([]);
-
-  const micActive = toggleMic || holdMic;
-
-  useEffect(() => {
-    if (!shell?.subscribeFrame) return () => {};
-    return shell.subscribeFrame((frame) => {
-      if (frame?.type === "voice_vad") {
-        setVadActive(!!frame?.payload?.speaking);
-        return;
-      }
-      if (frame?.type !== "chat_response") return;
-      const line = transcriptLineFromFrame(frame);
-      if (!line) return;
-      setTranscript((prev) => [{
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        text: line,
-      }, ...prev].slice(0, 20));
-    });
+  const handleOpen = useCallback(() => {
+    setFullscreenOpen(true);
+    if (shell?.send) {
+      shell.send('voice_session_start', {
+        mode: shell?.voice_config?.mode || 'openai_realtime',
+      });
+    }
   }, [shell]);
 
-  useEffect(() => {
-    const node = shell?.node;
-    if (!node) return;
-    if (micActive) {
-      node.startMic?.().catch(() => {});
-      setVadActive(true);
-      return;
-    }
-    node.stopMic?.().catch(() => {});
-    setVadActive(false);
-  }, [micActive, shell]);
-
-  const interrupt = () => {
-    shell?.sendFrame?.("voice_interrupt", {
-      stream_id: `voice-${shell.deviceId || "session"}`,
-      reason: "user_interrupt",
-    });
-  };
-
-  const vadTone = useMemo(() => (vadActive ? "live" : "off"), [vadActive]);
+  const handleClose = useCallback(() => {
+    setFullscreenOpen(false);
+  }, []);
 
   return (
-    <section data-testid="voice-panel" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-        <StatusDot tone={vadTone} pulse={vadActive} label={`VAD ${vadActive ? "active" : "idle"}`} />
-        <span>VAD {vadActive ? "active" : "idle"}</span>
-      </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button
-          type="button"
-          className={`v2-btn ${toggleMic ? "v2-btn--primary" : ""}`.trim()}
-          aria-pressed={toggleMic}
-          onClick={() => setToggleMic((prev) => !prev)}
-        >
-          {toggleMic ? "Tap mic on" : "Tap mic off"}
-        </button>
-        <button
-          type="button"
-          className={`v2-btn ${holdMic ? "v2-btn--primary" : ""}`.trim()}
-          onMouseDown={() => setHoldMic(true)}
-          onMouseUp={() => setHoldMic(false)}
-          onMouseLeave={() => setHoldMic(false)}
-          onTouchStart={() => setHoldMic(true)}
-          onTouchEnd={() => setHoldMic(false)}
-        >
-          Hold to talk
-        </button>
-        <button
-          type="button"
-          className="v2-btn"
-          onClick={interrupt}
-        >
-          Interrupt
-        </button>
-      </div>
-      <div
+    <div data-testid="voice-panel" style={{ padding: 16, height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <button
+        data-testid="start-voice-button"
+        onClick={handleOpen}
         style={{
-          borderRadius: 10,
-          border: "1px solid rgba(255,255,255,0.08)",
-          background: "rgba(255,255,255,0.02)",
-          minHeight: 120,
-          padding: 10,
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
+          width: '100%',
+          padding: '18px 0',
+          fontSize: 17,
+          fontWeight: 600,
+          color: '#fff',
+          background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
+          border: 'none',
+          borderRadius: 14,
+          cursor: 'pointer',
+          marginBottom: 20,
         }}
       >
-        {transcript.length === 0 ? (
-          <p className="v2-p v2-p--muted" style={{ margin: 0 }}>
-            Voice transcripts appear here as responses arrive.
+        Start voice
+      </button>
+
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        {history.length === 0 && (
+          <p style={{ textAlign: 'center', opacity: 0.4, fontSize: 14 }}>
+            No voice sessions yet
           </p>
-        ) : (
-          transcript.map((line) => (
-            <div key={line.id}>{line.text}</div>
-          ))
         )}
+        {history.map((entry, i) => (
+          <div
+            key={i}
+            style={{
+              padding: '8px 0',
+              borderBottom: '1px solid rgba(255,255,255,0.06)',
+              fontSize: 14,
+            }}
+          >
+            <span style={{ opacity: 0.5, marginRight: 8 }}>{entry.role === 'user' ? 'You' : 'Brain'}:</span>
+            {entry.text}
+          </div>
+        ))}
       </div>
-    </section>
+
+      <VoiceFullscreen
+        open={fullscreenOpen}
+        onClose={handleClose}
+        initialMode="listening"
+        shell={shell}
+      />
+    </div>
   );
 }
