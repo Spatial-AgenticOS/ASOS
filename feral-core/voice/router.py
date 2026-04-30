@@ -73,11 +73,15 @@ class VoiceRouter:
     # ------------------------------------------------------------------
 
     def _resolve_provider(self, node_id: str) -> str:
-        """Return 'gemini', 'openai', or 'whisper' for a given node."""
+        """Return 'gemini', 'openai', 'chained', or 'whisper' for a given node."""
         cfg = self._node_voice_config.get(node_id, {})
 
         if cfg.get("mode") == "whisper":
             return "whisper"
+        # --- Subagent B: chained mode resolution ---
+        if cfg.get("mode") == "chained":
+            return "chained"
+        # --- end Subagent B ---
 
         explicit = cfg.get("voice_provider", "").lower()
         if explicit == "gemini":
@@ -98,8 +102,12 @@ class VoiceRouter:
         return "whisper"
 
     def _resolve_session_provider(self, session_id: str) -> str:
-        """Return 'gemini', 'openai', or 'whisper' for a web-client session."""
+        """Return 'gemini', 'openai', 'chained', or 'whisper' for a web-client session."""
         mode = self._session_voice_mode.get(session_id, "")
+        # --- Subagent B: chained mode session resolution ---
+        if mode == "chained":
+            return "chained"
+        # --- end Subagent B ---
         if mode != "realtime":
             return "whisper"
 
@@ -154,6 +162,17 @@ class VoiceRouter:
                 await rs.send_audio(audio_b64)
             return
 
+        # --- Subagent B: chained pipeline audio routing ---
+        if provider == "chained":
+            await self.handle_chained_audio(
+                session_id=session_id,
+                audio_b64=audio_b64,
+                chunk_index=chunk_index,
+                is_final=is_final,
+            )
+            return
+        # --- end Subagent B ---
+
         await self._handle_whisper_path(
             session_id=session_id,
             audio_b64=audio_b64,
@@ -191,6 +210,17 @@ class VoiceRouter:
             if rs and rs.connected:
                 await rs.send_audio(audio_b64)
             return
+
+        # --- Subagent B: chained pipeline audio routing (client) ---
+        if provider == "chained":
+            await self.handle_chained_audio(
+                session_id=session_id,
+                audio_b64=audio_b64,
+                chunk_index=chunk_index,
+                is_final=is_final,
+            )
+            return
+        # --- end Subagent B ---
 
         await self._handle_whisper_path(
             session_id=session_id,
@@ -394,11 +424,119 @@ class VoiceRouter:
             if sid_for_node:
                 await self._realtime.stop_session(sid_for_node)
 
+        # --- Subagent B: close chained session ---
+        if hasattr(self, "_chained") and self._chained:
+            await self._chained.close_session(session_id)
+        # --- end Subagent B ---
+
         self._session_voice_mode.pop(session_id, None)
         logger.info(f"Voice stopped for session {session_id[:8]}")
+
+    # --- Subagent B (chained pipeline) additions ---
+
+    def set_chained_pipeline(self, pipeline) -> None:
+        """Inject ChainedVoicePipeline after construction."""
+        self._chained = pipeline
+
+    async def open_chained_session(
+        self, session_id: str, provider_opts: dict | None = None
+    ):
+        """Create a chained STT→LLM→TTS session with configured providers.
+
+        Called when ``mode="chained"`` is received in a
+        ``voice_session_start`` envelope.  Reads provider choices from
+        ``provider_opts`` (falls back to settings keys
+        ``voice.chained.stt_provider``, ``voice.chained.tts_provider``).
+        """
+        if not hasattr(self, "_chained") or self._chained is None:
+            logger.warning("Chained pipeline not available")
+            return None
+
+        opts = provider_opts or {}
+
+        from voice.stt_providers import get_stt_provider
+        from voice.tts_providers import get_tts_provider
+
+        stt_name = opts.get("stt_provider", "deepgram")
+        tts_name = opts.get("tts_provider", "openai")
+        stt_model = opts.get("stt_model", "nova-3")
+        tts_model = opts.get("tts_model", "gpt-4o-mini-tts")
+        tts_voice = opts.get("tts_voice", "alloy")
+
+        import os
+        stt_keys = {
+            "deepgram": os.getenv("DEEPGRAM_API_KEY", ""),
+            "openai_whisper": os.getenv("OPENAI_API_KEY", ""),
+            "groq_whisper": os.getenv("GROQ_API_KEY", ""),
+        }
+        tts_keys = {
+            "openai": os.getenv("OPENAI_API_KEY", ""),
+            "elevenlabs": os.getenv("ELEVENLABS_API_KEY", ""),
+        }
+
+        stt_provider = get_stt_provider(
+            stt_name,
+            api_key=stt_keys.get(stt_name, ""),
+            model=stt_model,
+        )
+        tts_kwargs = {"api_key": tts_keys.get(tts_name, "")}
+        if tts_name == "openai":
+            tts_kwargs["model"] = tts_model
+            tts_kwargs["voice"] = tts_voice
+        elif tts_name == "elevenlabs":
+            if opts.get("tts_voice_id"):
+                tts_kwargs["voice_id"] = opts["tts_voice_id"]
+
+        tts_provider_inst = get_tts_provider(tts_name, **tts_kwargs)
+
+        send_fn = self._send_to_session
+
+        async def _send_frame(sid, frame):
+            if send_fn:
+                from models.protocol import FeralMessage
+                msg = FeralMessage(
+                    session_id=sid,
+                    hop="brain",
+                    type=frame["type"],
+                    payload=frame.get("payload", {}),
+                )
+                await send_fn(sid, msg)
+
+        session = await self._chained.open_session(
+            session_id=session_id,
+            stt_provider=stt_provider,
+            tts_provider=tts_provider_inst,
+            llm_handle=self._orchestrator,
+            send_frame=_send_frame,
+        )
+        self._session_voice_mode[session_id] = "chained"
+        return session
+
+    async def handle_chained_audio(
+        self,
+        session_id: str,
+        audio_b64: str,
+        chunk_index: int = 0,
+        is_final: bool = False,
+    ):
+        """Route audio into the chained pipeline for a session."""
+        if not hasattr(self, "_chained") or self._chained is None:
+            return
+        await self._chained.handle_audio(
+            session_id=session_id,
+            audio_b64=audio_b64,
+            chunk_index=chunk_index,
+            is_final=is_final,
+        )
+
+    # --- end Subagent B additions ---
 
     async def shutdown(self):
         if self._realtime:
             await self._realtime.shutdown()
         if self._gemini:
             await self._gemini.shutdown()
+        # --- Subagent B: shutdown chained pipeline ---
+        if hasattr(self, "_chained") and self._chained:
+            await self._chained.shutdown()
+        # --- end Subagent B ---
