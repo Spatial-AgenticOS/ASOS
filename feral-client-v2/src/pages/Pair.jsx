@@ -40,12 +40,21 @@ export default function Pair() {
   const [node, setNode] = useState(null);
   const connectInFlightRef = useRef(false);
 
+  // pair-pin-confirm PR — PIN second factor.
+  const [pinRequired, setPinRequired] = useState(null); // null = not yet checked
+  const [pinLength, setPinLength] = useState(4);
+  const [pinInput, setPinInput] = useState("");
+  const [pinVerified, setPinVerified] = useState(false);
+  const [pinBusy, setPinBusy] = useState(false);
+
   useEffect(() => {
     return () => {
       if (node) node.stop().catch(() => {});
     };
   }, [node]);
 
+  // Phone-as-peer: detect existing phone_bearer in IndexedDB → restore
+  // paired view directly without going through the pair form.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -75,6 +84,65 @@ export default function Pair() {
       cancelled = true;
     };
   }, [token]);
+
+  // PIN second-factor: ask the brain whether THIS token requires a PIN
+  // (open-listed endpoint, leaks nothing beyond pin-or-not).
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/devices/pair/check?t=${encodeURIComponent(token)}`,
+          { credentials: "same-origin" },
+        );
+        if (!r.ok) return;
+        const data = await r.json();
+        if (cancelled) return;
+        setPinRequired(Boolean(data?.pin_required));
+        if (data?.pin_length) setPinLength(Number(data.pin_length));
+      } catch {
+        // Silent; pair can still try and the brain will reject if needed.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const verifyPin = useCallback(async () => {
+    if (!token || !pinInput) return;
+    setPinBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/devices/pair/verify_pin", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ token, pin: pinInput }),
+      });
+      if (r.ok) {
+        setPinVerified(true);
+        return;
+      }
+      const data = await r.json().catch(() => ({}));
+      const code = data?.detail?.code;
+      if (code === "wrong_pin") {
+        setError("Wrong PIN. Check the numbers shown on the FERAL Mac.");
+      } else if (code === "exhausted") {
+        setError("Too many wrong attempts. Ask the FERAL Mac to generate a new pair URL.");
+      } else if (code === "expired") {
+        setError("This pair URL has expired. Ask for a fresh one.");
+      } else if (code === "no_pin_required") {
+        setPinVerified(true);
+      } else {
+        setError(`Could not verify PIN (${r.status}).`);
+      }
+      setPinInput("");
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setPinBusy(false);
+    }
+  }, [token, pinInput]);
 
   const connectWithBearer = useCallback(async (bearer, onPhase) => {
     const n = new BrowserNode({
@@ -118,7 +186,10 @@ export default function Pair() {
     };
   }, [connectWithBearer, isBootstrapped, node, resumeRecord, token]);
 
-  const canPair = !!token && isBootstrapped && !resumeRecord && phase === "idle";
+  // PIN gate must be passed (or no PIN required) AND IDB bootstrap
+  // must finish AND no resume record AND phase idle.
+  const pinGateOpen = pinRequired === false || pinVerified;
+  const canPair = !!token && isBootstrapped && !resumeRecord && phase === "idle" && pinGateOpen;
 
   const pair = useCallback(async () => {
     if (!canPair || connectInFlightRef.current) return;
@@ -319,6 +390,48 @@ export default function Pair() {
           tapped "Allow" below.
         </p>
 
+        {/* PIN second-factor gate (pair-pin-confirm PR). When the
+            pair URL was issued with require_pin=true, this block
+            appears BEFORE the permission toggles. The user must
+            enter the 4-digit PIN shown on the FERAL Mac dashboard
+            before "Pair this device" becomes enabled. */}
+        {pinRequired === true && !pinVerified && (
+          <div style={{ marginTop: 14 }} data-testid="pair-pin-form">
+            <div style={pinHelpBox}>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <ShieldCheck size={13} aria-hidden="true" />
+                <strong>Enter the PIN shown on FERAL</strong>
+              </div>
+              <p style={{ margin: "0 0 10px", fontSize: 13, opacity: 0.8 }}>
+                The FERAL Mac is showing a {pinLength}-digit number.
+                Type it below before this device can pair.
+              </p>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern={`[0-9]{${pinLength}}`}
+                maxLength={pinLength}
+                placeholder={"•".repeat(pinLength)}
+                value={pinInput}
+                onChange={(e) => setPinInput(e.target.value.replace(/[^0-9]/g, ""))}
+                disabled={pinBusy}
+                style={pinInputStyle}
+                data-testid="pair-pin-input"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={verifyPin}
+                disabled={pinBusy || pinInput.length !== pinLength}
+                style={{ ...btnPrimary, marginLeft: 8 }}
+                data-testid="pair-pin-submit"
+              >
+                {pinBusy ? "Checking…" : "Verify"}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
           <PermissionToggle
             label="Share location"
@@ -343,8 +456,14 @@ export default function Pair() {
             onClick={pair}
             disabled={!canPair}
             style={btnPrimary}
+            data-testid="pair-pair-button"
           >
-            <Zap size={14} aria-hidden="true" /> {phase === "idle" ? "Pair this device" : phase}
+            <Zap size={14} aria-hidden="true" />{" "}
+            {phase === "idle"
+              ? (pinRequired === true && !pinVerified
+                  ? "Enter PIN to continue"
+                  : "Pair this device")
+              : phase}
           </button>
         </div>
 
@@ -500,6 +619,28 @@ const toggleRow = {
   border: "1px solid rgba(255,255,255,0.08)",
   background: "rgba(255,255,255,0.04)",
   fontSize: 14,
+};
+
+const pinHelpBox = {
+  padding: 14,
+  borderRadius: 12,
+  border: "1px solid rgba(255, 213, 87, 0.3)",
+  background: "rgba(255, 213, 87, 0.06)",
+  color: "#FFE9A7",
+};
+
+const pinInputStyle = {
+  fontSize: 24,
+  letterSpacing: "0.4em",
+  padding: "10px 14px",
+  width: "8.5em",
+  textAlign: "center",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.16)",
+  background: "rgba(0,0,0,0.3)",
+  color: "white",
+  fontFamily: "ui-monospace, SFMono-Regular, monospace",
+  outline: "none",
 };
 
 const bulletList = {

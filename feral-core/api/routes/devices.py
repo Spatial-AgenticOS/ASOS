@@ -496,17 +496,40 @@ async def pair_device_qr(request: Request, name: str = "unnamed", mode: str = "w
 
 
 @router.get("/api/devices/pair/url")
-async def pair_device_url(request: Request, name: str = "unnamed"):
+async def pair_device_url(
+    request: Request,
+    name: str = "unnamed",
+    pin: bool = False,
+):
     """Return the web-pair URL + token WITHOUT an image — handy for tests
-    and for the ``/pair`` landing page needing the token to render."""
+    and for the ``/pair`` landing page needing the token to render.
+
+    ``pin=true`` (pair-pin-confirm PR) requests a 4-digit PIN second
+    factor. When set, the response includes a ``pin`` field with the
+    plaintext PIN — the dashboard MUST show it to the operator AT
+    ISSUE TIME. After the response returns, the PIN can only be
+    verified, not retrieved.
+    """
     store = state.device_pairing_store
     if not store:
         raise HTTPException(status_code=503, detail="Pairing store not initialized")
     try:
-        result = store.pair_device(name, kind="browser")
-        return _pair_payload(result)
+        result = store.pair_device(
+            name,
+            kind="browser",
+            require_pin=bool(pin),
+        )
+        payload = _pair_payload(result)
     except PairUnavailable as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    payload["pin_required"] = result.get("pin_required", False)
+    if result.get("pin"):
+        # Plaintext PIN included for the operator's dashboard ONCE.
+        # Phone never sees this in any subsequent request — the form
+        # learns that a PIN is required via /api/devices/pair/check
+        # and prompts the user to enter it manually.
+        payload["pin"] = result["pin"]
+    return payload
 
 
 # ─────────────────────────────────────────────
@@ -610,6 +633,61 @@ async def pair_code_claim(request: Request):
     }
 
 
+# ─────────────────────────────────────────────
+# PIN second-factor (pair-pin-confirm PR)
+# ─────────────────────────────────────────────
+
+
+@router.get("/api/devices/pair/check")
+async def pair_device_check(t: str = ""):
+    """Phone calls this BEFORE rendering the pair form.
+
+    Returns {pin_required, pin_length}. Open-listed (the response
+    leaks nothing beyond pin-or-not, harmless given the phone has the
+    URL token). Unknown tokens look the same as no-PIN tokens.
+    """
+    store = state.device_pairing_store
+    if not store:
+        raise HTTPException(status_code=503, detail="Pairing store not initialized")
+    return {
+        "pin_required": store.token_requires_pin(t or ""),
+        "pin_length": store.PIN_DIGITS,
+    }
+
+
+@router.post("/api/devices/pair/verify_pin")
+async def pair_device_verify_pin(body: dict):
+    """Phone submits the PIN before completing the pair."""
+    token = (body or {}).get("token", "").strip()
+    pin = str((body or {}).get("pin", "")).strip()
+    if not token or not pin:
+        raise HTTPException(status_code=400, detail="token and pin required")
+
+    store = state.device_pairing_store
+    if not store:
+        raise HTTPException(status_code=503, detail="Pairing store not initialized")
+
+    ok, reason = store.verify_pin(token, pin)
+    if ok:
+        return {"ok": True, "verified": True}
+
+    if reason == "wrong_pin":
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "wrong_pin",
+                "attempts_remaining": f"capped at {store.PIN_MAX_ATTEMPTS}",
+            },
+        )
+    if reason == "no_pin_required":
+        raise HTTPException(status_code=409, detail={"code": "no_pin_required"})
+    if reason in ("exhausted", "expired", "unknown_token"):
+        raise HTTPException(status_code=404, detail={"code": reason})
+    raise HTTPException(status_code=400, detail={"code": "verification_failed"})
+
+
+
+
 @router.post("/api/devices/pair/prune")
 async def prune_unclaimed_pairings(body: dict = None):
     """Bulk-revoke pairing tokens that were issued but never attached.
@@ -646,6 +724,15 @@ async def pair_device_complete(body: dict):
     store = state.device_pairing_store
     if not store:
         raise HTTPException(status_code=503, detail="Pairing store not initialized")
+    # PIN gate (pair-pin-confirm PR): tokens with require_pin=True must
+    # have called /verify_pin first; legacy tokens (no PIN) skip the
+    # gate so backward-compat is preserved. Unknown-token check still
+    # fires next so 404 contract is preserved.
+    if store.token_requires_pin(token) and not store.token_pin_verified(token):
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "pin_not_verified"},
+        )
     device_id = store.mark_claimed(token)
     if device_id is None:
         raise HTTPException(status_code=404, detail="unknown pairing token")
