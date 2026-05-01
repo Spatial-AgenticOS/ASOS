@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { waitFor } from '@testing-library/react';
+import { act, waitFor } from '@testing-library/react';
 import { Routes, Route } from 'react-router-dom';
 import { renderV2 } from '../_helpers/renderV2';
 
@@ -35,6 +35,12 @@ describe('AppSurface', () => {
   beforeEach(() => {
     socketListener = null;
     fakeSocket.subscribe.mockClear();
+    fakeSocket.subscribe.mockImplementation((fn) => {
+      socketListener = fn;
+      return () => {
+        if (socketListener === fn) socketListener = null;
+      };
+    });
   });
 
   it('fetches the manifest + opens the entry surface + renders the tree inside a sandboxed iframe', async () => {
@@ -103,13 +109,18 @@ describe('AppSurface', () => {
     const iframe = await findByTestId('v2-appsurface-iframe');
     expect(iframe.getAttribute('srcdoc') || '').toContain('before patch');
     expect(fakeSocket.subscribe).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(socketListener).not.toBeNull();
+    });
 
-    socketListener?.({
-      type: 'sdui_patch',
-      payload: {
-        screen_id: 'demo-app:home:v2-user',
-        patches: [{ op: 'replace', path: '/children/0/value', value: 'after patch' }],
-      },
+    await act(async () => {
+      socketListener?.({
+        type: 'sdui_patch',
+        payload: {
+          screen_id: 'demo-app:home:v2-user',
+          patches: [{ op: 'replace', path: '/children/0/value', value: 'after patch' }],
+        },
+      });
     });
 
     await waitFor(() => {
