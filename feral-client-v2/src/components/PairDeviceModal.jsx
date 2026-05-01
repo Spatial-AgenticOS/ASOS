@@ -102,8 +102,8 @@ export default function PairDeviceModal({ open, onClose, onPaired, onTokenIssued
       />
       <div className="v2-pair-body">
         {tab === 'web_phone' && <WebPhoneTab onIssue={trackIssue} />}
-        {tab === 'daemon' && <DaemonTokenTab onPaired={onPaired} onIssue={trackIssue} />}
-        {tab === 'app_qr' && <AppQRTab />}
+        {tab === 'daemon' && <DaemonTokenTab onIssue={trackIssue} />}
+        {tab === 'app_qr' && <AppQRTab onIssue={trackIssue} />}
         {tab === 'ble' && <BLETab onPaired={onPaired} />}
       </div>
     </Modal>
@@ -209,7 +209,7 @@ function WebPhoneTab({ onIssue }) {
   );
 }
 
-function DaemonTokenTab({ onPaired, onIssue }) {
+function DaemonTokenTab({ onIssue }) {
   const [pair, setPair] = useState(null);
   const [nodeId, setNodeId] = useState('');
   const [error, setError] = useState(null);
@@ -244,13 +244,12 @@ function DaemonTokenTab({ onPaired, onIssue }) {
     try {
       const body = await promise;
       setPair(body);
-      if (onPaired) onPaired({ source: 'daemon', ...body });
     } catch (err) {
       setError(err?.message || 'failed');
     } finally {
       setBusy(false);
     }
-  }, [nodeId, onPaired, onIssue]);
+  }, [nodeId, onIssue]);
 
   const brainUrl = typeof window !== 'undefined' ? window.location.origin : '';
   const wsUrl = brainUrl.replace(/^http/, 'ws') + '/v1/node';
@@ -334,10 +333,15 @@ function OneLiner({ id, label, cmd, copied, onCopy }) {
   );
 }
 
-function AppQRTab() {
+function AppQRTab({ onIssue }) {
+  const handleTokenIssued = useCallback((deviceId) => {
+    if (!deviceId) return;
+    onIssue?.(Promise.resolve({ device_id: deviceId }));
+  }, [onIssue]);
+
   return (
     <div className="v2-pair-qr">
-      <DeviceQRCode size={240} mode="app" />
+      <DeviceQRCode size={240} mode="app" onTokenIssued={handleTokenIssued} />
       <div className="v2-p v2-p--muted">
         <QrCode size={13} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
         Scan from the FERAL iOS or Android app. The QR encodes
