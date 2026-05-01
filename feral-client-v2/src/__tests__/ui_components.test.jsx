@@ -109,7 +109,9 @@ describe('DeviceQRCode', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
       ok: true, status: 200,
-      headers: { get: () => 'image/png' },
+      headers: {
+        get: (name) => (name === 'Content-Type' ? 'image/png' : null),
+      },
       blob: () => Promise.resolve(new Blob(['x'], { type: 'image/png' })),
       json: () => Promise.resolve({}),
       text: () => Promise.resolve(''),
@@ -129,6 +131,25 @@ describe('DeviceQRCode', () => {
   it('fetches and renders a PNG when no value prop is passed', async () => {
     const { findByAltText } = render(<DeviceQRCode size={180} />);
     expect(await findByAltText(/Device pairing QR code/i)).toBeInTheDocument();
+  });
+
+  it('reports issued device ids from response headers', async () => {
+    const onTokenIssued = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+      ok: true, status: 200,
+      headers: {
+        get: (name) => {
+          if (name === 'Content-Type') return 'image/png';
+          if (name === 'X-Feral-Device-Id') return 'dev-qr-1';
+          return null;
+        },
+      },
+      blob: () => Promise.resolve(new Blob(['x'], { type: 'image/png' })),
+      json: () => Promise.resolve({}),
+      text: () => Promise.resolve(''),
+    })));
+    render(<DeviceQRCode onTokenIssued={onTokenIssued} />);
+    await waitFor(() => expect(onTokenIssued).toHaveBeenCalledWith('dev-qr-1'));
   });
 
   it('renders error state when the API call rejects', async () => {
