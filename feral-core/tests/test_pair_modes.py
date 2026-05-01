@@ -54,19 +54,25 @@ def env(tmp_path, monkeypatch):
 
 
 def test_default_mode_is_localhost_and_pair_url_is_unavailable(env):
-    c, config, _ = env
+    c, config, store = env
     assert config.access_pairing_mode == "localhost"
+    before = len(store.list_devices())
 
     r = c.get("/api/devices/pair/url?name=phone-A")
     assert r.status_code == 409, r.text
     body = r.json()
     assert "Mode B" in body["detail"] or "localhost" in body["detail"].lower()
+    # 409 responses must not leak orphan rows in paired_devices.
+    assert len(store.list_devices()) == before
 
 
 def test_pair_qr_returns_409_in_localhost(env):
-    c, _, _ = env
+    c, _, store = env
+    before = len(store.list_devices())
     r = c.get("/api/devices/pair/qr?name=phone-A")
     assert r.status_code == 409, r.text
+    # 409 responses must not leak orphan rows in paired_devices.
+    assert len(store.list_devices()) == before
 
 
 # ── Mode A — LAN ────────────────────────────────────────────────────
@@ -95,12 +101,14 @@ def test_mode_local_emits_lan_url(env, monkeypatch):
 
 
 def test_mode_local_no_lan_ip_returns_409(env, monkeypatch):
-    c, config, _ = env
+    c, config, store = env
     config.update_settings("access", "pairing_mode", "local")
     monkeypatch.setattr("api.routes.devices._detect_lan_ip", lambda: "")
+    before = len(store.list_devices())
     r = c.get("/api/devices/pair/url?name=phone-LAN")
     assert r.status_code == 409
     assert "LAN IP not detected" in r.json()["detail"]
+    assert len(store.list_devices()) == before
 
 
 def test_mode_local_emits_brain_port_not_hardcoded_9090(env, monkeypatch):
@@ -141,14 +149,16 @@ def test_mode_remote_falls_back_to_public_base_url(env, monkeypatch):
 
 
 def test_mode_remote_with_no_url_returns_409(env, monkeypatch):
-    c, config, _ = env
+    c, config, store = env
     config.update_settings("access", "pairing_mode", "remote")
     monkeypatch.delenv("FERAL_PUBLIC_BASE_URL", raising=False)
     config.update_settings("access", "tailscale", {"funnel": True, "tailnet_url": ""})
+    before = len(store.list_devices())
 
     r = c.get("/api/devices/pair/url?name=phone-Tailnet")
     assert r.status_code == 409
     assert "remote-up" in r.json()["detail"] or "FERAL_PUBLIC_BASE_URL" in r.json()["detail"]
+    assert len(store.list_devices()) == before
 
 
 def test_mode_remote_rejects_loopback_public_url(env, monkeypatch):

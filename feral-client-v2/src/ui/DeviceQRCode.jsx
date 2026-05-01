@@ -11,7 +11,7 @@ import { apiFetch } from '../lib/api';
  * flow uses this path so the modal can show a ready-to-open URL without
  * re-pairing).
  */
-export default function DeviceQRCode({ size = 220, value = null, mode = 'web' }) {
+export default function DeviceQRCode({ size = 220, value = null, mode = 'web', onTokenIssued = null }) {
   const [imgUrl, setImgUrl] = useState(null);
   const [textLink, setTextLink] = useState(null);
   const [error, setError] = useState(null);
@@ -27,6 +27,8 @@ export default function DeviceQRCode({ size = 220, value = null, mode = 'web' })
       try {
         const r = await apiFetch(`/api/devices/pair/qr?mode=${encodeURIComponent(mode)}`);
         if (!r.ok) throw new Error(`${r.status}`);
+        const headerDeviceId = r.headers.get('X-Feral-Device-Id');
+        if (headerDeviceId) onTokenIssued?.(headerDeviceId);
         const ct = r.headers.get('Content-Type') || '';
         if (ct.includes('image/')) {
           const blob = await r.blob();
@@ -34,6 +36,8 @@ export default function DeviceQRCode({ size = 220, value = null, mode = 'web' })
           if (!cancelled) setImgUrl(createdUrl);
         } else if (ct.includes('application/json')) {
           const data = await r.json();
+          const bodyDeviceId = data?.pairing_info?.device_id || data?.device_id;
+          if (bodyDeviceId) onTokenIssued?.(bodyDeviceId);
           if (!cancelled) {
             if (data?.qr_png_b64) {
               setImgUrl(`data:image/png;base64,${data.qr_png_b64}`);
@@ -55,7 +59,7 @@ export default function DeviceQRCode({ size = 220, value = null, mode = 'web' })
       cancelled = true;
       if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
-  }, [value, mode]);
+  }, [value, mode, onTokenIssued]);
 
   if (error) {
     return (
