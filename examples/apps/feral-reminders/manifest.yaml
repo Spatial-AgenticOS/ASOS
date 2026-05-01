@@ -1,0 +1,179 @@
+app_id: feral-reminders
+version: 0.1.0
+author: feral-team
+description: Starter reminders app used to validate GenUI V2 runtime wiring.
+
+brand:
+  name: Reminders
+  primary_color: "#0EA5E9"
+  secondary_color: "#0284C7"
+
+permissions:
+  - storage
+
+skill_dependencies:
+  - feral_reminders
+
+data_schemas:
+  - schema_id: reminders_state
+    description: Reminder list + draft metadata.
+    schema:
+      type: object
+      properties:
+        reminders:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              title: { type: string }
+              due: { type: string }
+        draft_text: { type: string }
+  - schema_id: create_reminder_payload
+    description: Form payload emitted from the compose surface.
+    schema:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: object
+          required: [title]
+          properties:
+            title: { type: string, minLength: 1, maxLength: 240 }
+            due: { type: string, minLength: 0, maxLength: 120 }
+  - schema_id: reminder_id_payload
+    description: Payload with reminder id for complete/delete actions.
+    schema:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string, minLength: 1 }
+  - schema_id: schedule_notification_payload
+    description: Payload for scheduling reminder notifications.
+    schema:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string, minLength: 1 }
+        when_iso: { type: string, minLength: 1 }
+
+entry_surface_id: list
+
+surfaces:
+  - surface_id: list
+    title: Reminders
+    kind: authored
+    data_schema_ref: reminders_state
+    template_root:
+      type: VStack
+      spacing: md
+      padding: md
+      children:
+        - type: Text
+          style: headline
+          value: "Reminders"
+        - type: Card
+          children:
+            - type: Text
+              style: subtitle
+              value: "$data.reminders.0.title"
+            - type: Text
+              style: caption
+              value: "$data.reminders.0.due"
+        - type: Button
+          label: "Refresh reminders"
+          style: secondary
+          action_id: list_reminders
+        - type: Button
+          label: "Complete first"
+          style: ghost
+          action_id: complete_reminder
+          value:
+            id: "$data.reminders.0.id"
+        - type: Button
+          label: "Delete first"
+          style: ghost
+          action_id: delete_reminder
+          value:
+            id: "$data.reminders.0.id"
+        - type: Button
+          label: "Schedule first"
+          style: ghost
+          action_id: schedule_notification
+          value:
+            id: "$data.reminders.0.id"
+            when_iso: "$data.reminders.0.due"
+        - type: Button
+          label: "Add reminder"
+          style: primary
+          action_id: open_compose
+    action_contract:
+      - action_id: list_reminders
+        handler: skill_call
+        target: feral_reminders/list
+      - action_id: complete_reminder
+        handler: skill_call
+        target: feral_reminders/complete
+        value_schema_ref: "#/data_schemas/reminder_id_payload"
+      - action_id: delete_reminder
+        handler: skill_call
+        target: feral_reminders/delete
+        value_schema_ref: "#/data_schemas/reminder_id_payload"
+        requires_confirmation: true
+      - action_id: schedule_notification
+        handler: skill_call
+        target: feral_reminders/schedule_notification
+        value_schema_ref: "#/data_schemas/schedule_notification_payload"
+      - action_id: open_compose
+        handler: navigate
+        target: compose
+
+  - surface_id: compose
+    title: New reminder
+    kind: authored
+    data_schema_ref: reminders_state
+    template_root:
+      type: VStack
+      spacing: md
+      padding: md
+      children:
+        - type: Text
+          style: headline
+          value: "Create reminder"
+        - type: Form
+          action_id: create_reminder
+          submit_label: "Save"
+          fields:
+            - name: title
+              type: text
+              label: "Title"
+              placeholder: "What should I remind you about?"
+            - name: due
+              type: text
+              label: "Due (optional)"
+              placeholder: "Tomorrow 9am"
+        - type: Button
+          style: ghost
+          label: "Back"
+          action_id: back_to_list
+    action_contract:
+      - action_id: create_reminder
+        handler: skill_call
+        target: feral_reminders/create
+        value_schema_ref: "#/data_schemas/create_reminder_payload"
+      - action_id: back_to_list
+        handler: navigate
+        target: list
+
+interactions:
+  button_style_priority: ["primary", "secondary", "ghost"]
+  destructive_confirmation_required: true
+  list_render_preference: list
+  prose_guidance: |
+    Keep reminder language concise, avoid duplicate phrasing, and always
+    show due-context in human wording rather than raw IDs.
+
+notifications:
+  enabled: true
+  default_priority: normal
+  default_deep_link_surface_id: list

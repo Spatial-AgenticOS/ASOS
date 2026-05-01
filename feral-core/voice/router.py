@@ -57,8 +57,9 @@ class VoiceRouter:
 
     def register_voice_config(self, node_id: str, config: dict):
         """Store a node's voice capabilities.  Called when a `voice_config` message arrives."""
-        self._node_voice_config[node_id] = config
-        logger.info(f"Voice config for {node_id}: {config}")
+        merged = {**self._node_voice_config.get(node_id, {}), **(config or {})}
+        self._node_voice_config[node_id] = merged
+        logger.info(f"Voice config for {node_id}: {merged}")
 
     def set_session_voice_mode(self, session_id: str, mode: str):
         """Set the voice mode for a web client session (realtime | whisper | disabled)."""
@@ -75,13 +76,20 @@ class VoiceRouter:
     def _resolve_provider(self, node_id: str) -> str:
         """Return 'gemini', 'openai', 'chained', or 'whisper' for a given node."""
         cfg = self._node_voice_config.get(node_id, {})
+        mode = (cfg.get("mode") or "").lower()
 
-        if cfg.get("mode") == "whisper":
+        if mode == "whisper":
             return "whisper"
         # --- Subagent B: chained mode resolution ---
-        if cfg.get("mode") == "chained":
+        if mode == "chained":
             return "chained"
         # --- end Subagent B ---
+        if mode == "gemini_live":
+            if self._gemini and self._gemini.available:
+                return "gemini"
+        if mode == "openai_realtime":
+            if self._realtime and self._realtime.available:
+                return "openai"
 
         explicit = cfg.get("voice_provider", "").lower()
         if explicit == "gemini":
@@ -150,14 +158,16 @@ class VoiceRouter:
         #
         # Skip the gate if there's an active browser_node voice session
         # bound to this node (the phone-as-peer fast path).
-        skip_wake = False
-        try:
-            if node_id and session_id in self._session_voice_mode:
-                skip_wake = True
-            elif node_id and node_id.startswith("browser-node-"):
-                skip_wake = True
-        except Exception:
-            skip_wake = False
+        cfg = self._node_voice_config.get(node_id, {})
+        skip_wake = bool(cfg.get("skip_wake"))
+        if not skip_wake:
+            try:
+                if node_id and session_id in self._session_voice_mode:
+                    skip_wake = True
+                elif node_id and node_id.startswith("browser-node-"):
+                    skip_wake = True
+            except Exception:
+                skip_wake = False
 
         if self._wake_word and self._wake_word.enabled and not skip_wake:
             import base64
@@ -175,7 +185,14 @@ class VoiceRouter:
         if provider == "openai":
             rs = self._realtime.get_session(node_id)
             if not rs:
-                rs = await self._realtime.start_session(session_id, node_id)
+                rs = await self._realtime.start_session(
+                    session_id,
+                    node_id,
+                    model=cfg.get("model", "gpt-realtime"),
+                    voice=cfg.get("voice", "marin"),
+                    input_sample_rate=int(cfg.get("sample_rate") or sample_rate or 24000),
+                    language_hint=cfg.get("language_hint", ""),
+                )
             if rs and rs.connected:
                 await rs.send_audio(audio_b64)
             return
@@ -224,7 +241,11 @@ class VoiceRouter:
         if provider == "openai":
             rs = self._realtime.get_session(client_node)
             if not rs:
-                rs = await self._realtime.start_session(session_id, client_node)
+                rs = await self._realtime.start_session(
+                    session_id,
+                    client_node,
+                    input_sample_rate=sample_rate or 24000,
+                )
             if rs and rs.connected:
                 await rs.send_audio(audio_b64)
             return
@@ -474,17 +495,51 @@ class VoiceRouter:
             node_id = opts.get("node_id", f"webclient_{session_id[:8]}")
             model = opts.get("model", "gpt-realtime")
             voice = opts.get("voice", "marin")
+            input_sample_rate = int(opts.get("sample_rate") or 24000)
+            language_hint = opts.get("language_hint", "")
+            self.register_voice_config(node_id, {
+                "mode": "openai_realtime",
+                "voice_provider": "openai",
+                "supports_realtime": True,
+                "sample_rate": input_sample_rate,
+                "language_hint": language_hint,
+                "voice": voice,
+                "model": model,
+                "skip_wake": True,
+            })
             rs = await self._realtime.start_session(
-                session_id, node_id, model=model, voice=voice,
+                session_id,
+                node_id,
+                model=model,
+                voice=voice,
+                input_sample_rate=input_sample_rate,
+                language_hint=language_hint,
             )
             return rs
         if mode == "chained":
+            node_id = opts.get("node_id", "")
+            if node_id:
+                self.register_voice_config(node_id, {
+                    "mode": "chained",
+                    "voice_provider": "openai",
+                    "supports_realtime": False,
+                    "skip_wake": True,
+                })
             return await self.open_chained_session(session_id, opts)
         if mode == "gemini_live":
-            # Delegates to the existing Gemini realtime proxy wiring
-            # handled elsewhere; we don't reinvent it here.
-            logger.debug("open_session: gemini_live handled by existing path")
-            return None
+            if not self._gemini or not self._gemini.available:
+                logger.warning("gemini_live requested but proxy unavailable")
+                return None
+            node_id = opts.get("node_id", f"webclient_{session_id[:8]}")
+            self.register_voice_config(node_id, {
+                "mode": "gemini_live",
+                "voice_provider": "gemini",
+                "supports_realtime": True,
+                "sample_rate": int(opts.get("sample_rate") or 16000),
+                "language_hint": opts.get("language_hint", ""),
+                "skip_wake": True,
+            })
+            return await self._gemini.start_session(session_id, node_id)
         logger.debug("open_session: mode=%s not recognised", mode)
         return None
 

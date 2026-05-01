@@ -114,7 +114,7 @@ describe('BrowserNode', () => {
     expect(frame.type).toBe('voice_config');
     expect(frame.payload.provider).toBe('gemini');
     expect(frame.payload.supports_realtime).toBe(true);
-    expect(frame.payload.sample_rate).toBe(16000);
+    expect(frame.payload.sample_rate).toBe(24000);
     expect(frame.payload.encoding).toBe('pcm16');
   });
 
@@ -134,7 +134,7 @@ describe('BrowserNode', () => {
     const frame = JSON.parse(ws.sent[0]);
     expect(frame.type).toBe('audio_chunk');
     expect(frame.payload.encoding).toBe('pcm16');
-    expect(frame.payload.sample_rate).toBe(16000);
+    expect(frame.payload.sample_rate).toBe(24000);
     expect(typeof frame.payload.data_b64).toBe('string');
     expect(frame.payload.data_b64.length).toBeGreaterThan(0);
     expect(frame.payload.chunk_index).toBe(0);
@@ -152,7 +152,7 @@ describe('BrowserNode', () => {
     const ws = MockWebSocket.instances[0];
     ws.sent = [];
 
-    const samples = new Float32Array(160); // 10ms @ 16kHz
+    const samples = new Float32Array(160);
     node._pushAudioChunk(samples);
     const frame = JSON.parse(ws.sent[0]);
     // 160 samples * 2 bytes = 320 raw bytes; base64 → ceil(320/3)*4 = 428 chars

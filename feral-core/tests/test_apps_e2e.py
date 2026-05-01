@@ -40,6 +40,7 @@ def registry(tmp_path):
 def test_examples_dir_present():
     assert (EXAMPLES / "feral-messages" / "manifest.yaml").is_file()
     assert (EXAMPLES / "feral-rides" / "manifest.yaml").is_file()
+    assert (EXAMPLES / "feral-reminders" / "manifest.yaml").is_file()
 
 
 class TestMessagesApp:
@@ -184,6 +185,7 @@ class TestRidesApp:
         orchestrator.handle_command = AsyncMock()
         orchestrator.send = AsyncMock()
         orchestrator._execute_tool_call = AsyncMock()
+        orchestrator._pending_confirmations = {}
         mock_state = MagicMock()
         mock_state.app_registry = registry
         with patch("api.state.state", mock_state):
@@ -208,6 +210,39 @@ class TestRidesApp:
         msg = orchestrator.send.await_args.args[1]
         assert msg.type == "sdui"
         assert msg.payload["screen_id"].startswith("feral-rides:confirm:")
+
+    @pytest.mark.asyncio
+    async def test_cancel_ride_waits_for_confirmation(self, registry):
+        registry.install_from_dir(EXAMPLES / "feral-rides")
+        orchestrator = MagicMock()
+        orchestrator._send_text = AsyncMock()
+        orchestrator.handle_command = AsyncMock()
+        orchestrator.send = AsyncMock()
+        orchestrator._execute_tool_call = AsyncMock()
+        orchestrator._pending_confirmations = {}
+        mock_state = MagicMock()
+        mock_state.app_registry = registry
+        with patch("api.state.state", mock_state):
+            await handle_ui_event(
+                orchestrator,
+                session_id="sess-1",
+                action_id="cancel_ride",
+                event="tap",
+                app_id="feral-rides",
+                screen_id="feral-rides:status:sess-1",
+            )
+            orchestrator.handle_command.assert_not_called()
+            confirm_msg = orchestrator.send.await_args.args[1]
+            confirm_action_id = confirm_msg.payload["root"]["children"][2]["children"][0]["action_id"]
+            await handle_ui_event(
+                orchestrator,
+                session_id="sess-1",
+                action_id=confirm_action_id,
+                event="tap",
+                app_id="feral-rides",
+                screen_id="feral-rides:status:sess-1",
+            )
+        orchestrator.handle_command.assert_awaited_once()
 
 
 class TestHybridCacheReuse:
@@ -243,6 +278,24 @@ class TestHybridCacheReuse:
         )
         # No new cache file added.
         assert len(list(cache_dir.rglob("*.json"))) == len(cached_files)
+
+
+class TestRemindersStarterApp:
+    def test_installs_from_examples_dir(self, registry):
+        app = registry.install_from_dir(EXAMPLES / "feral-reminders")
+        assert app.app_id == "feral-reminders"
+        assert app.manifest.entry_surface_id == "list"
+        assert "feral_reminders" in app.manifest.skill_dependencies
+
+    def test_compose_action_schema_is_enforced(self, registry):
+        registry.install_from_dir(EXAMPLES / "feral-reminders")
+        with pytest.raises(Exception):
+            registry.validate_action(
+                "feral-reminders",
+                "compose",
+                "create_reminder",
+                value={"values": {}},
+            )
 
 
 # ----------------------------------------------------------------------

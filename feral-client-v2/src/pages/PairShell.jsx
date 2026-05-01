@@ -321,6 +321,9 @@ export default function PairShell() {
     deviceId,
     bearerRecord,
     node,
+    voice_config: {
+      mode: node?.voiceProvider === "gemini" ? "gemini_live" : "openai_realtime",
+    },
     status,
     isConnected: isConnectedPhase(status),
     permissions,

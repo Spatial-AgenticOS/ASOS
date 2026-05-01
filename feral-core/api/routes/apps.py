@@ -28,7 +28,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from agents.app_registry import UnverifiedManifestError
+from agents.app_registry import AppRegistryError, UnverifiedManifestError
 from api.state import state
 from genui.permissions_policy import PolicyViolation
 
@@ -55,9 +55,123 @@ def _manifest_summary(app) -> dict:
         "entry_surface_id": m.entry_surface_id,
         "surfaces": [s.surface_id for s in m.surfaces],
         "permissions": list(m.permissions),
+        "skill_dependencies": list(getattr(m, "skill_dependencies", []) or []),
         "install_dir": str(app.install_dir),
         "installed_at": app.installed_at,
     }
+
+
+async def _resolve_skill_dependencies(manifest) -> dict[str, Any]:
+    deps = [
+        dep.strip()
+        for dep in list(getattr(manifest, "skill_dependencies", []) or [])
+        if isinstance(dep, str) and dep.strip()
+    ]
+    report: dict[str, Any] = {
+        "required": deps,
+        "already_present": [],
+        "installed": [],
+        "failed": [],
+    }
+    if not deps:
+        return report
+
+    skill_registry = getattr(state, "skill_registry", None)
+    marketplace = getattr(state, "marketplace", None)
+
+    for skill_id in deps:
+        if skill_registry is not None and skill_id in getattr(skill_registry, "skills", {}):
+            report["already_present"].append(skill_id)
+            continue
+        if marketplace is None:
+            report["failed"].append({
+                "skill_id": skill_id,
+                "error": "marketplace_unavailable",
+            })
+            continue
+        try:
+            result = await marketplace.install(skill_id, "latest", None)
+            if result.get("success"):
+                report["installed"].append(skill_id)
+                if skill_registry is not None and skill_id not in getattr(skill_registry, "skills", {}):
+                    try:
+                        skill_registry.reload_skill(skill_id)
+                    except Exception:
+                        pass
+            else:
+                report["failed"].append({
+                    "skill_id": skill_id,
+                    "error": str(result.get("error") or "install_failed"),
+                })
+        except Exception as exc:
+            report["failed"].append({
+                "skill_id": skill_id,
+                "error": str(exc),
+            })
+    return report
+
+
+async def _enforce_skill_dependencies_or_rollback(registry, app) -> dict[str, Any]:
+    report = await _resolve_skill_dependencies(app.manifest)
+    failed = list(report.get("failed") or [])
+    if not failed:
+        return report
+    # Keep installed state truthful: if declared dependencies failed we
+    # roll back the app install rather than leaving a half-functional app.
+    registry.uninstall(app.app_id, purge_cache=False)
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "error": "skill_dependency_resolution_failed",
+            "app_id": app.app_id,
+            "failed": failed,
+            "remediation": (
+                "Install the missing skills first or ensure the registry can "
+                "resolve marketplace dependencies, then retry app install."
+            ),
+        },
+    )
+
+
+def _bound_daemon_for_session(session_id: str) -> Optional[str]:
+    if not session_id:
+        return None
+    bindings = getattr(state, "_daemon_session_bindings", {}) or {}
+    for node_id, sessions in bindings.items():
+        if session_id in sessions:
+            return node_id
+    return None
+
+
+async def _maybe_push_genui_to_phone(session_id: str, result: dict[str, Any], *, title: str = "") -> None:
+    node_id = _bound_daemon_for_session(session_id)
+    if not node_id:
+        return
+    if not hasattr(state, "send_to_daemon"):
+        return
+    try:
+        from models.protocol import FeralMessage
+        payload = {
+            "kind": "interactive",
+            "push_id": result.get("screen_id", ""),
+            "app_id": result.get("app_id", ""),
+            "surface_id": result.get("surface_id", ""),
+            "screen_id": result.get("screen_id", ""),
+            "title": title or result.get("surface_id", "App"),
+            "body": "",
+            "sdui": result.get("root", {}),
+        }
+        await state.send_to_daemon(
+            node_id,
+            FeralMessage(
+                session_id=session_id,
+                hop="brain",
+                type="genui_push",
+                payload=payload,
+            ),
+        )
+    except Exception as exc:
+        logger.debug("genui_push relay failed silently: %s", exc)
 
 
 @router.get("/api/apps")
@@ -143,6 +257,7 @@ async def validate_manifest(req: ValidateRequest):
             "surfaces": [s.surface_id for s in manifest.surfaces],
             "actions": actions,
             "permissions": list(manifest.permissions),
+            "skill_dependencies": list(getattr(manifest, "skill_dependencies", []) or []),
             "entry_surface_id": manifest.entry_surface_id,
         },
     }
@@ -228,7 +343,8 @@ async def install_app(req: InstallRequest, unsigned: Optional[bool] = None):
             raise
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        return {"success": True, "app": _manifest_summary(app)}
+        dep_report = await _enforce_skill_dependencies_or_rollback(registry, app)
+        return {"success": True, "app": _manifest_summary(app), "skill_dependencies": dep_report}
 
     if req.git_url:
         tmp = Path(tempfile.mkdtemp(prefix="feral-app-clone-"))
@@ -248,18 +364,45 @@ async def install_app(req: InstallRequest, unsigned: Optional[bool] = None):
                 raise
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
-            return {"success": True, "app": _manifest_summary(app)}
+            dep_report = await _enforce_skill_dependencies_or_rollback(registry, app)
+            return {"success": True, "app": _manifest_summary(app), "skill_dependencies": dep_report}
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
     if req.registry_id:
-        # Registry install lands in commit 6 once the CLI + Kind.app
-        # publish flow exists. Report honestly until then so callers
-        # can branch on the status code.
-        raise HTTPException(
-            status_code=501,
-            detail="registry_id install requires registry.feral.sh Kind.app; ship feral-registry commit 6 first",
-        )
+        try:
+            app = registry.install_from_registry(
+                req.registry_id,
+                allow_unsigned=bool(req.unsigned),
+                user_high_trust=bool(req.user_high_trust),
+                overwrite=req.overwrite,
+                supervisor=getattr(state, "supervisor", None),
+            )
+        except UnverifiedManifestError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "unverified_registry_bundle",
+                    "message": str(exc),
+                    "remediation": (
+                        "Ensure the registry item has a valid signature and "
+                        "publisher key, or retry with unsigned=true in dev."
+                    ),
+                },
+            )
+        except PolicyViolation as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "permissions_policy_violation",
+                    "message": str(exc),
+                },
+            )
+        except AppRegistryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        dep_report = await _enforce_skill_dependencies_or_rollback(registry, app)
+        return {"success": True, "app": _manifest_summary(app), "skill_dependencies": dep_report}
 
 
 @router.delete("/api/apps/{app_id}")
@@ -321,6 +464,11 @@ async def open_app(app_id: str, req: OpenSurfaceRequest):
                     ).model_dump(),
                 ),
             )
+            await _maybe_push_genui_to_phone(
+                req.session_id,
+                result,
+                title=f"{app_id} · {surface_id}",
+            )
         except Exception as exc:
             logger.debug("Push to session failed silently: %s", exc)
 
@@ -372,14 +520,23 @@ async def dispatch_action(app_id: str, req: DispatchRequest):
     """
     registry = _require_registry()
     try:
-        spec = registry.validate_action(app_id, req.surface_id, req.action_id)
+        spec = registry.validate_action(
+            app_id,
+            req.surface_id,
+            req.action_id,
+            value=req.value,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     if state.orchestrator is None:
         raise HTTPException(status_code=503, detail="Orchestrator not available")
 
-    screen_id = f"{app_id}:{req.surface_id}:{req.session_id or 'default'}"
+    screen_id = registry.build_screen_id(
+        app_id=app_id,
+        surface_id=req.surface_id,
+        scope=req.session_id or "rest-dispatch",
+    )
     try:
         await state.orchestrator.handle_ui_event(
             session_id=req.session_id or "rest-dispatch",
@@ -396,5 +553,6 @@ async def dispatch_action(app_id: str, req: DispatchRequest):
         "success": True,
         "handler": spec.handler,
         "target": spec.target,
+        "requires_confirmation": bool(spec.requires_confirmation),
         "screen_id": screen_id,
     }

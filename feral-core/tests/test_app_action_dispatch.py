@@ -18,6 +18,20 @@ from models.app_manifest import ActionSpec, AppManifest, SurfaceSpec
 from models.skill_manifest import BrandProfile
 
 
+def _collect_action_ids(node) -> list[str]:
+    out: list[str] = []
+    if isinstance(node, dict):
+        action_id = node.get("action_id")
+        if isinstance(action_id, str) and action_id:
+            out.append(action_id)
+        for value in node.values():
+            out.extend(_collect_action_ids(value))
+    elif isinstance(node, list):
+        for value in node:
+            out.extend(_collect_action_ids(value))
+    return out
+
+
 def _build_manifest() -> AppManifest:
     return AppManifest(
         app_id="demo-app",
@@ -33,6 +47,7 @@ def _build_manifest() -> AppManifest:
                     ActionSpec(action_id="run_tool", handler="skill_call", target="demo_skill/ping"),
                     ActionSpec(action_id="close_modal", handler="close"),
                     ActionSpec(action_id="bump", handler="patch"),
+                    ActionSpec(action_id="danger", handler="app_event", requires_confirmation=True),
                 ],
             ),
             SurfaceSpec(
@@ -67,6 +82,7 @@ def orchestrator():
     mock._execute_tool_call = AsyncMock()
     mock.handle_command = AsyncMock()
     mock.send = AsyncMock()
+    mock._pending_confirmations = {}
     return mock
 
 
@@ -211,7 +227,13 @@ async def test_patch_action_logs_and_noops(registry, orchestrator):
             event="tap",
             app_id="demo-app",
             screen_id="demo-app:home:s1",
+            value={"patches": [{"path": "/value", "op": "replace", "value": "after"}]},
         )
+    orchestrator.send.assert_awaited_once()
+    msg = orchestrator.send.await_args.args[1]
+    assert msg.type == "sdui_patch"
+    assert msg.payload["screen_id"] == "demo-app:home:s1"
+    assert msg.payload["patches"][0]["op"] == "replace"
     orchestrator._execute_tool_call.assert_not_called()
     orchestrator.handle_command.assert_not_called()
 
@@ -249,3 +271,57 @@ async def test_non_app_event_preserves_legacy_prefix_routing(orchestrator):
             event="tap",
         )
     orchestrator._execute_tool_call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_requires_confirmation_for_app_action(registry, orchestrator):
+    mock_state = MagicMock()
+    mock_state.app_registry = registry
+    with patch("api.state.state", mock_state):
+        await handle_ui_event(
+            orchestrator,
+            session_id="s1",
+            action_id="danger",
+            event="tap",
+            value={"x": 1},
+            app_id="demo-app",
+            screen_id="demo-app:home:s1",
+        )
+        orchestrator.handle_command.assert_not_called()
+        orchestrator.send.assert_awaited_once()
+        confirm_msg = orchestrator.send.await_args.args[1]
+        confirm_action_id = next(
+            aid for aid in _collect_action_ids(confirm_msg.payload["root"])
+            if aid.startswith("confirm_")
+        )
+        await handle_ui_event(
+            orchestrator,
+            session_id="s1",
+            action_id=confirm_action_id,
+            event="tap",
+            app_id="demo-app",
+            screen_id="demo-app:home:s1",
+        )
+    orchestrator.handle_command.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_navigate_action_relays_genui_push_to_bound_phone(registry, orchestrator):
+    mock_state = MagicMock()
+    mock_state.app_registry = registry
+    mock_state._daemon_session_bindings = {"phone-node-1": {"s1"}}
+    mock_state.send_to_daemon = AsyncMock()
+    with patch("api.state.state", mock_state):
+        await handle_ui_event(
+            orchestrator,
+            session_id="s1",
+            action_id="open_thread",
+            event="tap",
+            app_id="demo-app",
+            screen_id="demo-app:home:s1",
+        )
+    mock_state.send_to_daemon.assert_awaited_once()
+    daemon_msg = mock_state.send_to_daemon.await_args.args[1]
+    assert daemon_msg.type == "genui_push"
+    assert daemon_msg.payload["kind"] == "interactive"
+    assert daemon_msg.payload["app_id"] == "demo-app"

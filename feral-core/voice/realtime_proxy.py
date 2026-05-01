@@ -56,6 +56,9 @@ class RealtimeSession:
         api_key: str = "",
         model: str = DEFAULT_MODEL,
         voice: str = "marin",
+        input_sample_rate: int = SAMPLE_RATE,
+        output_sample_rate: int = SAMPLE_RATE,
+        language_hint: str = "",
         system_prompt: str = "",
         tools: list[dict] | None = None,
         on_audio_delta: Callable[[str, str, bool], Awaitable[None]] | None = None,
@@ -70,6 +73,9 @@ class RealtimeSession:
         self._api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self._model = model
         self._voice = voice
+        self._input_sample_rate = int(input_sample_rate or SAMPLE_RATE)
+        self._output_sample_rate = int(output_sample_rate or SAMPLE_RATE)
+        self._language_hint = self._normalize_language_hint(language_hint)
         self._system_prompt = system_prompt
         self._tools = tools or []
 
@@ -89,6 +95,19 @@ class RealtimeSession:
         self._connected = False
         self._recv_task: Optional[asyncio.Task] = None
         self._pending_tool_calls: dict[str, dict] = {}
+
+    @staticmethod
+    def _normalize_language_hint(language_hint: str) -> str:
+        """Convert browser/phone locale hints (e.g. en-US) to whisper locale."""
+        if not language_hint or not isinstance(language_hint, str):
+            return ""
+        raw = language_hint.strip()
+        if not raw:
+            return ""
+        primary = raw.split("-", 1)[0].split("_", 1)[0].strip().lower()
+        if primary and primary.isalpha():
+            return primary
+        return ""
 
     @property
     def connected(self) -> bool:
@@ -150,6 +169,10 @@ class RealtimeSession:
                 "parameters": fn.get("parameters", {}),
             })
 
+        transcription_cfg = {"model": "whisper-1"}
+        if self._language_hint:
+            transcription_cfg["language"] = self._language_hint
+
         session_update = {
             "type": "session.update",
             "session": {
@@ -159,8 +182,8 @@ class RealtimeSession:
                 "instructions": self._system_prompt,
                 "audio": {
                     "input": {
-                        "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
-                        "transcription": {"model": "whisper-1"},
+                        "format": {"type": "audio/pcm", "rate": self._input_sample_rate},
+                        "transcription": transcription_cfg,
                         "turn_detection": {
                             "type": "server_vad",
                             "threshold": 0.5,
@@ -169,7 +192,7 @@ class RealtimeSession:
                         },
                     },
                     "output": {
-                        "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
+                        "format": {"type": "audio/pcm", "rate": self._output_sample_rate},
                         "voice": self._voice,
                     },
                 },
@@ -380,6 +403,7 @@ class RealtimeSession:
         elif event_type == "error":
             err = event.get("error", {})
             msg = err.get("message", str(err))
+            self._response_in_progress = False
             logger.error(f"Realtime API error: {msg}")
             if self._on_error:
                 await self._on_error(self.session_id, msg)
@@ -406,6 +430,10 @@ class RealtimeSession:
                     "Realtime response.done session=%s status=%s",
                     self.session_id, status or "(unknown)",
                 )
+
+        elif event_type in {"response.failed", "response.cancelled", "response.canceled"}:
+            self._response_in_progress = False
+            logger.warning("Realtime %s session=%s", event_type, self.session_id)
 
         elif event_type == "rate_limits.updated":
             pass
@@ -466,6 +494,8 @@ class RealtimeProxy:
         node_id: str,
         model: str = DEFAULT_MODEL,
         voice: str = "",
+        input_sample_rate: int = SAMPLE_RATE,
+        language_hint: str = "",
     ) -> RealtimeSession:
         """Create and connect a new realtime session for a phone/glasses node."""
         system_prompt = self._build_system_prompt(session_id)
@@ -477,6 +507,9 @@ class RealtimeProxy:
             api_key=self._api_key,
             model=model,
             voice=voice or self._voice,
+            input_sample_rate=input_sample_rate,
+            output_sample_rate=SAMPLE_RATE,
+            language_hint=language_hint,
             system_prompt=system_prompt,
             tools=tools,
             on_audio_delta=self._handle_audio_delta,
@@ -583,6 +616,10 @@ class RealtimeProxy:
         )
 
         parts = [personality_block]
+        parts.append(
+            "\nLanguage policy: Always respond in English unless the user clearly "
+            "starts speaking in another language first."
+        )
 
         parts.append(
             "\nYou have access to the user's physical environment through "
@@ -665,7 +702,7 @@ class RealtimeProxy:
         payload = {
             "data_b64": audio_b64,
             "encoding": AUDIO_FORMAT,
-            "sample_rate": SAMPLE_RATE,
+            "sample_rate": getattr(rs, "_output_sample_rate", SAMPLE_RATE),
             "is_final": is_done,
         }
 

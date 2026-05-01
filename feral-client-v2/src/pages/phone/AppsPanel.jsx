@@ -1,25 +1,45 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext, useParams } from "react-router-dom";
-import SduiRenderer from "../../ui/SduiRenderer";
+import SduiRenderer, { applySduiPatches } from "../../ui/SduiRenderer";
 
 function makeId(prefix = "push") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function buildScreenId(appId, surfaceId, scope = "phone") {
+  return [
+    encodeURIComponent(String(appId || "")),
+    encodeURIComponent(String(surfaceId || appId || "surface")),
+    encodeURIComponent(String(scope || "phone")),
+  ].join(":");
 }
 
 function normalizePush(frameOrPayload) {
   if (!frameOrPayload) return null;
   const payload = frameOrPayload.payload || frameOrPayload;
   if (!payload.kind) return null;
+  const appId = payload.app_id || "unknown";
+  const surfaceId = payload.surface_id || payload.app_id || "surface";
   return {
     id: payload.push_id || makeId(payload.kind),
     kind: payload.kind,
-    app_id: payload.app_id || "unknown",
-    surface_id: payload.surface_id || payload.app_id || "surface",
+    app_id: appId,
+    surface_id: surfaceId,
+    screen_id: payload.screen_id || buildScreenId(appId, surfaceId),
     title: payload.title || payload.app_id || "App notification",
     body: payload.body || "",
     actions: Array.isArray(payload.actions) ? payload.actions : [],
     sdui: payload.sdui || payload.root || null,
   };
+}
+
+function normalizePatch(frameOrPayload) {
+  if (!frameOrPayload) return null;
+  const payload = frameOrPayload.payload || frameOrPayload;
+  const screenId = payload.screen_id || "";
+  const patches = Array.isArray(payload.patches) ? payload.patches : [];
+  if (!screenId || patches.length === 0) return null;
+  return { screen_id: screenId, patches };
 }
 
 export default function AppsPanel({ shell: shellProp }) {
@@ -45,13 +65,34 @@ export default function AppsPanel({ shell: shellProp }) {
       }
     };
 
+    const onPatch = (frame) => {
+      const patch = normalizePatch(frame);
+      if (!patch) return;
+      setSurfaces((prev) => {
+        const next = { ...prev };
+        for (const [appId, surface] of Object.entries(prev)) {
+          if (!surface || surface.screen_id !== patch.screen_id) continue;
+          next[appId] = {
+            ...surface,
+            sdui: applySduiPatches(surface.sdui, patch.patches),
+          };
+        }
+        return next;
+      });
+    };
+
     if (shell?.subscribePhase) {
-      return shell.subscribePhase("genui_push", onPush);
+      const unsubPush = shell.subscribePhase("genui_push", onPush);
+      const unsubPatch = shell.subscribePhase("sdui_patch", onPatch);
+      return () => {
+        if (typeof unsubPush === "function") unsubPush();
+        if (typeof unsubPatch === "function") unsubPatch();
+      };
     }
     if (shell?.subscribeFrame) {
       return shell.subscribeFrame((frame) => {
-        if (frame?.type !== "genui_push") return;
-        onPush(frame);
+        if (frame?.type === "genui_push") onPush(frame);
+        if (frame?.type === "sdui_patch") onPatch(frame);
       });
     }
     return () => {};
@@ -73,9 +114,12 @@ export default function AppsPanel({ shell: shellProp }) {
 
   const emitAction = (actionId, value) => {
     if (!activeAppId || !shell?.sendFrame) return;
+    const activeScreenId = activeSurface?.screen_id
+      || buildScreenId(activeAppId, activeSurface?.surface_id || activeAppId, deviceId || "phone");
     shell.sendFrame("genui_event", {
       app_id: activeAppId,
       surface_id: activeSurface?.surface_id || activeAppId,
+      screen_id: activeScreenId,
       event_type: "tap",
       action_id: actionId,
       value,

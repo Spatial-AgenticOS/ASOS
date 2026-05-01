@@ -63,6 +63,29 @@ export default function ChatPanel({ shell: shellProp }) {
 
   const speech = useWebSpeech({ continuous: false, interimResults: true });
 
+  const startVoiceSession = useCallback(async () => {
+    if (typeof shell?.sendFrame === 'function') {
+      const mode = shell?.voice_config?.mode || 'openai_realtime';
+      const streamId = `voice-${shell?.deviceId || 'session'}`;
+      shell.sendFrame('voice_session_start', {
+        session_id: streamId,
+        stream_id: streamId,
+        voice_mode: mode,
+        sample_rate: 24000,
+        channels: 1,
+        language_hint: 'en-US',
+        interrupt_policy: 'barge_in',
+      });
+    }
+    if (shell?.node?.startMic) {
+      try {
+        await shell.node.startMic();
+      } catch {
+        // Keep fullscreen available even when mic startup fails.
+      }
+    }
+  }, [shell]);
+
   // ─ Subscribe to brain's chat_response frames ─────────────────
   useEffect(() => {
     if (typeof shell?.subscribeFrame !== 'function') return undefined;
@@ -140,9 +163,9 @@ export default function ChatPanel({ shell: shellProp }) {
     longPressTimerRef.current = setTimeout(() => {
       longPressTriggeredRef.current = true;
       if (speech.listening) speech.stop();
-      setVoiceFullscreenOpen(true);
+      void startVoiceSession().finally(() => setVoiceFullscreenOpen(true));
     }, LONG_PRESS_MS);
-  }, [speech]);
+  }, [speech, startVoiceSession]);
 
   const handleMicPointerUp = useCallback(() => {
     if (longPressTimerRef.current) {
@@ -166,6 +189,15 @@ export default function ChatPanel({ shell: shellProp }) {
     speech.reset();
     speech.start();
   }, [speech]);
+
+  const handleVoiceFullscreenClose = useCallback(async () => {
+    try {
+      if (shell?.node?.stopMic) await shell.node.stopMic();
+    } catch {
+      // Ignore stop errors on close.
+    }
+    setVoiceFullscreenOpen(false);
+  }, [shell]);
 
   return (
     <div className="phone-chat-panel" data-testid="phone-chat-panel">
@@ -242,7 +274,7 @@ export default function ChatPanel({ shell: shellProp }) {
       {voiceFullscreenOpen && (
         <VoiceFullscreen
           open={voiceFullscreenOpen}
-          onClose={() => setVoiceFullscreenOpen(false)}
+          onClose={handleVoiceFullscreenClose}
           initialMode="listening"
           shell={shell}
         />

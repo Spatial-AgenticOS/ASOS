@@ -26,3 +26,13 @@ def test_orchestrator_boot_block_has_no_preengine_wiring_calls() -> None:
     # construction blocks later in the file.
     assert text.count("self.orchestrator.set_tool_genesis(") == 1
     assert text.count("self.orchestrator.set_mitosis_engine(") == 1
+
+
+def test_boot_wires_starter_reminders_install_guard() -> None:
+    state_py = Path(__file__).resolve().parents[1] / "api" / "state.py"
+    text = state_py.read_text(encoding="utf-8")
+
+    assert 'starter_dir = (' in text
+    assert '"feral-reminders"' in text
+    assert "if self.app_registry.get(\"feral-reminders\") is None:" in text
+    assert "self.app_registry.install_from_dir(" in text

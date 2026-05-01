@@ -6,8 +6,8 @@ let frameListeners = [];
 
 function makeShell(overrides = {}) {
   return {
-    send: vi.fn(),
-    onFrame: vi.fn((cb) => {
+    sendFrame: vi.fn(),
+    subscribeFrame: vi.fn((cb) => {
       frameListeners.push(cb);
       return () => {
         frameListeners = frameListeners.filter((l) => l !== cb);
@@ -43,6 +43,10 @@ beforeEach(() => {
   });
 
   vi.stubGlobal('AudioContext', vi.fn(() => ({
+    state: 'running',
+    resume: vi.fn(() => Promise.resolve()),
+    destination: {},
+    currentTime: 0,
     createMediaStreamSource: vi.fn(() => ({
       connect: vi.fn(),
     })),
@@ -51,6 +55,21 @@ beforeEach(() => {
       frequencyBinCount: 128,
       getByteFrequencyData: vi.fn((arr) => arr.fill(0)),
       connect: vi.fn(),
+    })),
+    createBuffer: vi.fn((channels, length) => {
+      const ch = new Float32Array(length);
+      return {
+        duration: length / 24000,
+        getChannelData: vi.fn(() => ch),
+      };
+    }),
+    createBufferSource: vi.fn(() => ({
+      connect: vi.fn(),
+      start: vi.fn(),
+      buffer: null,
+    })),
+    decodeAudioData: vi.fn(async () => ({
+      duration: 0.1,
     })),
     close: vi.fn(() => Promise.resolve()),
   })));
@@ -111,7 +130,7 @@ describe('VoiceFullscreen', () => {
     );
 
     fireEvent.click(getByTestId('close-button'));
-    expect(shell.send).toHaveBeenCalledWith('voice_interrupt', {});
+    expect(shell.sendFrame).toHaveBeenCalledWith('voice_interrupt', {});
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -125,11 +144,11 @@ describe('VoiceFullscreen', () => {
     expect(muteBtn.getAttribute('aria-pressed')).toBe('false');
 
     fireEvent.click(muteBtn);
-    expect(shell.send).toHaveBeenCalledWith('voice_mute', { muted: true });
+    expect(shell.sendFrame).toHaveBeenCalledWith('voice_mute', { muted: true });
     expect(muteBtn.getAttribute('aria-pressed')).toBe('true');
 
     fireEvent.click(muteBtn);
-    expect(shell.send).toHaveBeenCalledWith('voice_mute', { muted: false });
+    expect(shell.sendFrame).toHaveBeenCalledWith('voice_mute', { muted: false });
   });
 
   it('keyboard button calls onClose', () => {
@@ -197,7 +216,7 @@ describe('VoiceFullscreen', () => {
     pushFrame('voice_state', { state: 'error', message: 'fail' });
     fireEvent.click(getByTestId('retry-button'));
 
-    expect(shell.send).toHaveBeenCalledWith('voice_session_start', {});
+    expect(shell.sendFrame).toHaveBeenCalledWith('voice_session_start', {});
     expect(queryByTestId('error-surface')).toBeNull();
   });
 
@@ -209,7 +228,7 @@ describe('VoiceFullscreen', () => {
 
     pushFrame('voice_state', { state: 'speaking' });
     fireEvent.click(getByTestId('orb-container'));
-    expect(shell.send).toHaveBeenCalledWith('voice_interrupt', {});
+    expect(shell.sendFrame).toHaveBeenCalledWith('voice_interrupt', {});
   });
 
   it('tap on orb does NOT send interrupt when not speaking', () => {
@@ -219,7 +238,7 @@ describe('VoiceFullscreen', () => {
     );
 
     fireEvent.click(getByTestId('orb-container'));
-    expect(shell.send).not.toHaveBeenCalledWith('voice_interrupt', expect.anything());
+    expect(shell.sendFrame).not.toHaveBeenCalledWith('voice_interrupt', expect.anything());
   });
 
   it('haptics fire on listening→processing transition', () => {
