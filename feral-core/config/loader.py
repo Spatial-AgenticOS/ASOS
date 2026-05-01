@@ -435,23 +435,6 @@ class ConfigLoader:
         self.update_settings("meta", "brain_id", new_id)
         return new_id
 
-    @property
-    def access_pairing_mode(self) -> str:
-        mode = self._merged.get("access", {}).get("pairing_mode", "localhost")
-        if mode not in ("local", "localhost", "remote"):
-            return "localhost"
-        return mode
-
-    @property
-    def access_remote_url(self) -> str:
-        """Public-reachable URL for Mode C, populated by the Tailscale
-        integration. Empty string means Mode C is configured but not yet
-        live; callers MUST treat empty as "remote unavailable".
-        """
-        access = self._merged.get("access", {}) or {}
-        ts = access.get("tailscale", {}) or {}
-        return str(ts.get("tailnet_url", "") or "")
-
     def get_skill_key(self, skill_id: str) -> Optional[str]:
         return self._credentials.get("skill_keys", {}).get(skill_id)
 
