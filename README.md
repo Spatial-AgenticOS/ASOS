@@ -38,8 +38,8 @@
 
 ## Feature Maturity
 
-<!-- sync-versions:test-counts pytest=2594 vitest=167 -->
-> **Stable** means all 5 criteria are met: ≥1 integration test, structured logging (`feral.{subsystem}.{name}`), documented env vars + settings, graceful error handling, and a troubleshooting guide in `docs/mintlify/`. **2594 backend + 167 frontend tests pass** on every commit. See [docs/mintlify/guides/](docs/mintlify/guides/) for per-feature troubleshooting.
+<!-- sync-versions:test-counts pytest=2813 vitest=255 -->
+> **Stable** means all 5 criteria are met: ≥1 integration test, structured logging (`feral.{subsystem}.{name}`), documented env vars + settings, graceful error handling, and a troubleshooting guide in `docs/mintlify/`. **2813 backend + 255 frontend tests pass** on every commit. See [docs/mintlify/guides/](docs/mintlify/guides/) for per-feature troubleshooting.
 <!-- /sync-versions:test-counts -->
 
 | Feature | Status | Details |
