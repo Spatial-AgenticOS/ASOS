@@ -41,17 +41,34 @@ import logging
 import os
 import shutil
 import sqlite3
+import tarfile
 import tempfile
 import time
+from base64 import b64decode
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import quote, unquote
 
 from pydantic import ValidationError
 
 from genui.manifest_signing import SignedManifest, verify as verify_signed_manifest
 from genui.permissions_policy import PolicyViolation, enforce_install_policy
 from models.app_manifest import ActionSpec, AppManifest, SurfaceSpec
+
+try:  # pragma: no cover - optional dependency in constrained test envs
+    import httpx
+except Exception:  # pragma: no cover
+    httpx = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency in constrained test envs
+    from nacl.encoding import HexEncoder  # type: ignore
+    from nacl.exceptions import BadSignatureError  # type: ignore
+    from nacl.signing import VerifyKey  # type: ignore
+except Exception:  # pragma: no cover
+    HexEncoder = None  # type: ignore
+    BadSignatureError = Exception  # type: ignore
+    VerifyKey = None  # type: ignore
 
 logger = logging.getLogger("feral.app_registry")
 
@@ -60,6 +77,8 @@ DEFAULT_APPS_DIR_NAME = "apps"
 DEFAULT_APPS_DB_NAME = "apps.db"
 
 SIGNED_MANIFEST_FILENAMES = ("manifest.signed.json",)
+REGISTRY_DEFAULT_URL = "https://registry.feral.sh"
+MANIFEST_FILENAMES = ("manifest.signed.json", "manifest.json", "manifest.yaml", "manifest.yml")
 
 
 @dataclass
@@ -338,6 +357,124 @@ class AppRegistry:
         )
         return installed
 
+    def install_from_registry(
+        self,
+        registry_id: str,
+        *,
+        registry_url: Optional[str] = None,
+        allow_unsigned: bool = False,
+        user_high_trust: bool = False,
+        overwrite: bool = True,
+        supervisor: Optional[Any] = None,
+        audit_callback: Optional[Callable[[dict], None]] = None,
+    ) -> InstalledApp:
+        """Install an app bundle from the remote registry.
+
+        Expected registry response shape:
+            GET /api/v1/item/{registry_id} -> {
+                "kind": "app",
+                "download_url": "...",
+                "sha256": "<hex>",
+                "signature_b64": "...",          # optional when allow_unsigned
+                "publisher_pubkey_hex": "...",   # optional when allow_unsigned
+            }
+
+        The tarball SHA-256 is always enforced. Detached signature
+        verification is enforced unless ``allow_unsigned=True``.
+        """
+        if not registry_id:
+            raise AppRegistryError("registry_id is required")
+        if httpx is None:
+            raise AppRegistryError("httpx is required for registry installs")
+
+        base = (registry_url or os.environ.get("FERAL_REGISTRY_URL") or REGISTRY_DEFAULT_URL).rstrip("/")
+        item_url = f"{base}/api/v1/item/{registry_id}"
+
+        stage_root = Path(tempfile.mkdtemp(prefix="feral-app-registry-"))
+        tarball = stage_root / "bundle.tar.gz"
+        extract_root = stage_root / "extract"
+
+        try:
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:  # type: ignore[union-attr]
+                try:
+                    item_resp = client.get(item_url)
+                except Exception as exc:
+                    raise AppRegistryError(f"registry lookup failed: {exc}") from exc
+                if item_resp.status_code == 404:
+                    raise AppRegistryError(f"registry item {registry_id!r} not found")
+                if item_resp.status_code >= 400:
+                    raise AppRegistryError(
+                        f"registry lookup failed ({item_resp.status_code}): {item_resp.text[:240]}"
+                    )
+                try:
+                    item = item_resp.json()
+                except Exception as exc:
+                    raise AppRegistryError(
+                        f"registry returned non-JSON metadata for {registry_id!r}"
+                    ) from exc
+                if not isinstance(item, dict):
+                    raise AppRegistryError("registry item metadata must be a JSON object")
+
+                kind = str(item.get("kind") or (item.get("manifest") or {}).get("kind") or "app").lower()
+                if kind not in {"app", "genui_app", "genui-app"}:
+                    raise AppRegistryError(
+                        f"registry item {registry_id!r} is kind {kind!r}, expected 'app'"
+                    )
+
+                download_url = str(item.get("download_url") or "")
+                if not download_url:
+                    raise AppRegistryError("registry item is missing download_url")
+
+                try:
+                    with client.stream("GET", download_url) as bundle_resp:
+                        if bundle_resp.status_code >= 400:
+                            raise AppRegistryError(
+                                f"bundle download failed ({bundle_resp.status_code}) from {download_url}"
+                            )
+                        with open(tarball, "wb") as f:
+                            for chunk in bundle_resp.iter_bytes():
+                                f.write(chunk)
+                except AppRegistryError:
+                    raise
+                except Exception as exc:
+                    raise AppRegistryError(f"bundle download failed: {exc}") from exc
+
+            verified_signature = _verify_registry_bundle(
+                item,
+                tarball,
+                allow_unsigned=allow_unsigned,
+            )
+            _safe_extract_tarball(tarball, extract_root)
+            source_dir = _locate_manifest_source_dir(extract_root)
+            manifest_dict = _load_manifest_dict(source_dir)
+            enforce_install_policy(
+                manifest_dict,
+                allow_unsigned=not verified_signature,
+                user_high_trust=user_high_trust,
+            )
+            installed = self.install_from_dir(source_dir, overwrite=overwrite)
+            self._audit_install(
+                "verified_install" if verified_signature else "unsigned_install",
+                source=stage_root,
+                detail={
+                    "registry_id": registry_id,
+                    "registry_url": base,
+                    "app_id": installed.app_id,
+                    "version": installed.version,
+                },
+                supervisor=supervisor,
+                callback=audit_callback,
+            )
+            return installed
+        except PolicyViolation:
+            raise
+        except AppRegistryError:
+            raise
+        except Exception as exc:
+            raise AppRegistryError(f"registry install failed: {exc}") from exc
+        finally:
+            shutil.rmtree(stage_root, ignore_errors=True)
+
     @staticmethod
     def _audit_install(
         event: str,
@@ -437,7 +574,11 @@ class AppRegistry:
         return {
             "app_id": app_id,
             "surface_id": surface_id,
-            "screen_id": f"{app_id}:{surface_id}:{session_id or user_fingerprint}",
+            "screen_id": self.build_screen_id(
+                app_id=app_id,
+                surface_id=surface_id,
+                scope=session_id or user_fingerprint,
+            ),
             "root": tree,
         }
 
@@ -468,22 +609,49 @@ class AppRegistry:
             )
         for action in surface.action_contract:
             if action.action_id == action_id:
+                schema = _resolve_action_value_schema(app.manifest, action)
+                if schema is not None:
+                    _validate_json_like_schema(value, schema, path="$")
                 return action
         raise AppRegistryError(
             f"action {action_id!r} is not declared on surface {surface_id!r} "
             f"of app {app_id!r}"
         )
 
+    @staticmethod
+    def build_screen_id(app_id: str, surface_id: str, scope: str) -> str:
+        """Build a canonical app screen id used across REST/WS/phone."""
+        return (
+            f"{quote(str(app_id), safe='-._~')}:"
+            f"{quote(str(surface_id), safe='-._~')}:"
+            f"{quote(str(scope or 'default'), safe='-._~')}"
+        )
+
+    @staticmethod
+    def parse_screen_id(screen_id: str) -> Optional[tuple[str, str, str]]:
+        """Parse canonical + legacy ``<app>:<surface>:<scope>`` screen ids."""
+        if not screen_id or ":" not in screen_id:
+            return None
+        parts = screen_id.split(":", 2)
+        if len(parts) != 3:
+            return None
+        app_id, surface_id, scope = parts
+        return unquote(app_id), unquote(surface_id), unquote(scope)
+
     def resolve_app_and_surface(
         self, screen_id: str
     ) -> Optional[tuple[str, str]]:
         """Parse an app-scoped ``screen_id`` back into (app_id, surface_id)."""
+        parsed = self.parse_screen_id(screen_id)
+        if parsed is not None:
+            return parsed[0], parsed[1]
+        # Legacy fallback for malformed pre-canonical ids.
         if not screen_id or ":" not in screen_id:
             return None
-        parts = screen_id.split(":")
-        if len(parts) < 2:
+        first, second, *_ = screen_id.split(":")
+        if not first or not second:
             return None
-        return parts[0], parts[1]
+        return first, second
 
     # ------------------------------------------------------------------
     # Internals
@@ -615,6 +783,232 @@ def _vault_lookup_key(vault: Any, key_id: str) -> Optional[str]:
     except Exception as exc:
         logger.debug("vault publisher_keys lookup failed: %s", exc)
     return None
+
+
+def _sha256_file(path: Path) -> bytes:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.digest()
+
+
+def _verify_registry_bundle(
+    item: dict[str, Any],
+    tarball: Path,
+    *,
+    allow_unsigned: bool,
+) -> bool:
+    """Return True when detached signature verification succeeds."""
+    expected_hex = str(item.get("sha256") or "").lower().strip()
+    if not expected_hex:
+        raise AppRegistryError("registry item is missing sha256")
+    actual_hex = _sha256_file(tarball).hex()
+    if actual_hex != expected_hex:
+        raise AppRegistryError(
+            f"registry bundle sha256 mismatch ({actual_hex} != {expected_hex})"
+        )
+
+    sig_b64 = str(item.get("signature_b64") or item.get("signature") or "").strip()
+    pub_hex = str(item.get("publisher_pubkey_hex") or item.get("publisher_pubkey") or "").strip()
+
+    if not sig_b64 or not pub_hex:
+        if allow_unsigned:
+            return False
+        raise UnverifiedManifestError(
+            "registry bundle missing signature and/or publisher public key"
+        )
+    if VerifyKey is None or HexEncoder is None:
+        raise AppRegistryError("pynacl is required for registry signature verification")
+
+    try:
+        vk = VerifyKey(pub_hex, encoder=HexEncoder)
+        # Registry signs over the ASCII sha256 hex digest.
+        vk.verify(expected_hex.encode("ascii"), b64decode(sig_b64))
+        return True
+    except (BadSignatureError, ValueError, TypeError) as exc:
+        if allow_unsigned:
+            logger.warning("registry signature verification failed but allow_unsigned=True: %s", exc)
+            return False
+        raise UnverifiedManifestError(f"registry signature verification failed: {exc}") from exc
+
+
+def _safe_extract_tarball(tarball: Path, dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    dest_abs = dest.resolve()
+    try:
+        with tarfile.open(tarball, "r:gz") as tf:
+            for member in tf.getmembers():
+                target = (dest / member.name).resolve()
+                if not str(target).startswith(str(dest_abs) + os.sep) and target != dest_abs:
+                    raise AppRegistryError(
+                        f"registry bundle path traversal blocked: {member.name}"
+                    )
+            tf.extractall(dest)
+    except AppRegistryError:
+        raise
+    except Exception as exc:
+        raise AppRegistryError(f"failed to extract registry bundle: {exc}") from exc
+
+
+def _locate_manifest_source_dir(extracted_root: Path) -> Path:
+    """Find the bundle directory containing manifest metadata."""
+    candidates: list[Path] = [extracted_root]
+    candidates.extend(p for p in extracted_root.iterdir() if p.is_dir())
+    for candidate in candidates:
+        for name in MANIFEST_FILENAMES:
+            if (candidate / name).is_file():
+                return candidate
+    for name in MANIFEST_FILENAMES:
+        matches = list(extracted_root.rglob(name))
+        if matches:
+            return matches[0].parent
+    raise AppRegistryError("registry bundle did not contain a manifest file")
+
+
+def _resolve_action_value_schema(
+    manifest: AppManifest,
+    action: ActionSpec,
+) -> Optional[dict[str, Any]]:
+    if isinstance(action.value_schema, dict):
+        return action.value_schema
+    ref = action.value_schema_ref or ""
+    if not ref:
+        return None
+    schema_id = ref
+    if schema_id.startswith("#/data_schemas/"):
+        schema_id = schema_id.split("/", 2)[-1]
+    schema_spec = manifest.get_data_schema(schema_id)
+    if schema_spec is None:
+        raise AppRegistryError(
+            f"action {action.action_id!r} references unknown schema {ref!r}"
+        )
+    if not isinstance(schema_spec.schema, dict):
+        raise AppRegistryError(
+            f"data schema {schema_id!r} is not a JSON object schema"
+        )
+    return schema_spec.schema
+
+
+def _validate_json_like_schema(value: Any, schema: dict[str, Any], *, path: str) -> None:
+    if not isinstance(schema, dict):
+        raise AppRegistryError(f"invalid schema at {path}: schema must be an object")
+
+    expected_type = schema.get("type")
+    if expected_type is not None:
+        _validate_type(value, expected_type, path=path)
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and enum_values and value not in enum_values:
+        raise AppRegistryError(f"{path} must be one of {enum_values!r}")
+
+    if isinstance(value, str):
+        min_len = schema.get("minLength")
+        max_len = schema.get("maxLength")
+        if isinstance(min_len, int) and len(value) < min_len:
+            raise AppRegistryError(f"{path} must be at least {min_len} chars")
+        if isinstance(max_len, int) and len(value) > max_len:
+            raise AppRegistryError(f"{path} must be at most {max_len} chars")
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if isinstance(minimum, (int, float)) and value < minimum:
+            raise AppRegistryError(f"{path} must be >= {minimum}")
+        if isinstance(maximum, (int, float)) and value > maximum:
+            raise AppRegistryError(f"{path} must be <= {maximum}")
+
+    if isinstance(value, dict):
+        required = schema.get("required")
+        if isinstance(required, list):
+            for field in required:
+                if isinstance(field, str) and field not in value:
+                    raise AppRegistryError(f"{path}.{field} is required")
+
+        props = schema.get("properties")
+        if isinstance(props, dict):
+            for key, child_schema in props.items():
+                if key in value and isinstance(child_schema, dict):
+                    _validate_json_like_schema(
+                        value[key],
+                        child_schema,
+                        path=f"{path}.{key}",
+                    )
+
+        additional = schema.get("additionalProperties", True)
+        if additional is False and isinstance(props, dict):
+            extra = [k for k in value.keys() if k not in props]
+            if extra:
+                raise AppRegistryError(
+                    f"{path} has unexpected keys: {', '.join(sorted(extra))}"
+                )
+        if isinstance(additional, dict):
+            for key, child in value.items():
+                if not isinstance(props, dict) or key not in props:
+                    _validate_json_like_schema(
+                        child,
+                        additional,
+                        path=f"{path}.{key}",
+                    )
+
+    if isinstance(value, list):
+        min_items = schema.get("minItems")
+        max_items = schema.get("maxItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            raise AppRegistryError(f"{path} must contain at least {min_items} items")
+        if isinstance(max_items, int) and len(value) > max_items:
+            raise AppRegistryError(f"{path} must contain at most {max_items} items")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for idx, item in enumerate(value):
+                _validate_json_like_schema(
+                    item,
+                    item_schema,
+                    path=f"{path}[{idx}]",
+                )
+
+
+def _validate_type(value: Any, expected: Any, *, path: str) -> None:
+    """Validate JSON-schema-like ``type`` value(s)."""
+    if isinstance(expected, list):
+        errors: list[str] = []
+        for one in expected:
+            try:
+                _validate_type(value, one, path=path)
+                return
+            except AppRegistryError as exc:
+                errors.append(str(exc))
+        raise AppRegistryError(errors[0] if errors else f"{path} has invalid type")
+
+    if expected == "object":
+        if not isinstance(value, dict):
+            raise AppRegistryError(f"{path} must be an object")
+        return
+    if expected == "array":
+        if not isinstance(value, list):
+            raise AppRegistryError(f"{path} must be an array")
+        return
+    if expected == "string":
+        if not isinstance(value, str):
+            raise AppRegistryError(f"{path} must be a string")
+        return
+    if expected == "number":
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise AppRegistryError(f"{path} must be a number")
+        return
+    if expected == "integer":
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise AppRegistryError(f"{path} must be an integer")
+        return
+    if expected == "boolean":
+        if not isinstance(value, bool):
+            raise AppRegistryError(f"{path} must be a boolean")
+        return
+    if expected == "null":
+        if value is not None:
+            raise AppRegistryError(f"{path} must be null")
+        return
+    # Unknown type keywords are ignored for forward compatibility.
 
 
 # ----------------------------------------------------------------------

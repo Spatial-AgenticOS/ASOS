@@ -1,10 +1,164 @@
 # Changelog
 
-<!-- feral-version: 2026.5.7 -->
+<!-- feral-version: 2026.5.8 -->
 
 All notable changes to FERAL are documented here.
 
-## [Unreleased]
+## [2026.5.8] - 2026-04-28 — pairing access modes, PWA, mobile consolidation, HUP fixes
+
+### Added
+
+- **Pairing access modes (Mode A / B / C)** — the brain now distinguishes
+  brain reachability ("how does the phone get to the brain socket?")
+  from device pairing identity ("which token proves *this* device is
+  paired with *this* brain?"). The new `access.pairing_mode` setting
+  picks one of:
+  - **Mode A `local`** — Mode A LAN. Brain binds `0.0.0.0`; pair URL is
+    `http://<lan-ip>:<port>/pair?t=<token>`. LAN IP detected via the
+    UDP-connect kernel trick (no packet sent on the wire).
+  - **Mode B `localhost`** — same Mac only. No pair URL is emitted;
+    the dashboard's "Pair Device" button surfaces a tooltip telling
+    the user to switch modes.
+  - **Mode C `remote`** — Tailscale Funnel-encrypted private tunnel.
+    Pair URL is `https://<machine>.<tailnet>.ts.net/pair?t=<token>`.
+    No port-forwarding, no domain registration, no certs the operator
+    has to manage.
+- `/setup` wizard gained a **"Pair your phone"** step (between "About
+  you" and "Ready") with three mode cards, an inline pair URL +
+  reachability diagnostic, and an explicit **Skip for now** option that
+  persists Mode B and surfaces a follow-up note in the Ready screen.
+  Finishing the wizard now correctly POSTs `/api/setup/complete` (was
+  silently skipping that call before).
+- New brain endpoints for the SDK code-pair flow:
+  `POST /api/devices/pair/announce`, `GET /api/devices/pair/status`,
+  `POST /api/devices/pair/code/claim`. The python-node-sdk and
+  ts-node-sdk pair flow now reaches the brain (was silently 404'ing
+  through the SPA catch-all). 8-character base32 codes (~38 bits of
+  entropy) with a 600-second TTL and a 5-attempts-per-IP-per-15-minutes
+  rate limit on `/code/claim`.
+- New brain WS handler branches: `node_ack` reply after `node_register`
+  (was sending legacy `text_response`), `hup_action_response`
+  consumer (resolves `HardwareMesh` action futures by `request_id`),
+  `node_bye` graceful close, structured `{type:"error",code,message}`
+  frames per HUP_SPEC §8 on protocol violations.
+- iOS SDK `HUPWebSocket` heartbeat loop driven by the `heartbeat_ms`
+  field in the brain's `node_ack`. Cancels on disconnect.
+- PWA scaffolding for `feral-client-v2`: manifest.webmanifest, icon
+  set (192/512/maskable), service worker with auth-sensitive bypass +
+  401-runtime-cache-wipe, apple-touch-icon, `<link rel="manifest">`.
+  Phones can now install the dashboard from Safari ("Add to Home
+  Screen") and Android Chrome ("Install app").
+- Unified QR v1 payload: `{v:1, mode, url, token, brain_id, expires,
+  name?}` emitted by every brain ≥ 2026.5.8. Mobile clients accept the
+  new payload, the legacy `{host,port,apiKey,nodeName}` shape, the
+  legacy `{host,port,token,name}` shape, the `feral://pair?p=…`
+  base64url-deep-link form, and plain `https://<brain>/pair?t=<token>`
+  URLs. All five route through the same `parsePayload()` /
+  `parsePairingPayload()` function on each platform; legacy shapes log
+  a deprecation warning. Sunset for legacy shapes: `2026.7.0`.
+- `feral://` URL scheme registered on iOS (`CFBundleURLTypes`) and the
+  canonical Android app (`<intent-filter scheme="feral" host="pair">`).
+- `/api/...` honest 404s — the SPA catch-all no longer returns `200
+  text/html` for unknown `/api/*`, `/v1/*`, `/v2/api/*` paths. SDKs
+  that polled missing endpoints used to hang silently parsing HTML;
+  they now get a structured JSON 404 with `code: "no_such_route"`.
+
+### Changed
+
+- **HUP protocol bumped to v1.2.0.** The on-wire message types
+  `node_heartbeat` (was legacy `heartbeat`) and `hup_action_request`
+  (was legacy `command` / `execute` / `hup_execute`) are now canonical
+  on both the brain and SDK sides. Legacy aliases are accepted by the
+  brain for one minor version with a structured deprecation log;
+  removed in `2026.7.0`. See `feral-nodes/HUP_SPEC.md` §5.8.
+- **Mobile app of record for Android moved** from the deleted
+  `apps/android/` (and the never-published `feral-nodes/android-app/`)
+  to **`feral-nodes/android-bridge/sample/`**, with `applicationId`
+  promoted from `ai.feral.sample` → `ai.feral.app`. The `bridge/`
+  library module is unchanged.
+- **Mobile app of record for iOS** is now **`feral-nodes/ios-app/`**;
+  the deleted `apps/ios/` (which used `ws://?api_key=`) is gone.
+- **Phone bridge** (`feral-nodes/phone-bridge/bridge.py`) authenticates
+  via `Authorization: Bearer` header by default. If the brain rejects
+  the Bearer with WS close code 4001, the bridge retries once with
+  `?api_key=` query auth so it still works against pre-Bearer brains
+  during the deprecation window.
+- **`?api_key=` query authentication on `/v1/node` is deprecated**
+  across every client (brain still accepts; logs
+  `feral.security.deprecated_query_auth` per accept). Sunset
+  `2026.7.0`.
+- The `_pair_payload` resolver now consults `access.pairing_mode` and
+  `runtime.brain_public_base_url()` instead of echoing the request
+  Host header. The hardcoded `port = 9090` literal is gone.
+- `/api/devices/pair/qr?mode=app` query parameter is deprecated —
+  the route still accepts it but emits the unified v1 payload
+  regardless. Sunset `2026.7.0`.
+- The `/setup/legacy` route returns a server-side **301** redirect to
+  `/setup`. The `SetupWizard.jsx` component is removed.
+
+### Removed
+
+- `apps/ios/`, `apps/android/`, `feral-nodes/android-app/` — never
+  published anywhere (no CI publish workflow, no `.xcodeproj`, no
+  signing keys); duplicates of the canonical apps above.
+- `feral-nodes/theora_glasses_daemon/` — empty stub (only contained a
+  `.pytest_cache`).
+- `feral-client-v2/src/pages/SetupWizard.jsx` — superseded by
+  `Setup.jsx` (which now has the pairing step) and was a blank page in
+  the bundled UI (depth-2 SPA route + Vite's relative asset base).
+
+### Migration
+
+- **Existing installs**: `~/.feral/settings.json` is auto-migrated on
+  first boot to `access.pairing_mode = "localhost"` and
+  `access.remote_provider = null`. This preserves the historical
+  loopback-only behavior; the `/setup` wizard or Settings → Access
+  panel switches the user to LAN or remote when they're ready.
+- **Existing paired devices**: row format unchanged. All previously
+  issued tokens keep working; the `_pair_payload` rewrite changes URL
+  emission, not token storage.
+- **Daemons running pre-2026.5.8 SDKs**: the brain's legacy `heartbeat`
+  handler is removed. No shipped SDK uses it; only an internal test
+  did (now updated). Daemons running the in-tree SDKs continue to
+  work because both python-node-sdk and ts-node-sdk already produce
+  the canonical `node_heartbeat` literal.
+- **Mobile clients**: the deleted `apps/{ios,android}` were never on
+  any store, so no end-user migration is required. Developers who
+  cloned and ran the local source should switch to
+  `feral-nodes/ios-app/` and `feral-nodes/android-bridge/sample/`.
+- **Tailscale (Mode C)**: opt-in only. Operators who do nothing stay
+  in Mode B (localhost). Picking Mode C in the wizard runs `feral
+  access remote-up`, which checks for the `tailscale` CLI, runs
+  `tailscale up` (one-time OAuth in the browser), enables Funnel on
+  the brain port, and writes the resolved URL into settings.
+  Operators behind CGNAT are explicitly supported (Tailscale's relay
+  nodes proxy without port forwarding).
+
+### Security
+
+- 21 distinct issues from `.internal/audit-v2026.5.5/A4-map.md` §4
+  closed: 8 critical, 11 major, 2 minor.
+- Token lifecycle (Argon2id + SHA-256 lookup index + 24h sliding TTL +
+  claim marker) **unchanged** — the redesign explicitly does not
+  modify the verifier path. Pair-code rate limiter is additive.
+- `feral-client-v2` service worker explicitly bypasses cache (no-store
+  fetch) for `/api/setup/*`, `/api/devices/pair/*`, `/api/auth/*` and
+  passes through `/v1/*` so the WS upgrade handshake is never
+  intercepted. On any `/api/*` 401 the runtime cache is wiped to
+  prevent stale-token loops.
+
+### Coverage
+
+- pytest (feral-core): 2619 passed, 15 skipped (pre-existing).
+- pytest (feral-nodes/python-node-sdk): 12 passed.
+- pytest (feral-nodes/phone-bridge): 10 passed.
+- vitest (feral-client-v2): 169 passed across 39 files.
+- npm test (feral-nodes/ts-node-sdk): 5 passed.
+- swift test (feral-nodes/ios-node-sdk): 18 passed.
+- iOS app + Android sample: tests authored under
+  `feral-nodes/ios-app/FeralNodeTests/UnifiedPairPayloadTests.swift`
+  and `feral-nodes/android-bridge/bridge/src/test/java/io/feral/bridge/PairingManagerTest.kt`;
+  require local Xcode / Android SDK to execute.
 
 ## [2026.5.5] - 2026-04-26
 

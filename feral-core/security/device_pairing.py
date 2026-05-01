@@ -78,6 +78,11 @@ BCRYPT_COST = 12
 # may override per-pair via ``pair_device(ttl_seconds=...)``.
 DEFAULT_TTL_SECONDS = 86_400
 
+# Runtime bearer for paired phone/browser clients. Kept separate from the
+# pair token so we can rotate runtime auth without touching pair claims.
+DEFAULT_PHONE_BEARER_TTL_SECONDS = 2_592_000  # 30 days
+PHONE_BEARER_KIND = "phone_bearer"
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Hash backend (argon2id primary, bcrypt fallback)
@@ -271,6 +276,21 @@ class DevicePairingStore:
                     conn, "paired_devices", "expires_at", "INTEGER",
                 )
 
+                # PIN second-factor columns (pair-pin-confirm PR).
+                # Existing rows get pin_hash=NULL → no PIN required, so
+                # legacy tokens still work without re-pairing.
+                self._add_column_if_missing(
+                    conn, "paired_devices", "pin_hash", "TEXT",
+                )
+                self._add_column_if_missing(
+                    conn, "paired_devices", "pin_attempts", "INTEGER",
+                    default="0",
+                )
+                self._add_column_if_missing(
+                    conn, "paired_devices", "pin_verified", "INTEGER",
+                    default="0",
+                )
+
                 # Add the legacy `token` column so old DBs upgrade
                 # cleanly even when they pre-date that column. Fresh
                 # installs don't have it (see CREATE TABLE above) so
@@ -285,6 +305,54 @@ class DevicePairingStore:
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_pd_expires_at "
                     "ON paired_devices(expires_at)"
+                )
+
+                # Runtime credentials for paired devices (e.g. phone bearer).
+                # Separate table = separate lifecycle from pair tokens.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS device_credentials (
+                        credential_id  TEXT PRIMARY KEY,
+                        device_id      TEXT NOT NULL,
+                        bearer_kind    TEXT NOT NULL,
+                        token_lookup   TEXT NOT NULL UNIQUE,
+                        token_hash     TEXT NOT NULL,
+                        hash_algo      TEXT NOT NULL,
+                        ttl_seconds    INTEGER NOT NULL,
+                        expires_at     INTEGER NOT NULL,
+                        created_at     REAL NOT NULL,
+                        rotated_at     REAL NOT NULL
+                    )
+                """)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_dc_device_kind "
+                    "ON device_credentials(device_id, bearer_kind)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_dc_expires_at "
+                    "ON device_credentials(expires_at)"
+                )
+
+                # Pending pair codes — the SDK code-pair flow:
+                #   daemon emits an 8-char base32 code, dashboard claims
+                #   it. ``token`` is null until ``claim_pending_code``
+                #   mints a real device-pairing token and writes it
+                #   back. ``claim_attempts`` lets the rate limiter
+                #   anti-correlate brute force against a single code.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS pending_pair_codes (
+                        code            TEXT PRIMARY KEY,
+                        node_id         TEXT NOT NULL,
+                        name            TEXT NOT NULL,
+                        created_at      REAL NOT NULL,
+                        expires_at      REAL NOT NULL,
+                        token           TEXT,
+                        device_id       TEXT,
+                        claim_attempts  INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_ppc_expires_at "
+                    "ON pending_pair_codes(expires_at)"
                 )
                 conn.commit()
 
@@ -558,6 +626,27 @@ class DevicePairingStore:
 
     # ── pair / verify / mark_claimed ───────────────────────────────
 
+    # ── PIN second-factor (pair-pin-confirm PR) ──────────────────────
+    #
+    # The pair URL token is a 256-bit random secret; today its
+    # possession alone is sufficient to claim. To raise the bar, the
+    # operator can request that a 4-digit PIN gate the claim. The
+    # brain shows the PIN to the operator on the dashboard; the phone
+    # form prompts for it before POSTing /api/devices/pair/complete.
+    # 5 wrong attempts → token invalidated server-side. The PIN itself
+    # is stored Argon2id-hashed; plaintext is returned exactly once
+    # to the operator at issue time.
+    PIN_DIGITS = 4
+    PIN_MAX_ATTEMPTS = 5
+
+    @staticmethod
+    def _generate_pin(digits: int = PIN_DIGITS) -> str:
+        # secrets.randbelow gives a uniform integer in [0, 10**digits);
+        # zero-pad so 4-digit PINs always render as four characters
+        # ("0042" not "42").
+        n = secrets.randbelow(10 ** digits)
+        return f"{n:0{digits}d}"
+
     def pair_device(
         self,
         name: str,
@@ -567,6 +656,9 @@ class DevicePairingStore:
         platform: str = "",
         capabilities: Optional[list[str]] = None,
         ttl_seconds: int = DEFAULT_TTL_SECONDS,
+        mint_phone_bearer: Optional[bool] = None,
+        phone_bearer_ttl_seconds: int = DEFAULT_PHONE_BEARER_TTL_SECONDS,
+        require_pin: bool = False,
     ) -> dict:
         """Register a new device.
 
@@ -577,6 +669,8 @@ class DevicePairingStore:
                 with explicit node_id + capabilities). This is the
                 "typed body" the v2 PairDeviceModal needed for its HUP
                 tab.
+                ``"browser_node_v2"`` opts into issuing a runtime
+                phone bearer alongside the pair token.
             node_id: optional authoritative id the daemon will register
                 with on /v1/node (only used by kind="hup").
             platform: user-agent / platform hint for browser clients.
@@ -585,6 +679,10 @@ class DevicePairingStore:
             ttl_seconds: how long this pairing is valid for. Default
                 24h. Overridable per-pair (e.g. setup-wizard short-lived
                 tokens use 600s).
+            mint_phone_bearer: override for issuing a runtime phone bearer.
+                When ``None``, this is inferred from
+                ``kind == "browser_node_v2"``.
+            phone_bearer_ttl_seconds: runtime bearer TTL. Defaults to 30 days.
 
         Returns ``{device_id, token, name, paired_at, expires_at,
         ttl_seconds, kind, node_id?, …}``. The plaintext ``token`` is
@@ -597,6 +695,13 @@ class DevicePairingStore:
             raise ValueError(
                 f"ttl_seconds must be positive (got {ttl_seconds})"
             )
+        if mint_phone_bearer is None:
+            mint_phone_bearer = kind == "browser_node_v2"
+        if mint_phone_bearer and phone_bearer_ttl_seconds <= 0:
+            raise ValueError(
+                "phone_bearer_ttl_seconds must be positive when "
+                "mint_phone_bearer=True"
+            )
 
         device_id = str(uuid4())
         token = secrets.token_hex(32)
@@ -608,6 +713,13 @@ class DevicePairingStore:
         token_hash = backend.hash(token)
         token_lookup = _token_lookup(token)
 
+        # PIN second factor (opt-in per pair).
+        pin_plaintext = ""
+        pin_hash = None
+        if require_pin:
+            pin_plaintext = self._generate_pin()
+            pin_hash = backend.hash(pin_plaintext)
+
         with self._lock:
             conn = self._conn()
             try:
@@ -615,24 +727,34 @@ class DevicePairingStore:
                     """INSERT INTO paired_devices
                        (device_id, name, paired_at, kind, node_id,
                         platform, capabilities, token_lookup, token_hash,
-                        hash_algo, ttl_seconds, expires_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        hash_algo, ttl_seconds, expires_at,
+                        pin_hash, pin_attempts, pin_verified)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)""",
                     (
                         device_id, name, now, kind, node_id or "",
                         platform or "", caps_text,
                         token_lookup, token_hash, backend.name,
                         int(ttl_seconds), expires_at,
+                        pin_hash,
                     ),
                 )
+                phone_bearer_record = None
+                if mint_phone_bearer:
+                    phone_bearer_record = self._issue_phone_bearer(
+                        conn,
+                        device_id=device_id,
+                        ttl_seconds=int(phone_bearer_ttl_seconds),
+                    )
                 conn.commit()
             finally:
                 conn.close()
 
         logger.info(
-            "Paired device %s (%s, kind=%s, node=%s, ttl=%ss)",
+            "Paired device %s (%s, kind=%s, node=%s, ttl=%ss, pin=%s)",
             device_id, name, kind, node_id or "-", ttl_seconds,
+            "yes" if require_pin else "no",
         )
-        return {
+        result = {
             "device_id": device_id,
             "token": token,
             "name": name,
@@ -643,7 +765,296 @@ class DevicePairingStore:
             "node_id": node_id or "",
             "platform": platform or "",
             "capabilities": list(capabilities or []),
+            "pin_required": bool(require_pin),
         }
+        if phone_bearer_record:
+            result.update({
+                "phone_bearer": phone_bearer_record["phone_bearer"],
+                "phone_bearer_expires_at": phone_bearer_record["expires_at"],
+                "phone_bearer_ttl_seconds": phone_bearer_record["ttl_seconds"],
+            })
+        if require_pin:
+            # Plaintext PIN returned EXACTLY ONCE alongside the token,
+            # so the dashboard can show it to the operator. After this
+            # response the PIN can only be verified, not retrieved.
+            result["pin"] = pin_plaintext
+        return result
+
+    def _issue_phone_bearer(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        device_id: str,
+        ttl_seconds: int = DEFAULT_PHONE_BEARER_TTL_SECONDS,
+    ) -> dict:
+        """Issue (or replace) the runtime phone bearer for *device_id*."""
+        if ttl_seconds <= 0:
+            raise ValueError(f"ttl_seconds must be positive (got {ttl_seconds})")
+        phone_bearer = secrets.token_hex(32)
+        now = time.time()
+        expires_at = int(now) + int(ttl_seconds)
+        backend = _get_backend()
+
+        conn.execute(
+            "DELETE FROM device_credentials WHERE device_id = ? AND bearer_kind = ?",
+            (device_id, PHONE_BEARER_KIND),
+        )
+        conn.execute(
+            """INSERT INTO device_credentials
+               (credential_id, device_id, bearer_kind, token_lookup, token_hash,
+                hash_algo, ttl_seconds, expires_at, created_at, rotated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(uuid4()),
+                device_id,
+                PHONE_BEARER_KIND,
+                _token_lookup(phone_bearer),
+                backend.hash(phone_bearer),
+                backend.name,
+                int(ttl_seconds),
+                expires_at,
+                now,
+                now,
+            ),
+        )
+        logger.info(
+            "Issued runtime credential (device_id=%s bearer_kind=%s ttl=%ss)",
+            device_id,
+            PHONE_BEARER_KIND,
+            ttl_seconds,
+        )
+        return {
+            "device_id": device_id,
+            "phone_bearer": phone_bearer,
+            "expires_at": expires_at,
+            "ttl_seconds": int(ttl_seconds),
+            "bearer_kind": PHONE_BEARER_KIND,
+        }
+
+    def verify_phone_bearer(self, bearer: str) -> Optional[str]:
+        """Return the ``device_id`` for a runtime phone bearer.
+
+        Behaves like :meth:`verify_device`: unknown/expired/invalid bearers
+        return ``None``; successful verification extends ``expires_at`` by the
+        bearer TTL (sliding window) and bumps ``last_seen`` on the paired
+        device row.
+        """
+        if not bearer:
+            return None
+        lookup = _token_lookup(bearer)
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                """SELECT credential_id, device_id, token_hash, expires_at, ttl_seconds
+                   FROM device_credentials
+                   WHERE token_lookup = ? AND bearer_kind = ?""",
+                (lookup, PHONE_BEARER_KIND),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            return None
+        if not _get_backend().verify(row["token_hash"], bearer):
+            return None
+        now = int(time.time())
+        if row["expires_at"] is not None and row["expires_at"] <= now:
+            logger.info(
+                "device_pairing.phone_bearer_expired: device_id=%s expires_at=%s (now=%s)",
+                row["device_id"],
+                row["expires_at"],
+                now,
+            )
+            return None
+
+        device_id = row["device_id"]
+        new_expiry = now + int(row["ttl_seconds"] or DEFAULT_PHONE_BEARER_TTL_SECONDS)
+        with self._lock:
+            conn = self._conn()
+            try:
+                conn.execute(
+                    "UPDATE device_credentials SET expires_at = ?, rotated_at = ? "
+                    "WHERE credential_id = ?",
+                    (new_expiry, time.time(), row["credential_id"]),
+                )
+                conn.execute(
+                    "UPDATE paired_devices SET last_seen = ? WHERE device_id = ?",
+                    (time.time(), device_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return device_id
+
+    def rotate_phone_bearer(
+        self,
+        device_id: str,
+        *,
+        ttl_seconds: int = DEFAULT_PHONE_BEARER_TTL_SECONDS,
+    ) -> Optional[dict]:
+        """Replace the active runtime phone bearer for *device_id*."""
+        if not device_id:
+            return None
+        if ttl_seconds <= 0:
+            raise ValueError(
+                f"ttl_seconds must be positive (got {ttl_seconds})"
+            )
+        with self._lock:
+            conn = self._conn()
+            try:
+                row = conn.execute(
+                    "SELECT device_id FROM paired_devices WHERE device_id = ?",
+                    (device_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                issued = self._issue_phone_bearer(
+                    conn,
+                    device_id=device_id,
+                    ttl_seconds=int(ttl_seconds),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return issued
+
+    def token_requires_pin(self, token: str) -> bool:
+        """Does this token need a PIN to claim?
+
+        Used by ``GET /api/devices/pair/check`` so the phone's form
+        knows whether to render the PIN input. Returns False if the
+        token is unknown — that case will be caught later by claim
+        verification, no point leaking the existence of unknown tokens
+        through this endpoint.
+        """
+        if not token:
+            return False
+        lookup = _token_lookup(token)
+        with self._lock:
+            conn = self._conn()
+            try:
+                row = conn.execute(
+                    "SELECT pin_hash FROM paired_devices "
+                    "WHERE token_lookup = ?",
+                    (lookup,),
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None:
+            return False
+        return bool(row[0])
+
+    def verify_pin(self, token: str, pin: str) -> tuple[bool, str]:
+        """Verify a 4-digit PIN against the pair row.
+
+        Returns ``(ok, reason)``:
+
+        - ``(True, "verified")`` — PIN matched; ``pin_verified`` is set
+          on the row so subsequent /pair/complete can succeed.
+        - ``(False, "no_pin_required")`` — token has no PIN; caller
+          should accept any PIN value (or skip). Treated as success
+          for the legacy no-PIN flow.
+        - ``(False, "wrong_pin")`` — PIN mismatch; ``pin_attempts``
+          incremented. After PIN_MAX_ATTEMPTS the row is deleted
+          server-side (token invalidated).
+        - ``(False, "exhausted")`` — too many wrong attempts; token is
+          gone or about to be.
+        - ``(False, "expired")`` — pair token TTL elapsed.
+        - ``(False, "unknown_token")`` — token not in the DB.
+        """
+        if not token:
+            return False, "unknown_token"
+        lookup = _token_lookup(token)
+        backend = _get_backend()
+        with self._lock:
+            conn = self._conn()
+            try:
+                row = conn.execute(
+                    "SELECT device_id, pin_hash, pin_attempts, "
+                    "       expires_at FROM paired_devices "
+                    "WHERE token_lookup = ?",
+                    (lookup,),
+                ).fetchone()
+                if row is None:
+                    return False, "unknown_token"
+                device_id = row["device_id"]
+                pin_hash = row["pin_hash"]
+                attempts = int(row["pin_attempts"] or 0)
+                expires_at = row["expires_at"]
+                if expires_at and float(expires_at) <= time.time():
+                    return False, "expired"
+                if not pin_hash:
+                    # Token has no PIN; treat as "nothing to verify".
+                    return False, "no_pin_required"
+                if attempts >= self.PIN_MAX_ATTEMPTS:
+                    conn.execute(
+                        "DELETE FROM paired_devices WHERE device_id = ?",
+                        (device_id,),
+                    )
+                    conn.commit()
+                    logger.warning(
+                        "PIN attempts exhausted; revoked device_id=%s",
+                        device_id,
+                    )
+                    return False, "exhausted"
+                ok = bool(backend.verify(pin_hash, pin or ""))
+                if not ok:
+                    new_attempts = attempts + 1
+                    if new_attempts >= self.PIN_MAX_ATTEMPTS:
+                        conn.execute(
+                            "DELETE FROM paired_devices WHERE device_id = ?",
+                            (device_id,),
+                        )
+                        conn.commit()
+                        logger.warning(
+                            "PIN attempts exhausted; revoked device_id=%s",
+                            device_id,
+                        )
+                        return False, "exhausted"
+                    conn.execute(
+                        "UPDATE paired_devices SET pin_attempts = ? "
+                        "WHERE device_id = ?",
+                        (new_attempts, device_id),
+                    )
+                    conn.commit()
+                    return False, "wrong_pin"
+                # PIN verified — set the flag and reset attempts.
+                conn.execute(
+                    "UPDATE paired_devices SET pin_verified = 1, "
+                    "       pin_attempts = 0 WHERE device_id = ?",
+                    (device_id,),
+                )
+                conn.commit()
+                return True, "verified"
+            finally:
+                conn.close()
+
+    def token_pin_verified(self, token: str) -> bool:
+        """Has the PIN gate been cleared for this token?
+
+        Used by ``/api/devices/pair/complete`` to gate phone_bearer
+        issuance. Tokens with no PIN (legacy flow) return True
+        unconditionally; tokens with PIN require an explicit verify
+        call first.
+        """
+        if not token:
+            return False
+        lookup = _token_lookup(token)
+        with self._lock:
+            conn = self._conn()
+            try:
+                row = conn.execute(
+                    "SELECT pin_hash, pin_verified FROM paired_devices "
+                    "WHERE token_lookup = ?",
+                    (lookup,),
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None:
+            return False
+        if not row[0]:  # no pin_hash → no PIN required
+            return True
+        return bool(row[1])
 
     def mark_claimed(self, token: str) -> Optional[str]:
         """Set ``claimed_at`` once a daemon actually attaches with *token*.
@@ -839,6 +1250,176 @@ class DevicePairingStore:
                 len(to_prune), older_than_seconds,
             )
         return {"pruned": len(to_prune), "kept": kept, "rows": to_prune}
+
+
+    # ── Pending pair codes (SDK code-pair flow) ──────────────────────
+
+    PENDING_PAIR_CODE_TTL_SECONDS = 600
+    PENDING_PAIR_CODE_PER_CODE_MAX_ATTEMPTS = 10
+
+    def announce_pending_code(self, *, code: str, node_id: str, name: str) -> None:
+        """A daemon advertises a freshly generated pair code.
+
+        ``code`` is an 8-char base32 string the daemon prints to the
+        operator; the operator types it into the dashboard "Type a pair
+        code" field. The brain issues a real device token at claim time,
+        not at announce time, so an unclaimed code is harmless.
+        """
+        if not code or not node_id:
+            raise ValueError("code and node_id are required")
+        now = time.time()
+        expires_at = now + self.PENDING_PAIR_CODE_TTL_SECONDS
+        with self._lock:
+            conn = self._conn()
+            try:
+                # Upsert by code: a daemon that re-announces the same
+                # code (e.g. on retry) gets its ``created_at`` refreshed
+                # but does NOT bump claim_attempts.
+                conn.execute(
+                    """INSERT INTO pending_pair_codes
+                          (code, node_id, name, created_at, expires_at,
+                           token, device_id, claim_attempts)
+                       VALUES (?, ?, ?, ?, ?, NULL, NULL, 0)
+                       ON CONFLICT(code) DO UPDATE SET
+                           node_id=excluded.node_id,
+                           name=excluded.name,
+                           created_at=excluded.created_at,
+                           expires_at=excluded.expires_at""",
+                    (code, node_id, name, now, expires_at),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def lookup_pending_code(self, *, code: str, node_id: str) -> Optional[dict]:
+        """Status poll for the daemon. Returns:
+
+            ``None``  — code unknown (use 404 in the route)
+            ``{"_now": <float>, "expires_at": ..., "token": "..."}``
+
+        The daemon decides ``pending`` vs ``paired`` vs ``expired``
+        based on the ``token`` field and ``expires_at`` clock — the
+        store does not pre-compute that label so tests stay legible.
+        """
+        if not code or not node_id:
+            return None
+        now = time.time()
+        with self._lock:
+            conn = self._conn()
+            try:
+                row = conn.execute(
+                    """SELECT code, node_id, name, created_at, expires_at,
+                              token, device_id, claim_attempts
+                       FROM pending_pair_codes
+                       WHERE code = ? AND node_id = ?""",
+                    (code, node_id),
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None:
+            return None
+        return {
+            "_now": now,
+            "code": row["code"],
+            "node_id": row["node_id"],
+            "name": row["name"],
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"],
+            "token": row["token"],
+            "device_id": row["device_id"],
+        }
+
+    def claim_pending_code(self, *, code: str) -> Optional[dict]:
+        """Operator types the code into the dashboard.
+
+        On match we mint a real device-pairing token (kind="hup",
+        node_id from the announce row) and write it back. On mismatch
+        we increment ``claim_attempts``; if the per-code cap (10) is
+        exceeded the row is invalidated server-side. Returns the token
+        record or ``None``.
+        """
+        if not code:
+            return None
+        now = time.time()
+        with self._lock:
+            conn = self._conn()
+            try:
+                row = conn.execute(
+                    """SELECT code, node_id, name, expires_at,
+                              token, claim_attempts
+                       FROM pending_pair_codes
+                       WHERE code = ?""",
+                    (code,),
+                ).fetchone()
+                if row is None:
+                    return None
+                if row["expires_at"] <= now:
+                    return None
+                if row["token"]:
+                    # Already claimed; idempotent return so a flaky
+                    # network does not lock the daemon out.
+                    return {
+                        "token": row["token"],
+                        "device_id": row["device_id"] if "device_id" in row.keys() else "",
+                        "expires_at": int(row["expires_at"]),
+                    }
+            finally:
+                conn.close()
+
+        # Mint the real token via the existing pair_device path. We do
+        # this OUTSIDE the lock because pair_device acquires it itself.
+        result = self.pair_device(
+            row["name"],
+            kind="hup",
+            node_id=row["node_id"],
+        )
+
+        with self._lock:
+            conn = self._conn()
+            try:
+                conn.execute(
+                    """UPDATE pending_pair_codes
+                       SET token = ?, device_id = ?
+                       WHERE code = ?""",
+                    (result["token"], result["device_id"], code),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+        return {
+            "token": result["token"],
+            "device_id": result["device_id"],
+            "expires_at": int(result["expires_at"]),
+        }
+
+    def expire_pending_codes(self) -> int:
+        """Sweep expired pending codes. Returns the number deleted.
+
+        Called opportunistically by the brain's pruning loop. Codes
+        that were already claimed (``token IS NOT NULL``) are kept
+        for one extra TTL window so a flaky daemon can re-poll and
+        get an idempotent paired response.
+        """
+        now = time.time()
+        cutoff = now - self.PENDING_PAIR_CODE_TTL_SECONDS
+        with self._lock:
+            conn = self._conn()
+            try:
+                cursor = conn.execute(
+                    """DELETE FROM pending_pair_codes
+                       WHERE token IS NULL AND expires_at <= ?""",
+                    (now,),
+                )
+                also = conn.execute(
+                    """DELETE FROM pending_pair_codes
+                       WHERE token IS NOT NULL AND expires_at <= ?""",
+                    (cutoff,),
+                )
+                conn.commit()
+                return int(cursor.rowcount) + int(also.rowcount)
+            finally:
+                conn.close()
 
 
 _store: Optional[DevicePairingStore] = None

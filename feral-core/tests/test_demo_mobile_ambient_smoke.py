@@ -28,11 +28,22 @@ pytestmark = pytest.mark.no_auto_feral_home
 
 
 @pytest.fixture
-def brain(tmp_path):
+def brain(tmp_path, monkeypatch):
+    monkeypatch.setenv("FERAL_HOME", str(tmp_path))
+    from config.loader import ConfigLoader
     from security.device_pairing import DevicePairingStore
+
+    config = ConfigLoader(project_dir=str(tmp_path))
+    config.discover()
+    config.update_settings("access", "pairing_mode", "local")
+    monkeypatch.setattr(
+        "api.routes.devices._detect_lan_ip", lambda: "192.168.50.9"
+    )
+
     store = DevicePairingStore(db_path=str(tmp_path / "demo_pairs.db"))
 
     mock = MagicMock()
+    mock.config = config
     mock.device_pairing_store = store
     with patch("api.state.state", mock), patch("api.routes.devices.state", mock):
         from api.server import app
@@ -45,7 +56,9 @@ def test_demo_step_1_issue_pair_url(brain):
     r = c.get("/api/devices/pair/url?name=demo-phone")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["mode"] == "web"
+    # Post-Phase-3: unified v1 payload, ``mode`` is now the access mode.
+    assert body["v"] == 1
+    assert body["mode"] == "local"
     assert body["url"].startswith("http")
     assert "/pair?t=" in body["url"]
     assert len(body["token"]) >= 32

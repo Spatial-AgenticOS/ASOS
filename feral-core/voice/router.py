@@ -57,8 +57,9 @@ class VoiceRouter:
 
     def register_voice_config(self, node_id: str, config: dict):
         """Store a node's voice capabilities.  Called when a `voice_config` message arrives."""
-        self._node_voice_config[node_id] = config
-        logger.info(f"Voice config for {node_id}: {config}")
+        merged = {**self._node_voice_config.get(node_id, {}), **(config or {})}
+        self._node_voice_config[node_id] = merged
+        logger.info(f"Voice config for {node_id}: {merged}")
 
     def set_session_voice_mode(self, session_id: str, mode: str):
         """Set the voice mode for a web client session (realtime | whisper | disabled)."""
@@ -73,11 +74,22 @@ class VoiceRouter:
     # ------------------------------------------------------------------
 
     def _resolve_provider(self, node_id: str) -> str:
-        """Return 'gemini', 'openai', or 'whisper' for a given node."""
+        """Return 'gemini', 'openai', 'chained', or 'whisper' for a given node."""
         cfg = self._node_voice_config.get(node_id, {})
+        mode = (cfg.get("mode") or "").lower()
 
-        if cfg.get("mode") == "whisper":
+        if mode == "whisper":
             return "whisper"
+        # --- Subagent B: chained mode resolution ---
+        if mode == "chained":
+            return "chained"
+        # --- end Subagent B ---
+        if mode == "gemini_live":
+            if self._gemini and self._gemini.available:
+                return "gemini"
+        if mode == "openai_realtime":
+            if self._realtime and self._realtime.available:
+                return "openai"
 
         explicit = cfg.get("voice_provider", "").lower()
         if explicit == "gemini":
@@ -98,8 +110,12 @@ class VoiceRouter:
         return "whisper"
 
     def _resolve_session_provider(self, session_id: str) -> str:
-        """Return 'gemini', 'openai', or 'whisper' for a web-client session."""
+        """Return 'gemini', 'openai', 'chained', or 'whisper' for a web-client session."""
         mode = self._session_voice_mode.get(session_id, "")
+        # --- Subagent B: chained mode session resolution ---
+        if mode == "chained":
+            return "chained"
+        # --- end Subagent B ---
         if mode != "realtime":
             return "whisper"
 
@@ -133,7 +149,27 @@ class VoiceRouter:
         encoding: str = "pcm16",
         sample_rate: int = 24000,
     ):
-        if self._wake_word and self._wake_word.enabled:
+        # Wake-word gate is only appropriate for always-listening
+        # desktop/background mics. When a phone user explicitly tapped
+        # "Start voice" we already have voice_session_start on record
+        # and MUST NOT drop audio waiting for "hey feral" — that's
+        # what stalled voice in the live test even though the mic was
+        # streaming PCM correctly to the brain.
+        #
+        # Skip the gate if there's an active browser_node voice session
+        # bound to this node (the phone-as-peer fast path).
+        cfg = self._node_voice_config.get(node_id, {})
+        skip_wake = bool(cfg.get("skip_wake"))
+        if not skip_wake:
+            try:
+                if node_id and session_id in self._session_voice_mode:
+                    skip_wake = True
+                elif node_id and node_id.startswith("browser-node-"):
+                    skip_wake = True
+            except Exception:
+                skip_wake = False
+
+        if self._wake_word and self._wake_word.enabled and not skip_wake:
             import base64
             pcm_bytes = base64.b64decode(audio_b64)
             should_process = await self._wake_word.process_frame(session_id, pcm_bytes)
@@ -149,10 +185,28 @@ class VoiceRouter:
         if provider == "openai":
             rs = self._realtime.get_session(node_id)
             if not rs:
-                rs = await self._realtime.start_session(session_id, node_id)
+                rs = await self._realtime.start_session(
+                    session_id,
+                    node_id,
+                    model=cfg.get("model", "gpt-realtime"),
+                    voice=cfg.get("voice", "marin"),
+                    input_sample_rate=int(cfg.get("sample_rate") or sample_rate or 24000),
+                    language_hint=cfg.get("language_hint", ""),
+                )
             if rs and rs.connected:
                 await rs.send_audio(audio_b64)
             return
+
+        # --- Subagent B: chained pipeline audio routing ---
+        if provider == "chained":
+            await self.handle_chained_audio(
+                session_id=session_id,
+                audio_b64=audio_b64,
+                chunk_index=chunk_index,
+                is_final=is_final,
+            )
+            return
+        # --- end Subagent B ---
 
         await self._handle_whisper_path(
             session_id=session_id,
@@ -187,10 +241,25 @@ class VoiceRouter:
         if provider == "openai":
             rs = self._realtime.get_session(client_node)
             if not rs:
-                rs = await self._realtime.start_session(session_id, client_node)
+                rs = await self._realtime.start_session(
+                    session_id,
+                    client_node,
+                    input_sample_rate=sample_rate or 24000,
+                )
             if rs and rs.connected:
                 await rs.send_audio(audio_b64)
             return
+
+        # --- Subagent B: chained pipeline audio routing (client) ---
+        if provider == "chained":
+            await self.handle_chained_audio(
+                session_id=session_id,
+                audio_b64=audio_b64,
+                chunk_index=chunk_index,
+                is_final=is_final,
+            )
+            return
+        # --- end Subagent B ---
 
         await self._handle_whisper_path(
             session_id=session_id,
@@ -394,11 +463,191 @@ class VoiceRouter:
             if sid_for_node:
                 await self._realtime.stop_session(sid_for_node)
 
+        # --- Subagent B: close chained session ---
+        if hasattr(self, "_chained") and self._chained:
+            await self._chained.close_session(session_id)
+        # --- end Subagent B ---
+
         self._session_voice_mode.pop(session_id, None)
         logger.info(f"Voice stopped for session {session_id[:8]}")
+
+    # --- Subagent A (realtime GA) + Subagent B (chained pipeline) integration ---
+    #
+    # open_session is the high-level mode dispatcher used by
+    # daemon_session's voice_session_start handler. It routes to:
+    #   - openai_realtime → RealtimeProxy (GA, gpt-realtime)
+    #   - gemini_live     → GeminiRealtimeProxy (existing)
+    #   - chained         → ChainedVoicePipeline via open_chained_session
+
+    async def open_session(self, session_id: str, mode: str, provider_opts: dict | None = None):
+        """High-level entry point for opening a voice session by mode.
+
+        Dispatches by mode:
+          - ``openai_realtime``: OpenAI Realtime GA (Subagent A)
+          - ``chained``: Deepgram/Whisper STT → LLM → OpenAI/ElevenLabs TTS (Subagent B)
+          - ``gemini_live``: existing GeminiRealtimeProxy
+        """
+        opts = provider_opts or {}
+        if mode == "openai_realtime":
+            if not self._realtime or not self._realtime.available:
+                logger.warning("openai_realtime requested but proxy unavailable")
+                return None
+            node_id = opts.get("node_id", f"webclient_{session_id[:8]}")
+            model = opts.get("model", "gpt-realtime")
+            voice = opts.get("voice", "marin")
+            input_sample_rate = int(opts.get("sample_rate") or 24000)
+            language_hint = opts.get("language_hint", "")
+            self.register_voice_config(node_id, {
+                "mode": "openai_realtime",
+                "voice_provider": "openai",
+                "supports_realtime": True,
+                "sample_rate": input_sample_rate,
+                "language_hint": language_hint,
+                "voice": voice,
+                "model": model,
+                "skip_wake": True,
+            })
+            rs = await self._realtime.start_session(
+                session_id,
+                node_id,
+                model=model,
+                voice=voice,
+                input_sample_rate=input_sample_rate,
+                language_hint=language_hint,
+            )
+            return rs
+        if mode == "chained":
+            node_id = opts.get("node_id", "")
+            if node_id:
+                self.register_voice_config(node_id, {
+                    "mode": "chained",
+                    "voice_provider": "openai",
+                    "supports_realtime": False,
+                    "skip_wake": True,
+                })
+            return await self.open_chained_session(session_id, opts)
+        if mode == "gemini_live":
+            if not self._gemini or not self._gemini.available:
+                logger.warning("gemini_live requested but proxy unavailable")
+                return None
+            node_id = opts.get("node_id", f"webclient_{session_id[:8]}")
+            self.register_voice_config(node_id, {
+                "mode": "gemini_live",
+                "voice_provider": "gemini",
+                "supports_realtime": True,
+                "sample_rate": int(opts.get("sample_rate") or 16000),
+                "language_hint": opts.get("language_hint", ""),
+                "skip_wake": True,
+            })
+            return await self._gemini.start_session(session_id, node_id)
+        logger.debug("open_session: mode=%s not recognised", mode)
+        return None
+
+    # Chained-pipeline helpers (Subagent B)
+
+    def set_chained_pipeline(self, pipeline) -> None:
+        """Inject ChainedVoicePipeline after construction."""
+        self._chained = pipeline
+
+    async def open_chained_session(
+        self, session_id: str, provider_opts: dict | None = None
+    ):
+        """Create a chained STT→LLM→TTS session with configured providers.
+
+        Called when ``mode="chained"`` is received in a
+        ``voice_session_start`` envelope.  Reads provider choices from
+        ``provider_opts`` (falls back to settings keys
+        ``voice.chained.stt_provider``, ``voice.chained.tts_provider``).
+        """
+        if not hasattr(self, "_chained") or self._chained is None:
+            logger.warning("Chained pipeline not available")
+            return None
+
+        opts = provider_opts or {}
+
+        from voice.stt_providers import get_stt_provider
+        from voice.tts_providers import get_tts_provider
+
+        stt_name = opts.get("stt_provider", "deepgram")
+        tts_name = opts.get("tts_provider", "openai")
+        stt_model = opts.get("stt_model", "nova-3")
+        tts_model = opts.get("tts_model", "gpt-4o-mini-tts")
+        tts_voice = opts.get("tts_voice", "alloy")
+
+        import os
+        stt_keys = {
+            "deepgram": os.getenv("DEEPGRAM_API_KEY", ""),
+            "openai_whisper": os.getenv("OPENAI_API_KEY", ""),
+            "groq_whisper": os.getenv("GROQ_API_KEY", ""),
+        }
+        tts_keys = {
+            "openai": os.getenv("OPENAI_API_KEY", ""),
+            "elevenlabs": os.getenv("ELEVENLABS_API_KEY", ""),
+        }
+
+        stt_provider = get_stt_provider(
+            stt_name,
+            api_key=stt_keys.get(stt_name, ""),
+            model=stt_model,
+        )
+        tts_kwargs = {"api_key": tts_keys.get(tts_name, "")}
+        if tts_name == "openai":
+            tts_kwargs["model"] = tts_model
+            tts_kwargs["voice"] = tts_voice
+        elif tts_name == "elevenlabs":
+            if opts.get("tts_voice_id"):
+                tts_kwargs["voice_id"] = opts["tts_voice_id"]
+
+        tts_provider_inst = get_tts_provider(tts_name, **tts_kwargs)
+
+        send_fn = self._send_to_session
+
+        async def _send_frame(sid, frame):
+            if send_fn:
+                from models.protocol import FeralMessage
+                msg = FeralMessage(
+                    session_id=sid,
+                    hop="brain",
+                    type=frame["type"],
+                    payload=frame.get("payload", {}),
+                )
+                await send_fn(sid, msg)
+
+        session = await self._chained.open_session(
+            session_id=session_id,
+            stt_provider=stt_provider,
+            tts_provider=tts_provider_inst,
+            llm_handle=self._orchestrator,
+            send_frame=_send_frame,
+        )
+        self._session_voice_mode[session_id] = "chained"
+        return session
+
+    async def handle_chained_audio(
+        self,
+        session_id: str,
+        audio_b64: str,
+        chunk_index: int = 0,
+        is_final: bool = False,
+    ):
+        """Route audio into the chained pipeline for a session."""
+        if not hasattr(self, "_chained") or self._chained is None:
+            return
+        await self._chained.handle_audio(
+            session_id=session_id,
+            audio_b64=audio_b64,
+            chunk_index=chunk_index,
+            is_final=is_final,
+        )
+
+    # --- end integration ---
 
     async def shutdown(self):
         if self._realtime:
             await self._realtime.shutdown()
         if self._gemini:
             await self._gemini.shutdown()
+        # --- Subagent B: shutdown chained pipeline ---
+        if hasattr(self, "_chained") and self._chained:
+            await self._chained.shutdown()
+        # --- end Subagent B ---

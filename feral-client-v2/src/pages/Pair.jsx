@@ -3,13 +3,20 @@
  *
  * The QR a user scans on their phone encodes <origin>/pair?t=<TOKEN>.
  * Opening that URL (on ANY phone, no app needed) renders this page.
- * One tap on "Pair this phone" instantiates BrowserNode which opens
- * /v1/node?api_key=<TOKEN>, registers as a browser_node, and starts
+ * On pair success we claim a runtime phone bearer, persist it in IndexedDB,
+ * then instantiate BrowserNode which connects to /v1/node using that bearer,
+ * registers as a browser_node, and starts
  * streaming sensors back to the Brain.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Smartphone, ShieldCheck, Zap, AlertTriangle } from "lucide-react";
+import { Navigate } from "react-router-dom";
 import BrowserNode from "../node/BrowserNode";
+import {
+  clearPhoneBearer,
+  getLatestPhoneBearer,
+  setPhoneBearer,
+} from "../lib/phoneBearerStore";
 
 function useToken() {
   return useMemo(() => {
@@ -23,12 +30,22 @@ export default function Pair() {
   const token = useToken();
   const [phase, setPhase] = useState("idle");
   const [error, setError] = useState(null);
+  const [isBootstrapped, setIsBootstrapped] = useState(false);
+  const [resumeRecord, setResumeRecord] = useState(null);
   const [permissions, setPermissions] = useState({
     location: true,
     camera: false,
     mic: false,
   });
   const [node, setNode] = useState(null);
+  const connectInFlightRef = useRef(false);
+
+  // pair-pin-confirm PR — PIN second factor.
+  const [pinRequired, setPinRequired] = useState(null); // null = not yet checked
+  const [pinLength, setPinLength] = useState(4);
+  const [pinInput, setPinInput] = useState("");
+  const [pinVerified, setPinVerified] = useState(false);
+  const [pinBusy, setPinBusy] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -36,37 +53,217 @@ export default function Pair() {
     };
   }, [node]);
 
-  const canPair = !!token && phase === "idle";
+  // Phone-as-peer: detect existing phone_bearer in IndexedDB → restore
+  // paired view directly without going through the pair form.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const existing = await getLatestPhoneBearer();
+        if (cancelled) return;
+        if (
+          existing
+          && existing.phone_bearer
+          && existing.paired_device_id
+          && existing.pair_claim_marker
+        ) {
+          setResumeRecord(existing);
+          setPhase("restoring");
+        } else {
+          setPhase("idle");
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setError(err?.message || String(err));
+        setPhase(token ? "idle" : "failed");
+      } finally {
+        if (!cancelled) setIsBootstrapped(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  // PIN second-factor: ask the brain whether THIS token requires a PIN
+  // (open-listed endpoint, leaks nothing beyond pin-or-not).
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/devices/pair/check?t=${encodeURIComponent(token)}`,
+          { credentials: "same-origin" },
+        );
+        if (!r.ok) return;
+        const data = await r.json();
+        if (cancelled) return;
+        setPinRequired(Boolean(data?.pin_required));
+        if (data?.pin_length) setPinLength(Number(data.pin_length));
+      } catch {
+        // Silent; pair can still try and the brain will reject if needed.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const verifyPin = useCallback(async () => {
+    if (!token || !pinInput) return;
+    setPinBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/devices/pair/verify_pin", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ token, pin: pinInput }),
+      });
+      if (r.ok) {
+        setPinVerified(true);
+        return;
+      }
+      const data = await r.json().catch(() => ({}));
+      const code = data?.detail?.code;
+      if (code === "wrong_pin") {
+        setError("Wrong PIN. Check the numbers shown on the FERAL Mac.");
+      } else if (code === "exhausted") {
+        setError("Too many wrong attempts. Ask the FERAL Mac to generate a new pair URL.");
+      } else if (code === "expired") {
+        setError("This pair URL has expired. Ask for a fresh one.");
+      } else if (code === "no_pin_required") {
+        setPinVerified(true);
+      } else {
+        setError(`Could not verify PIN (${r.status}).`);
+      }
+      setPinInput("");
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setPinBusy(false);
+    }
+  }, [token, pinInput]);
+
+  const connectWithBearer = useCallback(async (bearer, onPhase) => {
+    const n = new BrowserNode({
+      token: bearer,
+      onPhase: (p) => {
+        setPhase(p);
+        onPhase?.(p);
+      },
+      onError: (e) => setError(e?.message || String(e)),
+    });
+    await n.connect();
+    await n.startSensors(permissions);
+    setNode(n);
+    setPhase("live");
+    return n;
+  }, [permissions]);
+
+  useEffect(() => {
+    if (!isBootstrapped || !resumeRecord || node || connectInFlightRef.current) return;
+    if (!resumeRecord.phone_bearer || !resumeRecord.paired_device_id) return;
+
+    let cancelled = false;
+    connectInFlightRef.current = true;
+    setError(null);
+    setPhase("restoring");
+
+    connectWithBearer(resumeRecord.phone_bearer)
+      .catch(async (err) => {
+        if (cancelled) return;
+        setError(err?.message || String(err));
+        await clearPhoneBearer(resumeRecord.paired_device_id);
+        setResumeRecord(null);
+        setPhase(token ? "idle" : "failed");
+      })
+      .finally(() => {
+        connectInFlightRef.current = false;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connectWithBearer, isBootstrapped, node, resumeRecord, token]);
+
+  // PIN gate must be passed (or no PIN required) AND IDB bootstrap
+  // must finish AND no resume record AND phase idle.
+  const pinGateOpen = pinRequired === false || pinVerified;
+  const canPair = !!token && isBootstrapped && !resumeRecord && phase === "idle" && pinGateOpen;
 
   const pair = useCallback(async () => {
-    if (!canPair) return;
+    if (!canPair || connectInFlightRef.current) return;
     setError(null);
-    setPhase("connecting");
+    setPhase("claiming");
+    let saved = null;
     try {
-      const n = new BrowserNode({
-        token,
-        onPhase: (p) => setPhase(p),
-        onError: (e) => setError(e?.message || String(e)),
+      const claimRes = await fetch(
+        new URL("/api/devices/pair/complete", window.location.origin).toString(),
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token, kind: "browser_node_v2" }),
+        },
+      );
+      if (!claimRes.ok) {
+        const details = await claimRes.text().catch(() => "");
+        throw new Error(
+          `pair claim failed (${claimRes.status})${details ? `: ${details}` : ""}`,
+        );
+      }
+      const claim = await claimRes.json();
+      const phoneBearer = claim.phone_bearer || "";
+      const pairedDeviceId = claim.paired_device_id || claim.device_id || "";
+      const pairClaimMarker = claim.pair_claim_marker || "";
+      if (!phoneBearer || !pairedDeviceId || !pairClaimMarker) {
+        throw new Error("pair claim response missing phone bearer metadata");
+      }
+
+      saved = await setPhoneBearer({
+        paired_device_id: pairedDeviceId,
+        phone_bearer: phoneBearer,
+        pair_claim_marker: pairClaimMarker,
       });
-      await n.connect();
-      await n.startSensors(permissions);
-      setNode(n);
-      setPhase("live");
+      setResumeRecord(saved);
+
+      connectInFlightRef.current = true;
+      await connectWithBearer(phoneBearer);
+      connectInFlightRef.current = false;
     } catch (err) {
+      connectInFlightRef.current = false;
+      if (saved?.paired_device_id) {
+        await clearPhoneBearer(saved.paired_device_id);
+      }
+      setResumeRecord(null);
       setError(err?.message || String(err));
-      setPhase("failed");
+      setPhase("idle");
     }
-  }, [canPair, token, permissions]);
+  }, [canPair, connectWithBearer, token]);
 
   const disconnect = useCallback(async () => {
     if (node) {
       await node.stop();
       setNode(null);
     }
-    setPhase("idle");
-  }, [node]);
+    if (resumeRecord?.paired_device_id) {
+      await clearPhoneBearer(resumeRecord.paired_device_id);
+    }
+    setResumeRecord(null);
+    setPhase(token ? "idle" : "failed");
+  }, [node, resumeRecord, token]);
 
-  if (!token) {
+  if (!isBootstrapped) {
+    return (
+      <Frame>
+        <Card>
+          <Header icon={Smartphone} title="Restoring pairing" />
+          <p>Checking for an existing paired session on this device...</p>
+        </Card>
+      </Frame>
+    );
+  }
+
+  if (!token && !resumeRecord) {
     return (
       <Frame>
         <Card>
@@ -88,6 +285,25 @@ export default function Pair() {
   const isLive = phase === "live" || phase === "registered"
     || phase === "acknowledged" || phase === "mic_streaming"
     || phase === "camera_streaming" || phase === "voice_config";
+
+  if (resumeRecord && !isLive) {
+    return (
+      <Frame>
+        <Card>
+          <Header icon={Smartphone} title="Restoring paired session" />
+          <p>
+            Reconnecting to your paired FERAL session using the saved
+            phone bearer.
+          </p>
+          {error && (
+            <div style={errorBox}>
+              <AlertTriangle size={13} aria-hidden="true" /> {error}
+            </div>
+          )}
+        </Card>
+      </Frame>
+    );
+  }
 
   const toggleMic = async () => {
     if (!node) return;
@@ -112,6 +328,12 @@ export default function Pair() {
   };
 
   if (isLive) {
+    const pairedDeviceId = resumeRecord?.paired_device_id
+      || (typeof localStorage !== "undefined" ? localStorage.getItem("feral.paired_device_id") : "");
+    if (pairedDeviceId) {
+      return <Navigate to={`/pair/${encodeURIComponent(pairedDeviceId)}/chat`} replace />;
+    }
+
     return (
       <Frame>
         <Card>
@@ -168,6 +390,48 @@ export default function Pair() {
           tapped "Allow" below.
         </p>
 
+        {/* PIN second-factor gate (pair-pin-confirm PR). When the
+            pair URL was issued with require_pin=true, this block
+            appears BEFORE the permission toggles. The user must
+            enter the 4-digit PIN shown on the FERAL Mac dashboard
+            before "Pair this device" becomes enabled. */}
+        {pinRequired === true && !pinVerified && (
+          <div style={{ marginTop: 14 }} data-testid="pair-pin-form">
+            <div style={pinHelpBox}>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <ShieldCheck size={13} aria-hidden="true" />
+                <strong>Enter the PIN shown on FERAL</strong>
+              </div>
+              <p style={{ margin: "0 0 10px", fontSize: 13, opacity: 0.8 }}>
+                The FERAL Mac is showing a {pinLength}-digit number.
+                Type it below before this device can pair.
+              </p>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern={`[0-9]{${pinLength}}`}
+                maxLength={pinLength}
+                placeholder={"•".repeat(pinLength)}
+                value={pinInput}
+                onChange={(e) => setPinInput(e.target.value.replace(/[^0-9]/g, ""))}
+                disabled={pinBusy}
+                style={pinInputStyle}
+                data-testid="pair-pin-input"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={verifyPin}
+                disabled={pinBusy || pinInput.length !== pinLength}
+                style={{ ...btnPrimary, marginLeft: 8 }}
+                data-testid="pair-pin-submit"
+              >
+                {pinBusy ? "Checking…" : "Verify"}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
           <PermissionToggle
             label="Share location"
@@ -192,8 +456,14 @@ export default function Pair() {
             onClick={pair}
             disabled={!canPair}
             style={btnPrimary}
+            data-testid="pair-pair-button"
           >
-            <Zap size={14} aria-hidden="true" /> {phase === "idle" ? "Pair this device" : phase}
+            <Zap size={14} aria-hidden="true" />{" "}
+            {phase === "idle"
+              ? (pinRequired === true && !pinVerified
+                  ? "Enter PIN to continue"
+                  : "Pair this device")
+              : phase}
           </button>
         </div>
 
@@ -349,6 +619,28 @@ const toggleRow = {
   border: "1px solid rgba(255,255,255,0.08)",
   background: "rgba(255,255,255,0.04)",
   fontSize: 14,
+};
+
+const pinHelpBox = {
+  padding: 14,
+  borderRadius: 12,
+  border: "1px solid rgba(255, 213, 87, 0.3)",
+  background: "rgba(255, 213, 87, 0.06)",
+  color: "#FFE9A7",
+};
+
+const pinInputStyle = {
+  fontSize: 24,
+  letterSpacing: "0.4em",
+  padding: "10px 14px",
+  width: "8.5em",
+  textAlign: "center",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.16)",
+  background: "rgba(0,0,0,0.3)",
+  color: "white",
+  fontFamily: "ui-monospace, SFMono-Regular, monospace",
+  outline: "none",
 };
 
 const bulletList = {

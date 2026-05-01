@@ -12,6 +12,8 @@ from typing import Optional, Literal, Any
 from uuid import uuid4
 from time import time
 
+HUP_VERSION = "1.3.1"
+
 
 # ─────────────────────────────────────────────
 # The Universal Message Envelope
@@ -34,7 +36,7 @@ class FeralMessage(BaseModel):
 class AudioChunkPayload(BaseModel):
     """Streaming audio from client to brain."""
     encoding: str = "opus"
-    sample_rate: int = 16000
+    sample_rate: int = 24000
     channels: int = 1
     chunk_index: int = 0
     is_final: bool = False
@@ -72,6 +74,134 @@ class UIEventPayload(BaseModel):
     action_id: str
     value: Optional[Any] = None
     app_id: Optional[str] = None
+
+
+# ─────────────────────────────────────────────
+# Payload Models — Phone-as-peer Envelopes (HUP v1.3)
+# ─────────────────────────────────────────────
+
+class ChatRequestPayload(BaseModel):
+    """Phone text/vision query request routed through the orchestrator."""
+    session_id: str
+    text: str
+    reply_mode: Literal["stream", "final"] = "final"
+    channel: Literal["chat", "vision_ask"] = "chat"
+    reply_to: Optional[str] = None
+
+
+class ChatResponsePayload(BaseModel):
+    """Brain response envelope for phone chat requests."""
+    session_id: str
+    text: str
+    reply_mode: Literal["stream", "final"] = "final"
+    channel: Literal["chat", "vision_ask"] = "chat"
+    reply_to: Optional[str] = None
+
+
+class VoiceSessionStartPayload(BaseModel):
+    """Phone voice session bootstrap metadata."""
+    stream_id: str
+    sample_rate: int
+    channels: int
+    language_hint: str = "en-US"
+    mode: Literal["push_to_talk", "hold_to_talk", "vad"] = "push_to_talk"
+    interrupt_policy: Literal["barge_in", "strict_turn"] = "barge_in"
+    camera_linked: bool = False
+
+
+class VoiceInterruptPayload(BaseModel):
+    """Signal from phone to cut in-flight TTS on the active stream.
+
+    ``stream_id`` used to be required, but in practice the phone UI
+    emits a bare ``voice_interrupt`` (tap-to-interrupt on the orb)
+    without knowing the session's stream id — the brain looks up the
+    active voice session via the node_id on the WS. Making this
+    optional stops live-test pydantic validation errors like:
+      VoiceInterruptPayload.stream_id: Field required
+    from dropping the interrupt frame entirely.
+    """
+    stream_id: Optional[str] = None
+    reason: str = "user_interrupt"
+
+
+class GenUIPushActionPayload(BaseModel):
+    """Action button attached to a GenUI push card."""
+    id: str
+    label: str
+    value: dict = Field(default_factory=dict)
+
+
+class GenUIPushPayload(BaseModel):
+    """Brain-originated mobile GenUI push payload."""
+    kind: Literal["notification", "interactive"]
+    app_id: str
+    surface_id: str
+    push_id: str = ""
+    screen_id: str = ""
+    title: str
+    body: str = ""
+    actions: list[GenUIPushActionPayload] = Field(default_factory=list)
+    sdui: Optional[dict] = None
+
+
+class GenUIEventPayload(BaseModel):
+    """Phone-originated GenUI interaction routed to app action handlers."""
+    app_id: str
+    surface_id: str
+    event_type: str
+    action_id: str
+    value: Optional[Any] = None
+    screen_id: Optional[str] = None
+
+
+class LocationUpdatePayload(BaseModel):
+    """Phone-originated geolocation update streamed over the same HUP
+    WebSocket as other peer envelopes.
+
+    Replaces the legacy ``POST /api/location/update`` HTTP path that
+    relied on dashboard API key auth — phones authenticate with
+    ``phone_bearer`` over WS subprotocol, so the HTTP path returned
+    401 for them. Sending location as a HUP envelope gets free auth
+    + lifecycle alignment with the rest of the peer streams.
+
+    HUP v1.3.1 addition.
+    """
+    node_id: str
+    lat: float
+    lon: float
+    accuracy_m: Optional[float] = None
+    altitude_m: Optional[float] = None
+    heading_deg: Optional[float] = None
+    speed_mps: Optional[float] = None
+    source: str = "browser_node"
+    ts: Optional[float] = None
+
+
+class PeripheralBridgeDevicePayload(BaseModel):
+    """One bridged peripheral exposed by the phone peer."""
+    device_id: str
+    kind: Literal["glasses", "watch", "band"]
+    protocol: Literal["web_bluetooth", "native_bridge", "none"]
+    capabilities: list[str] = Field(default_factory=list)
+    status: Literal["connected", "connecting", "disconnected"] = "connecting"
+    manifest: dict = Field(default_factory=dict)
+
+
+class PeripheralBridgeRegisterPayload(BaseModel):
+    """Phone bridge registration/update payload."""
+    bridge_id: str
+    platform: Literal["ios", "android"]
+    devices: list[PeripheralBridgeDevicePayload]
+    expires_at: str
+
+
+class BackchannelRequestPayload(BaseModel):
+    """Structured operator-review request from phone."""
+    device_id: str
+    kind: str
+    payload: dict = Field(default_factory=dict)
+    request_id: str = Field(default_factory=lambda: str(uuid4()))
+    status: str = "pending"
 
 
 # ─────────────────────────────────────────────
@@ -181,7 +311,7 @@ class NodeRegisterPayload(BaseModel):
     node_type: Literal[
         "desktop", "server", "rpi", "robot", "glasses", "phone",
         "tablet", "actuator", "sensor", "wearable", "camera",
-        "vehicle", "appliance", "browser_camera",
+        "vehicle", "appliance", "browser_camera", "browser_node",
     ]
     os: str = ""
     platform: str = ""  # "ios", "android", "linux", "macos"
@@ -339,6 +469,50 @@ class HandoffRequestPayload(BaseModel):
 # Message Type Registry — Maps type strings to payload models
 # ─────────────────────────────────────────────
 
+class NodeAckPayload(BaseModel):
+    """Brain acknowledges a node_register (HUP_SPEC §5.2)."""
+    node_id: str = ""
+    session_token: str = ""
+    hup_version: str = HUP_VERSION
+    heartbeat_ms: int = 10000
+    server_time: float = Field(default_factory=time)
+    capabilities: list[str] = []
+    granted_capabilities: list[str] = []
+    denied_capabilities: list[str] = []
+
+
+class HUPActionRequestPayload(BaseModel):
+    """Brain dispatches an action to a daemon (HUP_SPEC §5.5)."""
+    action_id: str = Field(default_factory=lambda: str(uuid4())[:8])
+    name: str = ""
+    params: dict = Field(default_factory=dict)
+    timeout_ms: int = 5000
+    requires_confirmation: bool = False
+
+
+class HUPActionResponsePayload(BaseModel):
+    """Daemon responds to an hup_action_request (HUP_SPEC §5.6)."""
+    action_id: str = ""
+    request_id: str = ""
+    success: bool = True
+    result: dict = Field(default_factory=dict)
+    error: Optional[str] = None
+    duration_ms: int = 0
+
+
+class NodeHeartbeatPayload(BaseModel):
+    """Daemon heartbeat (HUP_SPEC §5.3)."""
+    ts: float = Field(default_factory=time)
+    battery_pct: Optional[int] = None
+    rssi: Optional[int] = None
+
+
+class NodeByePayload(BaseModel):
+    """Graceful disconnect (HUP_SPEC §5.7)."""
+    reason: str = "shutdown"
+    restart_in_s: int = 0
+
+
 MESSAGE_TYPES = {
     # Client → Brain
     "audio_chunk": AudioChunkPayload,
@@ -347,6 +521,13 @@ MESSAGE_TYPES = {
     "ui_event": UIEventPayload,
     "device_register": DeviceRegisterPayload,
     "handoff_request": HandoffRequestPayload,
+    "chat_request": ChatRequestPayload,
+    "voice_session_start": VoiceSessionStartPayload,
+    "voice_interrupt": VoiceInterruptPayload,
+    "genui_event": GenUIEventPayload,
+    "location_update": LocationUpdatePayload,
+    "peripheral_bridge_register": PeripheralBridgeRegisterPayload,
+    "backchannel_request": BackchannelRequestPayload,
 
     # Brain → Client
     "transcript": TranscriptPayload,
@@ -359,10 +540,17 @@ MESSAGE_TYPES = {
     "tool_result": ToolResultPayload,
     "gesture": GesturePayload,
     "error": ErrorPayload,
+    "chat_response": ChatResponsePayload,
+    "genui_push": GenUIPushPayload,
 
-    # Brain ↔ Daemon / Phone Bridge
+    # Brain ↔ Daemon (HUP canonical)
     "register": NodeRegisterPayload,
     "node_register": NodeRegisterPayload,
+    "node_ack": NodeAckPayload,
+    "node_heartbeat": NodeHeartbeatPayload,
+    "hup_action_request": HUPActionRequestPayload,
+    "hup_action_response": HUPActionResponsePayload,
+    "node_bye": NodeByePayload,
     "execute": ExecuteCommandPayload,
     "execute_result": ExecuteResultPayload,
 
@@ -384,6 +572,14 @@ MESSAGE_TYPES = {
     "audio_response": AudioResponsePayload,
     "vision_query": VisionQueryPayload,
 }
+
+DEPRECATED_TYPE_ALIASES: dict[str, str] = {
+    "command": "hup_action_request",
+    "execute": "hup_action_request",
+    "hup_execute": "hup_action_request",
+    "heartbeat": "node_heartbeat",
+}
+DEPRECATED_ALIAS_SUNSET = "2026.7.0"
 
 
 def parse_message(raw: dict) -> tuple[FeralMessage, BaseModel | None]:

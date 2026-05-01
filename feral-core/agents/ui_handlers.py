@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
+from uuid import uuid4
 
-from models.protocol import FeralMessage, SDUIPayload
+from models.protocol import FeralMessage, SDUIPayload, SDUIPatchPayload
 
 logger = logging.getLogger("feral.orchestrator")
 
@@ -34,6 +36,53 @@ async def handle_ui_event(
         session_id[:8], event, action_id, value, app_id or "",
     )
 
+    if action_id.startswith("confirm_"):
+        pending_confirmations = getattr(orchestrator, "_pending_confirmations", None)
+        if not isinstance(pending_confirmations, dict):
+            pending_confirmations = {}
+            setattr(orchestrator, "_pending_confirmations", pending_confirmations)
+        confirmation_id = action_id[8:]
+        pending = pending_confirmations.pop(confirmation_id, None)
+        if pending:
+            app_action = pending.get("app_action")
+            if app_action:
+                logger.info("User confirmed app action: %s", confirmation_id)
+                await _handle_app_action(
+                    orchestrator,
+                    session_id=session_id,
+                    app_id=app_action["app_id"],
+                    action_id=app_action["action_id"],
+                    event=app_action.get("event", "tap"),
+                    value=app_action.get("value"),
+                    screen_id=app_action.get("screen_id"),
+                    _confirmed=True,
+                )
+            else:
+                logger.info("User confirmed action: %s", confirmation_id)
+                await orchestrator._execute_tool_call(
+                    session_id,
+                    pending["tool_call"],
+                    pending.get("skills", []),
+                )
+        return
+    if action_id.startswith("reject_"):
+        pending_confirmations = getattr(orchestrator, "_pending_confirmations", None)
+        if not isinstance(pending_confirmations, dict):
+            pending_confirmations = {}
+            setattr(orchestrator, "_pending_confirmations", pending_confirmations)
+        confirmation_id = action_id[7:]
+        pending = pending_confirmations.pop(confirmation_id, None)
+        if pending:
+            logger.info("User rejected action: %s", confirmation_id)
+            await orchestrator._send_text(session_id, "Cancelled. I won't run that action.")
+        return
+    if action_id.startswith("perm_grant_"):
+        await handle_permission_response(orchestrator, session_id, action_id[11:], granted=True, value=value)
+        return
+    if action_id.startswith("perm_deny_"):
+        await handle_permission_response(orchestrator, session_id, action_id[10:], granted=False, value=value)
+        return
+
     if app_id:
         await _handle_app_action(
             orchestrator,
@@ -49,27 +98,12 @@ async def handle_ui_event(
     if action_id.startswith("call_"):
         tool_ref = action_id[5:]
         await orchestrator._execute_tool_call(session_id, {"name": tool_ref, "args": {}}, [])
-    elif action_id.startswith("confirm_"):
-        confirmation_id = action_id[8:]
-        pending = orchestrator._pending_confirmations.pop(confirmation_id, None)
-        if pending:
-            logger.info(f"User confirmed action: {confirmation_id}")
-            await orchestrator._execute_tool_call(session_id, pending["tool_call"], pending.get("skills", []))
-    elif action_id.startswith("reject_"):
-        confirmation_id = action_id[7:]
-        pending = orchestrator._pending_confirmations.pop(confirmation_id, None)
-        if pending:
-            logger.info(f"User rejected action: {confirmation_id}")
-            await orchestrator._send_text(session_id, "Cancelled. I won't run that action.")
-    elif action_id.startswith("perm_grant_"):
-        await handle_permission_response(orchestrator, session_id, action_id[11:], granted=True, value=value)
-    elif action_id.startswith("perm_deny_"):
-        await handle_permission_response(orchestrator, session_id, action_id[10:], granted=False, value=value)
-    else:
-        await orchestrator.handle_command(
-            session_id,
-            f"The user interacted with '{action_id}' (event: {event}, value: {value}). What should happen next?",
-        )
+        return
+
+    await orchestrator.handle_command(
+        session_id,
+        f"The user interacted with '{action_id}' (event: {event}, value: {value}). What should happen next?",
+    )
 
 
 async def _handle_app_action(
@@ -81,6 +115,7 @@ async def _handle_app_action(
     event: str,
     value: Any,
     screen_id: Optional[str],
+    _confirmed: bool = False,
 ) -> None:
     """Dispatch a ui_event that belongs to a third-party GenUI app.
 
@@ -123,8 +158,22 @@ async def _handle_app_action(
     if not surface_id:
         surface_id = app.manifest.entry_surface_id
 
+    resolved_screen_id = (
+        screen_id
+        or registry.build_screen_id(
+            app_id=app_id,
+            surface_id=surface_id,
+            scope=session_id,
+        )
+    )
+
     try:
-        action_spec = registry.validate_action(app_id, surface_id, action_id)
+        action_spec = registry.validate_action(
+            app_id,
+            surface_id,
+            action_id,
+            value=value,
+        )
     except Exception as exc:
         logger.warning(
             "Rejecting unsigned app action: app=%s surface=%s action=%s (%s)",
@@ -138,6 +187,72 @@ async def _handle_app_action(
 
     handler = action_spec.handler
 
+    if action_spec.requires_confirmation and not _confirmed:
+        pending_confirmations = getattr(orchestrator, "_pending_confirmations", None)
+        if not isinstance(pending_confirmations, dict):
+            pending_confirmations = {}
+            setattr(orchestrator, "_pending_confirmations", pending_confirmations)
+        confirmation_id = str(uuid4())[:8]
+        pending_confirmations[confirmation_id] = {
+            "app_action": {
+                "app_id": app_id,
+                "surface_id": surface_id,
+                "action_id": action_id,
+                "event": event,
+                "value": value,
+                "screen_id": resolved_screen_id,
+            },
+            "created_at": time.time(),
+        }
+        confirm_root = {
+            "type": "VStack",
+            "spacing": 12,
+            "padding": 18,
+            "children": [
+                {"type": "Text", "value": "Confirm action", "style": "headline"},
+                {
+                    "type": "Text",
+                    "value": (
+                        f"{app_id} requested '{action_id}'. "
+                        "Confirm to continue."
+                    ),
+                    "style": "body",
+                },
+                {
+                    "type": "HStack",
+                    "spacing": 10,
+                    "children": [
+                        {
+                            "type": "Button",
+                            "action_id": f"confirm_{confirmation_id}",
+                            "label": "Confirm",
+                            "style": "primary",
+                        },
+                        {
+                            "type": "Button",
+                            "action_id": f"reject_{confirmation_id}",
+                            "label": "Cancel",
+                            "style": "secondary",
+                        },
+                    ],
+                },
+            ],
+        }
+        await _send_app_surface_payload(
+            orchestrator,
+            session_id=session_id,
+            app_id=app_id,
+            surface_id=surface_id,
+            screen_id=resolved_screen_id,
+            root=confirm_root,
+            title=f"{app_id} confirmation",
+        )
+        await orchestrator._send_text(
+            session_id,
+            "Please confirm that app action before I execute it.",
+        )
+        return
+
     if handler == "navigate":
         target = action_spec.target or ""
         if not target:
@@ -149,17 +264,14 @@ async def _handle_app_action(
             session_id=session_id,
             data=value if isinstance(value, dict) else {},
         )
-        await orchestrator.send(
-            session_id,
-            FeralMessage(
-                session_id=session_id,
-                hop="brain",
-                type="sdui",
-                payload=SDUIPayload(
-                    screen_id=result["screen_id"],
-                    root=result["root"],
-                ).model_dump(),
-            ),
+        await _send_app_surface_payload(
+            orchestrator,
+            session_id=session_id,
+            app_id=app_id,
+            surface_id=target,
+            screen_id=result["screen_id"],
+            root=result["root"],
+            title=f"{app_id} · {target}",
         )
         return
 
@@ -183,12 +295,28 @@ async def _handle_app_action(
         return
 
     if handler == "patch":
-        # Patch handler is reserved — the publisher's app backend is
-        # expected to push sdui_patch envelopes directly in a follow-up
-        # commit. For now we acknowledge so the client isn't stuck.
-        logger.info(
-            "App %s/%s emitted a patch-handler action %s; no patch backend wired yet",
-            app_id, surface_id, action_id,
+        patches = None
+        if isinstance(value, dict):
+            patches = value.get("patches")
+        elif isinstance(value, list):
+            patches = value
+        if not isinstance(patches, list) or not patches:
+            await orchestrator._send_text(
+                session_id,
+                "Patch action ignored because no patches payload was provided.",
+            )
+            return
+        await orchestrator.send(
+            session_id,
+            FeralMessage(
+                session_id=session_id,
+                hop="brain",
+                type="sdui_patch",
+                payload=SDUIPatchPayload(
+                    screen_id=resolved_screen_id,
+                    patches=patches,
+                ).model_dump(),
+            ),
         )
         return
 
@@ -204,6 +332,68 @@ async def _handle_app_action(
             f"(event: {event}, value: {value}). What should happen next?"
         ),
     )
+
+
+async def _send_app_surface_payload(
+    orchestrator,
+    *,
+    session_id: str,
+    app_id: str,
+    surface_id: str,
+    screen_id: str,
+    root: dict,
+    title: str,
+) -> None:
+    await orchestrator.send(
+        session_id,
+        FeralMessage(
+            session_id=session_id,
+            hop="brain",
+            type="sdui",
+            payload=SDUIPayload(
+                screen_id=screen_id,
+                root=root,
+            ).model_dump(),
+        ),
+    )
+
+    try:
+        from api.state import state as _state
+    except Exception:
+        _state = None
+    if _state is None:
+        return
+    bindings = getattr(_state, "_daemon_session_bindings", {}) or {}
+    node_id = None
+    for bound_node, sessions in bindings.items():
+        if session_id in sessions:
+            node_id = bound_node
+            break
+    if not node_id:
+        return
+    if not hasattr(_state, "send_to_daemon"):
+        return
+    try:
+        await _state.send_to_daemon(
+            node_id,
+            FeralMessage(
+                session_id=session_id,
+                hop="brain",
+                type="genui_push",
+                payload={
+                    "kind": "interactive",
+                    "push_id": screen_id,
+                    "app_id": app_id,
+                    "surface_id": surface_id,
+                    "screen_id": screen_id,
+                    "title": title or f"{app_id}:{surface_id}",
+                    "body": "",
+                    "sdui": root,
+                },
+            ),
+        )
+    except Exception as exc:
+        logger.debug("genui_push relay failed: %s", exc)
 
 
 async def send_permission_request(orchestrator, session_id: str, path: str, operation: str, reason: str = "") -> None:

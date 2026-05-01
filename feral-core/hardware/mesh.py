@@ -240,10 +240,13 @@ class HardwareMesh:
         self._pending_invokes[request_id] = future
 
         msg = {
-            "type": "command",
-            "request_id": request_id,
-            "command": command,
-            "args": params or {},
+            "type": "hup_action_request",
+            "payload": {
+                "action_id": request_id,
+                "name": command,
+                "params": params or {},
+                "timeout_ms": int(timeout * 1000),
+            },
         }
 
         try:
@@ -339,10 +342,13 @@ class WebSocketNodeAdapter:
         command = action.capability_id
 
         msg = {
-            "type": "command",
-            "request_id": request_id,
-            "command": command,
-            "args": action.parameters,
+            "type": "hup_action_request",
+            "payload": {
+                "action_id": request_id,
+                "name": command,
+                "params": action.parameters,
+                "timeout_ms": action.timeout_ms,
+            },
         }
 
         try:

@@ -10,8 +10,12 @@ Glasses/Sensors --> Phone (Bridge) --> Brain (localhost:9090) --> Actions
 
 ## What it does
 
-- Connects to `ws://<brain-host>:9090/v1/node?api_key=<NODE_API_KEY>`
-- Registers as a `phone` node with capabilities (camera, location, health, audio, notifications)
+- Connects to `wss://<brain-host>/v1/node` (or `ws://` for LAN-only) with an
+  `Authorization: Bearer <token>` header
+- Falls back to `?api_key=` query if the brain rejects Bearer with close code
+  4001 (pre-Bearer brains during the deprecation window)
+- Registers as a `phone` node with capabilities (camera, location, health,
+  audio, notifications)
 - Listens for `command` messages and replies with `execute_result`
 - Emits `sensor_batch` and `glasses_status` events on an interval
 - Includes stub handlers you can replace with native iOS/Android calls
@@ -24,9 +28,33 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-export NODE_API_KEY=<your-secret-key>
-python bridge.py --brain ws://localhost:9090
+python bridge.py --brain wss://my-brain.<tailnet>.ts.net --api-key <token>
 ```
+
+For LAN-only setups (Mode A), `ws://` is accepted:
+
+```bash
+python bridge.py --brain ws://192.168.1.42:9090 --api-key <token>
+```
+
+## Authentication
+
+The bridge sends credentials via the `Authorization: Bearer` HTTP header
+during the WebSocket upgrade. This is the recommended method for all new
+deployments.
+
+**Deprecation notice:** The legacy `?api_key=` query-string method is
+deprecated and will be removed in **2026.7.0**. During the deprecation
+window the bridge automatically retries with query auth if Bearer is
+rejected (close code 4001), but you should upgrade your brain to accept
+Bearer as soon as possible.
+
+## Transport security
+
+Use `wss://` (TLS) for any deployment outside a trusted LAN. The bridge
+preserves the scheme you pass — it will **never** silently downgrade
+`wss://` to `ws://`. If a TLS handshake fails, the error is surfaced
+directly so you can fix certificates or connectivity.
 
 ## Notes
 

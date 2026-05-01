@@ -8,7 +8,7 @@ returns {"success": false, "reason": "..."}.
 
 For full phone capabilities (HealthKit, Health Connect, motion, camera),
 use the native FERAL Node apps for iOS and Android in feral-nodes/ios-app/
-and feral-nodes/android-app/.
+and feral-nodes/android-bridge/sample/.
 """
 
 from __future__ import annotations
@@ -106,6 +106,12 @@ def _try_real_location() -> dict:
     }
 
 
+_QUERY_AUTH_DEPRECATION_WARNING = (
+    "Brain rejected Bearer auth — retrying with ?api_key= query "
+    "(DEPRECATED, will stop working in 2026.7.0)"
+)
+
+
 class PhoneBridgeDaemon:
     def __init__(
         self,
@@ -117,32 +123,64 @@ class PhoneBridgeDaemon:
     ):
         self.base_url = normalize_ws_base(brain_url)
         self.api_key = api_key
-        self.ws_url = f"{self.base_url}/v1/node?api_key={self.api_key}"
+        self.ws_url = f"{self.base_url}/v1/node"
         self.node_id = node_id or f"{socket.gethostname()}-phone-{uuid4().hex[:6]}"
         self.glasses_model = glasses_model
         self.sensor_interval_s = max(1.0, sensor_interval_s)
         self.ws: websockets.WebSocketClientProtocol | None = None
         self.running = True
 
+    @staticmethod
+    def _is_auth_rejection(exc: Exception) -> bool:
+        """Return True if *exc* indicates the brain refused our credentials."""
+        if isinstance(exc, websockets.InvalidStatus):
+            return exc.response.status_code == 401
+        if isinstance(exc, websockets.ConnectionClosedError):
+            return exc.rcvd is not None and exc.rcvd.code == 4001
+        return False
+
+    async def _run_session(self, *, use_query_auth: bool = False) -> None:
+        """Run a single WebSocket session against the brain."""
+        if use_query_auth:
+            url = f"{self.ws_url}?api_key={self.api_key}"
+            headers = None
+        else:
+            url = self.ws_url
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+        async with websockets.connect(
+            url,
+            additional_headers=headers,
+            ping_interval=20,
+            ping_timeout=20,
+        ) as ws:
+            self.ws = ws
+            await self._register()
+            listener = asyncio.create_task(self._listen_loop())
+            sensors = asyncio.create_task(self._sensor_loop())
+            done, pending = await asyncio.wait(
+                [listener, sensors],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            for task in done:
+                if task.exception():
+                    raise task.exception()
+
     async def run(self) -> None:
         while self.running:
             try:
                 logger.info("Connecting to %s", self.ws_url)
-                async with websockets.connect(self.ws_url, ping_interval=20, ping_timeout=20) as ws:
-                    self.ws = ws
-                    await self._register()
-                    listener = asyncio.create_task(self._listen_loop())
-                    sensors = asyncio.create_task(self._sensor_loop())
-                    done, pending = await asyncio.wait(
-                        [listener, sensors],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in pending:
-                        task.cancel()
-                    for task in done:
-                        exc = task.exception()
-                        if exc:
-                            raise exc
+                try:
+                    await self._run_session()
+                except (
+                    websockets.InvalidStatus,
+                    websockets.ConnectionClosedError,
+                ) as exc:
+                    if not self._is_auth_rejection(exc):
+                        raise
+                    logger.warning(_QUERY_AUTH_DEPRECATION_WARNING)
+                    await self._run_session(use_query_auth=True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

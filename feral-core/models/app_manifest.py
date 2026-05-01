@@ -302,6 +302,10 @@ class AppManifest(BaseModel):
     data_schemas: list[DataSchemaSpec] = Field(default_factory=list)
     surfaces: list[SurfaceSpec] = Field(default_factory=list)
     interactions: InteractionRules = Field(default_factory=InteractionRules)
+    # Optional runtime dependencies on FERAL skills. The app install path
+    # resolves these at install-time so app actions don't fail later due to
+    # missing tool surfaces.
+    skill_dependencies: list[str] = Field(default_factory=list)
     entry_surface_id: str = Field(...)
     background_jobs: list[JobSpec] = Field(default_factory=list)
     notifications: NotificationSchema = Field(default_factory=NotificationSchema)
@@ -407,6 +411,9 @@ class AppManifest(BaseModel):
         surface_id_list = [s.surface_id for s in self.surfaces]
         if len(surface_id_list) != len(set(surface_id_list)):
             raise ValueError("surfaces contains duplicate surface_id values")
+        dep_ids = [str(dep) for dep in self.skill_dependencies]
+        if len(dep_ids) != len(set(dep_ids)):
+            raise ValueError("skill_dependencies contains duplicate ids")
 
         return self
 

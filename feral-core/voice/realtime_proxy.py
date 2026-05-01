@@ -1,11 +1,20 @@
 """
-FERAL Realtime Voice Proxy — OpenAI Realtime API Bridge
-=========================================================
+FERAL Realtime Voice Proxy — OpenAI Realtime API Bridge (GA)
+=============================================================
 The Brain opens one OpenAI Realtime WebSocket session per connected
 phone/glasses node.  Phone sends PCM16 audio to the Brain; the Brain
 relays it to OpenAI Realtime.  OpenAI sends audio back; the Brain
 relays it to the phone.  Tool calls are intercepted and executed
 locally through the full skill/hardware/memory ecosystem.
+
+GA migration (PR #62 / Subagent A):
+  - Removed ``OpenAI-Beta: realtime=v1`` header
+  - Model default: ``gpt-realtime``
+  - Session update carries ``type: "realtime"`` and GA audio config shape
+  - Event names: ``response.output_audio.delta``,
+    ``response.output_audio_transcript.delta``, ``response.output_text.delta``
+  - Conversation item events: ``conversation.item.added``, ``conversation.item.done``
+  - Content types: ``output_text``, ``output_audio`` (not legacy ``text``/``audio``)
 
 The phone never talks to OpenAI directly — the Brain owns the context.
 """
@@ -25,7 +34,7 @@ import httpx
 logger = logging.getLogger("feral.voice.openai")
 
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
-DEFAULT_MODEL = "gpt-4o-realtime-preview-2024-12-17"
+DEFAULT_MODEL = "gpt-realtime"
 SAMPLE_RATE = 24000
 AUDIO_FORMAT = "pcm16"
 
@@ -35,6 +44,8 @@ class RealtimeSession:
     Manages a single OpenAI Realtime WebSocket session on behalf of a
     connected phone/glasses node.  Handles audio relay, tool interception,
     and perception context injection.
+
+    GA API: no beta header, new event names, session.type = "realtime".
     """
 
     def __init__(
@@ -44,6 +55,10 @@ class RealtimeSession:
         *,
         api_key: str = "",
         model: str = DEFAULT_MODEL,
+        voice: str = "marin",
+        input_sample_rate: int = SAMPLE_RATE,
+        output_sample_rate: int = SAMPLE_RATE,
+        language_hint: str = "",
         system_prompt: str = "",
         tools: list[dict] | None = None,
         on_audio_delta: Callable[[str, str, bool], Awaitable[None]] | None = None,
@@ -51,11 +66,16 @@ class RealtimeSession:
         on_tool_call: Callable[[str, str, str, str], Awaitable[str]] | None = None,
         on_speech_started: Callable[[str], Awaitable[None]] | None = None,
         on_error: Callable[[str, str], Awaitable[None]] | None = None,
+        on_conversation_item: Callable[[str, dict], Awaitable[None]] | None = None,
     ):
         self.session_id = session_id
         self.node_id = node_id
         self._api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self._model = model
+        self._voice = voice
+        self._input_sample_rate = int(input_sample_rate or SAMPLE_RATE)
+        self._output_sample_rate = int(output_sample_rate or SAMPLE_RATE)
+        self._language_hint = self._normalize_language_hint(language_hint)
         self._system_prompt = system_prompt
         self._tools = tools or []
 
@@ -63,19 +83,38 @@ class RealtimeSession:
         self._on_transcript = on_transcript
         self._on_tool_call = on_tool_call
         self._on_speech_started = on_speech_started
+        # GA Realtime response lifecycle tracking. Flips True on
+        # `response.created`, False on `response.done`. Prevents the
+        # cancel_response no-op error spam when VAD fires on initial
+        # speech (no response yet) or after a response completed.
+        self._response_in_progress = False
         self._on_error = on_error
+        self._on_conversation_item = on_conversation_item
 
         self._ws = None
         self._connected = False
         self._recv_task: Optional[asyncio.Task] = None
         self._pending_tool_calls: dict[str, dict] = {}
 
+    @staticmethod
+    def _normalize_language_hint(language_hint: str) -> str:
+        """Convert browser/phone locale hints (e.g. en-US) to whisper locale."""
+        if not language_hint or not isinstance(language_hint, str):
+            return ""
+        raw = language_hint.strip()
+        if not raw:
+            return ""
+        primary = raw.split("-", 1)[0].split("_", 1)[0].strip().lower()
+        if primary and primary.isalpha():
+            return primary
+        return ""
+
     @property
     def connected(self) -> bool:
         return self._connected
 
     async def connect(self):
-        """Open a WebSocket to the OpenAI Realtime API."""
+        """Open a WebSocket to the OpenAI Realtime API (GA — no beta header)."""
         if not self._api_key:
             logger.error("Cannot start realtime session — no OPENAI_API_KEY")
             return
@@ -85,7 +124,6 @@ class RealtimeSession:
             url = f"{OPENAI_REALTIME_URL}?model={self._model}"
             headers = {
                 "Authorization": f"Bearer {self._api_key}",
-                "OpenAI-Beta": "realtime=v1",
             }
             self._ws = await self._connect_with_retry(
                 url,
@@ -113,7 +151,7 @@ class RealtimeSession:
                 await asyncio.sleep(2 ** attempt)
 
     async def configure(self, system_prompt: str = "", tools: list[dict] | None = None):
-        """Send session.update with system prompt, tools, and voice/VAD config."""
+        """Send session.update with GA session shape (type='realtime', audio config)."""
         if not self._connected:
             return
 
@@ -131,30 +169,58 @@ class RealtimeSession:
                 "parameters": fn.get("parameters", {}),
             })
 
+        transcription_cfg = {"model": "whisper-1"}
+        if self._language_hint:
+            transcription_cfg["language"] = self._language_hint
+
         session_update = {
             "type": "session.update",
             "session": {
-                "modalities": ["text", "audio"],
+                "type": "realtime",
+                "model": self._model,
+                "output_modalities": ["audio"],
                 "instructions": self._system_prompt,
-                "voice": "sage",
-                "input_audio_format": AUDIO_FORMAT,
-                "output_audio_format": AUDIO_FORMAT,
-                "input_audio_transcription": {"model": "whisper-1"},
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": 0.5,
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": 800,
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": self._input_sample_rate},
+                        "transcription": transcription_cfg,
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.5,
+                            "prefix_padding_ms": 300,
+                            "silence_duration_ms": 800,
+                        },
+                    },
+                    "output": {
+                        "format": {"type": "audio/pcm", "rate": self._output_sample_rate},
+                        "voice": self._voice,
+                    },
                 },
                 "tools": openai_tools,
                 "tool_choice": "auto",
-                "temperature": 0.7,
-                "max_response_output_tokens": 4096,
+                # NOTE: GA Realtime API no longer accepts
+                # `session.temperature` at the session.update path —
+                # live test surfaced:
+                #   "Unknown parameter: 'session.temperature'"
+                # which silently broke session configuration so the
+                # model never responded. `max_output_tokens` is still
+                # accepted at session scope as of GA 2025-11.
+                "max_output_tokens": 4096,
             },
         }
 
+        # OpenAI also caps tools at 128 per request; GA Realtime is
+        # the same as /v1/chat/completions in this respect.
+        if len(openai_tools) > 128:
+            logger.warning(
+                "realtime session.update: truncating tools from %d → 128 "
+                "(OpenAI hard limit).",
+                len(openai_tools),
+            )
+            session_update["session"]["tools"] = openai_tools[:128]
+
         await self._send(session_update)
-        logger.info(f"Realtime session configured: {len(openai_tools)} tools")
+        logger.info(f"Realtime session configured (GA): {len(openai_tools)} tools, voice={self._voice}")
 
     async def send_audio(self, audio_b64: str):
         """Relay PCM16 audio from the phone to OpenAI Realtime."""
@@ -194,9 +260,22 @@ class RealtimeSession:
         await self._send({"type": "response.create"})
 
     async def cancel_response(self):
-        """Cancel the current response (e.g., user interrupted)."""
-        if self._connected:
-            await self._send({"type": "response.cancel"})
+        """Cancel the current response (e.g., user interrupted).
+
+        Guarded: only send response.cancel when a response is actually
+        in flight. Otherwise OpenAI returns
+           "Cancellation failed: no active response found"
+        which floods the log and hints that VAD-triggered cancellations
+        are firing before any response was generated. We track the
+        in_progress flag via response.created / response.done events
+        on this session.
+        """
+        if not self._connected:
+            return
+        if not getattr(self, "_response_in_progress", False):
+            # No-op. Don't waste a round-trip or generate error spam.
+            return
+        await self._send({"type": "response.cancel"})
 
     async def inject_context(self, context_text: str):
         """Inject updated perception context as a system-level message."""
@@ -257,24 +336,50 @@ class RealtimeSession:
             logger.info("Realtime session.created — configuring...")
             await self.configure()
 
-        elif event_type == "response.audio.delta":
+        # --- GA event names (output_audio / output_audio_transcript / output_text) ---
+
+        elif event_type == "response.output_audio.delta":
             delta_b64 = event.get("delta", "")
             if delta_b64 and self._on_audio_delta:
                 await self._on_audio_delta(self.session_id, delta_b64, False)
 
-        elif event_type == "response.audio.done":
+        elif event_type == "response.output_audio.done":
             if self._on_audio_delta:
                 await self._on_audio_delta(self.session_id, "", True)
 
-        elif event_type == "response.audio_transcript.delta":
+        elif event_type == "response.output_audio_transcript.delta":
             text = event.get("delta", "")
             if text and self._on_transcript:
                 await self._on_transcript(self.session_id, text, False)
 
-        elif event_type == "response.audio_transcript.done":
+        elif event_type == "response.output_audio_transcript.done":
             text = event.get("transcript", "")
             if text and self._on_transcript:
                 await self._on_transcript(self.session_id, text, True)
+
+        elif event_type == "response.output_text.delta":
+            text = event.get("delta", "")
+            if text and self._on_transcript:
+                await self._on_transcript(self.session_id, text, False)
+
+        elif event_type == "response.output_text.done":
+            text = event.get("text", "")
+            if text and self._on_transcript:
+                await self._on_transcript(self.session_id, text, True)
+
+        # --- Conversation item events (GA) ---
+
+        elif event_type == "conversation.item.added":
+            item = event.get("item", {})
+            if self._on_conversation_item:
+                await self._on_conversation_item(self.session_id, {"action": "added", "item": item})
+
+        elif event_type == "conversation.item.done":
+            item = event.get("item", {})
+            if self._on_conversation_item:
+                await self._on_conversation_item(self.session_id, {"action": "done", "item": item})
+
+        # --- Input audio transcription (unchanged) ---
 
         elif event_type == "conversation.item.input_audio_transcription.completed":
             text = event.get("transcript", "")
@@ -298,12 +403,49 @@ class RealtimeSession:
         elif event_type == "error":
             err = event.get("error", {})
             msg = err.get("message", str(err))
+            self._response_in_progress = False
             logger.error(f"Realtime API error: {msg}")
             if self._on_error:
                 await self._on_error(self.session_id, msg)
 
-        elif event_type in ("response.done", "response.created", "rate_limits.updated"):
-            pass  # informational, no action needed
+        elif event_type == "response.created":
+            self._response_in_progress = True
+            logger.info("Realtime response.created session=%s", self.session_id)
+
+        elif event_type == "response.done":
+            self._response_in_progress = False
+            # Surface the response's status so we can tell if OpenAI
+            # is rejecting our requests silently (e.g. "content_filter",
+            # "failed", "incomplete"). A healthy response is "completed".
+            resp = event.get("response", {})
+            status = resp.get("status", "")
+            status_details = resp.get("status_details", {})
+            if status and status != "completed":
+                logger.warning(
+                    "Realtime response.done session=%s status=%s details=%s",
+                    self.session_id, status, status_details,
+                )
+            else:
+                logger.info(
+                    "Realtime response.done session=%s status=%s",
+                    self.session_id, status or "(unknown)",
+                )
+
+        elif event_type in {"response.failed", "response.cancelled", "response.canceled"}:
+            self._response_in_progress = False
+            logger.warning("Realtime %s session=%s", event_type, self.session_id)
+
+        elif event_type == "rate_limits.updated":
+            pass
+
+        else:
+            # Catch-all: log unknown/unhandled event types so we can
+            # see WHAT the server sent if voice still doesn't produce
+            # audio after the guard above.
+            logger.debug(
+                "Realtime unhandled event type=%s session=%s",
+                event_type, self.session_id,
+            )
 
 
 class RealtimeProxy:
@@ -322,6 +464,7 @@ class RealtimeProxy:
         send_to_node: Callable[[str, dict], Awaitable[None]] | None = None,
         send_to_session: Callable[[str, Any], Awaitable[None]] | None = None,
         identity_workspace=None,
+        voice: str = "marin",
     ):
         self._sessions: dict[str, RealtimeSession] = {}
         self._node_to_session: dict[str, str] = {}
@@ -332,6 +475,7 @@ class RealtimeProxy:
         self._send_to_node = send_to_node
         self._send_to_session = send_to_session
         self._api_key = os.getenv("OPENAI_API_KEY", "")
+        self._voice = voice
 
         from voice.personality import VoicePersonality
         self._voice_personality = VoicePersonality(identity_workspace=identity_workspace)
@@ -349,6 +493,9 @@ class RealtimeProxy:
         session_id: str,
         node_id: str,
         model: str = DEFAULT_MODEL,
+        voice: str = "",
+        input_sample_rate: int = SAMPLE_RATE,
+        language_hint: str = "",
     ) -> RealtimeSession:
         """Create and connect a new realtime session for a phone/glasses node."""
         system_prompt = self._build_system_prompt(session_id)
@@ -359,6 +506,10 @@ class RealtimeProxy:
             node_id=node_id,
             api_key=self._api_key,
             model=model,
+            voice=voice or self._voice,
+            input_sample_rate=input_sample_rate,
+            output_sample_rate=SAMPLE_RATE,
+            language_hint=language_hint,
             system_prompt=system_prompt,
             tools=tools,
             on_audio_delta=self._handle_audio_delta,
@@ -366,6 +517,7 @@ class RealtimeProxy:
             on_tool_call=self._handle_tool_call,
             on_speech_started=self._handle_speech_started,
             on_error=self._handle_error,
+            on_conversation_item=self._handle_conversation_item,
         )
 
         await rs.connect()
@@ -464,6 +616,10 @@ class RealtimeProxy:
         )
 
         parts = [personality_block]
+        parts.append(
+            "\nLanguage policy: Always respond in English unless the user clearly "
+            "starts speaking in another language first."
+        )
 
         parts.append(
             "\nYou have access to the user's physical environment through "
@@ -546,7 +702,7 @@ class RealtimeProxy:
         payload = {
             "data_b64": audio_b64,
             "encoding": AUDIO_FORMAT,
-            "sample_rate": SAMPLE_RATE,
+            "sample_rate": getattr(rs, "_output_sample_rate", SAMPLE_RATE),
             "is_final": is_done,
         }
 
@@ -652,6 +808,13 @@ class RealtimeProxy:
                 "type": "speech_started",
                 "payload": payload,
             })
+
+    async def _handle_conversation_item(self, session_id: str, item_event: dict):
+        """Handle GA conversation.item.added / conversation.item.done events."""
+        action = item_event.get("action", "")
+        item = item_event.get("item", {})
+        logger.debug("Conversation item %s in session %s: role=%s type=%s",
+                      action, session_id[:8], item.get("role", ""), item.get("type", ""))
 
     async def _handle_error(self, session_id: str, error: str):
         logger.error(f"Realtime error [{session_id}]: {error}")

@@ -502,6 +502,22 @@ class LLMProvider:
             for tool in tools:
                 clean = {k: v for k, v in tool.items() if k != "_feral_meta"}
                 clean_tools.append(clean)
+            # OpenAI's /v1/chat/completions rejects payloads with more
+            # than 128 tools (array_above_max_length). FERAL ships
+            # 26 skills + ~23 browser endpoints + subagents + etc,
+            # which overflows on some installs. We slice to 128 here
+            # with a one-time warning rather than crashing the call.
+            # Prioritise retention of the first tools since skills
+            # register alphabetically and the brain-auto skills that
+            # appear first are the hottest path.
+            if self.provider in ("openai",) and len(clean_tools) > 128:
+                logger.warning(
+                    "openai chat/completions: truncating tools from %d → 128 "
+                    "(OpenAI hard limit). Later-registered tools will not be "
+                    "exposed to the model for this call.",
+                    len(clean_tools),
+                )
+                clean_tools = clean_tools[:128]
             body["tools"] = clean_tools
             body["tool_choice"] = "auto"
 
@@ -876,6 +892,14 @@ class LLMProvider:
 
         if tools:
             clean_tools = [{k: v for k, v in t.items() if k != "_feral_meta"} for t in tools]
+            if self.provider in ("openai",) and len(clean_tools) > 128:
+                # Same 128-tool hard limit as the non-streaming path.
+                # See commentary in the paired site above.
+                logger.warning(
+                    "openai chat/completions (stream): truncating tools "
+                    "from %d → 128 (OpenAI hard limit).", len(clean_tools),
+                )
+                clean_tools = clean_tools[:128]
             body["tools"] = clean_tools
             body["tool_choice"] = "auto"
 
@@ -1509,7 +1533,16 @@ class LLMProvider:
                 "max_tokens": max_tokens,
             }
             if tools:
-                body["tools"] = [{k: v for k, v in t.items() if k != "_feral_meta"} for t in tools]
+                clean_tools = [{k: v for k, v in t.items() if k != "_feral_meta"} for t in tools]
+                if self.provider in ("openai",) and len(clean_tools) > 128:
+                    # Same 128-tool cap as the other chat/completions paths.
+                    logger.warning(
+                        "openai chat/completions (failover primary): truncating "
+                        "tools from %d → 128 (OpenAI hard limit).",
+                        len(clean_tools),
+                    )
+                    clean_tools = clean_tools[:128]
+                body["tools"] = clean_tools
                 body["tool_choice"] = "auto"
 
             apply_reasoning_fork(self.provider, self.model, body)
@@ -1556,7 +1589,16 @@ class LLMProvider:
                 "max_tokens": max_tokens,
             }
             if tools:
-                body["tools"] = [{k: v for k, v in t.items() if k != "_feral_meta"} for t in tools]
+                clean_tools = [{k: v for k, v in t.items() if k != "_feral_meta"} for t in tools]
+                if provider_name in ("openai",) and len(clean_tools) > 128:
+                    # Same 128-tool cap, fallback provider path.
+                    logger.warning(
+                        "openai chat/completions (failover fallback): truncating "
+                        "tools from %d → 128 (OpenAI hard limit).",
+                        len(clean_tools),
+                    )
+                    clean_tools = clean_tools[:128]
+                body["tools"] = clean_tools
                 body["tool_choice"] = "auto"
 
             apply_reasoning_fork(provider_name, model, body)

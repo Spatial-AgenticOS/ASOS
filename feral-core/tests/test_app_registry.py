@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
+import tarfile
 
+import httpx
 import pytest
 
 from agents.app_registry import AppRegistry, AppRegistryError, HybridGenerator
@@ -26,6 +30,22 @@ def _sample_manifest(app_id: str = "demo-app") -> AppManifest:
         permissions=[],
         data_schemas=[
             DataSchemaSpec(schema_id="thread", schema={"type": "object"}),
+            DataSchemaSpec(
+                schema_id="send_payload",
+                schema={
+                    "type": "object",
+                    "required": ["values"],
+                    "properties": {
+                        "values": {
+                            "type": "object",
+                            "required": ["text"],
+                            "properties": {
+                                "text": {"type": "string", "minLength": 1},
+                            },
+                        },
+                    },
+                },
+            ),
         ],
         surfaces=[
             SurfaceSpec(
@@ -41,6 +61,11 @@ def _sample_manifest(app_id: str = "demo-app") -> AppManifest:
                 },
                 action_contract=[
                     ActionSpec(action_id="open", handler="navigate", target="thread"),
+                    ActionSpec(
+                        action_id="send",
+                        handler="app_event",
+                        value_schema_ref="send_payload",
+                    ),
                 ],
             ),
             SurfaceSpec(
@@ -138,6 +163,48 @@ class TestInstall:
         thread_surface = app.manifest.get_surface("thread")
         assert thread_surface.template_root == {"type": "Text", "value": "hydrated"}
 
+    def test_install_from_registry_downloads_bundle_and_installs(self, registry, monkeypatch):
+        manifest = _sample_manifest("registry-demo")
+        bundle = io.BytesIO()
+        with tarfile.open(fileobj=bundle, mode="w:gz") as tar:
+            data = manifest.model_dump_json().encode("utf-8")
+            info = tarfile.TarInfo(name="manifest.json")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        bundle_bytes = bundle.getvalue()
+        bundle_sha = hashlib.sha256(bundle_bytes).hexdigest()
+
+        registry_id = "publisher.registry-demo"
+        metadata = {
+            "kind": "app",
+            "download_url": "https://registry.test/downloads/registry-demo.tar.gz",
+            "sha256": bundle_sha,
+        }
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == f"/api/v1/item/{registry_id}":
+                return httpx.Response(200, json=metadata)
+            if request.url.path == "/downloads/registry-demo.tar.gz":
+                return httpx.Response(200, content=bundle_bytes)
+            return httpx.Response(404, json={"detail": "not found"})
+
+        transport = httpx.MockTransport(_handler)
+        real_client = httpx.Client
+
+        def _client_factory(*args, **kwargs):
+            del args, kwargs
+            return real_client(transport=transport, follow_redirects=True)
+
+        monkeypatch.setattr("agents.app_registry.httpx.Client", _client_factory)
+
+        installed = registry.install_from_registry(
+            registry_id,
+            registry_url="https://registry.test",
+            allow_unsigned=True,
+        )
+        assert installed.app_id == "registry-demo"
+        assert registry.get("registry-demo") is not None
+
 
 class TestListAndGet:
     def test_list_empty(self, registry):
@@ -196,6 +263,26 @@ class TestValidateAction:
             registry.validate_action("demo-app", "home", "evil")
         assert "evil" in str(exc.value)
 
+    def test_value_schema_ref_enforced(self, registry, tmp_path):
+        registry.install_from_dir(_write_manifest_dir(tmp_path, _sample_manifest()))
+        with pytest.raises(AppRegistryError):
+            registry.validate_action(
+                "demo-app",
+                "home",
+                "send",
+                value={"values": {}},
+            )
+
+    def test_value_schema_ref_accepts_valid_payload(self, registry, tmp_path):
+        registry.install_from_dir(_write_manifest_dir(tmp_path, _sample_manifest()))
+        spec = registry.validate_action(
+            "demo-app",
+            "home",
+            "send",
+            value={"values": {"text": "hello"}},
+        )
+        assert spec.action_id == "send"
+
 
 class TestResolveAppAndSurface:
     def test_resolves_screen_id(self, registry):
@@ -205,6 +292,12 @@ class TestResolveAppAndSurface:
     def test_rejects_bogus_screen_id(self, registry):
         assert registry.resolve_app_and_surface("") is None
         assert registry.resolve_app_and_surface("notacolon") is None
+
+    def test_parse_canonical_screen_id_roundtrip(self, registry):
+        screen_id = registry.build_screen_id("demo-app", "home", "session:abc/123")
+        parsed = registry.parse_screen_id(screen_id)
+        assert parsed == ("demo-app", "home", "session:abc/123")
+        assert registry.resolve_app_and_surface(screen_id) == ("demo-app", "home")
 
 
 class TestOpenSurface:
@@ -219,6 +312,16 @@ class TestOpenSurface:
         assert "screen_id" in out and out["screen_id"].startswith("demo-app:home:")
         tree = out["root"]
         assert tree["children"][0]["value"] == "hi there"
+
+    @pytest.mark.asyncio
+    async def test_open_surface_encodes_scope_in_screen_id(self, registry, tmp_path):
+        registry.install_from_dir(_write_manifest_dir(tmp_path, _sample_manifest()))
+        out = await registry.open_surface(
+            "demo-app",
+            "home",
+            session_id="session:with:colon",
+        )
+        assert out["screen_id"].startswith("demo-app:home:session%3Awith%3Acolon")
 
     @pytest.mark.asyncio
     async def test_open_surface_requires_installed_app(self, registry):

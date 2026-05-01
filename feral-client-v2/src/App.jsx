@@ -12,7 +12,6 @@ import Intents from './pages/Intents';
 import Home from './pages/Home';
 import Marketplace from './pages/Marketplace';
 import Settings from './pages/Settings';
-import SetupWizard from './pages/SetupWizard';
 import Setup from './pages/Setup';
 import Skills from './pages/Skills';
 import Memory from './pages/Memory';
@@ -27,16 +26,38 @@ import Apps from './pages/Apps';
 import AppsPublish from './pages/AppsPublish';
 import AppSurface from './pages/AppSurface';
 import Pair from './pages/Pair';
+import PairShell from './pages/PairShell';
+import ChatPanel from './pages/phone/ChatPanel';
+import VoicePanel from './pages/phone/VoicePanel';
+import VisionAskPanel from './pages/phone/VisionAskPanel';
+import PeripheralsPanel from './pages/phone/PeripheralsPanel';
+import AppsPanel from './pages/phone/AppsPanel';
+import SettingsPanel from './pages/phone/SettingsPanel';
 import Oversight from './pages/Oversight';
 
 export default function App() {
   return (
     <Routes>
-      {/* New catalog-backed setup page; falls back to legacy SetupWizard for backward compat. */}
+      {/* Canonical setup. The legacy /setup/legacy route was removed
+          in 2026.5.8 — the bundled UI's depth-2 SPA routes were broken
+          due to relative asset paths, so the legacy wizard was a
+          blank page in practice. /setup now has a pairing step (see
+          PairStep in Setup.jsx). The CLI wizard `feral setup` is
+          unaffected. */}
       <Route path="/setup" element={<Setup />} />
-      <Route path="/setup/legacy" element={<SetupWizard />} />
+      <Route path="/setup/legacy" element={<Navigate to="/setup" replace />} />
       {/* Unauthenticated browser-node pairing — any phone can land here. */}
       <Route path="/pair" element={<Pair />} />
+      <Route path="/pair/:device_id" element={<PairShell />}>
+        <Route index element={<Navigate to="chat" replace />} />
+        <Route path="chat" element={<ChatPanel />} />
+        <Route path="voice" element={<VoicePanel />} />
+        <Route path="vision" element={<VisionAskPanel />} />
+        <Route path="peripherals" element={<PeripheralsPanel />} />
+        <Route path="apps" element={<AppsPanel />} />
+        <Route path="apps/:app_id" element={<AppsPanel />} />
+        <Route path="settings" element={<SettingsPanel />} />
+      </Route>
       <Route element={<Shell />}>
         <Route path="/" element={<Home />} />
         <Route path="/chat" element={<Chat />} />
