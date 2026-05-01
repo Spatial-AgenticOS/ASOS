@@ -155,7 +155,7 @@ class TestStateMachine:
             if frame["type"] == "voice_state":
                 states_seen.append(frame["payload"]["state"])
 
-        session = await pipeline.open_session("sess-1", stt, tts, llm, send_frame=capture_frame)
+        await pipeline.open_session("sess-1", stt, tts, llm, send_frame=capture_frame)
 
         audio_b64 = base64.b64encode(b"\x00" * 320).decode()
         await pipeline.handle_audio("sess-1", audio_b64, chunk_index=0, is_final=False)
@@ -302,8 +302,9 @@ class TestErrorPropagation:
 
         class FailingTTS(TTSProvider):
             async def synthesize(self, text):
+                if False:
+                    yield b""
                 raise RuntimeError("TTS service down")
-                yield  # noqa: unreachable — makes this an async generator
 
         async def capture_frame(sid, frame):
             if frame["type"] == "voice_state":
