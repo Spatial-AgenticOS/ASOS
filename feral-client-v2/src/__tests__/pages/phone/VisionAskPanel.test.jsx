@@ -110,7 +110,11 @@ describe('VisionAskPanel', () => {
     setupMediaDevices();
     patchVideoElements();
     const sendCalls = [];
-    const shell = { send: vi.fn((env) => sendCalls.push(env)) };
+    const shell = {
+      deviceId: 'device-1',
+      sendFrame: vi.fn((type, payload) => sendCalls.push({ type, payload })),
+      subscribeFrame: vi.fn(() => () => {}),
+    };
     const { findByTestId, queryByTestId, getByTestId } = render(<VisionAskPanel shell={shell} sessionId="sess-123" />);
     await waitFor(() => expect(queryByTestId('capture-button')).toBeTruthy());
     const videoEl = getByTestId('camera-video');
@@ -121,12 +125,12 @@ describe('VisionAskPanel', () => {
     fireEvent.change(await findByTestId('question-input'), { target: { value: 'What is this?' } });
     await act(async () => { fireEvent.submit((await findByTestId('question-input')).closest('form')); });
     await waitFor(() => {
-      expect(shell.send).toHaveBeenCalledTimes(2);
+      expect(shell.sendFrame).toHaveBeenCalledTimes(2);
       expect(sendCalls[0].type).toBe('frame');
       expect(sendCalls[0].payload.data_b64).toBe('AAAA');
       expect(sendCalls[1].type).toBe('chat_request');
       expect(sendCalls[1].payload.text).toBe('What is this?');
-      expect(sendCalls[1].payload.channel).toBe('vision');
+      expect(sendCalls[1].payload.channel).toBe('vision_ask');
       expect(sendCalls[1].payload.session_id).toBe('sess-123');
     });
   });
@@ -134,7 +138,15 @@ describe('VisionAskPanel', () => {
   it('response renders with thumbnail inline', async () => {
     setupMediaDevices();
     patchVideoElements();
-    const shell = { send: vi.fn() };
+    let frameListener = null;
+    const shell = {
+      deviceId: 'device-1',
+      sendFrame: vi.fn(),
+      subscribeFrame: vi.fn((cb) => {
+        frameListener = cb;
+        return () => {};
+      }),
+    };
     const { findByTestId, queryByTestId, getByTestId } = render(<VisionAskPanel shell={shell} sessionId="s1" />);
     await waitFor(() => expect(queryByTestId('capture-button')).toBeTruthy());
     const videoEl = getByTestId('camera-video');
@@ -144,9 +156,16 @@ describe('VisionAskPanel', () => {
     await waitFor(() => expect(queryByTestId('question-input')).toBeTruthy());
     fireEvent.change(await findByTestId('question-input'), { target: { value: 'Describe' } });
     await act(async () => { fireEvent.submit((await findByTestId('question-input')).closest('form')); });
+    act(() => {
+      frameListener?.({
+        type: 'chat_response',
+        payload: { text: 'A desk lamp.' },
+      });
+    });
     await waitFor(() => {
       expect(queryByTestId('vision-response-item')).toBeTruthy();
       expect(queryByTestId('response-thumbnail')).toBeTruthy();
+      expect(queryByTestId('response-answer')).toBeTruthy();
     });
   });
 

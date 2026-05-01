@@ -157,7 +157,13 @@ async def test_handle_audio_from_node_openai_starts_session(monkeypatch):
     r.register_voice_config("n1", {"voice_provider": "openai"})
 
     await r.handle_audio_from_node("n1", "sid", "YmJi")
-    rt.start_session.assert_awaited_once_with("sid", "n1")
+    rt.start_session.assert_awaited_once()
+    kwargs = rt.start_session.await_args.kwargs
+    assert rt.start_session.await_args.args == ("sid", "n1")
+    assert kwargs["model"] == "gpt-realtime"
+    assert kwargs["voice"] == "marin"
+    assert kwargs["input_sample_rate"] == 24000
+    assert kwargs["language_hint"] == ""
     rs.send_audio.assert_awaited_once_with("YmJi")
 
 
@@ -495,7 +501,9 @@ async def test_handle_audio_from_client_openai_starts_session_and_sends(monkeypa
     r.set_session_voice_mode("12345678-abcd", "realtime")
 
     await r.handle_audio_from_client("12345678-abcd", "QUJD")
-    rt.start_session.assert_awaited_once_with("12345678-abcd", "webclient_12345678")
+    rt.start_session.assert_awaited_once()
+    assert rt.start_session.await_args.args == ("12345678-abcd", "webclient_12345678")
+    assert rt.start_session.await_args.kwargs["input_sample_rate"] == 24000
     rs.send_audio.assert_awaited_once_with("QUJD")
 
 

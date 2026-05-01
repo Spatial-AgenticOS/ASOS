@@ -84,29 +84,50 @@ export default function VisionAskPanel({ shell: shellProp, sessionId }) {
 
   const pendingQidRef = useRef(null);
 
-  // Subscribe to chat_response frames so "Analyzing…" can be replaced
-  // with the brain's actual answer. The shell API is sendFrame /
-  // subscribeFrame (NOT .send — that was Subagent D's miss). Without
-  // this subscription the response bubble stayed loading forever.
+  // Subscribe to both streaming and final response frames so the
+  // pending bubble can show progressive tokens then settle on the
+  // final assistant text.
   useEffect(() => {
     if (!shell?.subscribeFrame) return undefined;
     return shell.subscribeFrame((frame) => {
-      if (frame?.type !== 'chat_response') return;
-      const text = frame?.payload?.text || frame?.payload?.message
-        || frame?.payload?.content || '';
-      if (!text) return;
+      const type = frame?.type || '';
+      const payload = frame?.payload || {};
+      if (type === 'stream_delta') {
+        const delta = payload.delta || '';
+        const isFinal = Boolean(payload.is_final);
+        setResponses((prev) => {
+          const targetId = pendingQidRef.current;
+          let matched = false;
+          const next = prev.map((r) => {
+            if (matched) return r;
+            const isTarget = targetId ? r.id === targetId : r.loading;
+            if (!isTarget) return r;
+            matched = true;
+            const nextAnswer = delta ? `${r.answer || ''}${delta}` : (r.answer || '');
+            return { ...r, answer: nextAnswer, loading: !isFinal };
+          });
+          if (matched && isFinal) pendingQidRef.current = null;
+          return matched ? next : prev;
+        });
+        return;
+      }
+      if (type !== 'chat_response') return;
+      const text = payload.text || payload.message || payload.content || '';
       setResponses((prev) => {
-        // Route the first text response into the oldest still-loading
-        // entry (FIFO). In practice vision submits are one-at-a-time.
+        const targetId = pendingQidRef.current;
         let matched = false;
         const next = prev.map((r) => {
           if (matched) return r;
-          if (r.loading && !r.answer) {
-            matched = true;
-            return { ...r, answer: text, loading: false };
-          }
-          return r;
+          const isTarget = targetId ? r.id === targetId : r.loading;
+          if (!isTarget) return r;
+          matched = true;
+          return {
+            ...r,
+            answer: text || r.answer || '',
+            loading: false,
+          };
         });
+        if (matched) pendingQidRef.current = null;
         return matched ? next : prev;
       });
     });

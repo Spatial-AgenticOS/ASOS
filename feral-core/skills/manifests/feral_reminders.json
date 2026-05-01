@@ -1,0 +1,130 @@
+{
+  "skill_id": "feral_reminders",
+  "version": "1.0.0",
+  "author": "feral-core",
+  "brand": {
+    "name": "FERAL Reminders",
+    "primary_color": "#0EA5E9",
+    "secondary_color": "#0284C7",
+    "logo_url": "",
+    "icon_set": "sf_symbols"
+  },
+  "description": "Create, list, complete, delete, and schedule reminder notifications for the GenUI starter app.",
+  "trigger_phrases": [
+    "create reminder",
+    "remind me",
+    "mark reminder complete",
+    "delete reminder",
+    "list reminders"
+  ],
+  "categories": [
+    "productivity",
+    "reminders"
+  ],
+  "auth": {
+    "type": "none"
+  },
+  "endpoints": [
+    {
+      "id": "create",
+      "method": "POST",
+      "url": "python://feral_reminders/create",
+      "description": "Create a reminder with title and optional due date/time.",
+      "params": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Reminder title text."
+        },
+        {
+          "name": "due",
+          "type": "string",
+          "required": false,
+          "description": "Optional due string (ISO timestamp or natural language)."
+        }
+      ],
+      "returns_description": "{reminder, count}",
+      "ui_hint": "detail_card"
+    },
+    {
+      "id": "list",
+      "method": "GET",
+      "url": "python://feral_reminders/list",
+      "description": "List stored reminders, optionally including completed entries.",
+      "params": [
+        {
+          "name": "include_completed",
+          "type": "boolean",
+          "required": false,
+          "description": "If true, include completed reminders."
+        }
+      ],
+      "returns_description": "{items, count}",
+      "ui_hint": "list"
+    },
+    {
+      "id": "complete",
+      "method": "POST",
+      "url": "python://feral_reminders/complete",
+      "description": "Mark an existing reminder complete.",
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "Reminder id."
+        }
+      ],
+      "returns_description": "{reminder}",
+      "ui_hint": "detail_card"
+    },
+    {
+      "id": "delete",
+      "method": "DELETE",
+      "url": "python://feral_reminders/delete",
+      "description": "Delete a reminder by id.",
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "Reminder id."
+        }
+      ],
+      "returns_description": "{deleted_id, count}",
+      "ui_hint": "list"
+    },
+    {
+      "id": "schedule_notification",
+      "method": "POST",
+      "url": "python://feral_reminders/schedule_notification",
+      "description": "Schedule a reminder notification event for a reminder id.",
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "Reminder id."
+        },
+        {
+          "name": "when_iso",
+          "type": "string",
+          "required": false,
+          "description": "Target delivery time in ISO-8601 format."
+        }
+      ],
+      "returns_description": "{scheduled, id, when_iso}",
+      "ui_hint": "detail_card"
+    }
+  ],
+  "flows": [],
+  "crons": [],
+  "triggers": [],
+  "permissions": [
+    "storage",
+    "notifications"
+  ],
+  "requires_daemon": false,
+  "max_calls_per_hour": 10000
+}

@@ -27,12 +27,33 @@ def _write_manifest(path: Path, app_id: str = "demo-app") -> Path:
     manifest = AppManifest(
         app_id=app_id,
         brand=BrandProfile(name="Demo"),
+        data_schemas=[
+            {
+                "schema_id": "typed_payload",
+                "schema": {
+                    "type": "object",
+                    "required": ["values"],
+                    "properties": {
+                        "values": {
+                            "type": "object",
+                            "required": ["text"],
+                            "properties": {
+                                "text": {"type": "string", "minLength": 1},
+                            },
+                        }
+                    },
+                },
+            }
+        ],
         surfaces=[
             SurfaceSpec(
                 surface_id="home",
                 kind="authored",
                 template_root={"type": "VStack", "children": [{"type": "Text", "value": "$data.msg"}]},
-                action_contract=[ActionSpec(action_id="hello", handler="app_event")],
+                action_contract=[
+                    ActionSpec(action_id="hello", handler="app_event"),
+                    ActionSpec(action_id="typed", handler="app_event", value_schema_ref="typed_payload"),
+                ],
             ),
         ],
         entry_surface_id="home",
@@ -106,10 +127,18 @@ def test_install_rejects_multiple_sources(client):
     assert r.status_code == 400
 
 
-def test_install_registry_id_returns_501(client):
-    c, _registry, _tmp = client
-    r = c.post("/api/apps/install", json={"registry_id": "some-id"})
-    assert r.status_code == 501
+def test_install_registry_id_calls_registry_installer(client):
+    c, registry, tmp = client
+    src = _write_manifest(tmp, app_id="registry-app")
+    with patch.object(
+        registry,
+        "install_from_registry",
+        side_effect=lambda *args, **kwargs: registry.install_from_dir(src),
+    ) as install_mock:
+        r = c.post("/api/apps/install", json={"registry_id": "some-id"})
+    assert r.status_code == 200, r.text
+    assert install_mock.called
+    assert r.json()["app"]["app_id"] == "registry-app"
 
 
 def test_install_invalid_manifest_returns_400(client, tmp_path):
@@ -207,6 +236,17 @@ def test_dispatch_unknown_action_returns_400(client):
     r = c.post(
         "/api/apps/demo-app/dispatch",
         json={"surface_id": "home", "action_id": "evil"},
+    )
+    assert r.status_code == 400
+
+
+def test_dispatch_schema_violation_returns_400(client):
+    c, _registry, tmp = client
+    src = _write_manifest(tmp)
+    c.post("/api/apps/install", json={"path": str(src), "unsigned": True})
+    r = c.post(
+        "/api/apps/demo-app/dispatch",
+        json={"surface_id": "home", "action_id": "typed", "value": {"values": {}}},
     )
     assert r.status_code == 400
 

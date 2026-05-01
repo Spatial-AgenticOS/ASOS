@@ -79,7 +79,7 @@ describe("PairShell", () => {
     expect(await findByTestId("pair-shell")).toBeInTheDocument();
     expect(await findByTestId("pair-top-bar")).toBeInTheDocument();
     expect(await findByTestId("pair-capability-tabs")).toBeInTheDocument();
-    expect(await findByTestId("chat-panel")).toBeInTheDocument();
+    expect(await findByTestId("phone-chat-panel")).toBeInTheDocument();
     expect(await findByRole("tab", { name: /chat/i })).toBeInTheDocument();
 
     await waitFor(() => {

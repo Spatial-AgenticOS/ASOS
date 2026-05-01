@@ -36,7 +36,7 @@ class FeralMessage(BaseModel):
 class AudioChunkPayload(BaseModel):
     """Streaming audio from client to brain."""
     encoding: str = "opus"
-    sample_rate: int = 16000
+    sample_rate: int = 24000
     channels: int = 1
     chunk_index: int = 0
     is_final: bool = False
@@ -136,6 +136,8 @@ class GenUIPushPayload(BaseModel):
     kind: Literal["notification", "interactive"]
     app_id: str
     surface_id: str
+    push_id: str = ""
+    screen_id: str = ""
     title: str
     body: str = ""
     actions: list[GenUIPushActionPayload] = Field(default_factory=list)

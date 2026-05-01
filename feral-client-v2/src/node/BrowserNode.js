@@ -10,7 +10,7 @@
  *
  * Frames the Brain understands:
  *   • location — navigator.geolocation.watchPosition → WS `location_update`
- *   • mic      — AudioWorklet PCM16 @ 16kHz → WS `audio_chunk`
+ *   • mic      — AudioWorklet PCM16 @ 24kHz → WS `audio_chunk`
  *                 {data_b64, chunk_index, is_final, encoding, sample_rate}
  *   • camera   — canvas.toBlob('image/jpeg') → WS `frame`
  *                 {data_b64, width, height, mime}
@@ -23,7 +23,7 @@
  */
 
 const HUP_VERSION = "1.0";
-const AUDIO_TARGET_SAMPLE_RATE = 16000;
+const AUDIO_TARGET_SAMPLE_RATE = 24000;
 const AUDIO_CHUNK_MS = 250; // 200-400ms per chunk — matches the VoiceRouter contract
 const VIDEO_INTERVAL_MS = 750;
 const VIDEO_MAX_WIDTH = 640;
@@ -91,7 +91,7 @@ const WORKLET_SOURCE = `
 class FeralCaptureProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
-    this.targetRate = options.processorOptions?.targetRate || 16000;
+    this.targetRate = options.processorOptions?.targetRate || 24000;
     this.inputRate = sampleRate;
     this.ratio = this.inputRate / this.targetRate;
     this.chunkSamples = Math.round(this.targetRate * (options.processorOptions?.chunkMs || 250) / 1000);

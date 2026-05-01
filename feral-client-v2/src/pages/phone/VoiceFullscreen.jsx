@@ -37,6 +37,13 @@ function providerLabel(mode) {
   return mode;
 }
 
+function base64ToArrayBuffer(dataB64) {
+  const binary = atob(dataB64 || '');
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
 export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) {
   const [voiceState, setVoiceState] = useState(initialMode);
   const [transcript, setTranscript] = useState('');
@@ -49,8 +56,12 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
 
   const containerRef = useRef(null);
   const prevStateRef = useRef(voiceState);
+  const voiceStateRef = useRef(voiceState);
   const analyserRef = useRef(null);
   const animLevelRef = useRef(null);
+  const playbackCtxRef = useRef(null);
+  const nextPlaybackTimeRef = useRef(0);
+  const playbackQueueRef = useRef(Promise.resolve());
 
   useEffect(() => {
     if (!open) return;
@@ -66,6 +77,7 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
   useEffect(() => {
     const prev = prevStateRef.current;
     prevStateRef.current = voiceState;
+    voiceStateRef.current = voiceState;
     if (prev === voiceState) return;
 
     if (prev === 'listening' && voiceState === 'processing') {
@@ -74,6 +86,74 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
       triggerHaptic([30, 30, 30]);
     }
   }, [voiceState]);
+
+  const ensurePlaybackContext = useCallback(async () => {
+    if (typeof window === 'undefined') return null;
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!playbackCtxRef.current || playbackCtxRef.current.state === 'closed') {
+      playbackCtxRef.current = new AudioCtx();
+      nextPlaybackTimeRef.current = 0;
+    }
+    if (playbackCtxRef.current.state === 'suspended') {
+      try {
+        await playbackCtxRef.current.resume();
+      } catch {
+        // iOS Safari may reject resume outside a fresh gesture.
+      }
+    }
+    return playbackCtxRef.current;
+  }, []);
+
+  const queuePcm16Playback = useCallback(async (payload) => {
+    const ctx = await ensurePlaybackContext();
+    if (!ctx || !payload?.data_b64) return;
+    const pcm16 = new Int16Array(base64ToArrayBuffer(payload.data_b64));
+    const float32 = new Float32Array(pcm16.length);
+    for (let i = 0; i < pcm16.length; i++) {
+      float32[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7fff);
+    }
+    const sampleRate = Number(payload.sample_rate) || 24000;
+    const buffer = ctx.createBuffer(1, float32.length, sampleRate);
+    buffer.getChannelData(0).set(float32);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    const now = ctx.currentTime;
+    const startTime = Math.max(now, nextPlaybackTimeRef.current);
+    source.start(startTime);
+    nextPlaybackTimeRef.current = startTime + buffer.duration;
+  }, [ensurePlaybackContext]);
+
+  const queueEncodedPlayback = useCallback(async (payload) => {
+    const ctx = await ensurePlaybackContext();
+    if (!ctx || !payload?.data_b64) return;
+    const encoded = base64ToArrayBuffer(payload.data_b64);
+    const decoded = await ctx.decodeAudioData(encoded.slice(0));
+    const source = ctx.createBufferSource();
+    source.buffer = decoded;
+    source.connect(ctx.destination);
+    const now = ctx.currentTime;
+    const startTime = Math.max(now, nextPlaybackTimeRef.current);
+    source.start(startTime);
+    nextPlaybackTimeRef.current = startTime + decoded.duration;
+  }, [ensurePlaybackContext]);
+
+  const queueAudioPlayback = useCallback((type, payload) => {
+    if (!payload?.data_b64 || payload?.is_final) return;
+    const encoding = (payload.encoding || '').toLowerCase();
+    playbackQueueRef.current = playbackQueueRef.current
+      .then(async () => {
+        if (encoding === 'mp3' || type === 'audio_chunk') {
+          await queueEncodedPlayback(payload);
+          return;
+        }
+        await queuePcm16Playback(payload);
+      })
+      .catch(() => {
+        // Keep queue healthy after transient decode/playback failures.
+      });
+  }, [queueEncodedPlayback, queuePcm16Playback]);
 
   useEffect(() => {
     if (!open) return;
@@ -97,22 +177,31 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
           }
         }
       } else if (type === 'transcript') {
-        if (payload.is_final) {
+        const isFinal = payload.is_final === true || payload.is_partial === false;
+        if (isFinal) {
           setTranscript(payload.text || '');
           setPartialTranscript('');
-          setHistory((h) => [...h, { role: 'user', text: payload.text || '' }]);
+          if (payload.text) {
+            setHistory((h) => [...h, { role: 'user', text: payload.text || '' }]);
+          }
         } else {
           setPartialTranscript(payload.text || '');
         }
       } else if (type === 'chat_response') {
         setBrainText(payload.text || '');
         setHistory((h) => [...h, { role: 'assistant', text: payload.text || '' }]);
-      } else if (type === 'tts_chunk') {
-        if (voiceState !== 'speaking') setVoiceState('speaking');
+      } else if (type === 'stream_delta') {
+        const delta = payload.delta || '';
+        if (delta) setBrainText((prev) => `${prev}${delta}`);
+      } else if (type === 'tts_chunk' || type === 'audio_response' || type === 'audio_chunk') {
+        if (voiceStateRef.current !== 'speaking') setVoiceState('speaking');
+        queueAudioPlayback(type, payload);
       } else if (type === 'voice_vad') {
-        if (payload.speaking && voiceState !== 'listening') {
+        if (payload.speaking && voiceStateRef.current !== 'listening') {
           setVoiceState('listening');
         }
+      } else if (type === 'speech_started') {
+        nextPlaybackTimeRef.current = 0;
       } else if (type === 'voice_error') {
         setVoiceState('error');
         setErrorMessage(payload.message || 'Voice session failed');
@@ -120,7 +209,7 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
     });
 
     return unsub;
-  }, [open, shell, voiceState]);
+  }, [open, queueAudioPlayback, shell]);
 
   useEffect(() => {
     if (!open) return;
@@ -180,6 +269,19 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
       if (ctx) ctx.close().catch(() => {});
     };
   }, [open, shell]);
+
+  useEffect(() => {
+    if (!open) {
+      nextPlaybackTimeRef.current = 0;
+      playbackQueueRef.current = Promise.resolve();
+      if (playbackCtxRef.current) {
+        playbackCtxRef.current.close().catch(() => {});
+        playbackCtxRef.current = null;
+      }
+      return;
+    }
+    ensurePlaybackContext().catch(() => {});
+  }, [ensurePlaybackContext, open]);
 
   useEffect(() => {
     if (!open) return;

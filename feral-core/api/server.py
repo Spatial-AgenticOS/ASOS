@@ -1439,6 +1439,11 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                     state.sessions[target_sid] = ws
                 if node_id:
                     state.bind_session_to_daemon(target_sid, node_id)
+                    if channel == "vision_ask" and getattr(state, "perception", None):
+                        # First vision turn can race: phone sends frame first, then
+                        # chat_request. The frame may land before this session is bound
+                        # to the daemon, so refresh perception here after binding.
+                        state.perception.update_vision(target_sid, state.vision_buffer, node_id)
 
                 if state.memory:
                     state.memory.working_push(target_sid, {"role": "user", "text": text})
@@ -1456,11 +1461,18 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
 
                 response_text = ""
                 try:
-                    result = await state.orchestrator.handle_command(
-                        session_id=target_sid,
-                        text=text,
-                        context=context,
-                    )
+                    if reply_mode == "stream":
+                        result = await state.orchestrator.handle_command_stream(
+                            session_id=target_sid,
+                            text=text,
+                            context=context,
+                        )
+                    else:
+                        result = await state.orchestrator.handle_command(
+                            session_id=target_sid,
+                            text=text,
+                            context=context,
+                        )
                     if isinstance(result, str):
                         response_text = result
                     elif isinstance(result, dict):
@@ -1534,20 +1546,6 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                     state.sessions[session_id] = ws
                 state.bind_session_to_daemon(session_id, node_id)
                 state.voice_router.bind_node_to_session(node_id, session_id)
-                state.voice_router.register_voice_config(
-                    node_id,
-                    {
-                        "node_id": node_id,
-                        "mode": "realtime",
-                        "supports_realtime": True,
-                        "sample_rate": payload_dict.get("sample_rate", 24000),
-                        "channels": payload_dict.get("channels", 1),
-                        "language_hint": payload_dict.get("language_hint", "en-US"),
-                        "interrupt_policy": payload_dict.get("interrupt_policy", "barge_in"),
-                        "camera_linked": bool(payload_dict.get("camera_linked", False)),
-                        "phone_mode": payload_dict.get("mode", "push_to_talk"),
-                    },
-                )
 
                 # PR #61 (voice-v2) wire-up: dispatch to the user-selected
                 # voice mode (openai_realtime / gemini_live / chained) via
@@ -1560,9 +1558,10 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 )
                 if not selected_mode:
                     cfg = getattr(state, "config", None)
-                    voice_cfg = (
-                        (cfg._merged.get("voice") or {}) if cfg else {}
-                    )
+                    merged_cfg = getattr(cfg, "_merged", {}) if cfg else {}
+                    if not isinstance(merged_cfg, dict):
+                        merged_cfg = {}
+                    voice_cfg = merged_cfg.get("voice") or {}
                     selected_mode = voice_cfg.get("mode", "openai_realtime")
                 if selected_mode not in (
                     "openai_realtime", "gemini_live", "chained",
@@ -1574,12 +1573,35 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                     )
                     selected_mode = "openai_realtime"
 
+                voice_provider = "openai"
+                if selected_mode == "gemini_live":
+                    voice_provider = "gemini"
+                mode_for_router = selected_mode if selected_mode in {"openai_realtime", "gemini_live", "chained"} else "openai_realtime"
+                state.voice_router.register_voice_config(
+                    node_id,
+                    {
+                        "node_id": node_id,
+                        "mode": mode_for_router,
+                        "voice_provider": voice_provider,
+                        "supports_realtime": selected_mode in {"openai_realtime", "gemini_live"},
+                        "sample_rate": payload_dict.get("sample_rate", 24000),
+                        "channels": payload_dict.get("channels", 1),
+                        "language_hint": payload_dict.get("language_hint", "en-US"),
+                        "interrupt_policy": payload_dict.get("interrupt_policy", "barge_in"),
+                        "camera_linked": bool(payload_dict.get("camera_linked", False)),
+                        "phone_mode": payload_dict.get("mode", "push_to_talk"),
+                        "skip_wake": True,
+                    },
+                )
+
                 try:
                     await state.voice_router.open_session(
                         session_id=session_id,
                         mode=selected_mode,
                         provider_opts={
                             "node_id": node_id,
+                            "sample_rate": payload_dict.get("sample_rate", 24000),
+                            "language_hint": payload_dict.get("language_hint", "en-US"),
                             **(payload_dict.get("provider_opts") or {}),
                         },
                     )
@@ -1681,7 +1703,17 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         state.sessions[target_sid] = ws
                         if node_id:
                             state.bind_session_to_daemon(target_sid, node_id)
-                    screen_id = payload_dict.get("screen_id") or f"{app_id}:{surface_id}:{target_sid}"
+                    screen_id = payload_dict.get("screen_id")
+                    if not screen_id:
+                        registry = getattr(state, "app_registry", None)
+                        if registry is not None and hasattr(registry, "build_screen_id"):
+                            screen_id = registry.build_screen_id(
+                                app_id=app_id,
+                                surface_id=surface_id or "home",
+                                scope=target_sid,
+                            )
+                        else:
+                            screen_id = f"{app_id}:{surface_id}:{target_sid}"
                     await _handle_app_action(
                         state.orchestrator,
                         session_id=target_sid,

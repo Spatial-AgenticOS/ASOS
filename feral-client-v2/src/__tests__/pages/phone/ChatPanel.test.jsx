@@ -13,6 +13,11 @@ vi.mock('../../../hooks/useWebSpeech', () => ({
 }));
 
 vi.mock('../../../pages/phone/VoiceFullscreen', () => ({
+  VoiceFullscreen: ({ open, onClose, initialMode }) => (
+    open ? <div data-testid="voice-fullscreen" data-mode={initialMode}>
+      <button onClick={onClose} data-testid="vf-close">Close</button>
+    </div> : null
+  ),
   default: ({ open, onClose, initialMode }) => (
     open ? <div data-testid="voice-fullscreen" data-mode={initialMode}>
       <button onClick={onClose} data-testid="vf-close">Close</button>
@@ -49,7 +54,7 @@ describe('ChatPanel', () => {
 
   it('renders default greeting message', () => {
     const { getByText } = render(<ChatPanel />);
-    expect(getByText('How can I help?')).toBeTruthy();
+    expect(getByText('Ask anything to the paired brain.')).toBeTruthy();
   });
 
   it('mic button has correct aria attributes', () => {
@@ -90,21 +95,34 @@ describe('ChatPanel', () => {
     expect(getByTestId('chat-input').value).toBe('hel');
   });
 
-  it('long-press (400ms+) opens VoiceFullscreen', async () => {
-    vi.useRealTimers();
-    const { getByTestId, queryByTestId } = render(<ChatPanel />);
-    // Wait for the dynamic import of VoiceFullscreen to resolve
-    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+  it('long-press (400ms+) opens VoiceFullscreen and starts voice session', async () => {
+    const shell = {
+      deviceId: 'device-1',
+      voice_config: { mode: 'openai_realtime' },
+      sendFrame: vi.fn(),
+      subscribeFrame: vi.fn(() => () => {}),
+      node: {
+        startMic: vi.fn(async () => {}),
+        stopMic: vi.fn(async () => {}),
+      },
+    };
+    const { getByTestId, queryByTestId } = render(<ChatPanel shell={shell} />);
     expect(queryByTestId('voice-fullscreen')).toBeNull();
     const mic = getByTestId('mic-button');
     fireEvent.pointerDown(mic);
-    await act(async () => { await new Promise((r) => setTimeout(r, 450)); });
+    act(() => { vi.advanceTimersByTime(450); });
     fireEvent.pointerUp(mic);
-    await waitFor(() => {
-      expect(queryByTestId('voice-fullscreen')).toBeTruthy();
-    });
+    await act(async () => { await Promise.resolve(); });
+    expect(queryByTestId('voice-fullscreen')).toBeTruthy();
+    expect(shell.sendFrame).toHaveBeenCalledWith(
+      'voice_session_start',
+      expect.objectContaining({
+        voice_mode: 'openai_realtime',
+        sample_rate: 24000,
+      }),
+    );
+    expect(shell.node.startMic).toHaveBeenCalled();
     expect(getByTestId('voice-fullscreen').getAttribute('data-mode')).toBe('listening');
-    vi.useFakeTimers();
   });
 
   it('unsupported browser renders disabled mic button', () => {
@@ -141,30 +159,54 @@ describe('ChatPanel', () => {
     expect(mockStart).toHaveBeenCalled();
   });
 
-  it('sends message via shell.send on form submit', () => {
-    const shell = { send: vi.fn() };
+  it('sends message via shell.sendFrame on form submit', () => {
+    const shell = {
+      deviceId: 'device-1',
+      sendFrame: vi.fn(),
+      subscribeFrame: vi.fn(() => () => {}),
+    };
     const { getByTestId } = render(<ChatPanel shell={shell} />);
     fireEvent.change(getByTestId('chat-input'), { target: { value: 'test message' } });
     fireEvent.submit(getByTestId('chat-composer'));
-    expect(shell.send).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'chat_request', payload: { text: 'test message' } })
+    expect(shell.sendFrame).toHaveBeenCalledWith(
+      'chat_request',
+      expect.objectContaining({
+        text: 'test message',
+        reply_mode: 'stream',
+        channel: 'chat',
+      }),
     );
   });
 
-  it('calls onSend callback when provided', () => {
-    const onSend = vi.fn();
-    const { getByTestId } = render(<ChatPanel onSend={onSend} />);
-    fireEvent.change(getByTestId('chat-input'), { target: { value: 'callback test' } });
-    fireEvent.submit(getByTestId('chat-composer'));
-    expect(onSend).toHaveBeenCalledWith('callback test');
-  });
-
   it('clears input after sending', () => {
-    const onSend = vi.fn();
-    const { getByTestId } = render(<ChatPanel onSend={onSend} />);
+    const shell = {
+      deviceId: 'device-1',
+      sendFrame: vi.fn(),
+      subscribeFrame: vi.fn(() => () => {}),
+    };
+    const { getByTestId } = render(<ChatPanel shell={shell} />);
     const input = getByTestId('chat-input');
     fireEvent.change(input, { target: { value: 'clear me' } });
     fireEvent.submit(getByTestId('chat-composer'));
     expect(input.value).toBe('');
+  });
+
+  it('appends assistant reply from chat_response frame', async () => {
+    let frameListener = null;
+    const shell = {
+      sendFrame: vi.fn(),
+      subscribeFrame: vi.fn((cb) => {
+        frameListener = cb;
+        return () => {};
+      }),
+    };
+    const { queryByText } = render(<ChatPanel shell={shell} />);
+    act(() => {
+      frameListener?.({
+        type: 'chat_response',
+        payload: { text: 'Assistant reply' },
+      });
+    });
+    expect(queryByText('Assistant reply')).toBeTruthy();
   });
 });
