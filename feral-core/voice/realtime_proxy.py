@@ -77,6 +77,11 @@ class RealtimeSession:
         self._on_transcript = on_transcript
         self._on_tool_call = on_tool_call
         self._on_speech_started = on_speech_started
+        # GA Realtime response lifecycle tracking. Flips True on
+        # `response.created`, False on `response.done`. Prevents the
+        # cancel_response no-op error spam when VAD fires on initial
+        # speech (no response yet) or after a response completed.
+        self._response_in_progress = False
         self._on_error = on_error
         self._on_conversation_item = on_conversation_item
 
@@ -170,10 +175,26 @@ class RealtimeSession:
                 },
                 "tools": openai_tools,
                 "tool_choice": "auto",
-                "temperature": 0.7,
+                # NOTE: GA Realtime API no longer accepts
+                # `session.temperature` at the session.update path —
+                # live test surfaced:
+                #   "Unknown parameter: 'session.temperature'"
+                # which silently broke session configuration so the
+                # model never responded. `max_output_tokens` is still
+                # accepted at session scope as of GA 2025-11.
                 "max_output_tokens": 4096,
             },
         }
+
+        # OpenAI also caps tools at 128 per request; GA Realtime is
+        # the same as /v1/chat/completions in this respect.
+        if len(openai_tools) > 128:
+            logger.warning(
+                "realtime session.update: truncating tools from %d → 128 "
+                "(OpenAI hard limit).",
+                len(openai_tools),
+            )
+            session_update["session"]["tools"] = openai_tools[:128]
 
         await self._send(session_update)
         logger.info(f"Realtime session configured (GA): {len(openai_tools)} tools, voice={self._voice}")
@@ -216,9 +237,22 @@ class RealtimeSession:
         await self._send({"type": "response.create"})
 
     async def cancel_response(self):
-        """Cancel the current response (e.g., user interrupted)."""
-        if self._connected:
-            await self._send({"type": "response.cancel"})
+        """Cancel the current response (e.g., user interrupted).
+
+        Guarded: only send response.cancel when a response is actually
+        in flight. Otherwise OpenAI returns
+           "Cancellation failed: no active response found"
+        which floods the log and hints that VAD-triggered cancellations
+        are firing before any response was generated. We track the
+        in_progress flag via response.created / response.done events
+        on this session.
+        """
+        if not self._connected:
+            return
+        if not getattr(self, "_response_in_progress", False):
+            # No-op. Don't waste a round-trip or generate error spam.
+            return
+        await self._send({"type": "response.cancel"})
 
     async def inject_context(self, context_text: str):
         """Inject updated perception context as a system-level message."""
@@ -350,8 +384,40 @@ class RealtimeSession:
             if self._on_error:
                 await self._on_error(self.session_id, msg)
 
-        elif event_type in ("response.done", "response.created", "rate_limits.updated"):
+        elif event_type == "response.created":
+            self._response_in_progress = True
+            logger.info("Realtime response.created session=%s", self.session_id)
+
+        elif event_type == "response.done":
+            self._response_in_progress = False
+            # Surface the response's status so we can tell if OpenAI
+            # is rejecting our requests silently (e.g. "content_filter",
+            # "failed", "incomplete"). A healthy response is "completed".
+            resp = event.get("response", {})
+            status = resp.get("status", "")
+            status_details = resp.get("status_details", {})
+            if status and status != "completed":
+                logger.warning(
+                    "Realtime response.done session=%s status=%s details=%s",
+                    self.session_id, status, status_details,
+                )
+            else:
+                logger.info(
+                    "Realtime response.done session=%s status=%s",
+                    self.session_id, status or "(unknown)",
+                )
+
+        elif event_type == "rate_limits.updated":
             pass
+
+        else:
+            # Catch-all: log unknown/unhandled event types so we can
+            # see WHAT the server sent if voice still doesn't produce
+            # audio after the guard above.
+            logger.debug(
+                "Realtime unhandled event type=%s session=%s",
+                event_type, self.session_id,
+            )
 
 
 class RealtimeProxy:

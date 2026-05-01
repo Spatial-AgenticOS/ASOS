@@ -1,10 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { Camera, RotateCcw, Send } from 'lucide-react';
 
 const JPEG_QUALITY = 0.85;
 const MAX_WIDTH = 640;
 
-export default function VisionAskPanel({ shell, sessionId }) {
+export default function VisionAskPanel({ shell: shellProp, sessionId }) {
+  // PairShell renders children via <Outlet context={shellContext}/>,
+  // so panels must fall back to useOutletContext() when no shell is
+  // passed as a prop. Without this fallback the panel thought it
+  // wasn't paired even though PairShell had the WS alive.
+  const outletShell = useOutletContext();
+  const shell = shellProp || outletShell || {};
   const [cameraError, setCameraError] = useState(null);
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [capturedImage, setCapturedImage] = useState(null);
@@ -75,26 +82,73 @@ export default function VisionAskPanel({ shell, sessionId }) {
     setQuestion('');
   }, []);
 
+  const pendingQidRef = useRef(null);
+
+  // Subscribe to chat_response frames so "Analyzing…" can be replaced
+  // with the brain's actual answer. The shell API is sendFrame /
+  // subscribeFrame (NOT .send — that was Subagent D's miss). Without
+  // this subscription the response bubble stayed loading forever.
+  useEffect(() => {
+    if (!shell?.subscribeFrame) return undefined;
+    return shell.subscribeFrame((frame) => {
+      if (frame?.type !== 'chat_response') return;
+      const text = frame?.payload?.text || frame?.payload?.message
+        || frame?.payload?.content || '';
+      if (!text) return;
+      setResponses((prev) => {
+        // Route the first text response into the oldest still-loading
+        // entry (FIFO). In practice vision submits are one-at-a-time.
+        let matched = false;
+        const next = prev.map((r) => {
+          if (matched) return r;
+          if (r.loading && !r.answer) {
+            matched = true;
+            return { ...r, answer: text, loading: false };
+          }
+          return r;
+        });
+        return matched ? next : prev;
+      });
+    });
+  }, [shell]);
+
   const handleSubmit = useCallback(async (e) => {
     e?.preventDefault?.();
     if (!capturedImage || !question.trim()) return;
-    setSubmitting(true);
-    const frameEnvelope = {
-      type: 'frame',
-      payload: { data_b64: capturedImage.b64, width: capturedImage.width, height: capturedImage.height, mime: 'image/jpeg' },
-    };
-    const chatEnvelope = {
-      type: 'chat_request',
-      payload: { text: question.trim(), session_id: sessionId || '', channel: 'vision' },
-    };
-    if (shell?.sendFrame) {
-      shell.sendFrame(capturedImage.b64);
-    } else if (shell?.send) {
-      shell.send(frameEnvelope);
+    if (typeof shell?.sendFrame !== 'function') {
+      setCameraError('Phone is not connected to the brain — pair first.');
+      return;
     }
-    if (shell?.send) shell.send(chatEnvelope);
+    setSubmitting(true);
+
+    // The brain's frame handler stashes JPEG bytes into
+    // state.vision_buffer keyed by node_id; the chat_request that
+    // arrives next pulls the latest frame for that node into the
+    // LLM prompt as vision input. Order matters: frame FIRST, then
+    // chat_request. Both are HUP envelopes shaped as (type, payload).
+    shell.sendFrame('frame', {
+      data_b64: capturedImage.b64,
+      width: capturedImage.width,
+      height: capturedImage.height,
+      mime: 'image/jpeg',
+    });
+    shell.sendFrame('chat_request', {
+      session_id: sessionId || `phone-${shell?.deviceId || 'session'}`,
+      text: question.trim(),
+      reply_mode: 'stream',
+      // Brain's ChatRequestPayload.channel is a strict Literal that
+      // accepts "chat" or "vision_ask" (NOT "vision" — that's a tab
+      // name, not a protocol channel). Using the wrong literal trips
+      // pydantic validation on the brain side and the envelope gets
+      // dropped, leaving "Analyzing…" stuck forever.
+      channel: 'vision_ask',
+      reply_to: null,
+    });
+
+    const qid = `vq_${Date.now()}`;
+    pendingQidRef.current = qid;
     setResponses((prev) => [...prev, {
-      id: `vq_${Date.now()}`,
+      id: qid,
       question: question.trim(),
       thumbnail: capturedImage.dataUrl,
       answer: null,

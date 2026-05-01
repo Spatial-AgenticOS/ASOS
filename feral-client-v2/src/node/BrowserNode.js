@@ -267,15 +267,37 @@ export class BrowserNode {
       this.onError(new Error(micErr.message));
       return;
     }
-    if (!this._voiceConfigSent) {
-      await this.sendVoiceConfig();
-    }
     try {
+      // CRITICAL iOS Safari ordering: call getUserMedia FIRST within
+      // the user-gesture context. If we await anything else before
+      // getUserMedia (like sendVoiceConfig) the gesture may be lost
+      // and Safari silently refuses mic access, leaving the rest of
+      // the pipeline set up but no audio flowing. Send the voice
+      // config AFTER the mic is acquired.
       this._mediaStream = this._mediaStream || await navigator.mediaDevices.getUserMedia({
         audio: true,
       });
+      if (!this._voiceConfigSent) {
+        // Intentionally not awaited — we just want the frame on the
+        // wire; sendVoiceConfig's internal WebSocket send is synchronous.
+        this.sendVoiceConfig().catch((err) => {
+          console.warn('[BrowserNode] sendVoiceConfig failed', err);
+        });
+      }
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       this._audioContext = new AudioCtx();
+      // iOS Safari starts AudioContext in 'suspended' state. Without
+      // an explicit resume() no audio data reaches the worklet, so
+      // the brain waits forever for audio_chunk frames that never
+      // arrive. resume() has to be called synchronously inside the
+      // user-gesture stack that led here (the Start voice tap).
+      if (this._audioContext.state === "suspended") {
+        try {
+          await this._audioContext.resume();
+        } catch (resumeErr) {
+          console.warn("[BrowserNode] AudioContext.resume failed", resumeErr);
+        }
+      }
       const blob = new Blob([WORKLET_SOURCE], { type: "application/javascript" });
       const workletUrl = URL.createObjectURL(blob);
       await this._audioContext.audioWorklet.addModule(workletUrl);
