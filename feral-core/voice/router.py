@@ -141,7 +141,25 @@ class VoiceRouter:
         encoding: str = "pcm16",
         sample_rate: int = 24000,
     ):
-        if self._wake_word and self._wake_word.enabled:
+        # Wake-word gate is only appropriate for always-listening
+        # desktop/background mics. When a phone user explicitly tapped
+        # "Start voice" we already have voice_session_start on record
+        # and MUST NOT drop audio waiting for "hey feral" — that's
+        # what stalled voice in the live test even though the mic was
+        # streaming PCM correctly to the brain.
+        #
+        # Skip the gate if there's an active browser_node voice session
+        # bound to this node (the phone-as-peer fast path).
+        skip_wake = False
+        try:
+            if node_id and session_id in self._session_voice_mode:
+                skip_wake = True
+            elif node_id and node_id.startswith("browser-node-"):
+                skip_wake = True
+        except Exception:
+            skip_wake = False
+
+        if self._wake_word and self._wake_word.enabled and not skip_wake:
             import base64
             pcm_bytes = base64.b64decode(audio_b64)
             should_process = await self._wake_word.process_frame(session_id, pcm_bytes)

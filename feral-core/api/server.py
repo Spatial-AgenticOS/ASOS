@@ -1885,18 +1885,49 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
             elif msg.type == "audio_chunk" and node_id:
                 payload_dict = raw.get("payload", {})
                 audio_b64 = payload_dict.get("data_b64", "")
+                chunk_idx = payload_dict.get("chunk_index", 0)
+                # Live-test diagnostic: log the FIRST chunk + every 50th
+                # chunk so the brain log shows whether phone PCM16 is
+                # actually reaching us. Without this, the "no audio"
+                # failure mode is invisible from the brain side.
+                if chunk_idx == 0 or (chunk_idx % 50 == 0):
+                    logger.info(
+                        "audio_chunk from node=%s chunk=%d bytes_b64=%d "
+                        "final=%s", node_id, chunk_idx, len(audio_b64 or ""),
+                        payload_dict.get("is_final", False),
+                    )
                 if state.voice_router and audio_b64:
                     sessions = state.get_sessions_for_daemon(node_id)
                     target_sid = next(iter(sessions), None)
-                    if target_sid:
+                    if not target_sid:
+                        if chunk_idx == 0:
+                            logger.warning(
+                                "audio_chunk from node=%s dropped — "
+                                "no voice session bound to this daemon. "
+                                "Did voice_session_start arrive before audio?",
+                                node_id,
+                            )
+                    else:
                         await state.voice_router.handle_audio_from_node(
                             node_id=node_id,
                             session_id=target_sid,
                             audio_b64=audio_b64,
-                            chunk_index=payload_dict.get("chunk_index", 0),
+                            chunk_index=chunk_idx,
                             is_final=payload_dict.get("is_final", False),
                             encoding=payload_dict.get("encoding", "pcm16"),
                             sample_rate=payload_dict.get("sample_rate", 24000),
+                        )
+                elif not state.voice_router:
+                    if chunk_idx == 0:
+                        logger.warning(
+                            "audio_chunk from node=%s dropped — "
+                            "voice_router not initialised", node_id,
+                        )
+                elif not audio_b64:
+                    if chunk_idx == 0:
+                        logger.warning(
+                            "audio_chunk from node=%s dropped — empty data_b64",
+                            node_id,
                         )
 
             elif msg.type == "skill_approval":

@@ -1045,19 +1045,40 @@ class BrainState:
                 pass
             return v
 
+        # Operator-level channel gates: settings.features.<channel>
+        # (default True for legacy behavior). Without this, any install
+        # whose vault carries a bot_token auto-starts polling loops even
+        # when the operator explicitly toggled the channel off in
+        # settings — which is what the phone test surfaced (telegram
+        # pings /getUpdates every 30s despite features.telegram=false).
+        features_cfg = (self.config._merged.get("features") or {}) if self.config else {}
+
+        def _ch_enabled(name: str, default: bool = True) -> bool:
+            val = features_cfg.get(name)
+            if val is None:
+                return default
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, str):
+                return val.lower() in ("true", "1", "yes", "on")
+            return bool(val)
+
         channel_configs = {
             "telegram": {
                 "bot_token": _cred("FERAL_TELEGRAM_BOT_TOKEN"),
-                "enabled": bool(_cred("FERAL_TELEGRAM_BOT_TOKEN")),
+                "enabled": _ch_enabled("telegram")
+                           and bool(_cred("FERAL_TELEGRAM_BOT_TOKEN")),
             },
             "discord": {
                 "bot_token": _cred("FERAL_DISCORD_BOT_TOKEN"),
-                "enabled": bool(_cred("FERAL_DISCORD_BOT_TOKEN")),
+                "enabled": _ch_enabled("discord")
+                           and bool(_cred("FERAL_DISCORD_BOT_TOKEN")),
             },
             "slack": {
                 "bot_token": _cred("FERAL_SLACK_BOT_TOKEN"),
                 "app_token": _cred("FERAL_SLACK_APP_TOKEN"),
-                "enabled": bool(_cred("FERAL_SLACK_BOT_TOKEN")),
+                "enabled": _ch_enabled("slack")
+                           and bool(_cred("FERAL_SLACK_BOT_TOKEN")),
             },
             "whatsapp": {
                 "access_token": _cred("FERAL_WHATSAPP_ACCESS_TOKEN"),

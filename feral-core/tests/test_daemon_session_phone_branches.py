@@ -269,7 +269,8 @@ def test_backchannel_request_persists_sqlite(tmp_path):
         ("chat_request", {"text": "missing session_id"}),
         ("chat_response", {"session_id": "phone-session-1"}),
         ("voice_session_start", {"stream_id": "voice-stream-1"}),
-        ("voice_interrupt", {}),
+        # voice_interrupt no longer has any required fields — see
+        # test_phone_envelopes.py for the same parametrisation update.
         ("genui_event", {"app_id": "feral.notes"}),
         ("peripheral_bridge_register", {"bridge_id": "bridge-1", "platform": "android"}),
         ("backchannel_request", {"kind": "bug"}),

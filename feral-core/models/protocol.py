@@ -110,8 +110,17 @@ class VoiceSessionStartPayload(BaseModel):
 
 
 class VoiceInterruptPayload(BaseModel):
-    """Signal from phone to cut in-flight TTS on the active stream."""
-    stream_id: str
+    """Signal from phone to cut in-flight TTS on the active stream.
+
+    ``stream_id`` used to be required, but in practice the phone UI
+    emits a bare ``voice_interrupt`` (tap-to-interrupt on the orb)
+    without knowing the session's stream id — the brain looks up the
+    active voice session via the node_id on the WS. Making this
+    optional stops live-test pydantic validation errors like:
+      VoiceInterruptPayload.stream_id: Field required
+    from dropping the interrupt frame entirely.
+    """
+    stream_id: Optional[str] = None
     reason: str = "user_interrupt"
 
 

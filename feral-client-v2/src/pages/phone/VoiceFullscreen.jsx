@@ -18,6 +18,7 @@
  *   <VoiceFullscreen open={isOpen} onClose={() => setOpen(false)} initialMode="listening" shell={shell} />
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import VoiceOrb from './VoiceOrb';
 
 const VOICE_STATES = ['idle', 'listening', 'processing', 'speaking', 'error'];
@@ -75,9 +76,15 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
   }, [voiceState]);
 
   useEffect(() => {
-    if (!open || !shell?.onFrame) return;
+    if (!open) return;
+    // PairShell exposes subscribeFrame (not onFrame — Subagent C's
+    // JSDoc guessed wrong). Same silent-noop bug as the sendEnvelope
+    // fix above. Prefer subscribeFrame; fall through to onFrame only
+    // for test harnesses that inject it.
+    const subscribe = shell?.subscribeFrame || shell?.onFrame;
+    if (typeof subscribe !== 'function') return;
 
-    const unsub = shell.onFrame((frame) => {
+    const unsub = subscribe((frame) => {
       const type = frame?.type || '';
       const payload = frame?.payload || {};
 
@@ -118,44 +125,61 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
   useEffect(() => {
     if (!open) return;
 
-    let stream = null;
+    // Critical iOS Safari fix: do NOT open a second getUserMedia here.
+    // BrowserNode already owns the mic via VoicePanel.handleOpen's
+    // startMic() call. Safari allows multiple getUserMedia streams
+    // from the same origin, BUT the cleanup path `track.stop()` on
+    // THIS stream's shared track can kill BrowserNode's track too
+    // (depending on iOS version) — which silently breaks audio
+    // streaming the moment VoiceFullscreen remounts.
+    //
+    // Instead, reuse BrowserNode's existing MediaStream if available
+    // (stored at shell.node._mediaStream after startMic runs). If the
+    // stream isn't ready yet (race), skip the analyser gracefully —
+    // the orb still renders from voice_vad frames the brain emits.
     let ctx = null;
 
-    async function startAnalyser() {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const source = ctx.createMediaStreamSource(stream);
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
-        source.connect(analyser);
-        analyserRef.current = analyser;
-
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        function tick() {
-          if (!analyserRef.current) return;
-          analyser.getByteFrequencyData(dataArray);
-          let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-          const avg = sum / dataArray.length / 255;
-          setAudioLevel(avg);
-          animLevelRef.current = requestAnimationFrame(tick);
-        }
-        tick();
-      } catch {
-        /* mic analyser is best-effort for the orb visual — voice data flows through BrowserNode */
-      }
+    const sharedStream = shell?.node?._mediaStream;
+    if (!sharedStream) {
+      // No BrowserNode stream yet — orb will update from voice_vad
+      // frames instead. Don't open our own getUserMedia.
+      return undefined;
     }
 
-    startAnalyser();
+    try {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+      const source = ctx.createMediaStreamSource(sharedStream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        if (!analyserRef.current) return;
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        const avg = sum / dataArray.length / 255;
+        setAudioLevel(avg);
+        animLevelRef.current = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch {
+      // Analyser is best-effort for the orb visual — voice data
+      // still flows through BrowserNode's mic → WS pipeline.
+    }
 
     return () => {
       analyserRef.current = null;
       if (animLevelRef.current) cancelAnimationFrame(animLevelRef.current);
-      if (stream) stream.getTracks().forEach((t) => t.stop());
+      // Do NOT stop sharedStream tracks — they belong to BrowserNode.
       if (ctx) ctx.close().catch(() => {});
     };
-  }, [open]);
+  }, [open, shell]);
 
   useEffect(() => {
     if (!open) return;
@@ -177,7 +201,16 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
 
   const sendEnvelope = useCallback(
     (type, payload = {}) => {
-      if (shell?.send) shell.send(type, payload);
+      // PairShell exposes sendFrame(type, payload). The original
+      // Subagent C implementation referenced shell.send which doesn't
+      // exist on the context, so interrupts + envelopes silently
+      // no-opped in the live test. Prefer sendFrame; fall through
+      // to shell.send only for off-shell test harnesses that mock it.
+      if (typeof shell?.sendFrame === 'function') {
+        shell.sendFrame(type, payload);
+        return;
+      }
+      if (typeof shell?.send === 'function') shell.send(type, payload);
     },
     [shell],
   );
@@ -216,7 +249,15 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
 
   const voiceMode = shell?.voice_config?.mode || '';
 
-  return (
+  // Portal to document.body so position:fixed actually covers the
+  // viewport. Without this the modal is trapped inside the pair
+  // shell's Glass pane — which has backdrop-filter, creating a
+  // containing block that captures fixed-position descendants. That's
+  // why the live test showed the voice UI "cut off" as a black
+  // rectangle inside the tab area instead of a fullscreen takeover.
+  if (typeof document === 'undefined') return null;
+
+  return createPortal((
     <div
       ref={containerRef}
       role="dialog"
@@ -426,7 +467,7 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
         </button>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 export default VoiceFullscreen;

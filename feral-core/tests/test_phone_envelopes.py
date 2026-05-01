@@ -135,7 +135,11 @@ def test_parse_phone_envelopes(msg_type, payload, expected_cls):
         ("chat_request", {"text": "missing session_id"}),
         ("chat_response", {"session_id": "phone-session-1"}),
         ("voice_session_start", {"stream_id": "voice-stream-1"}),
-        ("voice_interrupt", {}),
+        # voice_interrupt NO LONGER has required fields — stream_id
+        # moved to Optional in v2026.5.9 so the phone UI's tap-to-
+        # interrupt on the orb doesn't fail validation when it
+        # doesn't know the current stream id. Dropped from this
+        # "missing required fields" parametrisation accordingly.
         (
             "genui_push",
             {"kind": "notification", "app_id": "feral.notes", "surface_id": "today"},

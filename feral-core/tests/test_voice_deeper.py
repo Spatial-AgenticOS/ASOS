@@ -694,6 +694,11 @@ async def test_realtime_session_send_text_and_cancel_when_connected(monkeypatch)
     rs._connected = True
     rs._ws = MagicMock()
     rs._send = fake_send
+    # cancel_response now guards on _response_in_progress (v2026.5.9
+    # fix for the "Cancellation failed: no active response" spam
+    # that prevented GA Realtime from ever producing audio in the
+    # live test). Seed the flag so the guard lets the cancel through.
+    rs._response_in_progress = True
 
     await rs.send_text("hello")
     await rs.cancel_response()
