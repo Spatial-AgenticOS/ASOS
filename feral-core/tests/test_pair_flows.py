@@ -22,11 +22,25 @@ pytestmark = pytest.mark.no_auto_feral_home
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("FERAL_HOME", str(tmp_path))
+    from config.loader import ConfigLoader
     from security.device_pairing import DevicePairingStore
+
+    config = ConfigLoader(project_dir=str(tmp_path))
+    config.discover()
+    # Default to Mode A so /pair/url tests get a usable payload without
+    # needing a Tailscale tunnel. test_pair_modes.py covers the other
+    # modes explicitly.
+    config.update_settings("access", "pairing_mode", "local")
+    monkeypatch.setattr(
+        "api.routes.devices._detect_lan_ip", lambda: "192.168.50.9"
+    )
+
     store = DevicePairingStore(db_path=str(tmp_path / "pairs.db"))
 
     mock = MagicMock()
+    mock.config = config
     mock.device_pairing_store = store
     with patch("api.state.state", mock), patch("api.routes.devices.state", mock):
         from api.server import app
@@ -94,15 +108,20 @@ def test_pair_rejects_non_list_capabilities(client):
 # ── QR + url helpers ────────────────────────────────────────────────
 
 
-def test_pair_url_returns_web_mode_payload(client):
+def test_pair_url_returns_unified_v1_payload(client):
     c, store = client
     r = c.get("/api/devices/pair/url?name=Pixel-8")
     assert r.status_code == 200
     body = r.json()
-    assert body["mode"] == "web"
+    # Unified v1 shape (post-Phase-3 redesign). The legacy ``mode=web``
+    # string is replaced by the access mode (local|localhost|remote).
+    assert body["v"] == 1
+    assert body["mode"] in {"local", "remote"}
     assert body["url"].startswith("http")
     assert "/pair?t=" in body["url"]
     assert body["token"] in body["url"]
+    assert body["brain_id"]
+    assert body["expires"] > 0
     # Record must exist with kind=browser so we can distinguish it later.
     rows = store.list_devices()
     assert rows and rows[0]["kind"] == "browser"

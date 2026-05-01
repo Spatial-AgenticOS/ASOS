@@ -26,6 +26,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 logger = logging.getLogger("feral.config")
 
@@ -75,6 +76,26 @@ DEFAULT_SETTINGS = {
     "ui": {
         "theme": "dark",
         "show_debug": False,
+    },
+    # Pairing access mode (Mode A LAN / Mode B localhost / Mode C remote).
+    # Default is "localhost" to preserve the historical loopback-only
+    # behavior on existing installs; the /setup wizard prompts the user
+    # to pick LAN or remote (Tailscale) explicitly.
+    "access": {
+        "pairing_mode": "localhost",
+        "remote_provider": None,
+        "tailscale": {
+            "funnel": True,
+            "tailnet_url": "",
+        },
+    },
+    # Per-brain identity. Populated lazily on first read by
+    # ``ConfigLoader.brain_id`` so existing installs upgrade in place
+    # without a settings rewrite. Clients use this to refuse to talk
+    # to a different brain after pairing.
+    "meta": {
+        "setup_complete": False,
+        "brain_id": "",
     },
 }
 
@@ -366,8 +387,53 @@ class ConfigLoader:
     def get(self, section: str, key: str, default=None):
         return self._merged.get(section, {}).get(key, default)
 
+    @property
+    def access_pairing_mode(self) -> str:
+        """Resolved pairing access mode (Mode A "local" / Mode B
+        "localhost" / Mode C "remote").
+
+        Defaults to "localhost" when not set so legacy installs (no
+        access namespace in settings.json) keep their existing
+        loopback-only behavior. Idempotent with the same property
+        added in PR #55 / phone-as-peer; whichever PR merges first,
+        the other rebases cleanly because the implementation is
+        identical.
+        """
+        mode = self._merged.get("access", {}).get("pairing_mode", "localhost")
+        if mode not in ("local", "localhost", "remote"):
+            return "localhost"
+        return mode
+
+    @property
+    def access_remote_url(self) -> str:
+        """Public-reachable URL for Mode C (Tailscale Funnel).
+
+        Populated by ``feral access remote-up`` after running
+        ``tailscale funnel <port> on``. Empty string means Mode C is
+        configured but not yet live; the pair URL resolver MUST treat
+        empty as "remote unavailable" rather than emitting a loopback
+        URL silently.
+        """
+        access = self._merged.get("access", {}) or {}
+        ts = access.get("tailscale", {}) or {}
+        return str(ts.get("tailnet_url", "") or "")
+
     def get_credential(self, key: str, default: str = "") -> str:
         return self._credentials.get(key, default)
+
+    @property
+    def brain_id(self) -> str:
+        """Stable per-brain UUID. Generated lazily on first access and
+        persisted under ``meta.brain_id`` so subsequent boots return the
+        same value. Phone clients refuse to re-pair against a different
+        brain by comparing the QR's ``brain_id`` to this one.
+        """
+        existing = self._merged.get("meta", {}).get("brain_id", "")
+        if isinstance(existing, str) and existing:
+            return existing
+        new_id = str(uuid4())
+        self.update_settings("meta", "brain_id", new_id)
+        return new_id
 
     def get_skill_key(self, skill_id: str) -> Optional[str]:
         return self._credentials.get("skill_keys", {}).get(skill_id)

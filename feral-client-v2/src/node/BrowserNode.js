@@ -3,13 +3,14 @@
  *
  * The phone scans the "Web phone" QR, lands on /pair?t=<TOKEN>, taps
  * "Pair this phone". Pair.jsx then instantiates this class, which opens
- * a WebSocket to /v1/node?api_key=<TOKEN>, sends a NodeRegisterPayload
+ * a WebSocket to /v1/node authenticated via
+ * Sec-WebSocket-Protocol: feral-token-<TOKEN>, sends a NodeRegisterPayload
  * with node_type="browser_node", and streams live sensor data back to the
  * Brain. No app install needed.
  *
  * Frames the Brain understands:
- *   • location — navigator.geolocation.watchPosition → POST /api/location/update
- *   • mic      — AudioWorklet PCM16 @ 16kHz → WS `audio_chunk`
+ *   • location — navigator.geolocation.watchPosition → WS `location_update`
+ *   • mic      — AudioWorklet PCM16 @ 24kHz → WS `audio_chunk`
  *                 {data_b64, chunk_index, is_final, encoding, sample_rate}
  *   • camera   — canvas.toBlob('image/jpeg') → WS `frame`
  *                 {data_b64, width, height, mime}
@@ -22,7 +23,7 @@
  */
 
 const HUP_VERSION = "1.0";
-const AUDIO_TARGET_SAMPLE_RATE = 16000;
+const AUDIO_TARGET_SAMPLE_RATE = 24000;
 const AUDIO_CHUNK_MS = 250; // 200-400ms per chunk — matches the VoiceRouter contract
 const VIDEO_INTERVAL_MS = 750;
 const VIDEO_MAX_WIDTH = 640;
@@ -90,7 +91,7 @@ const WORKLET_SOURCE = `
 class FeralCaptureProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
-    this.targetRate = options.processorOptions?.targetRate || 16000;
+    this.targetRate = options.processorOptions?.targetRate || 24000;
     this.inputRate = sampleRate;
     this.ratio = this.inputRate / this.targetRate;
     this.chunkSamples = Math.round(this.targetRate * (options.processorOptions?.chunkMs || 250) / 1000);
@@ -122,7 +123,7 @@ registerProcessor("feral-capture", FeralCaptureProcessor);
 export class BrowserNode {
   /**
    * @param {object} opts
-   * @param {string} opts.token        — pairing token from /pair?t=
+   * @param {string} opts.token        — runtime bearer token for /v1/node
    * @param {string} [opts.brainUrl]   — ws://… prefix for /v1/node. Inferred
    *                                      from window.location when absent.
    * @param {string} [opts.nodeId]     — stable id (persisted in localStorage).
@@ -131,6 +132,8 @@ export class BrowserNode {
    * @param {string} [opts.voiceProvider]  — "openai" | "gemini" | "whisper"
    * @param {(phase: string, detail?: any) => void} [opts.onPhase]
    * @param {(err: Error) => void} [opts.onError]
+   * @param {(err: {code: string, message: string, recoverable: boolean}) => void} [opts.onMicError]
+   * @param {(err: {code: string, message: string, recoverable: boolean}) => void} [opts.onVoiceError]
    */
   constructor(opts) {
     if (!opts?.token) throw new Error("BrowserNode: token is required");
@@ -143,13 +146,16 @@ export class BrowserNode {
     this.voiceProvider = opts.voiceProvider || "openai";
     this.onPhase = opts.onPhase || (() => {});
     this.onError = opts.onError || ((e) => console.warn("[BrowserNode]", e));
+    this.onMicError = opts.onMicError || null;
+    this.onVoiceError = opts.onVoiceError || null;
 
     const originHttp = opts.brainUrl || (
       typeof window !== "undefined" ? window.location.origin : ""
     );
     this.wsUrl = originHttp
       .replace(/^http/, "ws")
-      .replace(/\/$/, "") + `/v1/node?api_key=${encodeURIComponent(this.token)}`;
+      .replace(/\/$/, "") + "/v1/node";
+    this.wsProtocol = `feral-token-${this.token}`;
 
     this._ws = null;
     this._stopped = false;
@@ -169,7 +175,7 @@ export class BrowserNode {
     if (typeof WebSocket === "undefined") {
       throw new Error("WebSocket not available in this runtime");
     }
-    this._ws = new WebSocket(this.wsUrl);
+    this._ws = new WebSocket(this.wsUrl, [this.wsProtocol]);
 
     await new Promise((resolve, reject) => {
       this._ws.onopen = () => resolve();
@@ -192,22 +198,16 @@ export class BrowserNode {
     });
 
     this._ws.onmessage = (e) => this._onFrame(e);
-    this._ws.onclose = () => {
+    this._ws.onclose = (event) => {
       this.onPhase("closed");
+      if (event.code !== 1000 && event.code !== 1005 && this.onVoiceError) {
+        this.onVoiceError({
+          code: 'WS_CLOSED',
+          message: event.reason || `WebSocket closed unexpectedly (code ${event.code})`,
+          recoverable: true,
+        });
+      }
     };
-
-    try {
-      await fetch(
-        new URL("/api/devices/pair/complete", window.location.origin).toString(),
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token: this.token }),
-        },
-      );
-    } catch (err) {
-      this.onError(err);
-    }
 
     this._visibilityHandler = () => {
       if (document.hidden) {
@@ -258,21 +258,46 @@ export class BrowserNode {
   async startMic() {
     if (this._workletNode) return;
     if (!navigator.mediaDevices?.getUserMedia) {
-      this.onError(new Error("getUserMedia not available"));
+      const micErr = {
+        code: 'MIC_UNAVAILABLE',
+        message: 'getUserMedia not available on this device',
+        recoverable: false,
+      };
+      if (this.onMicError) this.onMicError(micErr);
+      this.onError(new Error(micErr.message));
       return;
     }
-    if (!this._voiceConfigSent) {
-      // Always send voice_config before the first audio_chunk so the
-      // Brain knows which realtime provider to wire.
-      await this.sendVoiceConfig();
-    }
     try {
+      // CRITICAL iOS Safari ordering: call getUserMedia FIRST within
+      // the user-gesture context. If we await anything else before
+      // getUserMedia (like sendVoiceConfig) the gesture may be lost
+      // and Safari silently refuses mic access, leaving the rest of
+      // the pipeline set up but no audio flowing. Send the voice
+      // config AFTER the mic is acquired.
       this._mediaStream = this._mediaStream || await navigator.mediaDevices.getUserMedia({
         audio: true,
       });
-      // AudioContext + Worklet
+      if (!this._voiceConfigSent) {
+        // Intentionally not awaited — we just want the frame on the
+        // wire; sendVoiceConfig's internal WebSocket send is synchronous.
+        this.sendVoiceConfig().catch((err) => {
+          console.warn('[BrowserNode] sendVoiceConfig failed', err);
+        });
+      }
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       this._audioContext = new AudioCtx();
+      // iOS Safari starts AudioContext in 'suspended' state. Without
+      // an explicit resume() no audio data reaches the worklet, so
+      // the brain waits forever for audio_chunk frames that never
+      // arrive. resume() has to be called synchronously inside the
+      // user-gesture stack that led here (the Start voice tap).
+      if (this._audioContext.state === "suspended") {
+        try {
+          await this._audioContext.resume();
+        } catch (resumeErr) {
+          console.warn("[BrowserNode] AudioContext.resume failed", resumeErr);
+        }
+      }
       const blob = new Blob([WORKLET_SOURCE], { type: "application/javascript" });
       const workletUrl = URL.createObjectURL(blob);
       await this._audioContext.audioWorklet.addModule(workletUrl);
@@ -287,12 +312,17 @@ export class BrowserNode {
       });
       this._workletNode.port.onmessage = (event) => this._pushAudioChunk(event.data);
       source.connect(this._workletNode);
-      // Connect to a silent gain so the graph actually runs in some browsers.
       const silent = this._audioContext.createGain();
       silent.gain.value = 0;
       this._workletNode.connect(silent).connect(this._audioContext.destination);
       this.onPhase("mic_streaming");
     } catch (err) {
+      const micErr = {
+        code: err.name === 'NotAllowedError' ? 'MIC_PERMISSION_DENIED' : 'MIC_START_FAILED',
+        message: err.message || 'Microphone failed to start',
+        recoverable: err.name !== 'NotAllowedError',
+      };
+      if (this.onMicError) this.onMicError(micErr);
       this.onError(err);
     }
   }
@@ -413,20 +443,26 @@ export class BrowserNode {
 
   _pushLocation(pos) {
     if (!pos?.coords) return;
-    fetch(
-      new URL("/api/location/update", window.location.origin).toString(),
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          lat: pos.coords.latitude,
-          lon: pos.coords.longitude,
-          accuracy_m: pos.coords.accuracy,
-          source: "browser_node",
-          node_id: this.nodeId,
-        }),
-      },
-    ).catch((err) => this.onError(err));
+    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+    // HUP v1.3.1: stream location over the existing authenticated
+    // WebSocket instead of HTTP POSTing to /api/location/update.
+    // The HTTP path required a dashboard API key, which the phone
+    // never has — it authenticates with phone_bearer over the WS
+    // subprotocol. Sending over WS reuses the same auth + lifecycle.
+    const c = pos.coords;
+    this._send("location_update", {
+      node_id: this.nodeId,
+      lat: c.latitude,
+      lon: c.longitude,
+      accuracy_m: typeof c.accuracy === "number" ? c.accuracy : null,
+      altitude_m: typeof c.altitude === "number" ? c.altitude : null,
+      heading_deg: typeof c.heading === "number" ? c.heading : null,
+      speed_mps: typeof c.speed === "number" ? c.speed : null,
+      source: "browser_node",
+      ts: typeof pos.timestamp === "number"
+        ? pos.timestamp / 1000
+        : Date.now() / 1000,
+    });
   }
 
   _pushAudioChunk(float32) {
@@ -492,6 +528,16 @@ export class BrowserNode {
     if (type === "action") {
       this._handleAction(frame.payload || {});
       return;
+    }
+    if (type === "voice_error" || type === "error") {
+      const p = frame.payload || {};
+      if (this.onVoiceError && (type === "voice_error" || p.scope === "voice")) {
+        this.onVoiceError({
+          code: p.code || 'PROVIDER_ERROR',
+          message: p.message || 'Voice session error',
+          recoverable: p.recoverable !== false,
+        });
+      }
     }
     this.onPhase("frame", frame);
   }

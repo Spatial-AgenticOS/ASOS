@@ -418,6 +418,14 @@ class TestSessionErrors:
 def pairing_store_mock():
     store = MagicMock()
     store.verify_device = MagicMock(return_value=None)
+    # P1 added a second credential surface (phone_bearer) on the
+    # DevicePairingStore. The brain's daemon_session credential
+    # resolver tries verify_phone_bearer if verify_device returns
+    # None. A bare MagicMock would auto-spawn a truthy callable that
+    # returns another MagicMock, which the resolver treats as "valid
+    # phone_bearer" — silently bypassing the close-with-4003 path.
+    # Pin the return so unauthorized credentials really reject.
+    store.verify_phone_bearer = MagicMock(return_value=None)
     return store
 
 
@@ -443,8 +451,8 @@ class TestNodeWebSocket:
                     }
                 )
                 ack = ws.receive_json()
-                assert ack["type"] == "text_response"
-                assert "node-a" in ack["payload"]["text"]
+                assert ack["type"] == "node_ack"
+                assert ack["payload"]["node_id"] == "node-a"
 
             assert "node-a" not in ws_mock_state.daemons
 
@@ -463,7 +471,7 @@ class TestNodeWebSocket:
                     }
                 )
                 ws.receive_json()
-                ws.send_json({"type": "heartbeat", "payload": {}})
+                ws.send_json({"type": "node_heartbeat", "payload": {"ts": 1234567890.0}})
 
             ws_mock_state.hardware_mesh.node_health.record_heartbeat.assert_called_with("hb-node")
 

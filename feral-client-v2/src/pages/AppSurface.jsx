@@ -40,6 +40,7 @@ import { ChevronLeft, RefreshCw } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import EmptyState from '../ui/EmptyState';
+import { applySduiPatches } from '../ui/SduiRenderer';
 import { useFeralSocket, sendUiEvent } from '../hooks/useFeralSocket';
 import { apiJson, apiFetch } from '../lib/api';
 import { buildSrcDoc } from './AppSurface.srcdoc.js';
@@ -110,27 +111,27 @@ export default function AppSurface() {
       if (!msg || typeof msg !== 'object') return;
       if (msg.type === 'sdui_patch') {
         const p = msg.payload || {};
-        if (p.screen_id && screenId && p.screen_id === screenId && tree) {
-          setTree(applySduiPatchesShallow(tree, p.patches || []));
+        if (p.screen_id && screenId && p.screen_id === screenId) {
+          setTree((prev) => applySduiPatchesShallow(prev, p.patches || []));
         }
         return;
       }
       if (msg.type !== 'sdui') return;
       const p = msg.payload || {};
       if (typeof p.screen_id !== 'string') return;
-      if (!p.screen_id.startsWith(`${appId}:`)) return;
-      const parts = p.screen_id.split(':');
-      const surfaceFromId = parts[1];
+      const parsed = parseScreenId(p.screen_id);
+      if (!parsed || parsed.appId !== appId) return;
+      const surfaceFromId = parsed.surfaceId;
       setActiveSurface(surfaceFromId);
       setScreenId(p.screen_id);
       setTree(p.root || null);
     });
     return unsub;
-  }, [socket, appId, screenId, tree]);
+  }, [socket, appId, screenId]);
 
   const onAction = useCallback((action_id, value) => {
     sendUiEvent(socket, {
-      screen_id: screenId || `${appId}:${activeSurface || 'home'}:v2-user`,
+      screen_id: screenId || buildScreenId(appId, activeSurface || 'home', 'v2-user'),
       action_id,
       value,
       app_id: appId,
@@ -260,6 +261,36 @@ export default function AppSurface() {
 // module renders React. The iframe owns its DOM, so patches just walk
 // the in-memory tree before the next srcdoc rebuild.
 function applySduiPatchesShallow(tree, patches) {
-  if (!Array.isArray(patches) || patches.length === 0) return tree;
-  return tree;
+  if (!tree || !Array.isArray(patches) || patches.length === 0) return tree;
+  return applySduiPatches(tree, patches);
+}
+
+function buildScreenId(appId, surfaceId, scope) {
+  return [
+    encodeURIComponent(String(appId || '')),
+    encodeURIComponent(String(surfaceId || 'home')),
+    encodeURIComponent(String(scope || 'default')),
+  ].join(':');
+}
+
+function parseScreenId(screenId) {
+  if (typeof screenId !== 'string' || !screenId.includes(':')) return null;
+  const parts = screenId.split(':');
+  if (parts.length < 3) return null;
+  const [rawApp, rawSurface, ...rawScope] = parts;
+  let appId = rawApp;
+  let surfaceId = rawSurface;
+  let scope = rawScope.join(':');
+  try {
+    appId = decodeURIComponent(rawApp);
+    surfaceId = decodeURIComponent(rawSurface);
+    scope = decodeURIComponent(rawScope.join(':'));
+  } catch {
+    // Legacy unescaped screen ids still parse.
+  }
+  return {
+    appId,
+    surfaceId,
+    scope,
+  };
 }

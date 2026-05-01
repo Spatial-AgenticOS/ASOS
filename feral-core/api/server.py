@@ -15,10 +15,10 @@ import collections
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse, HTMLResponse, FileResponse
+from starlette.responses import JSONResponse, HTMLResponse, FileResponse, RedirectResponse
 
 from version import VERSION as __version__
 from models.protocol import (
@@ -59,6 +59,7 @@ from api.routes.genui import router as genui_router
 from api.routes.mcp import router as mcp_router
 from api.routes.channels import router as channels_router
 from api.routes.conversations import router as conversations_router
+from api.routes.access import router as access_router
 from api.routes.devices import router as devices_router
 from api.routes.timeline import router as timeline_router
 from api.routes.brain_rest import router as brain_rest_router
@@ -79,6 +80,8 @@ from api.routes.apps import router as apps_router
 from api.routes.supervisor import router as supervisor_router
 from api.routes.twin import router as twin_router
 from api.routes.sessions import router as sessions_router  # W17
+# --- Subagent A (realtime GA) additions ---
+from api.routes.realtime_client_secret import router as realtime_client_secret_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("feral.brain")
@@ -281,6 +284,21 @@ _OPEN_PATHS = frozenset({
     "/api/devices/pair/url",
     "/api/devices/pair/qr",
     "/api/devices/pair/complete",
+    # Code-pair flow (SDK ↔ dashboard typed pair code).
+    # Daemon announces an 8-char base32 code, dashboard claims it.
+    # Codes have ~38 bits of entropy, 600s TTL, and /code/claim is
+    # rate-limited to 5 wrong attempts per IP per 15 minutes — see
+    # ``feral-core/api/middleware/rate_limit.py``.
+    "/api/devices/pair/announce",
+    "/api/devices/pair/status",
+    "/api/devices/pair/code/claim",
+    # PIN second-factor (pair-pin-confirm PR). The phone calls /check
+    # before rendering the form to learn whether a PIN is required;
+    # /verify_pin is how it submits the PIN before /complete is allowed
+    # to issue a phone_bearer. Both are open-listed because the phone
+    # has the URL token but no API key yet.
+    "/api/devices/pair/check",
+    "/api/devices/pair/verify_pin",
 })
 
 _OPEN_PATH_PREFIXES = (
@@ -300,11 +318,22 @@ _OPEN_PATH_PREFIXES = (
 _OPEN_GET_PATHS = frozenset({
     "/pair",
     "/v2/pair",
+    # PWA + browser metadata. A phone scanning a Mode-A LAN pair URL
+    # is not on loopback and does not yet have an API key; the bundle
+    # fetches these eagerly during boot. Without them in the GET
+    # allowlist the pair flow worked but PWA install was silently
+    # broken (manifest 401 → no "Add to Home Screen" prompt; favicon
+    # 401 → red console errors that look scary). They are static and
+    # carry no secrets.
+    "/manifest.webmanifest",
+    "/favicon.ico",
+    "/sw.js",
 })
 
 _OPEN_GET_PATH_PREFIXES = (
     "/assets/",
     "/v2/assets/",
+    "/icons/",
 )
 
 
@@ -371,6 +400,7 @@ app.include_router(mcp_router)
 app.include_router(channels_router)
 app.include_router(conversations_router)
 app.include_router(devices_router)
+app.include_router(access_router)
 app.include_router(timeline_router)
 app.include_router(brain_rest_router)
 app.include_router(baseline_router)
@@ -390,6 +420,8 @@ app.include_router(apps_router)
 app.include_router(supervisor_router)
 app.include_router(twin_router)
 app.include_router(sessions_router)  # W17
+# --- Subagent A (realtime GA) additions ---
+app.include_router(realtime_client_secret_router)
 
 
 # ─────────────────────────────────────────────
@@ -1009,33 +1041,149 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
 NODE_API_KEY = os.environ.get("NODE_API_KEY", "")
 
 
+async def _send_protocol_error(ws: WebSocket, code: int, message: str, *, name: str = "bad_schema") -> None:
+    """Emit an HUP §8 error frame to the daemon."""
+    try:
+        await ws.send_json({
+            "hup_version": "1.2.0",
+            "type": "error",
+            "ts": __import__("time").time(),
+            "payload": {
+                "code": code,
+                "name": name,
+                "message": message,
+                "recoverable": False,
+                "ref_action_id": None,
+            },
+        })
+    except Exception:
+        pass
+
+
+def _extract_protocol_bearer(protocols_header: str) -> str:
+    """Return ``feral-token-...`` bearer from Sec-WebSocket-Protocol."""
+    for candidate in (protocols_header or "").split(","):
+        value = candidate.strip()
+        if value.startswith("feral-token-"):
+            return value.replace("feral-token-", "", 1).strip()
+    return ""
+
+
+def _verify_credential(store: DevicePairingStore, credential: str):
+    """Try pair token first, then phone bearer."""
+    if not store or not credential:
+        return None, None
+    pair_device_id = store.verify_device(credential)
+    if pair_device_id:
+        return pair_device_id, "pair_token"
+    verify_phone_bearer = getattr(store, "verify_phone_bearer", None)
+    if callable(verify_phone_bearer):
+        phone_device_id = verify_phone_bearer(credential)
+        if phone_device_id:
+            return phone_device_id, "phone_bearer"
+    return None, None
+
+
 @app.websocket("/v1/node")
 async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
-    if not api_key:
-        api_key = ws.headers.get("authorization", "").replace("Bearer ", "")
-    if not api_key:
-        api_key = ws.headers.get("x-api-key", "")
-    if not api_key:
-        protocols = ws.headers.get("sec-websocket-protocol", "")
-        if protocols.startswith("feral-token-"):
-            api_key = protocols.replace("feral-token-", "")
+    credential_source = ""
+    credential = ""
+
+    auth_header = ws.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        credential = auth_header[7:].strip()
+        credential_source = "authorization"
+    if not credential:
+        credential = (ws.headers.get("x-api-key", "") or "").strip()
+        if credential:
+            credential_source = "x-api-key"
+    if not credential:
+        credential = _extract_protocol_bearer(
+            ws.headers.get("sec-websocket-protocol", "")
+        )
+        if credential:
+            credential_source = "sec-websocket-protocol"
+    if not credential:
+        credential = (api_key or "").strip()
+        if credential:
+            credential_source = "query"
 
     store = state.device_pairing_store
-    paired_device_id = store.verify_device(api_key) if api_key else None
+    paired_device_id, bearer_kind = _verify_credential(store, credential)
 
     await ws.accept()
 
-    if paired_device_id is None and api_key != NODE_API_KEY:
+    if credential_source == "query" and credential:
+        logger.warning(
+            "feral.security.deprecated_query_auth: source=query path=/v1/node "
+            "sunset=2026.7.0"
+        )
+
+    if paired_device_id is None and credential != NODE_API_KEY:
         logger.warning("Unauthorized daemon connection attempt rejected")
         await ws.close(code=4003, reason="Unauthorized Edge Node API Key")
         return
     node_id = None
-    logger.info("Daemon connecting (device_id=%s)...", paired_device_id or "legacy-key")
+    from models.protocol import HUP_VERSION as _HUP_VERSION  # local to keep daemon_session self-contained
+    logger.info(
+        "Daemon connecting (device_id=%s bearer_kind=%s auth_source=%s)...",
+        paired_device_id or "legacy-key",
+        bearer_kind or ("legacy_node_api_key" if credential == NODE_API_KEY else "unknown"),
+        credential_source or "none",
+    )
+
+    def _record_phone_envelope(
+        decision: str,
+        message_type: str,
+        *,
+        detail: dict | None = None,
+        payload_for_hash=None,
+    ) -> None:
+        supervisor = getattr(state, "supervisor", None)
+        if supervisor is None:
+            return
+        info = {"message_type": message_type}
+        if isinstance(detail, dict):
+            info.update(detail)
+        try:
+            supervisor.record(
+                source="phone",
+                kind="phone_envelope",
+                session_id=str(node_id or paired_device_id or ""),
+                actor="phone",
+                payload=payload_for_hash if payload_for_hash is not None else {"type": message_type},
+                decision=decision,
+                detail=info,
+            )
+        except Exception as exc:
+            logger.debug("phone_envelope supervisor record failed: %s", exc)
 
     try:
         while True:
-            raw = await ws.receive_json()
-            msg, payload = parse_message(raw)
+            try:
+                raw = await ws.receive_json()
+            except (ValueError, KeyError):
+                await _send_protocol_error(ws, 1002, "Malformed JSON frame")
+                continue
+            try:
+                msg, payload = parse_message(raw)
+            except Exception as exc:  # noqa: BLE001 — pydantic ValidationError + others
+                # A typed-payload mismatch (e.g. an unknown node_type Literal,
+                # missing required field) used to bubble out of parse_message
+                # → out of daemon_session → silent WS close, leaving the
+                # phone with "connecting…" forever. Now we surface a real
+                # HUP §8 error frame and keep the loop alive so the daemon
+                # sees what's wrong.
+                logger.warning(
+                    "daemon_session: malformed payload from device_id=%s: %s",
+                    paired_device_id, exc,
+                )
+                await _send_protocol_error(
+                    ws, 1003,
+                    f"payload validation failed: {exc.__class__.__name__}: {exc}",
+                    name="bad_payload",
+                )
+                continue
 
             if msg.type in ("node_register", "register") and isinstance(payload, NodeRegisterPayload):
                 node_id = payload.node_id
@@ -1068,10 +1216,22 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         "capabilities": payload.capabilities,
                     })
 
-                await ws.send_json(FeralMessage(
-                    hop="brain", type="text_response",
-                    payload=TextResponsePayload(text=f"Node '{node_id}' registered successfully.").model_dump(),
-                ).model_dump())
+                session_token = str(__import__("uuid").uuid4())
+                await ws.send_json({
+                    "hup_version": "1.2.0",
+                    "type": "node_ack",
+                    "ts": __import__("time").time(),
+                    "payload": {
+                        "node_id": node_id,
+                        "session_token": session_token,
+                        "hup_version": "1.2.0",
+                        "heartbeat_ms": 10000,
+                        "server_time": __import__("time").time(),
+                        "capabilities": list(payload.capabilities),
+                        "granted_capabilities": list(payload.capabilities),
+                        "denied_capabilities": [],
+                    },
+                })
 
             elif msg.type == "execute_result":
                 logger.info(f"Daemon result from {node_id}")
@@ -1192,7 +1352,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                             await state.orchestrator._emit_brain_event(sid, "device_telemetry", {"source": node_id, "sensors": list(readings.keys())})
                 _record_biometrics_to_baseline(readings)
 
-            elif msg.type == "heartbeat":
+            elif msg.type == "node_heartbeat":
                 if node_id and state.hardware_mesh:
                     state.hardware_mesh.node_health.record_heartbeat(node_id)
                     pending = state.hardware_mesh.ledger.get_pending(node_id)
@@ -1206,6 +1366,29 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                                 "type": "pending_commands",
                                 "payload": {"command_ids": unacked_ids},
                             })
+
+            elif msg.type == "hup_action_response":
+                result_payload = raw.get("payload", {})
+                action_id = result_payload.get("action_id", "") or result_payload.get("request_id", "")
+                if state.hardware_mesh and action_id:
+                    state.hardware_mesh.resolve_invoke(action_id, result_payload)
+                if state.orchestrator:
+                    await state.orchestrator.handle_daemon_result(
+                        node_id=node_id,
+                        result=result_payload,
+                        session_id=msg.session_id,
+                    )
+
+            elif msg.type == "node_bye":
+                logger.info("node_bye from %s: %s", node_id, raw.get("payload", {}).get("reason", ""))
+                if node_id:
+                    state.daemons.pop(node_id, None)
+                    if state.skill_executor:
+                        state.skill_executor.unregister_daemon(node_id)
+                    if state.hardware_mesh:
+                        state.hardware_mesh.on_node_disconnected(node_id)
+                await ws.close(code=1000)
+                return
 
             elif msg.type == "glasses_status":
                 payload_dict = raw.get("payload", {})
@@ -1223,21 +1406,560 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                     supports_rt = payload_dict.get("supports_realtime", False)
                     logger.info(f"Voice config from {node_id}: realtime={supports_rt}")
 
+            elif msg.type == "chat_request":
+                payload_dict = raw.get("payload", {})
+                text = payload_dict.get("text", "")
+                channel = payload_dict.get("channel", "chat")
+                reply_mode = payload_dict.get("reply_mode", "final")
+                reply_to = payload_dict.get("reply_to")
+                target_sid = payload_dict.get("session_id", "") or f"phone-{node_id or paired_device_id or 'session'}"
+
+                if not text or not state.orchestrator:
+                    _record_phone_envelope(
+                        "denied",
+                        "chat_request",
+                        detail={"reason": "missing_text_or_orchestrator"},
+                        payload_for_hash=payload_dict,
+                    )
+                    await ws.send_json({
+                        "hup_version": _HUP_VERSION,
+                        "type": "chat_response",
+                        "ts": time.time(),
+                        "payload": {
+                            "session_id": target_sid,
+                            "text": "",
+                            "reply_mode": reply_mode,
+                            "channel": channel,
+                            "reply_to": reply_to,
+                        },
+                    })
+                    continue
+
+                if target_sid not in state.sessions:
+                    state.sessions[target_sid] = ws
+                if node_id:
+                    state.bind_session_to_daemon(target_sid, node_id)
+                    if channel == "vision_ask" and getattr(state, "perception", None):
+                        # First vision turn can race: phone sends frame first, then
+                        # chat_request. The frame may land before this session is bound
+                        # to the daemon, so refresh perception here after binding.
+                        state.perception.update_vision(target_sid, state.vision_buffer, node_id)
+
+                if state.memory:
+                    state.memory.working_push(target_sid, {"role": "user", "text": text})
+
+                context = {
+                    "source": "phone_surface",
+                    "mode": "phone_surface",
+                    "channel": channel,
+                    "reply_mode": reply_mode,
+                    "source_node": node_id or "",
+                    "paired_device_id": paired_device_id or "",
+                }
+                if reply_to:
+                    context["reply_to"] = reply_to
+
+                response_text = ""
+                try:
+                    if reply_mode == "stream":
+                        result = await state.orchestrator.handle_command_stream(
+                            session_id=target_sid,
+                            text=text,
+                            context=context,
+                        )
+                    else:
+                        result = await state.orchestrator.handle_command(
+                            session_id=target_sid,
+                            text=text,
+                            context=context,
+                        )
+                    if isinstance(result, str):
+                        response_text = result
+                    elif isinstance(result, dict):
+                        response_text = str(result.get("text") or result.get("message") or "")
+                    if not response_text and state.memory:
+                        history = state.memory.working_get(target_sid) or []
+                        for item in reversed(history):
+                            if item.get("role") == "assistant" and item.get("text"):
+                                response_text = str(item["text"])
+                                break
+                    _record_phone_envelope(
+                        "allowed",
+                        "chat_request",
+                        detail={
+                            "session_id": target_sid,
+                            "channel": channel,
+                            "reply_mode": reply_mode,
+                            "text_len": len(text),
+                        },
+                        payload_for_hash=payload_dict,
+                    )
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "chat_request",
+                        detail={"reason": "orchestrator_error", "error": str(exc)[:200]},
+                        payload_for_hash=payload_dict,
+                    )
+                    response_text = ""
+
+                await ws.send_json({
+                    "hup_version": _HUP_VERSION,
+                    "type": "chat_response",
+                    "ts": time.time(),
+                    "payload": {
+                        "session_id": target_sid,
+                        "text": response_text,
+                        "reply_mode": reply_mode,
+                        "channel": channel,
+                        "reply_to": reply_to,
+                    },
+                })
+
+            elif msg.type == "chat_response":
+                _record_phone_envelope(
+                    "denied",
+                    "chat_response",
+                    detail={"reason": "brain_emitted_only"},
+                    payload_for_hash=raw.get("payload", {}),
+                )
+                await _send_protocol_error(
+                    ws,
+                    1003,
+                    "chat_response is brain->phone only",
+                    name="capability_denied",
+                )
+
+            elif msg.type == "voice_session_start":
+                payload_dict = raw.get("payload", {})
+                stream_id = payload_dict.get("stream_id", "")
+                if not node_id or not state.voice_router:
+                    _record_phone_envelope(
+                        "denied",
+                        "voice_session_start",
+                        detail={"reason": "missing_node_or_voice_router"},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+                session_id = stream_id or f"voice-{node_id}"
+                if session_id not in state.sessions:
+                    state.sessions[session_id] = ws
+                state.bind_session_to_daemon(session_id, node_id)
+                state.voice_router.bind_node_to_session(node_id, session_id)
+
+                # PR #61 (voice-v2) wire-up: dispatch to the user-selected
+                # voice mode (openai_realtime / gemini_live / chained) via
+                # VoiceRouter.open_session. Phone emits the selected mode
+                # in the `voice_mode` payload field; falls back to the
+                # operator's configured default when absent.
+                selected_mode = (
+                    payload_dict.get("voice_mode")
+                    or payload_dict.get("provider_mode")
+                )
+                if not selected_mode:
+                    cfg = getattr(state, "config", None)
+                    merged_cfg = getattr(cfg, "_merged", {}) if cfg else {}
+                    if not isinstance(merged_cfg, dict):
+                        merged_cfg = {}
+                    voice_cfg = merged_cfg.get("voice") or {}
+                    selected_mode = voice_cfg.get("mode", "openai_realtime")
+                if selected_mode not in (
+                    "openai_realtime", "gemini_live", "chained",
+                ):
+                    logger.warning(
+                        "voice_session_start: unknown voice_mode=%r, "
+                        "defaulting to openai_realtime",
+                        selected_mode,
+                    )
+                    selected_mode = "openai_realtime"
+
+                voice_provider = "openai"
+                if selected_mode == "gemini_live":
+                    voice_provider = "gemini"
+                mode_for_router = selected_mode if selected_mode in {"openai_realtime", "gemini_live", "chained"} else "openai_realtime"
+                state.voice_router.register_voice_config(
+                    node_id,
+                    {
+                        "node_id": node_id,
+                        "mode": mode_for_router,
+                        "voice_provider": voice_provider,
+                        "supports_realtime": selected_mode in {"openai_realtime", "gemini_live"},
+                        "sample_rate": payload_dict.get("sample_rate", 24000),
+                        "channels": payload_dict.get("channels", 1),
+                        "language_hint": payload_dict.get("language_hint", "en-US"),
+                        "interrupt_policy": payload_dict.get("interrupt_policy", "barge_in"),
+                        "camera_linked": bool(payload_dict.get("camera_linked", False)),
+                        "phone_mode": payload_dict.get("mode", "push_to_talk"),
+                        "skip_wake": True,
+                    },
+                )
+
+                try:
+                    await state.voice_router.open_session(
+                        session_id=session_id,
+                        mode=selected_mode,
+                        provider_opts={
+                            "node_id": node_id,
+                            "sample_rate": payload_dict.get("sample_rate", 24000),
+                            "language_hint": payload_dict.get("language_hint", "en-US"),
+                            **(payload_dict.get("provider_opts") or {}),
+                        },
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "voice_router.open_session failed for mode=%s: %s",
+                        selected_mode, exc,
+                    )
+                    _record_phone_envelope(
+                        "error",
+                        "voice_session_start",
+                        detail={
+                            "mode": selected_mode,
+                            "error": str(exc)[:200],
+                        },
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+
+                _record_phone_envelope(
+                    "allowed",
+                    "voice_session_start",
+                    detail={
+                        "stream_id": stream_id,
+                        "session_id": session_id,
+                        "voice_mode": selected_mode,
+                    },
+                    payload_for_hash=payload_dict,
+                )
+
+            elif msg.type == "voice_interrupt":
+                payload_dict = raw.get("payload", {})
+                stream_id = payload_dict.get("stream_id", "")
+                if not node_id or not state.voice_router:
+                    _record_phone_envelope(
+                        "denied",
+                        "voice_interrupt",
+                        detail={"reason": "missing_node_or_voice_router"},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+
+                cancelled = False
+                try:
+                    realtime = getattr(state.voice_router, "_realtime", None)
+                    if realtime:
+                        rs = realtime.get_session(node_id)
+                        if rs and hasattr(rs, "cancel_response"):
+                            await rs.cancel_response()
+                            cancelled = True
+                    gemini = getattr(state.voice_router, "_gemini", None)
+                    if gemini and not cancelled:
+                        sid = getattr(gemini, "_node_to_session", {}).get(node_id)
+                        if sid:
+                            await gemini.stop_session(sid)
+                            cancelled = True
+                    if not cancelled and realtime:
+                        sid = getattr(realtime, "_node_to_session", {}).get(node_id)
+                        if sid:
+                            await realtime.stop_session(sid)
+                            cancelled = True
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "voice_interrupt",
+                        detail={"reason": "interrupt_failed", "error": str(exc)[:200], "stream_id": stream_id},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+
+                _record_phone_envelope(
+                    "allowed" if cancelled else "denied",
+                    "voice_interrupt",
+                    detail={"stream_id": stream_id, "cancelled": cancelled},
+                    payload_for_hash=payload_dict,
+                )
+
+            elif msg.type == "genui_event":
+                payload_dict = raw.get("payload", {})
+                if not state.orchestrator:
+                    _record_phone_envelope(
+                        "denied",
+                        "genui_event",
+                        detail={"reason": "missing_orchestrator"},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+                try:
+                    from agents.ui_handlers import _handle_app_action
+
+                    app_id = payload_dict.get("app_id", "")
+                    surface_id = payload_dict.get("surface_id", "")
+                    event_type = payload_dict.get("event_type", "tap")
+                    action_id = payload_dict.get("action_id", "")
+                    value = payload_dict.get("value")
+                    target_sid = next(iter(state.get_sessions_for_daemon(node_id)), "") if node_id else ""
+                    if not target_sid:
+                        target_sid = f"phone-{node_id or paired_device_id or 'session'}"
+                        state.sessions[target_sid] = ws
+                        if node_id:
+                            state.bind_session_to_daemon(target_sid, node_id)
+                    screen_id = payload_dict.get("screen_id")
+                    if not screen_id:
+                        registry = getattr(state, "app_registry", None)
+                        if registry is not None and hasattr(registry, "build_screen_id"):
+                            screen_id = registry.build_screen_id(
+                                app_id=app_id,
+                                surface_id=surface_id or "home",
+                                scope=target_sid,
+                            )
+                        else:
+                            screen_id = f"{app_id}:{surface_id}:{target_sid}"
+                    await _handle_app_action(
+                        state.orchestrator,
+                        session_id=target_sid,
+                        app_id=app_id,
+                        action_id=action_id,
+                        event=event_type,
+                        value=value,
+                        screen_id=screen_id,
+                    )
+                    _record_phone_envelope(
+                        "allowed",
+                        "genui_event",
+                        detail={
+                            "session_id": target_sid,
+                            "app_id": app_id,
+                            "surface_id": surface_id,
+                            "action_id": action_id,
+                        },
+                        payload_for_hash=payload_dict,
+                    )
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "genui_event",
+                        detail={"reason": "dispatch_failed", "error": str(exc)[:200]},
+                        payload_for_hash=payload_dict,
+                    )
+
+            elif msg.type == "location_update":
+                # Phone-as-peer: location streamed over the same HUP
+                # WebSocket as audio/video/etc. Replaces the legacy
+                # POST /api/location/update HTTP path that returned
+                # 401 for phones (they have phone_bearer in IDB, not
+                # the dashboard API key the HTTP endpoint required).
+                # HUP v1.3.1.
+                payload_dict = raw.get("payload", {})
+                if not state.location_engine:
+                    _record_phone_envelope(
+                        "denied",
+                        "location_update",
+                        detail={"reason": "missing_location_engine"},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+                try:
+                    lat = float(payload_dict.get("lat") or 0)
+                    lon = float(payload_dict.get("lon") or 0)
+                    src = (
+                        payload_dict.get("source")
+                        or payload_dict.get("node_id")
+                        or "browser_node"
+                    )
+                    if lat == 0 and lon == 0:
+                        # Browser geolocation can briefly emit (0,0)
+                        # before the GPS fix lands; ignore so it
+                        # doesn't poison geofence checks at Null Island.
+                        _record_phone_envelope(
+                            "skipped",
+                            "location_update",
+                            detail={"reason": "null_island"},
+                            payload_for_hash=payload_dict,
+                        )
+                        continue
+                    triggered = await state.location_engine.update_location(
+                        lat, lon, source=str(src)[:64],
+                    )
+                    _record_phone_envelope(
+                        "accepted",
+                        "location_update",
+                        detail={
+                            "lat": lat, "lon": lon,
+                            "source": src,
+                            "geofence_events": len(triggered),
+                        },
+                        payload_for_hash=payload_dict,
+                    )
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "location_update",
+                        detail={"reason": "update_failed", "error": str(exc)[:200]},
+                        payload_for_hash=payload_dict,
+                    )
+
+            elif msg.type == "peripheral_bridge_register":
+                payload_dict = raw.get("payload", {})
+                if not state.device_registry:
+                    _record_phone_envelope(
+                        "denied",
+                        "peripheral_bridge_register",
+                        detail={"reason": "missing_device_registry"},
+                        payload_for_hash=payload_dict,
+                    )
+                    continue
+                try:
+                    from hardware.protocol import DeviceManifest
+
+                    registered_ids: list[str] = []
+                    bridge_id = payload_dict.get("bridge_id", "")
+                    platform = payload_dict.get("platform", "")
+                    expires_at = payload_dict.get("expires_at", "")
+                    devices = payload_dict.get("devices", []) or []
+                    for entry in devices:
+                        manifest_dict = dict(entry.get("manifest") or {})
+                        device_id = entry.get("device_id", "")
+                        if not manifest_dict.get("device_id"):
+                            manifest_dict["device_id"] = device_id
+                        if not manifest_dict.get("device_type"):
+                            manifest_dict["device_type"] = entry.get("kind", "sensor_hub")
+                        if not manifest_dict.get("name"):
+                            manifest_dict["name"] = device_id or "phone-bridge-device"
+                        if not manifest_dict.get("connection_type"):
+                            manifest_dict["connection_type"] = entry.get("protocol", "websocket")
+                        if not isinstance(manifest_dict.get("capabilities"), list):
+                            manifest_dict["capabilities"] = []
+                        elif manifest_dict["capabilities"] and not isinstance(manifest_dict["capabilities"][0], dict):
+                            manifest_dict["capabilities"] = []
+                        if not isinstance(manifest_dict.get("sensors"), list):
+                            manifest_dict["sensors"] = list(entry.get("capabilities", []) or [])
+                        if not isinstance(manifest_dict.get("actuators"), list):
+                            manifest_dict["actuators"] = []
+                        manifest = DeviceManifest(**manifest_dict)
+                        state.device_registry.register_device(manifest)
+                        if manifest.device_id:
+                            registered_ids.append(manifest.device_id)
+                    state.devices[bridge_id] = {
+                        "node_id": node_id,
+                        "bridge_id": bridge_id,
+                        "platform": platform,
+                        "expires_at": expires_at,
+                        "devices": registered_ids,
+                    }
+                    _record_phone_envelope(
+                        "allowed",
+                        "peripheral_bridge_register",
+                        detail={
+                            "bridge_id": bridge_id,
+                            "platform": platform,
+                            "device_count": len(registered_ids),
+                        },
+                        payload_for_hash=payload_dict,
+                    )
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "peripheral_bridge_register",
+                        detail={"reason": "registry_write_failed", "error": str(exc)[:200]},
+                        payload_for_hash=payload_dict,
+                    )
+
+            elif msg.type == "backchannel_request":
+                payload_dict = raw.get("payload", {})
+                import json as _json
+                import sqlite3 as _sqlite3
+                from config.loader import feral_home as _feral_home
+
+                request_id = payload_dict.get("request_id") or str(uuid4())
+                req_ts = float(raw.get("ts") or time.time())
+                device_id = payload_dict.get("device_id") or node_id or str(paired_device_id or "")
+                kind = payload_dict.get("kind", "general")
+                status = payload_dict.get("status", "pending")
+                payload_json = _json.dumps(payload_dict, sort_keys=True, default=str)
+                db_path = _feral_home() / "backchannel_requests.db"
+                try:
+                    with _sqlite3.connect(str(db_path)) as conn:
+                        conn.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS backchannel_requests (
+                                id TEXT PRIMARY KEY,
+                                ts REAL NOT NULL,
+                                device_id TEXT NOT NULL,
+                                kind TEXT NOT NULL,
+                                payload_json TEXT NOT NULL,
+                                status TEXT NOT NULL
+                            )
+                            """
+                        )
+                        conn.execute(
+                            """
+                            INSERT OR REPLACE INTO backchannel_requests
+                            (id, ts, device_id, kind, payload_json, status)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (request_id, req_ts, device_id, kind, payload_json, status),
+                        )
+                        conn.commit()
+                    _record_phone_envelope(
+                        "allowed",
+                        "backchannel_request",
+                        detail={"id": request_id, "device_id": device_id, "kind": kind, "status": status},
+                        payload_for_hash=payload_dict,
+                    )
+                except Exception as exc:
+                    _record_phone_envelope(
+                        "error",
+                        "backchannel_request",
+                        detail={"reason": "sqlite_persist_failed", "error": str(exc)[:200]},
+                        payload_for_hash=payload_dict,
+                    )
+
             elif msg.type == "audio_chunk" and node_id:
                 payload_dict = raw.get("payload", {})
                 audio_b64 = payload_dict.get("data_b64", "")
+                chunk_idx = payload_dict.get("chunk_index", 0)
+                # Live-test diagnostic: log the FIRST chunk + every 50th
+                # chunk so the brain log shows whether phone PCM16 is
+                # actually reaching us. Without this, the "no audio"
+                # failure mode is invisible from the brain side.
+                if chunk_idx == 0 or (chunk_idx % 50 == 0):
+                    logger.info(
+                        "audio_chunk from node=%s chunk=%d bytes_b64=%d "
+                        "final=%s", node_id, chunk_idx, len(audio_b64 or ""),
+                        payload_dict.get("is_final", False),
+                    )
                 if state.voice_router and audio_b64:
                     sessions = state.get_sessions_for_daemon(node_id)
                     target_sid = next(iter(sessions), None)
-                    if target_sid:
+                    if not target_sid:
+                        if chunk_idx == 0:
+                            logger.warning(
+                                "audio_chunk from node=%s dropped — "
+                                "no voice session bound to this daemon. "
+                                "Did voice_session_start arrive before audio?",
+                                node_id,
+                            )
+                    else:
                         await state.voice_router.handle_audio_from_node(
                             node_id=node_id,
                             session_id=target_sid,
                             audio_b64=audio_b64,
-                            chunk_index=payload_dict.get("chunk_index", 0),
+                            chunk_index=chunk_idx,
                             is_final=payload_dict.get("is_final", False),
                             encoding=payload_dict.get("encoding", "pcm16"),
                             sample_rate=payload_dict.get("sample_rate", 24000),
+                        )
+                elif not state.voice_router:
+                    if chunk_idx == 0:
+                        logger.warning(
+                            "audio_chunk from node=%s dropped — "
+                            "voice_router not initialised", node_id,
+                        )
+                elif not audio_b64:
+                    if chunk_idx == 0:
+                        logger.warning(
+                            "audio_chunk from node=%s dropped — empty data_b64",
+                            node_id,
                         )
 
             elif msg.type == "skill_approval":
@@ -1318,6 +2040,10 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         "Ignoring unknown device_event event_type=%r from %s",
                         ev_type, node_id,
                     )
+
+            else:
+                logger.debug("Unknown HUP msg type=%r from %s", msg.type, node_id)
+                await _send_protocol_error(ws, 1002, f"Unknown message type: {msg.type}")
 
     except WebSocketDisconnect:
         if node_id:
@@ -1707,8 +2433,35 @@ a{color:#06b6d4}p{line-height:1.6}</style></head>
 </div></body></html>"""
 
 
+@app.get("/setup/legacy")
+async def setup_legacy_redirect():
+    """Hard-redirect the deleted /setup/legacy route to /setup.
+
+    The legacy wizard (SetupWizard.jsx) was removed in 2026.5.8.
+    A server-side 301 (rather than the App.jsx <Navigate>) is required
+    because the bundled UI uses relative asset paths (Vite ``base: './'``
+    so the /v2/ alias works), which means depth-2 SPA routes can't
+    boot React on a direct URL load — assets resolve to /setup/assets/*
+    which doesn't exist. The redirect bypasses that entirely.
+    """
+    return RedirectResponse(url="/setup", status_code=301)
+
+
 @app.get("/{full_path:path}")
 async def serve_webui_or_fallback(full_path: str = ""):
+    # Honest 404 for unknown API and protocol paths. Until this guard
+    # was added the catch-all returned 200 SPA HTML for any unknown
+    # ``/api/...`` GET, which silently broke SDKs that polled missing
+    # endpoints (parsers crashed on HTML; flows hung indefinitely).
+    if (
+        full_path.startswith("api/")
+        or full_path.startswith("v1/")
+        or full_path.startswith("v2/api/")
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "no_such_route", "path": "/" + full_path},
+        )
     if _webui_ready:
         file_path = (_webui_dir / full_path).resolve()
         if not file_path.is_relative_to(_webui_dir.resolve()):

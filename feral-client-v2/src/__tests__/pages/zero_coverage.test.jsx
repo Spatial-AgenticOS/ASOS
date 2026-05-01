@@ -17,7 +17,6 @@ import Webhooks from '../../pages/Webhooks';
 import Wiki from '../../pages/Wiki';
 import Identity from '../../pages/Identity';
 import Skills from '../../pages/Skills';
-import SetupWizard from '../../pages/SetupWizard';
 import Dashboard from '../../pages/Dashboard';
 import Health from '../../pages/Health';
 import Memory from '../../pages/Memory';
@@ -143,16 +142,9 @@ describe('Skills', () => {
   });
 });
 
-// ── SetupWizard (legacy / aliased) ───────────────────────────────
-
-describe('SetupWizard', () => {
-  it('mounts without crashing', () => {
-    const { container } = renderV2(<SetupWizard />, { fetch: () => ({}) });
-    // SetupWizard is a multi-step flow; mere mount exercises the
-    // initial-step branches.
-    expect(container.firstChild).toBeInTheDocument();
-  });
-});
+// ── SetupWizard (legacy /setup/legacy route) was removed in 2026.5.8.
+// The canonical setup is /setup (Setup.jsx, with the new pairing step
+// covered by tests/test_setup_pair_step.test.jsx).
 
 // ── Dashboard (alias for Home) ───────────────────────────────────
 

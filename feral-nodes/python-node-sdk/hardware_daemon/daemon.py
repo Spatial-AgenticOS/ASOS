@@ -259,7 +259,7 @@ class HardwareDaemon:
         return {
             "success": False,
             "reason": "no_health_sensor_connected",
-            "hint": "Health telemetry requires the iOS/Android FERAL Node app or a paired BLE wristband (see feral-nodes/ios-app, feral-nodes/android-app, feral-core/hardware/adapters/wristband.py).",
+            "hint": "Health telemetry requires the iOS/Android FERAL Node app or a paired BLE wristband (see feral-nodes/ios-app, feral-nodes/android-bridge/sample, feral-core/hardware/adapters/wristband.py).",
         }
 
     async def _cmd_audio_play(self, args: dict) -> dict:

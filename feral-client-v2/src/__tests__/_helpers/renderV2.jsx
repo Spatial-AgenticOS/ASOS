@@ -57,18 +57,27 @@ export function installFetchMock(responder) {
 }
 
 export class StubWebSocket {
+  static instances = [];
+
   constructor() {
     this.readyState = 1;
     this.send = vi.fn();
     this.close = vi.fn();
     this.addEventListener = vi.fn();
     this.removeEventListener = vi.fn();
+    StubWebSocket.instances.push(this);
     setTimeout(() => this.onopen?.({}), 0);
+  }
+
+  emitMessage(payload) {
+    const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    this.onmessage?.({ data });
   }
 }
 
 export function renderV2(ui, { route = '/', fetch } = {}) {
   installFetchMock(fetch);
+  StubWebSocket.instances = [];
   vi.stubGlobal('WebSocket', StubWebSocket);
   if (!window.matchMedia) {
     window.matchMedia = vi.fn().mockImplementation((q) => ({

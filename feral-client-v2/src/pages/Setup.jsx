@@ -12,17 +12,17 @@
  *   2. LLM provider (side-by-side table, fuzzy match, free-text model)
  *   3. Audio (STT + TTS, local vs cloud)
  *   4. Identity (name / occupation / location)
- *   5. Done
+ *   5. Pair your phone (Mode A LAN / Mode B localhost / Mode C remote)
+ *   6. Done — finish posts /api/setup/complete
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronRight, ChevronLeft, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { ChevronRight, ChevronLeft, RefreshCw, CheckCircle2, Smartphone, Wifi, Globe, Laptop2 } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import Tabs from '../ui/Tabs';
 import StatusDot from '../ui/StatusDot';
-import EmptyState from '../ui/EmptyState';
 import { apiJson, apiFetch } from '../lib/api';
 
 
@@ -31,6 +31,7 @@ const STEPS = [
   { id: 'llm', label: 'LLM provider' },
   { id: 'audio', label: 'Voice (STT + TTS)' },
   { id: 'identity', label: 'About you' },
+  { id: 'pair', label: 'Pair your phone' },
   { id: 'done', label: 'Ready' },
 ];
 
@@ -75,7 +76,22 @@ export default function Setup() {
 
   const [identity, setIdentity] = useState({ name: '', occupation: '', location: '' });
 
+  // Phase 4 — pairing step. ``pairChoice`` is one of:
+  //   ``""``       — user has not yet picked
+  //   ``"local"``  — Mode A LAN
+  //   ``"localhost"`` — Mode B (skip pairing)
+  //   ``"remote"`` — Mode C (Tailscale)
+  // ``pairPayload`` is the response from /api/devices/pair/url after
+  // mode is selected; null if not yet fetched or if the mode is
+  // localhost (no payload). ``pairError`` surfaces any 409 from the
+  // brain — most likely "LAN IP not detected" or "Mode C not configured".
+  const [pairChoice, setPairChoice] = useState('');
+  const [pairPayload, setPairPayload] = useState(null);
+  const [pairError, setPairError] = useState(null);
+  const [pairBusy, setPairBusy] = useState(false);
+
   const [saved, setSaved] = useState(false);
+  const [finishError, setFinishError] = useState(null);
 
   // Initial fetch — providers, current config
   useEffect(() => {
@@ -206,6 +222,66 @@ export default function Setup() {
     }
   }, [audio]);
 
+  const pickAccessMode = useCallback(async (mode) => {
+    setPairChoice(mode);
+    setPairError(null);
+    setPairPayload(null);
+    setPairBusy(true);
+    try {
+      // Persist the access mode FIRST so the next /api/devices/pair/url
+      // call resolves through the right resolver branch.
+      const r = await apiFetch('/api/config/update', {
+        method: 'POST',
+        body: JSON.stringify({ section: 'access', key: 'pairing_mode', value: mode }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        setPairError(err?.detail || `failed to persist mode (${r.status})`);
+        return;
+      }
+      if (mode === 'localhost') {
+        // Mode B does not emit a pair URL — the user is opting out
+        // of phone pairing for now. The Settings → Access panel can
+        // switch them later.
+        return;
+      }
+      const urlResp = await apiFetch('/api/devices/pair/url?name=phone-from-setup', {
+        method: 'GET',
+      });
+      if (!urlResp.ok) {
+        const err = await urlResp.json().catch(() => ({}));
+        setPairError(err?.detail || `pair URL unavailable (${urlResp.status})`);
+        return;
+      }
+      const body = await urlResp.json();
+      setPairPayload(body);
+    } catch (e) {
+      setPairError(e?.message || 'failed to set access mode');
+    } finally {
+      setPairBusy(false);
+    }
+  }, []);
+
+  const finishSetup = useCallback(async () => {
+    setFinishError(null);
+    try {
+      const r = await apiFetch('/api/setup/complete', {
+        method: 'POST',
+        body: JSON.stringify({ identity }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        setFinishError(err?.detail || `setup-complete failed (${r.status})`);
+        return false;
+      }
+      setSaved(true);
+      return true;
+    } catch (e) {
+      setFinishError(e?.message || 'setup-complete failed');
+      return false;
+    }
+  }, [identity]);
+
   const next = useCallback(async () => {
     if (step.id === 'llm') {
       const ok = await saveLlm();
@@ -218,13 +294,24 @@ export default function Setup() {
     if (step.id === 'identity') {
       // Identity is optional — no validation.
     }
+    if (step.id === 'pair') {
+      // Block until the user has picked a mode (or explicitly skipped
+      // via the ``Skip for now`` button which sets pairChoice="localhost").
+      if (!pairChoice) {
+        setPairError('Pick an option above (or "Skip for now") before continuing.');
+        return;
+      }
+    }
+    if (step.id === 'done') {
+      const ok = await finishSetup();
+      if (!ok) return;
+      setTimeout(() => navigate('/'), 800);
+      return;
+    }
     if (stepIdx < STEPS.length - 1) {
       setStepIdx(stepIdx + 1);
-    } else {
-      setSaved(true);
-      setTimeout(() => navigate('/'), 800);
     }
-  }, [step.id, stepIdx, saveLlm, saveAudio, navigate]);
+  }, [step.id, stepIdx, saveLlm, saveAudio, pairChoice, finishSetup, navigate]);
 
   const back = useCallback(() => {
     if (stepIdx > 0) setStepIdx(stepIdx - 1);
@@ -290,7 +377,17 @@ export default function Setup() {
         <IdentityStep value={identity} onChange={setIdentity} />
       )}
 
-      {step.id === 'done' && <DoneStep saved={saved} />}
+      {step.id === 'pair' && (
+        <PairStep
+          choice={pairChoice}
+          onPick={pickAccessMode}
+          payload={pairPayload}
+          error={pairError}
+          busy={pairBusy}
+        />
+      )}
+
+      {step.id === 'done' && <DoneStep saved={saved} error={finishError} pairChoice={pairChoice} />}
 
       <Pane>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between' }}>
@@ -622,15 +719,158 @@ function IdentityStep({ value, onChange }) {
 }
 
 
-function DoneStep({ saved }) {
+function PairStep({ choice, onPick, payload, error, busy }) {
+  const cards = [
+    {
+      id: 'local',
+      icon: <Wifi size={20} />,
+      title: 'Same WiFi',
+      blurb: 'Phone is on the same network as this Mac. Free, instant, only works on this WiFi.',
+    },
+    {
+      id: 'localhost',
+      icon: <Laptop2 size={20} />,
+      title: 'This Mac only',
+      blurb: 'Skip phone pairing for now. You can switch later in Settings → Access.',
+    },
+    {
+      id: 'remote',
+      icon: <Globe size={20} />,
+      title: 'Anywhere',
+      blurb: 'Tailscale-encrypted private network. One-time login on this Mac and on your phone.',
+    },
+  ];
+
+  return (
+    <>
+      <Pane title="Pair your phone" actions={<Smartphone size={16} />}>
+        <p className="v2-p v2-p--muted">
+          Where do you want to pair your phone from? You can change this later in Settings → Access.
+        </p>
+        <div className="v2-skills-grid" data-testid="v2-setup-pair-modes" style={{ marginTop: 12 }}>
+          {cards.map((c) => {
+            const isPicked = choice === c.id;
+            return (
+              <Glass
+                key={c.id}
+                level={isPicked ? 2 : 0}
+                radius="md"
+                padding="md"
+                className={isPicked ? 'v2-setup-pair is-picked' : 'v2-setup-pair'}
+              >
+                <header style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  {c.icon}
+                  <div style={{ fontWeight: 600 }}>{c.title}</div>
+                </header>
+                <div className="v2-p v2-p--tiny v2-p--muted" style={{ marginBottom: 10 }}>
+                  {c.blurb}
+                </div>
+                <button
+                  type="button"
+                  className={`v2-btn ${isPicked ? 'v2-btn--primary' : ''}`}
+                  onClick={() => onPick(c.id)}
+                  data-testid={`v2-setup-pair-${c.id}`}
+                  disabled={busy}
+                >
+                  {isPicked ? 'Selected' : c.id === 'localhost' ? 'Skip for now' : 'Use this'}
+                </button>
+              </Glass>
+            );
+          })}
+        </div>
+      </Pane>
+
+      {choice && choice !== 'localhost' && payload && (
+        <Pane title="Share this with your phone" data-testid="v2-setup-pair-payload">
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div>
+              <label className="v2-p v2-p--muted">Pair URL</label>
+              <code
+                style={{
+                  display: 'block',
+                  padding: '10px 12px',
+                  background: '#0a0a0a',
+                  border: '1px solid #1a1a1a',
+                  borderRadius: 8,
+                  wordBreak: 'break-all',
+                  fontSize: 13,
+                }}
+                data-testid="v2-setup-pair-url"
+              >
+                {payload.url}
+              </code>
+              <button
+                type="button"
+                className="v2-btn v2-btn--ghost"
+                onClick={() => navigator.clipboard?.writeText(payload.url)}
+                style={{ marginTop: 6 }}
+              >
+                Copy URL
+              </button>
+            </div>
+
+            {payload.diagnostic && (
+              <div className="v2-p v2-p--tiny v2-p--muted">
+                <strong>Reachability:</strong> mode = <code>{payload.mode}</code>; brain advertised{' '}
+                <code>{payload.diagnostic.advertised_lan_ip || '—'}</code>.
+                <ul style={{ marginTop: 4, paddingLeft: 18 }}>
+                  {(payload.diagnostic.honest_caveats || []).map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="v2-p v2-p--tiny v2-p--muted">
+              Token expires {payload.expires ? new Date(payload.expires * 1000).toLocaleString() : '—'}.
+              The QR for this URL is at <code>/api/devices/pair/qr?mode=web</code>.
+            </div>
+          </div>
+        </Pane>
+      )}
+
+      {choice === 'localhost' && (
+        <Pane>
+          <p className="v2-p v2-p--muted">
+            Pairing skipped. The dashboard's "Pair Device" button stays disabled until
+            you switch to <strong>Same WiFi</strong> or <strong>Anywhere</strong> in Settings → Access.
+          </p>
+        </Pane>
+      )}
+
+      {error && (
+        <Pane>
+          <div className="v2-chip v2-chip--error" data-testid="v2-setup-pair-error">
+            {error}
+          </div>
+        </Pane>
+      )}
+    </>
+  );
+}
+
+
+function DoneStep({ saved, error, pairChoice }) {
   return (
     <Pane title="Ready">
       <div style={{ textAlign: 'center', padding: 20 }}>
         <CheckCircle2 size={48} style={{ color: saved ? '#22c55e' : '#64748b' }} />
-        <h2 style={{ marginTop: 12 }}>{saved ? 'Setup complete.' : 'One more tap to finish.'}</h2>
+        <h2 style={{ marginTop: 12 }}>
+          {saved ? 'Setup complete.' : 'Click Finish to write settings to disk.'}
+        </h2>
         <p className="v2-p v2-p--muted">
           Start a chat at <code>/chat</code> or open the dashboard at <code>/</code>.
         </p>
+        {pairChoice === 'localhost' && (
+          <p className="v2-p v2-p--muted" style={{ marginTop: 10 }}>
+            You skipped phone pairing. Switch to LAN or Anywhere in Settings → Access whenever you're ready.
+          </p>
+        )}
+        {error && (
+          <div className="v2-chip v2-chip--error" style={{ marginTop: 10 }} data-testid="v2-setup-finish-error">
+            {error}
+          </div>
+        )}
       </div>
     </Pane>
   );

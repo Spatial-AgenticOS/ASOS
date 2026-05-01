@@ -8,6 +8,7 @@ import logging
 import os
 import time
 from collections import deque
+from pathlib import Path
 from typing import Optional
 
 from fastapi import WebSocket
@@ -675,6 +676,23 @@ class BrainState:
                 apps_dir=default_apps_dir(),
                 hybrid_generator=self.hybrid_genui,
             )
+            # Runtime-first baseline app: ship one starter bundle at boot so
+            # phone/genui routing can be validated in a fresh environment.
+            starter_dir = (
+                Path(__file__).resolve().parents[2]
+                / "examples"
+                / "apps"
+                / "feral-reminders"
+            )
+            if starter_dir.is_dir():
+                try:
+                    if self.app_registry.get("feral-reminders") is None:
+                        self.app_registry.install_from_dir(
+                            starter_dir,
+                            overwrite=False,
+                        )
+                except Exception as exc:
+                    logger.warning("Starter app bootstrap skipped: %s", exc)
 
         with boot_subsystem(self._boot_report, "BrowserController"):
             self.browser = BrowserController()
@@ -1045,19 +1063,47 @@ class BrainState:
                 pass
             return v
 
+        # Operator-level channel gates: settings.features.<channel>
+        # (default True for legacy behavior). Without this, any install
+        # whose vault carries a bot_token auto-starts polling loops even
+        # when the operator explicitly toggled the channel off in
+        # settings — which is what the phone test surfaced (telegram
+        # pings /getUpdates every 30s despite features.telegram=false).
+        merged_cfg = {}
+        if self.config:
+            merged_cfg = getattr(self.config, "_merged", {}) or {}
+            if not isinstance(merged_cfg, dict):
+                merged_cfg = {}
+        features_cfg = merged_cfg.get("features") or {}
+        if not isinstance(features_cfg, dict):
+            features_cfg = {}
+
+        def _ch_enabled(name: str, default: bool = True) -> bool:
+            val = features_cfg.get(name)
+            if val is None:
+                return default
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, str):
+                return val.lower() in ("true", "1", "yes", "on")
+            return bool(val)
+
         channel_configs = {
             "telegram": {
                 "bot_token": _cred("FERAL_TELEGRAM_BOT_TOKEN"),
-                "enabled": bool(_cred("FERAL_TELEGRAM_BOT_TOKEN")),
+                "enabled": _ch_enabled("telegram")
+                           and bool(_cred("FERAL_TELEGRAM_BOT_TOKEN")),
             },
             "discord": {
                 "bot_token": _cred("FERAL_DISCORD_BOT_TOKEN"),
-                "enabled": bool(_cred("FERAL_DISCORD_BOT_TOKEN")),
+                "enabled": _ch_enabled("discord")
+                           and bool(_cred("FERAL_DISCORD_BOT_TOKEN")),
             },
             "slack": {
                 "bot_token": _cred("FERAL_SLACK_BOT_TOKEN"),
                 "app_token": _cred("FERAL_SLACK_APP_TOKEN"),
-                "enabled": bool(_cred("FERAL_SLACK_BOT_TOKEN")),
+                "enabled": _ch_enabled("slack")
+                           and bool(_cred("FERAL_SLACK_BOT_TOKEN")),
             },
             "whatsapp": {
                 "access_token": _cred("FERAL_WHATSAPP_ACCESS_TOKEN"),

@@ -157,7 +157,13 @@ async def test_handle_audio_from_node_openai_starts_session(monkeypatch):
     r.register_voice_config("n1", {"voice_provider": "openai"})
 
     await r.handle_audio_from_node("n1", "sid", "YmJi")
-    rt.start_session.assert_awaited_once_with("sid", "n1")
+    rt.start_session.assert_awaited_once()
+    kwargs = rt.start_session.await_args.kwargs
+    assert rt.start_session.await_args.args == ("sid", "n1")
+    assert kwargs["model"] == "gpt-realtime"
+    assert kwargs["voice"] == "marin"
+    assert kwargs["input_sample_rate"] == 24000
+    assert kwargs["language_hint"] == ""
     rs.send_audio.assert_awaited_once_with("YmJi")
 
 
@@ -392,7 +398,7 @@ async def test_handle_event_audio_delta_invokes_callback():
         deltas.append((sid, b64, done))
 
     rs = RealtimeSession("sid", "nid", api_key="k", on_audio_delta=on_delta)
-    await rs._handle_event({"type": "response.audio.delta", "delta": "QQ=="})
+    await rs._handle_event({"type": "response.output_audio.delta", "delta": "QQ=="})
     assert deltas == [("sid", "QQ==", False)]
 
 
@@ -495,7 +501,9 @@ async def test_handle_audio_from_client_openai_starts_session_and_sends(monkeypa
     r.set_session_voice_mode("12345678-abcd", "realtime")
 
     await r.handle_audio_from_client("12345678-abcd", "QUJD")
-    rt.start_session.assert_awaited_once_with("12345678-abcd", "webclient_12345678")
+    rt.start_session.assert_awaited_once()
+    assert rt.start_session.await_args.args == ("12345678-abcd", "webclient_12345678")
+    assert rt.start_session.await_args.kwargs["input_sample_rate"] == 24000
     rs.send_audio.assert_awaited_once_with("QUJD")
 
 
@@ -694,6 +702,11 @@ async def test_realtime_session_send_text_and_cancel_when_connected(monkeypatch)
     rs._connected = True
     rs._ws = MagicMock()
     rs._send = fake_send
+    # cancel_response now guards on _response_in_progress (v2026.5.9
+    # fix for the "Cancellation failed: no active response" spam
+    # that prevented GA Realtime from ever producing audio in the
+    # live test). Seed the flag so the guard lets the cancel through.
+    rs._response_in_progress = True
 
     await rs.send_text("hello")
     await rs.cancel_response()
@@ -739,7 +752,7 @@ async def test_handle_event_audio_done_invokes_delta_with_done_flag():
         calls.append((sid, b64, done))
 
     rs = RealtimeSession("sid", "nid", api_key="k", on_audio_delta=on_delta)
-    await rs._handle_event({"type": "response.audio.done"})
+    await rs._handle_event({"type": "response.output_audio.done"})
     assert calls == [("sid", "", True)]
 
 
@@ -875,9 +888,9 @@ async def test_handle_event_transcript_deltas(monkeypatch):
         calls.append((sid, text, final))
 
     rs = RealtimeSession("sid", "nid", api_key="k", on_transcript=on_tr)
-    await rs._handle_event({"type": "response.audio_transcript.delta", "delta": "partial"})
+    await rs._handle_event({"type": "response.output_audio_transcript.delta", "delta": "partial"})
     await rs._handle_event({
-        "type": "response.audio_transcript.done",
+        "type": "response.output_audio_transcript.done",
         "transcript": "full",
     })
     assert ("sid", "partial", False) in calls

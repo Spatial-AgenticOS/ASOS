@@ -757,9 +757,18 @@ class Orchestrator:
                 detail=json.dumps(context or {}),
             )
 
+        context_data = context or {}
+        vision_fast_path = context_data.get("channel") == "vision_ask"
+
         # Multi-agent path
-        if self._multi_agent_enabled and self._multi_agent and self.llm and self.llm.available:
-            source = (context or {}).get("source", "")
+        if (
+            not vision_fast_path
+            and self._multi_agent_enabled
+            and self._multi_agent
+            and self.llm
+            and self.llm.available
+        ):
+            source = context_data.get("source", "")
             if source != "proactive":
                 try:
                     response_text = await self._multi_agent.run(session_id, text, context)

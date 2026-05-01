@@ -4,11 +4,16 @@ plugins {
 }
 
 android {
-    namespace = "ai.feral.sample"
+    namespace = "ai.feral.app"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "ai.feral.sample"
+        // Promoted from "ai.feral.sample" → "ai.feral.app" in 2026.5.8
+        // when this app became the canonical FERAL Android app of
+        // record (replacing the deleted apps/android/ and the
+        // never-published feral-nodes/android-app/). See
+        // CHANGELOG.md and feral-nodes/V2_MOBILE_PORTING.md.
+        applicationId = "ai.feral.app"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

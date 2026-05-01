@@ -59,7 +59,7 @@ class TestInvoke:
         mesh = HardwareMesh(reg, daemons)
 
         async def send_and_resolve(msg: dict):
-            rid = msg["request_id"]
+            rid = msg["payload"]["action_id"]
             mesh.resolve_invoke(rid, {"success": True, "data": {"v": 42}})
 
         ws = MagicMock()
@@ -126,7 +126,7 @@ class TestSystemRunApprovalGate:
         mesh = HardwareMesh(reg, daemons)
 
         async def send_and_resolve(msg):
-            rid = msg["request_id"]
+            rid = msg["payload"]["action_id"]
             mesh.resolve_invoke(rid, {"success": True, "data": {"stdout": "ok"}})
 
         ws = MagicMock()
@@ -154,7 +154,7 @@ class TestSoakMesh:
         async def random_send(msg):
             nonlocal call_count
             call_count += 1
-            rid = msg["request_id"]
+            rid = msg["payload"]["action_id"]
             if random.random() < 0.3:
                 return
             mesh.resolve_invoke(rid, {"success": random.random() > 0.2})

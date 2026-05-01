@@ -24,7 +24,7 @@ final class HUPFrameTests: XCTestCase {
         let decoded = try JSONDecoder().decode(HUPFrame.self, from: data)
 
         XCTAssertEqual(decoded.type, "device_event")
-        XCTAssertEqual(decoded.hupVersion, "1.1.0")
+        XCTAssertEqual(decoded.hupVersion, "1.2.0")
         if case .string(let s) = decoded.payload["event_type"] ?? .null {
             XCTAssertEqual(s, "heart_rate")
         } else {
