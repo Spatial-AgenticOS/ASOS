@@ -1,8 +1,32 @@
 # Changelog
 
-<!-- feral-version: 2026.5.8 -->
+<!-- feral-version: 2026.5.9 -->
 
 All notable changes to FERAL are documented here.
+
+## [2026.5.9] - 2026-05-01 — pairing leak fix, QR tracking, marketplace clarity
+
+### Fixed
+
+- Pair-token issuance endpoints no longer create orphan `paired_devices`
+  rows when pairing origin resolution fails (Mode B localhost, missing
+  LAN IP, or unresolved remote URL). Both `/api/devices/pair/url` and
+  `/api/devices/pair/qr` now resolve reachability first and only persist
+  a token row on successful payload construction.
+- Added regression coverage in `test_pair_modes.py` to assert 409
+  pairing responses do not mutate pairing-store row counts.
+- Native-app QR pairing now reports issued `device_id` values back to the
+  pair modal via `X-Feral-Device-Id`, so close-time cleanup can revoke
+  unclaimed QR issuances consistently.
+
+### Changed
+
+- Frontend API error handling now surfaces backend `detail/error`
+  messages for non-2xx responses, replacing opaque status-only strings.
+- Marketplace browse now distinguishes registry failures from truly empty
+  catalogs and adds explicit app-tab guidance that local starter apps
+  appear under Apps, while Marketplace Browse reflects published remote
+  registry entries.
 
 ## [2026.5.8] - 2026-04-28 — pairing access modes, PWA, mobile consolidation, HUP fixes
 
