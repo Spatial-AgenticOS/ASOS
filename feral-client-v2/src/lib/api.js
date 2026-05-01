@@ -30,7 +30,23 @@ export async function apiFetch(path, init = {}) {
 export async function apiJson(path, init = {}) {
   const r = await apiFetch(path, init);
   if (!r.ok) {
-    throw new Error(`${r.status} ${r.statusText} @ ${path}`);
+    let detail = r.statusText || 'request failed';
+    try {
+      const body = await r.clone().json();
+      if (typeof body?.detail === 'string' && body.detail.trim()) {
+        detail = body.detail.trim();
+      } else if (body?.detail && typeof body.detail === 'object') {
+        detail = typeof body.detail.message === 'string'
+          ? body.detail.message
+          : JSON.stringify(body.detail);
+      } else if (typeof body?.error === 'string' && body.error.trim()) {
+        detail = body.error.trim();
+      }
+    } catch {
+      const text = await r.text().catch(() => '');
+      if (text.trim()) detail = text.trim();
+    }
+    throw new Error(`${r.status} ${detail} @ ${path}`);
   }
   return r.json();
 }

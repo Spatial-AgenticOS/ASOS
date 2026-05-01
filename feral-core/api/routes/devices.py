@@ -151,13 +151,13 @@ def _build_diagnostic(origin_url: str) -> dict:
     return diagnostic
 
 
-def _pair_payload(result: dict) -> dict:
+def _pair_payload(result: dict, origin: str | None = None) -> dict:
     """Build the unified v1 pair payload (single shape for QR + URL).
 
     See ``A4-pairing-redesign.md`` §4. Replaces the legacy mode=app /
     mode=web fork; clients always get the same JSON.
     """
-    origin = _resolve_pair_origin()
+    origin = origin or _resolve_pair_origin()
     cfg = getattr(state, "config", None)
     mode = cfg.access_pairing_mode if cfg else "localhost"
     brain_id = cfg.brain_id if cfg else ""
@@ -472,10 +472,11 @@ async def pair_device_qr(request: Request, name: str = "unnamed", mode: str = "w
         )
 
     try:
-        result = store.pair_device(name, kind="browser")
-        payload = _pair_payload(result)
+        origin = _resolve_pair_origin()
     except PairUnavailable as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    result = store.pair_device(name, kind="browser")
+    payload = _pair_payload(result, origin=origin)
 
     encoded = payload["url"]
     try:
@@ -487,7 +488,11 @@ async def pair_device_qr(request: Request, name: str = "unnamed", mode: str = "w
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         buf.seek(0)
-        return StreamingResponse(buf, media_type="image/png")
+        return StreamingResponse(
+            buf,
+            media_type="image/png",
+            headers={"X-Feral-Device-Id": result["device_id"]},
+        )
     except ImportError:
         return {
             "pairing_info": payload,
@@ -514,14 +519,15 @@ async def pair_device_url(
     if not store:
         raise HTTPException(status_code=503, detail="Pairing store not initialized")
     try:
-        result = store.pair_device(
-            name,
-            kind="browser",
-            require_pin=bool(pin),
-        )
-        payload = _pair_payload(result)
+        origin = _resolve_pair_origin()
     except PairUnavailable as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    result = store.pair_device(
+        name,
+        kind="browser",
+        require_pin=bool(pin),
+    )
+    payload = _pair_payload(result, origin=origin)
     payload["pin_required"] = result.get("pin_required", False)
     if result.get("pin"):
         # Plaintext PIN included for the operator's dashboard ONCE.

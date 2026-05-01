@@ -40,18 +40,26 @@ function BrowseTab() {
   const [query, setQuery] = useState('');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState(null);
   const [busy, setBusy] = useState(null);
   const [msg, setMsg] = useState(null);
 
   const fetchList = useCallback(async () => {
     setLoading(true);
+    setCatalogError(null);
     try {
       const url = query.trim()
         ? `/api/marketplace/search?q=${encodeURIComponent(query)}&kind=${kind}`
         : `/api/marketplace/catalog?kind=${kind}`;
       const d = await apiJson(url);
       setItems(d.items || d.results || d || []);
-    } catch { setItems([]); }
+      if (typeof d?.error === 'string' && d.error.trim()) {
+        setCatalogError(d.error.trim());
+      }
+    } catch (err) {
+      setItems([]);
+      setCatalogError(err?.message || 'Catalog unavailable');
+    }
     finally { setLoading(false); }
   }, [kind, query]);
 
@@ -98,8 +106,16 @@ function BrowseTab() {
       )}
     >
       {msg && <div className="v2-chip v2-chip--live">{msg}</div>}
+      {catalogError && <div className="v2-chip v2-chip--error">{catalogError}</div>}
       {loading && <EmptyState title="Loading…" />}
-      {!loading && items.length === 0 && <EmptyState title={`Nothing in ${kind} yet`} />}
+      {!loading && items.length === 0 && (
+        <EmptyState
+          title={`Nothing in ${kind} yet`}
+          hint={kind === 'app'
+            ? 'No apps are published to the remote registry yet. Local starter apps appear under Apps, not Browse.'
+            : undefined}
+        />
+      )}
       <div className="v2-skills-grid">
         {items.map((it) => (
           <Glass key={it.id || it.name} level={0} radius="md" padding="md" className="v2-skill-card">
