@@ -1,79 +1,73 @@
 ---
-title: "Getting Started"
+title: "Quickstart"
 sidebarTitle: "Quickstart"
-description: "Get FERAL running locally in under five minutes."
+description: "Install FERAL from PyPI, run setup, and complete your first pairing without trial and error."
 ---
 
-# Quick Start
+# Quickstart
+
+## 1) Install and start
 
 ```bash
-# Install
-pip install "feral-ai[llm]"
-
-# Start (opens browser, runs setup wizard on first run)
+pip install "feral-ai[all]"
+feral setup
 feral start
 ```
 
-That's it. The Brain starts on `http://localhost:9090` with the web dashboard bundled.
+Open `http://localhost:9090`.
 
-## What Happens
+## 2) Choose your access mode during setup
 
-1. `feral start` detects first run and launches the setup wizard.
-2. You pick an LLM provider (OpenAI, Anthropic, Ollama, etc.) and enter your API key.
-3. The Brain starts on port 9090 with the web dashboard.
-4. Your browser opens automatically.
+In the setup wizard's **Pair your phone** step, pick one:
 
-No API key is required for local models — Ollama on `localhost:11434` is auto-detected.
+- **Same WiFi**: phone and Mac are on the same network.
+- **Anywhere**: phone can connect outside your LAN through Tailscale Funnel.
+- **This Mac only**: skip phone pairing for now.
 
-## First Chat (CLI)
+## 3) Pair from the Devices page
 
-You can also talk to FERAL from the terminal:
+1. Open `Devices`.
+2. Click `Pair new device`.
+3. Use the `Web phone` tab and click `Generate one-time link`.
+4. Scan the QR on your phone and finish the `/pair` flow.
 
-```bash
-feral "What files are in my home directory?"
-feral "Search the web for latest AI news"
-feral "Remember that my favorite color is blue"
-feral "What's my favorite color?"
-```
+If PIN is enabled, enter the 4-digit PIN shown in the modal.
 
-## First Chat (SDK)
+## 4) Anywhere mode: one terminal command still required
 
-```python
-from feral_sdk import FeralClient
-
-async with FeralClient("http://localhost:9090") as client:
-    reply = await client.chat("Hello! What can you do?")
-    print(reply)
-```
-
-## Development Mode
-
-If you're developing FERAL itself:
+If you selected **Anywhere**, run:
 
 ```bash
-git clone https://github.com/FERAL-AI/FERAL-AI.git
-cd FERAL-AI
-make dev           # installs both brain + client
-feral serve        # brain on :9090 (headless)
-cd feral-client && npm run dev  # Vite on :5173
+feral access remote-up
 ```
 
-## Docker Alternative
+This enables the remote tunnel and stores the resolved remote URL.
+
+Check status:
 
 ```bash
-git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
-cp .env.example .env   # fill in your API keys
-docker compose up -d
+feral access status
 ```
 
-| Service | URL |
-|:--------|:----|
-| Brain + Web UI | http://localhost:9090 |
+Turn remote mode off:
 
-## What's Next
+```bash
+feral access remote-down
+```
 
-- [Configuration](/getting-started/configuration) — customize settings, swap LLM models, tune autonomy
-- [Architecture](/architecture) — understand how the brain, memory, and device mesh fit together
-- [Python SDK](/sdk/python) — build plugins and automate FERAL programmatically
-- [Write a Skill](/guides/skills) — add new capabilities to your agent
-- [Connect a Device](/guides/devices) — bring hardware into the mesh
+## 5) If LAN URLs fail from phone
+
+If a generated LAN URL works on the Mac but fails on phone, restart bound to all interfaces:
+
+```bash
+FERAL_HOST=0.0.0.0 feral start
+```
+
+Also verify your WiFi does not block client-to-client traffic (AP isolation).
+
+## Next
+
+- [Pairing & Access](/guides/pairing-access)
+- [Configuration](/getting-started/configuration)
+- [Gen-UI guide](/guides/genui)
+- [Troubleshooting](/help/troubleshooting)

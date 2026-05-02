@@ -122,6 +122,44 @@ The dashboard or a client can't connect to the brain.
 curl http://localhost:9090/api/dashboard/status
 ```
 
+### Pair URL works on Mac but not on phone (LAN)
+
+**Symptom:** QR scans to `http://<lan-ip>:9090/pair?...` but phone shows connection failed.
+
+Most common fixes:
+
+1. Ensure FERAL is bound on all interfaces:
+
+```bash
+FERAL_HOST=0.0.0.0 feral start
+```
+
+2. Regenerate the pairing link in `Devices` -> `Pair new device`.
+3. Confirm phone and Mac are on the same network and WiFi does not block client-to-client traffic (AP isolation).
+
+### Anywhere mode selected but pairing still fails
+
+**Symptom:** Pairing returns remote-mode errors (no public URL / Mode C unavailable).
+
+Run:
+
+```bash
+feral access remote-up
+feral access status
+```
+
+If needed, complete Tailscale login first:
+
+```bash
+tailscale up
+```
+
+To revert:
+
+```bash
+feral access remote-down
+```
+
 ### Playwright Chromium Missing
 
 ```

@@ -67,4 +67,39 @@ describe('Setup (new v2 wizard)', () => {
     });
     expect(await findByTestId('v2-setup-next')).toBeInTheDocument();
   });
+
+  it('attempts remote-up when Anywhere mode is selected', async () => {
+    const calls = [];
+    const { getByRole, findByTestId } = renderV2(<Setup />, {
+      fetch: (url, init) => {
+        calls.push({ url, method: init?.method || 'GET' });
+        if (url.includes('/api/llm/providers') && !url.includes('/models')) return { providers: [], count: 0 };
+        if (url.includes('/api/llm/config')) return { provider: '', model: '' };
+        if (url.includes('/api/audio/providers')) return { stt: [], tts: [] };
+        if (url.includes('/api/audio/config')) return {
+          stt_provider: 'openai', stt_model: 'whisper-1', tts_provider: 'openai', tts_model: 'tts-1', tts_voice: 'nova',
+        };
+        if (url.includes('/api/config/update')) return { ok: true };
+        if (url.includes('/api/access/remote-up')) return { ok: true, pairing_mode: 'remote', remote_url: 'https://demo.ts.net' };
+        if (url.includes('/api/devices/pair/url')) {
+          return {
+            mode: 'remote',
+            url: 'https://demo.ts.net/pair?t=abc',
+            expires: 0,
+            diagnostic: { advertised_lan_ip: 'demo.ts.net', honest_caveats: [] },
+          };
+        }
+        return {};
+      },
+    });
+
+    getByRole('tab', { name: /pair your phone/i }).click();
+    const remoteBtn = await findByTestId('v2-setup-pair-remote');
+    remoteBtn.click();
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.url.includes('/api/access/remote-up'))).toBe(true);
+      expect(calls.some((c) => c.url.includes('/api/devices/pair/url'))).toBe(true);
+    });
+  });
 });

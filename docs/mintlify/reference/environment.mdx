@@ -28,7 +28,10 @@ Environment variables are the highest-priority configuration source — they ove
 |----------|---------|-------------|
 | `FERAL_HOME` | `~/.feral` | Root directory for all FERAL data (config, memory, logs) |
 | `FERAL_BRAIN_PORT` | `9090` | Brain WebSocket and API port |
-| `FERAL_BRAIN_HOST` | `127.0.0.1` | Brain bind address |
+| `FERAL_HOST` | `127.0.0.1` | Primary bind host (set `0.0.0.0` for LAN reachability) |
+| `FERAL_BIND_HOST` | — | Legacy alias for bind host |
+| `FERAL_BRAIN_HOST` | — | Backward-compatible host override |
+| `FERAL_PUBLIC_BASE_URL` | — | Public base URL used for remote pairing URL generation |
 | `FERAL_LOG_LEVEL` | `info` | Logging level: `debug`, `info`, `warn`, `error` |
 
 ## Autonomy & Security
@@ -98,6 +101,14 @@ Environment variables are the highest-priority configuration source — they ove
 | `FERAL_MEMORY_PATH` | `~/.feral/memory.db` | Path to the memory database file |
 | `FERAL_VECTOR_STORE` | `chroma` | Vector store for semantic search: `chroma`, `qdrant` |
 | `FERAL_MEMORY_SYNC` | `false` | Enable P2P memory sync across devices |
+| `FERAL_EMBED_FALLBACK` | `hash` | Embedding fallback when primary provider degrades (`hash`, `local`, `skip`) |
+
+## Pairing & Access
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_HOST` | `127.0.0.1` | LAN pairing needs `0.0.0.0` in many setups |
+| `FERAL_PUBLIC_BASE_URL` | — | Optional explicit remote pair URL base |
 
 ## Integrations
 

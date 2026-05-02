@@ -1,0 +1,81 @@
+---
+title: "Pairing & Access"
+sidebarTitle: "Pairing & Access"
+description: "Exact user flow for pairing phones over LAN or Anywhere mode, with real error handling."
+---
+
+# Pairing & Access
+
+FERAL pairing depends on access mode. If mode and network are wrong, QR scans still fail.
+
+## Modes
+
+| Mode | Setup label | Pair URL shape | Typical use |
+|---|---|---|---|
+| `local` | Same WiFi | `http://<lan-ip>:9090/pair?t=...` | Phone and brain on same network |
+| `remote` | Anywhere | `https://<tailnet-host>/pair?t=...` | Phone outside your LAN |
+| `localhost` | This Mac only | no pair URL emitted | Skip pairing for now |
+
+## LAN flow (Same WiFi)
+
+1. In setup, select **Same WiFi**.
+2. Go to `Devices` -> `Pair new device` -> `Web phone`.
+3. Click `Generate one-time link`.
+4. Scan QR on phone.
+5. If PIN is required, type the PIN shown on the Mac.
+6. Tap `Pair this device` on phone.
+
+If the QR URL is unreachable from phone:
+
+```bash
+FERAL_HOST=0.0.0.0 feral start
+```
+
+Then regenerate the link.
+
+## Anywhere flow (Remote / Tailscale Funnel)
+
+Current behavior: setup can switch mode to `remote`, but tunnel activation still requires a terminal command.
+
+1. In setup, select **Anywhere**.
+2. Run:
+
+```bash
+feral access remote-up
+```
+
+3. If prompted, complete Tailscale login (`tailscale up`) and Funnel enable steps.
+4. Regenerate pairing link from `Devices` and scan from phone.
+
+Status checks:
+
+```bash
+feral access status
+```
+
+Disable remote mode:
+
+```bash
+feral access remote-down
+```
+
+## Pair modal tabs
+
+- **Web phone**: default browser-based phone pairing flow.
+- **Daemon token**: token for SDK/daemon node registration.
+- **Native app QR**: compatibility QR path for native app flows.
+- **Bluetooth**: browser BLE scan path.
+
+## Common errors and fixes
+
+| Error symptom | Likely cause | Action |
+|---|---|---|
+| `Mode B (localhost) does not expose pairing` | Mode is `localhost` | Rerun `feral setup` and choose Same WiFi or Anywhere |
+| `LAN IP not detected` | Host has no active LAN address | Connect to network and retry |
+| `Mode C (remote) ... no public URL` | Remote mode selected but tunnel not enabled | `feral access remote-up` |
+| QR opens `/pair` but phone cannot connect | Brain bound to loopback or WiFi isolation | restart with `FERAL_HOST=0.0.0.0`; test another network |
+| Wrong PIN / expired token | Old token or PIN retries exhausted | Regenerate one-time link |
+
+## Practical note
+
+If you're intentionally not pairing yet, keep **This Mac only** and skip all phone steps.

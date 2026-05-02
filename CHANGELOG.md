@@ -4,6 +4,34 @@
 
 All notable changes to FERAL are documented here.
 
+## [2026.5.10] - 2026-05-01 — pairing lifecycle hardening, explicit issuance UX, embeddings fallback resilience
+
+### Fixed
+
+- Pair lifecycle state is now cleaner and less confusing in UI/API:
+  - `/api/devices/paired` excludes unclaimed rows by default.
+  - `DevicePairingStore.verify_device` idempotently sets `claimed_at`
+    when first verification succeeds.
+- Pair-token minting endpoints (`/api/devices/pair/url`, `/api/devices/pair/qr`)
+  are no longer in open unauthenticated allowlists.
+- Pair modal token issuance is now explicit by user action (no silent mint on
+  tab open) and web/native QR generation is button-driven.
+- Pair modal now shows PIN confirmation values when PIN gating is enabled.
+
+### Changed
+
+- Embedding provider degradation is now explicit and resilient:
+  - OpenAI quota/auth failures trigger controlled degrade behavior.
+  - Fallback path is configurable via `FERAL_EMBED_FALLBACK={hash|local|skip}`.
+  - Log spam is throttled during repeated provider failures.
+- Bundled `webui_v2` assets were rebuilt to keep frontend/runtime behavior coherent.
+
+### Coverage
+
+- Added lifecycle/security regression suite for pairing (`test_pairing_lifecycle_security.py`).
+- Added/updated frontend pairing tests in `Devices.test.jsx` for explicit generation flows.
+- Added embedding degrade/fallback coverage in `test_embeddings.py`.
+
 ## [2026.5.9] - 2026-05-01 — pairing leak fix, QR tracking, marketplace clarity
 
 ### Fixed
@@ -136,8 +164,8 @@ All notable changes to FERAL are documented here.
 - **Existing installs**: `~/.feral/settings.json` is auto-migrated on
   first boot to `access.pairing_mode = "localhost"` and
   `access.remote_provider = null`. This preserves the historical
-  loopback-only behavior; the `/setup` wizard or Settings → Access
-  panel switches the user to LAN or remote when they're ready.
+  loopback-only behavior; the `/setup` wizard can switch mode, and
+  `feral access remote-up` enables the remote tunnel path.
 - **Existing paired devices**: row format unchanged. All previously
   issued tokens keep working; the `_pair_payload` rewrite changes URL
   emission, not token storage.
@@ -151,8 +179,8 @@ All notable changes to FERAL are documented here.
   cloned and ran the local source should switch to
   `feral-nodes/ios-app/` and `feral-nodes/android-bridge/sample/`.
 - **Tailscale (Mode C)**: opt-in only. Operators who do nothing stay
-  in Mode B (localhost). Picking Mode C in the wizard runs `feral
-  access remote-up`, which checks for the `tailscale` CLI, runs
+  in Mode B (localhost). Operators enable Mode C with `feral access
+  remote-up`, which checks for the `tailscale` CLI, runs
   `tailscale up` (one-time OAuth in the browser), enables Funnel on
   the brain port, and writes the resolved URL into settings.
   Operators behind CGNAT are explicitly supported (Tailscale's relay
@@ -184,68 +212,76 @@ All notable changes to FERAL are documented here.
   and `feral-nodes/android-bridge/bridge/src/test/java/io/feral/bridge/PairingManagerTest.kt`;
   require local Xcode / Android SDK to execute.
 
-## [2026.5.5] - 2026-04-26
-
-### Added
-- (fill me in — what shipped that did not exist before?)
+## [2026.5.7] - 2026-04-27 — release coherence and bundled asset sync
 
 ### Fixed
-- (fill me in — what regressions did this release close?)
+
+- Refreshed bundled `webui_v2` assets to restore CI/runtime coherence for
+  frontend-bundled release artifacts.
 
 ### Changed
-- (fill me in — what user-visible behavior changed?)
+
+- Synced release metadata markers and test-count badge values to current CI snapshot.
+
+## [2026.5.6] - 2026-04-27 — wave hardening for runtime reliability
+
+### Fixed
+
+- Hardened wave 0-2 runtime reliability paths (stability and startup robustness).
+
+### Changed
+
+- Shipped as a focused reliability release with no major user-flow redesign.
+
+## [2026.5.5] - 2026-04-26
+
+### Fixed
+- Release pipeline hardening for wheel smoke checks, including authenticated
+  root-level smoke-path handling.
+
+### Changed
+- Reliability-focused release and packaging verification improvements.
 
 ### Coverage
-- pytest (feral-core): TODO collected, TODO passed, TODO skipped.
-- vitest (feral-client-v2): TODO passed.
+- Coverage tracked in CI artifacts for tag `v2026.5.5`.
 
 
 ## [2026.5.4] - 2026-04-26
 
-### Added
-- (fill me in — what shipped that did not exist before?)
-
 ### Fixed
-- (fill me in — what regressions did this release close?)
+- Added missing `prometheus-client` dependency to the base wheel to prevent
+  runtime/import failures in observability paths.
 
 ### Changed
-- (fill me in — what user-visible behavior changed?)
+- Packaging coherence improvements for release artifacts.
 
 ### Coverage
-- pytest (feral-core): TODO collected, TODO passed, TODO skipped.
-- vitest (feral-client-v2): TODO passed.
+- Coverage tracked in CI artifacts for tag `v2026.5.4`.
 
 
 ## [2026.5.3] - 2026-04-26
 
-### Added
-- (fill me in — what shipped that did not exist before?)
-
 ### Fixed
-- (fill me in — what regressions did this release close?)
+- Completed incident-recovery hardening fixes identified in prior wave cuts.
 
 ### Changed
-- (fill me in — what user-visible behavior changed?)
+- Stability-first release targeting recovery and resilience behavior.
 
 ### Coverage
-- pytest (feral-core): TODO collected, TODO passed, TODO skipped.
-- vitest (feral-client-v2): TODO passed.
+- Coverage tracked in CI artifacts for tag `v2026.5.3`.
 
 
 ## [2026.5.2] - 2026-04-26
 
-### Added
-- (fill me in — what shipped that did not exist before?)
-
 ### Fixed
-- (fill me in — what regressions did this release close?)
+- Unblocked CI for vault and add-on prepublish paths.
+- Synced remaining version literals for release coherence.
 
 ### Changed
-- (fill me in — what user-visible behavior changed?)
+- Hardened provider runtime truth and secure credential-flow handling.
 
 ### Coverage
-- pytest (feral-core): TODO collected, TODO passed, TODO skipped.
-- vitest (feral-client-v2): TODO passed.
+- Coverage tracked in CI artifacts for tag `v2026.5.2`.
 
 
 ## [2026.5.1] - 2026-04-26

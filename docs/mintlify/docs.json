@@ -53,6 +53,7 @@
       {
         "group": "Guides",
         "pages": [
+          "guides/pairing-access",
           "guides/skills",
           "guides/genui",
           "guides/memory",

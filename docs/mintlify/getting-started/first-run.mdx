@@ -1,155 +1,70 @@
 ---
 title: "First Run"
 sidebarTitle: "First Run"
-description: "What happens when you launch FERAL for the first time — setup wizard, LLM selection, and your first conversation."
+description: "What actually happens on first launch, including access mode and pairing behavior."
 ---
 
-## Starting FERAL
-
-After [installation](/getting-started/installation), start everything with a single command:
+## Start FERAL
 
 ```bash
 feral start
 ```
 
-This launches two components simultaneously:
+This boots the brain + dashboard on `http://localhost:9090` and runs setup when config is missing.
 
-| Component | Description | Default Address |
-|-----------|-------------|-----------------|
-| **Brain + Dashboard** | Python backend with bundled web UI — LLM orchestration, memory, skills, hardware mesh, The Orb, timeline, ambient strip, SDUI renderer | `http://localhost:9090` |
-| **REPL** | Interactive terminal session for text commands | Your terminal |
+## Setup flow
 
-<Note>
-  On first launch, FERAL detects that no configuration exists and automatically runs the setup wizard.
-</Note>
+### 1) Provider
 
-## The Setup Wizard
+Pick your LLM provider and model (cloud or local).
 
-If you haven't configured FERAL yet, run the wizard explicitly:
+### 2) Credentials
 
-```bash
-feral setup
-```
+For cloud providers, enter API keys. Local model providers can run without API keys.
 
-<Steps>
-  <Step title="Choose your LLM provider">
-    The wizard lists available providers. Pick one:
+### 3) Identity (optional)
 
-    ```
-    ? Select your LLM provider:
-      ❯ Ollama (local, no API key needed)
-        Anthropic (Claude)
-        OpenAI (GPT-4)
-        OpenRouter (multi-model gateway)
-        Google Gemini
-    ```
+Set user profile fields used by personalization and prompting.
 
-    <Tip>
-      Select **Ollama** for a fully local setup with zero cloud dependency. FERAL auto-detects Ollama running on `localhost:11434`.
-    </Tip>
-  </Step>
+### 4) Autonomy profile
 
-  <Step title="Enter your API key (if applicable)">
-    For cloud providers, paste your key. It gets encrypted and stored in `~/.feral/credentials.json`.
+Choose how strict vs automatic actions should be.
 
-    ```
-    ? Enter your Anthropic API key: sk-ant-••••••••
-    ✓ Key validated and stored in credential vault.
-    ```
-  </Step>
+### 5) Pair your phone (critical)
 
-  <Step title="Create your identity (USER.md)">
-    FERAL asks for your name, preferences, and context. This becomes your `USER.md` file — the foundation of how FERAL personalizes responses.
+Choose one access mode:
 
-    ```
-    ? Your name: Alex
-    ? How should FERAL address you? Alex
-    ? Describe yourself in a sentence: Software engineer, night owl, into running.
-    ✓ USER.md created at ~/.feral/USER.md
-    ```
+- **Same WiFi**: local LAN pairing.
+- **Anywhere**: remote pairing through Tailscale Funnel.
+- **This Mac only**: skip phone pairing for now.
 
-    You can edit `USER.md` at any time to refine your identity.
-  </Step>
-
-  <Step title="Configure autonomy level">
-    Choose how much freedom FERAL has:
-
-    ```
-    ? Autonomy mode:
-      ❯ Hybrid (safe actions auto-execute, risky ones ask first)
-        Strict (everything requires approval)
-        Loose (full autopilot)
-    ```
-  </Step>
-
-  <Step title="Hardware scan (optional)">
-    FERAL scans for nearby BLE devices and Home Assistant instances:
-
-    ```
-    Scanning for hardware…
-    ✓ Found: FERAL-Wristband-A3F2 (BLE)
-    ✓ Found: Home Assistant at 192.168.1.50:8123
-    ? Connect to these devices now? (Y/n)
-    ```
-  </Step>
-</Steps>
-
-## Your First Conversation
-
-Once setup completes, you are dropped into the REPL. Try these:
-
-<CodeGroup>
-```bash Say hello
-> Hey FERAL, what can you do?
-```
-```bash Check your health
-> What's my heart rate right now?
-```
-```bash Control your home
-> Dim the living room lights to 40%
-```
-```bash Morning briefing
-> Give me my morning briefing
-```
-</CodeGroup>
-
-Open the dashboard at [http://localhost:9090](http://localhost:9090) to see The Orb — FERAL's visual presence — react to your conversation in real time.
-
-## What's Running
-
-Use `feral status` to check all active components:
+If you choose **Anywhere**, run this once in a terminal:
 
 ```bash
-$ feral status
-
-  Brain       ● running   http://localhost:9090   PID 48201
-  Voice       ● active    wake word listening
-  Hardware    ● 2 devices FERAL-Wristband-A3F2, Home-Assistant
-  Memory      ● sqlite    ~/.feral/memory.db (24 episodes)
-  Autonomy    ● hybrid    3 safe / 2 risky categories
+feral access remote-up
 ```
 
-## Stopping FERAL
+### 6) Finish
+
+Setup writes config and returns you to the main dashboard.
+
+## Pairing after setup
+
+1. Open `Devices`.
+2. Click `Pair new device`.
+3. Use `Web phone` tab.
+4. Generate and scan QR.
+5. Complete PIN and permission steps on phone if prompted.
+
+## Verify status
 
 ```bash
-feral stop          # graceful shutdown of all components
+feral status
+feral access status
 ```
 
-Or press `Ctrl+C` in the REPL to stop the brain and dashboard together.
+## Common first-run mistakes
 
-## Next Steps
-
-<CardGroup cols={2}>
-  <Card title="Configuration" icon="gear" href="/getting-started/configuration">
-    Customize settings, swap LLM models, tune autonomy.
-  </Card>
-  <Card title="Voice Setup" icon="microphone" href="/guides/voice">
-    Configure wake word detection and streaming voice providers.
-  </Card>
-  <Card title="Connect Hardware" icon="microchip" href="/hardware/wristband">
-    Pair your wristband and start streaming biometrics.
-  </Card>
-  <Card title="Build Skills" icon="puzzle-piece" href="/guides/skills">
-    Extend FERAL with custom plugins.
-  </Card>
-</CardGroup>
+- Pairing while mode is **This Mac only** (`localhost`) -> no pair URL is emitted.
+- Choosing **Anywhere** but not running `feral access remote-up`.
+- LAN URL unreachable because brain is loopback-only -> restart with `FERAL_HOST=0.0.0.0`.
