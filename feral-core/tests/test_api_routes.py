@@ -253,6 +253,26 @@ class TestMemory:
         body = r.json()
         assert body["notes"] == 5
 
+    def test_memory_stats_observability_fields(self, client, mock_state):
+        mock_state.memory.stats.return_value = {
+            "notes": 5,
+            "episodes": 2,
+            "knowledge_triples": 10,
+            "embedded_chunks": 7,
+        }
+        mock_state.memory._vec_index = MagicMock(indexed=False)
+        embedder = MagicMock()
+        embedder.provider_name = "openai"
+        mock_state.memory._embed_queue = MagicMock(_embedder=embedder)
+
+        r = client.get("/internal/memory/stats")
+        assert r.status_code == 200
+        obs = r.json()["observability"]
+        assert obs["sqlite_vec_loaded"] is False
+        assert obs["embedding_provider"] == "openai"
+        assert obs["chunk_count"] == 7
+        assert obs["degraded_semantic_search"] is True
+
     def test_memory_save(self, client):
         r = client.post("/internal/memory/save", json={"content": "test note"})
         assert r.status_code == 200
@@ -273,6 +293,38 @@ class TestMemory:
         body = r.json()
         assert "nodes" in body
         assert "links" in body
+
+    def test_knowledge_relationship_returns_503_without_graph(self, client, mock_state):
+        mock_state.memory.kg = None
+        r = client.get("/api/knowledge/relationship?entity_a=alice&entity_b=bob")
+        assert r.status_code == 503
+
+    def test_knowledge_relationship_returns_200_with_graph(self, client, mock_state):
+        mock_state.memory.kg = MagicMock()
+        with patch(
+            "memory.enhanced_search.relationship_query",
+            return_value={"path": [], "depth": 0},
+        ) as rel:
+            r = client.get("/api/knowledge/relationship?entity_a=alice&entity_b=bob")
+            assert r.status_code == 200
+            assert r.json()["depth"] == 0
+            rel.assert_called_once()
+
+    def test_knowledge_visualize_returns_503_without_graph(self, client, mock_state):
+        mock_state.memory.kg = None
+        r = client.get("/api/knowledge/visualize?entity=alice")
+        assert r.status_code == 503
+
+    def test_knowledge_visualize_returns_200_with_graph(self, client, mock_state):
+        mock_state.memory.kg = MagicMock()
+        with patch(
+            "memory.enhanced_search.graph_visualization_data",
+            return_value={"nodes": [{"id": "n1"}], "edges": []},
+        ) as gv:
+            r = client.get("/api/knowledge/visualize?entity=alice")
+            assert r.status_code == 200
+            assert "nodes" in r.json()
+            gv.assert_called_once()
 
     def test_wiki_stats(self, client):
         r = client.get("/api/wiki/stats")
