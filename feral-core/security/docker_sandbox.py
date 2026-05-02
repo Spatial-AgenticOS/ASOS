@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+from security.sandbox_image import resolve_image_tag
 
 logger = logging.getLogger("feral.docker_sandbox")
 
@@ -58,6 +61,37 @@ async def _check_docker_async() -> bool:
         return False
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = str(raw).strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _resolve_default_image() -> str:
+    prefer_registry = _env_flag("FERAL_SANDBOX_PREFER_REGISTRY", False)
+    try:
+        return resolve_image_tag("minimal", prefer_registry=prefer_registry)
+    except Exception as exc:
+        logger.warning("sandbox image tag resolution failed, using latest tag: %s", exc)
+        return "feral-sandbox:latest"
+
+
+def _normalize_seccomp_profile(raw_value: str) -> str:
+    profile = str(raw_value or "").strip()
+    if not profile:
+        return ""
+    if profile.lower() == "unconfined":
+        logger.warning("Ignoring insecure seccomp profile value 'unconfined'")
+        return ""
+    return profile
+
+
 class DockerSandbox:
     """
     Run untrusted code in a container when Docker is available; otherwise run
@@ -66,15 +100,33 @@ class DockerSandbox:
 
     def __init__(
         self,
-        image: str = "feral-sandbox:latest",
+        image: str | None = None,
         timeout: int = 30,
         network: bool = False,
         memory_limit: str = "256m",
+        pids_limit: int = 128,
+        cap_drop: str = "ALL",
+        no_new_privileges: bool = True,
+        seccomp_profile: str = "",
     ):
-        self._image = image
+        self._image = image or _resolve_default_image()
         self._timeout = timeout
         self._network = network
         self._memory_limit = memory_limit
+        # Runtime hardening defaults: remove Linux capabilities, prevent
+        # privilege escalation, and constrain process fan-out.
+        try:
+            env_pids = int(str(os.environ.get("FERAL_SANDBOX_PIDS_LIMIT", pids_limit)))
+        except Exception:
+            env_pids = pids_limit
+        self._pids_limit = max(16, int(env_pids))
+        self._cap_drop = str(os.environ.get("FERAL_SANDBOX_CAP_DROP", cap_drop) or "").strip()
+        self._no_new_privileges = _env_flag(
+            "FERAL_SANDBOX_NO_NEW_PRIVILEGES",
+            no_new_privileges,
+        )
+        seccomp_env = os.environ.get("FERAL_SANDBOX_SECCOMP_PROFILE", seccomp_profile)
+        self._seccomp_profile = _normalize_seccomp_profile(str(seccomp_env or ""))
 
     def available(self) -> bool:
         """Return True if `docker` CLI can reach the daemon."""
@@ -89,9 +141,19 @@ class DockerSandbox:
             self._memory_limit,
             "--cpus",
             "1",
+            "--pids-limit",
+            str(self._pids_limit),
             "--read-only",
             "--tmpfs",
             "/tmp:rw,nosuid,size=128m",
+        ]
+        if self._cap_drop:
+            cmd.extend(["--cap-drop", self._cap_drop])
+        if self._no_new_privileges:
+            cmd.extend(["--security-opt", "no-new-privileges"])
+        if self._seccomp_profile:
+            cmd.extend(["--security-opt", f"seccomp={self._seccomp_profile}"])
+        cmd.extend([
             "--user",
             "sandbox",
             "-e",
@@ -100,7 +162,7 @@ class DockerSandbox:
             "PYTHONDONTWRITEBYTECODE=1",
             "-e",
             "TMPDIR=/tmp",
-        ]
+        ])
         if not self._network:
             cmd.extend(["--network", "none"])
         return cmd
