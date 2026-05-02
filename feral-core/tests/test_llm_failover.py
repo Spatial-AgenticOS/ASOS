@@ -434,6 +434,31 @@ def test_record_failure_caps_retry_after_at_max_cooldown():
     assert remaining > RETRY_AFTER_MAX_COOLDOWN - 5
 
 
+def test_cooldown_tracker_persists_state_to_disk(tmp_path):
+    from agents.llm_failover import FailoverReason, ProviderCooldownTracker
+
+    path = tmp_path / "cooldown-state.json"
+    first = ProviderCooldownTracker(storage_path=str(path))
+    first.record_failure("openai", FailoverReason.RATE_LIMIT, retry_after=120)
+    assert path.exists()
+
+    second = ProviderCooldownTracker(storage_path=str(path))
+    assert second.is_available("openai") is False
+
+
+def test_cooldown_tracker_success_clears_persisted_state(tmp_path):
+    from agents.llm_failover import FailoverReason, ProviderCooldownTracker
+
+    path = tmp_path / "cooldown-state.json"
+    first = ProviderCooldownTracker(storage_path=str(path))
+    first.record_failure("openai", FailoverReason.RATE_LIMIT, retry_after=120)
+    first.record_success("openai")
+
+    second = ProviderCooldownTracker(storage_path=str(path))
+    assert second.is_available("openai") is True
+    assert "openai" not in second._cooldowns
+
+
 # ── _retry_llm_call honours Retry-After / overrides --------------
 
 
@@ -526,6 +551,7 @@ def _make_failover_llm(fallbacks: list[str], call_side_effect=None):
     llm.model = "gpt-4o-mini"
     llm.api_key = "sk-x"
     llm.base_url = "https://api.openai.com/v1"
+    llm._last_budget_routing = {}
     llm._messages_contain_vision = lambda m: False  # type: ignore
     llm._cooldown = ProviderCooldownTracker()
 
@@ -604,3 +630,69 @@ async def test_chat_with_failover_records_retry_after_against_cooldown():
     # (well above the 60s rate-limit default).
     remaining = llm._cooldown._cooldowns["openai"] - time.time()
     assert 170 < remaining <= 181
+
+
+@pytest.mark.asyncio
+async def test_budget_routing_defers_over_budget_primary():
+    async def ok(provider_name, *a, **kw):
+        return {"choices": [{"message": {"content": provider_name}}]}
+
+    llm = _make_failover_llm(["ollama"], call_side_effect=ok)
+    llm._config = {
+        "fallback_providers": ["ollama"],
+        "daily_budget_usd": 1.0,
+        "daily_spend_usd": 0.95,
+        "budget_tight_ratio": 0.25,
+    }
+    llm._estimate_candidate_cost_usd = lambda provider, *_: {  # type: ignore[attr-defined]
+        "openai": 0.20,
+        "ollama": 0.01,
+    }[provider]
+
+    out = await llm.chat_with_failover([{"role": "user", "content": "hi"}])
+    assert out["choices"][0]["message"]["content"] == "ollama"
+    assert llm._call_provider.await_args_list[0].args[0] == "ollama"
+
+
+@pytest.mark.asyncio
+async def test_budget_routing_prefers_cheapest_when_headroom_is_tight():
+    async def ok(provider_name, *a, **kw):
+        return {"choices": [{"message": {"content": provider_name}}]}
+
+    llm = _make_failover_llm(["ollama"], call_side_effect=ok)
+    llm._config = {
+        "fallback_providers": ["ollama"],
+        "daily_budget_usd": 1.0,
+        "daily_spend_usd": 0.90,  # headroom ratio = 0.1
+        "budget_tight_ratio": 0.50,
+    }
+    llm._estimate_candidate_cost_usd = lambda provider, *_: {  # type: ignore[attr-defined]
+        "openai": 0.05,
+        "ollama": 0.01,
+    }[provider]
+
+    out = await llm.chat_with_failover([{"role": "user", "content": "hi"}])
+    assert out["choices"][0]["message"]["content"] == "ollama"
+    assert llm._call_provider.await_args_list[0].args[0] == "ollama"
+
+
+@pytest.mark.asyncio
+async def test_budget_routing_preserves_priority_when_headroom_is_healthy():
+    async def ok(provider_name, *a, **kw):
+        return {"choices": [{"message": {"content": provider_name}}]}
+
+    llm = _make_failover_llm(["ollama"], call_side_effect=ok)
+    llm._config = {
+        "fallback_providers": ["ollama"],
+        "daily_budget_usd": 10.0,
+        "daily_spend_usd": 1.0,   # headroom ratio = 0.9
+        "budget_tight_ratio": 0.25,
+    }
+    llm._estimate_candidate_cost_usd = lambda provider, *_: {  # type: ignore[attr-defined]
+        "openai": 0.50,
+        "ollama": 0.01,
+    }[provider]
+
+    out = await llm.chat_with_failover([{"role": "user", "content": "hi"}])
+    assert out["choices"][0]["message"]["content"] == "openai"
+    assert llm._call_provider.await_args_list[0].args[0] == "openai"

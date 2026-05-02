@@ -516,6 +516,34 @@ class TestHealthSnapshotUnsupported:
             if c["has_key"] and not c["in_cooldown"] and c["supported"]
         ]
 
+    def test_health_snapshot_includes_budget_context(self) -> None:
+        env = {"FERAL_LLM_PROVIDER": "openai", "OPENAI_API_KEY": "sk-x"}
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(LLMProvider, "_detect_ollama", return_value=None):
+                llm = LLMProvider()
+
+        llm.set_config({
+            "fallback_providers": [],
+            "daily_budget_usd": 2.0,
+            "daily_spend_usd": 1.5,
+            "budget_tight_ratio": 0.25,
+        })
+        llm._last_budget_routing = {
+            "remaining_usd": 0.5,
+            "candidate_costs": [{"provider": "openai", "estimated_usd": 0.02, "affordable": True}],
+            "over_budget_providers": [],
+            "prompt_tokens_estimate": 123,
+            "completion_tokens_estimate": 456,
+        }
+
+        snap = llm.health_snapshot()
+        budget = snap["budget"]
+        assert budget["enabled"] is True
+        assert budget["daily_budget_usd"] == 2.0
+        assert budget["daily_spend_usd"] == 1.5
+        assert budget["remaining_usd"] == 0.5
+        assert budget["last_routing"]["prompt_tokens_estimate"] == 123
+
 
 class TestChatRefusesUnsupportedProvider:
     @pytest.mark.asyncio
