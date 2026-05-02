@@ -129,38 +129,35 @@ approved = manager.check("shell_exec", {"command": "ls -la ~/Documents"})
 # approved == True (matches "ls *" pattern)
 ```
 
-### Standing Approvals via CLI
+Standing approvals are stored in `~/.feral/exec_approvals.db` and persist across restarts. They are managed today through the Python `ApprovalManager` API (used by skills, channels, and the orchestrator); a public CLI/REST surface for granting and listing them is tracked as a follow-up.
+
+## Approval Inbox API
+
+Every blocked tool call also surfaces in a non-chat **approval inbox** so a web UI, mobile client, or automation can resolve it without typing into a chat session. See [REST API → Approvals (Execution Inbox)](/reference/api#approvals-execution-inbox) for the full reference.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/approvals` | List pending requests (optional `session_id`, `limit`). |
+| `POST` | `/api/approvals/{request_id}/approve` | Approve and execute. |
+| `POST` | `/api/approvals/{request_id}/reject` | Reject without executing. |
 
 ```bash
-# Grant: allow "git status" without asking
-feral approve "shell_exec" --pattern '{"command": "git *"}' --expires 1h
+curl http://localhost:9090/api/approvals?session_id=s-abc123
 
-# List active standing approvals
-feral approve list
-
-# Revoke all standing approvals
-feral approve revoke --all
-```
-
-### Standing Approvals via API
-
-```bash
-# Grant
-curl -X POST http://localhost:9090/api/approvals \
+curl -X POST http://localhost:9090/api/approvals/apr_01HXYZ/approve \
   -H "Content-Type: application/json" \
-  -d '{"tool": "shell_exec", "pattern": {"command": "git *"}, "expires_in": 3600}'
-
-# List
-curl http://localhost:9090/api/approvals
+  -d '{ "session_id": "s-abc123" }'
 ```
+
+Both write endpoints accept an optional `{ "session_id": "…" }` body. When supplied it must match the session that owns the pending request, or the call returns `409 session_mismatch`. Resolving an unknown request returns `404`.
 
 ## Approval Flow
 
 When a tool call needs approval, the following sequence occurs:
 
-1. `enforce_safety()` determines the call requires approval.
-2. The Brain sends an `approval_request` message to the active channel.
-3. The user responds with approve or deny.
+1. `enforce_safety()` determines the call requires approval and a pending request is created with a stable `request_id`.
+2. The Brain sends an `approval_request` frame to the active chat session **and** the same request becomes visible at `GET /api/approvals`.
+3. The user responds, either by acknowledging in chat or by hitting `POST /api/approvals/{request_id}/approve` or `…/reject`.
 4. If approved, the tool executes and the result flows back normally.
 5. If denied, the agent receives a "tool denied" signal and re-plans.
 

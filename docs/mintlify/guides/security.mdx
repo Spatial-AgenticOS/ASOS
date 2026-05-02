@@ -207,6 +207,19 @@ The server-driven UI (SDUI) renderer in the React client now passes all HTML con
 ### Docker Sandbox Host Fallback Disabled
 When the Docker sandbox cannot connect to the Docker daemon, it now raises an error instead of falling back to direct host execution. This prevents a missing Docker installation from silently bypassing container isolation.
 
+### Docker Sandbox Runtime Hardening
+Every container started by `security/docker_sandbox.py` is launched with these defaults — no configuration needed:
+
+- `--cap-drop ALL` — every Linux capability is dropped.
+- `--security-opt no-new-privileges` — execve cannot raise privileges (blocks setuid escapes).
+- `--pids-limit 128` — caps process fan-out so a fork-bomb cannot exhaust the host PID namespace.
+- `--read-only` root filesystem with a tmpfs mount at `/tmp` (`nosuid`, 128 MB).
+- `--network none` unless the caller explicitly requests network access.
+- Runs as the unprivileged `sandbox` user inside the image.
+- Optional seccomp profile via `FERAL_SANDBOX_SECCOMP_PROFILE` (the literal value `unconfined` is rejected — supply a JSON profile path or leave unset).
+
+Tune any of these via the environment variables documented in [Environment Variables → Docker sandbox hardening](/reference/environment#docker-sandbox-hardening). The minimum effective `pids-limit` is `16` regardless of what you set.
+
 ### Command Injection Blocked in Direct Execution
 The daemon's direct execution path no longer passes raw strings to a shell. Shell metacharacters and injection patterns are rejected by a safety filter before any command is executed.
 

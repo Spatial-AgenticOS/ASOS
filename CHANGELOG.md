@@ -4,6 +4,38 @@
 
 All notable changes to FERAL are documented here.
 
+## [Unreleased] — wave-2 hardening (approvals inbox, sandbox defaults, LLM resilience)
+
+### Added
+
+- **Approval inbox REST API** (`feral-core/api/routes/approvals.py`) for resolving pending tool-execution requests from non-chat clients:
+  - `GET /api/approvals` — list pending requests (optional `session_id`, `limit`).
+  - `POST /api/approvals/{request_id}/approve` — approve and execute.
+  - `POST /api/approvals/{request_id}/reject` — reject without executing.
+  - Both write endpoints accept an optional `{ "session_id": "…" }` body and return `409 session_mismatch` when the session does not match the pending request, `404` for unknown ids.
+- **LLM cooldown circuit persistence** — `ProviderCooldownTracker` now writes its in-memory state to disk (default `<FERAL_HOME>/llm_provider_cooldowns.json`) so cooldowns survive process restarts. Override path with `FERAL_LLM_COOLDOWN_STATE_PATH`.
+- **Budget-aware failover routing** — when `llm.daily_budget_usd` (or `FERAL_LLM_DAILY_BUDGET_USD`) is set, the failover loop annotates each candidate with an estimated cost and:
+  - defers over-budget candidates to the back of the queue, and
+  - reorders affordable candidates cheapest-first once headroom drops below `llm.budget_tight_ratio` (default `0.25`, env `FERAL_LLM_BUDGET_TIGHT_RATIO`).
+  `GET /api/llm/health` now includes a `budget` block (`daily_budget_usd`, `daily_spend_usd`, `remaining_usd`, `headroom_ratio`, `tight_ratio`, plus per-candidate cost estimates from the most recent dispatch).
+
+### Changed
+
+- **Docker sandbox runtime hardening** (`security/docker_sandbox.py`). Every container now starts with `--cap-drop ALL`, `--security-opt no-new-privileges`, and `--pids-limit 128` by default, on top of the existing `--read-only` root + tmpfs `/tmp` + `--network none` + unprivileged `sandbox` user. New tunables:
+  - `FERAL_SANDBOX_PIDS_LIMIT` (default `128`, floor `16`)
+  - `FERAL_SANDBOX_CAP_DROP` (default `ALL`)
+  - `FERAL_SANDBOX_NO_NEW_PRIVILEGES` (default `true`)
+  - `FERAL_SANDBOX_SECCOMP_PROFILE` (default unset; literal `unconfined` is rejected)
+  - `FERAL_SANDBOX_PREFER_REGISTRY` (default `false`; resolve sandbox image tag from the published registry first)
+
+### Documentation
+
+- New "Approvals (Execution Inbox)" section in `docs/mintlify/reference/api.mdx`.
+- New "LLM failover & spend controls" and "Docker sandbox hardening" subsections in `docs/mintlify/reference/environment.mdx`.
+- New "Docker Sandbox Runtime Hardening" subsection in `docs/mintlify/guides/security.mdx`.
+- `docs/mintlify/guides/autonomy.mdx` rewritten to remove non-existent CLI/REST examples for standing approvals and document the real approval inbox endpoints.
+- `docs/RUNTIME_CONTRACT.md` extended with LLM failover/spend and sandbox-hardening tables.
+
 ## [2026.5.11] - 2026-05-01 — access panel, anywhere UX cleanup, release packaging hardening
 
 ### Added
