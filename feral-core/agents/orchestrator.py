@@ -42,6 +42,7 @@ from perception.fusion import PerceptionEngine, PerceptionFrame
 
 # Sub-modules — orchestrator delegates to these focused classes
 from agents.tool_runner import ToolRunner
+from security.dangerous_tools import resolve_surface_from_context
 from agents.context_manager import ContextManager
 from agents.refusal_handler import RefusalHandler
 from agents.identity_loader import IdentityLoader
@@ -149,6 +150,11 @@ class Orchestrator:
         # ordering. Different sessions still run fully parallel — only
         # turns on the same session are serialised.
         self._session_locks: dict[str, asyncio.Lock] = {}
+        # Per-session execution surface, populated from handle_command's
+        # context dict. Threaded into ToolRunner.enforce_safety so
+        # surface deny-lists fire on the actual invocation surface
+        # instead of the historical "websocket" default.
+        self._session_surfaces: dict[str, str] = {}
         self._pending_daemon_results: dict[str, asyncio.Future] = {}
         self._pending_frame_futures: dict[str, asyncio.Future] = {}
         self._pending_confirmations: dict[str, dict] = {}
@@ -721,10 +727,23 @@ class Orchestrator:
             # Lock release stays synchronous; cancellation is fire-and-forget.
             self._w17_cancel_subsessions_nowait(session_id)
 
+    def _stamp_session_surface(self, session_id: str, context: Optional[dict]) -> str:
+        """Resolve and persist the execution surface for ``session_id``.
+
+        Called at the head of every handle_command path so deeper tool
+        execution can read back the surface via
+        ``ToolRunner._resolve_surface_for_session`` instead of always
+        falling through to the websocket default.
+        """
+        surface = resolve_surface_from_context(context)
+        self._session_surfaces[session_id] = surface
+        return surface
+
     async def _handle_command_impl(self, session_id: str, text: str, context: Optional[dict] = None):
         """Real body of handle_command. Guarded by the session lock above."""
         logger.info(f"[{session_id[:8]}] Command: {text}")
         self._session_finalized.discard(session_id)
+        self._stamp_session_surface(session_id, context)
 
         if await self._maybe_handle_pending_tool_approval_text(session_id, text):
             return
@@ -1064,6 +1083,7 @@ class Orchestrator:
         so the client gets token-by-token output.
         Falls back to non-streaming if LLM doesn't support it.
         """
+        self._stamp_session_surface(session_id, context)
         if await self._maybe_handle_pending_tool_approval_text(session_id, text):
             return
 
@@ -1398,6 +1418,7 @@ class Orchestrator:
             # Drop the per-session lock too so long-running brains don't
             # grow the lock dict without bound.
             self._session_locks.pop(sid, None)
+            self._session_surfaces.pop(sid, None)
 
     async def on_session_disconnect(self, session_id: str):
         """Called when a client disconnects. Summarize and learn."""
@@ -1410,6 +1431,7 @@ class Orchestrator:
         self.conversation_history.pop(session_id, None)
         self._last_proactive_check.pop(session_id, None)
         self._session_locks.pop(session_id, None)
+        self._session_surfaces.pop(session_id, None)
         self.tool_runner.clear_session(session_id)
 
     # ─────────────────────────────────────────────

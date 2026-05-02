@@ -218,6 +218,23 @@ class ToolRunner:
             "note": "User denied this action.",
         }
 
+    # ─── Surface resolution ───
+
+    def _resolve_surface_for_session(self, session_id: str) -> str:
+        """Resolve the execution surface for a session.
+
+        Looks for ``Orchestrator._session_surfaces[session_id]`` first so the
+        orchestrator can stamp surfaces from ``handle_command`` context, then
+        falls back to ``"websocket"`` (the historical default for the
+        interactive operator channel).
+        """
+        surfaces = getattr(self._orch, "_session_surfaces", None)
+        if isinstance(surfaces, dict):
+            value = surfaces.get(session_id)
+            if isinstance(value, str) and value:
+                return value
+        return "websocket"
+
     def set_autonomy_mode(self, mode: str) -> str:
         """Runtime toggle for autonomy mode. Returns the effective mode."""
         mode = mode.strip().lower()
@@ -406,14 +423,24 @@ class ToolRunner:
     # Tool Execution (LLM loop variant)
     # ─────────────────────────────────────────────
 
-    async def execute_tool_call_for_llm(self, session_id: str, tool_call: dict, available_skills) -> dict:
+    async def execute_tool_call_for_llm(
+        self,
+        session_id: str,
+        tool_call: dict,
+        available_skills,
+        *,
+        surface: Optional[str] = None,
+    ) -> dict:
         tool_name = tool_call["name"]
         args = tool_call["args"]
         logger.info(f"  LLM Tool call: {tool_name}({json.dumps(args)[:200]})")
+        effective_surface = surface or self._resolve_surface_for_session(session_id)
 
         mcp_client = self._orch._mcp_client
         if tool_name.startswith("mcp_") and mcp_client:
-            denial = self.enforce_safety(tool_name, args, session_id=session_id)
+            denial = self.enforce_safety(
+                tool_name, args, session_id=session_id, surface=effective_surface,
+            )
             if denial:
                 logger.warning(f"Safety gate ({denial.get('status')}): {tool_name}")
                 return denial
@@ -430,7 +457,9 @@ class ToolRunner:
 
         skill_id, endpoint_id = parts
         if skill_id == "subagent" and endpoint_id == "spawn_subagent":
-            denial = self.enforce_safety(tool_name, args, session_id=session_id)
+            denial = self.enforce_safety(
+                tool_name, args, session_id=session_id, surface=effective_surface,
+            )
             if denial:
                 logger.warning(f"Safety gate ({denial.get('status')}): {tool_name}")
                 return denial
@@ -456,7 +485,9 @@ class ToolRunner:
             anti_loop_note = self.anti_loop_guidance(tool_name, streak)
             logger.warning(anti_loop_note)
 
-        denial = self.enforce_safety(tool_name, args, session_id=session_id)
+        denial = self.enforce_safety(
+            tool_name, args, session_id=session_id, surface=effective_surface,
+        )
         if denial:
             logger.warning(f"Safety gate ({denial.get('status')}): {tool_name}")
             return denial
@@ -493,12 +524,20 @@ class ToolRunner:
     # Tool Execution (direct / UI-event variant)
     # ─────────────────────────────────────────────
 
-    async def execute_tool_call(self, session_id: str, tool_call: dict, available_skills):
+    async def execute_tool_call(
+        self,
+        session_id: str,
+        tool_call: dict,
+        available_skills,
+        *,
+        surface: Optional[str] = None,
+    ):
         from models.protocol import FeralMessage, SDUIPayload
 
         tool_name = tool_call["name"]
         args = tool_call["args"]
         logger.info(f"  Tool call: {tool_name}({json.dumps(args)[:200]})")
+        effective_surface = surface or self._resolve_surface_for_session(session_id)
 
         parts = tool_name.split("__", 1)
         if len(parts) != 2:
@@ -507,7 +546,9 @@ class ToolRunner:
 
         skill_id, endpoint_id = parts
 
-        denial = self.enforce_safety(tool_name, args, session_id=session_id)
+        denial = self.enforce_safety(
+            tool_name, args, session_id=session_id, surface=effective_surface,
+        )
         if denial:
             status = denial.get("status", "blocked")
             note = denial.get("note", denial.get("error", "Action blocked by safety policy."))
@@ -696,8 +737,12 @@ class ToolRunner:
                             "error": "Nested subagent spawning is blocked to prevent recursion loops.",
                         }
                     else:
+                        # Inherit the parent session's surface for any nested
+                        # tool calls so the subagent can't escalate by virtue
+                        # of running on an "unknown session" default.
                         result_data = await self.execute_tool_call_for_llm(
                             sub_session_id, tc, relevant_skills,
+                            surface=self._resolve_surface_for_session(parent_session_id),
                         )
                     tool_calls_executed += 1
                     history.append({
