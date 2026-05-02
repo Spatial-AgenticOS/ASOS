@@ -241,3 +241,121 @@ def test_webhook_receiver_register_webhook_custom_app():
     out = recv.list_webhooks()
     ids = {x["app_id"] for x in out}
     assert "custom" in ids
+
+
+# ── Custom-webhook ingress hardening (fail-closed signature check) ──────────
+#
+# /api/webhooks/{id}/receive previously fell open: when a webhook had a
+# secret configured but the inbound request omitted the signature header
+# it skipped HMAC verification and accepted the payload anyway. These
+# tests pin the fixed contract:
+#   * valid HMAC → 200
+#   * secret set but signature header missing → 401
+#   * secret set but signature mismatched → 403
+#   * no secret configured → unsigned request still accepted (200)
+
+
+def _register_custom_webhook(secret: str = "") -> str:
+    """Insert a webhook directly into the route module's registry.
+
+    The /api/webhooks/create POST route shares its prefix with the
+    integrations webhooks router (`/api/webhooks/{app_id}`) which is
+    registered first and therefore swallows the create call. To keep
+    these tests focused on the signature-validation contract — and
+    independent of that unrelated routing collision — we bypass the
+    create endpoint and seed the in-memory store directly.
+    """
+    import time as _time
+    from uuid import uuid4
+
+    from api.routes import webhooks as webhooks_mod
+
+    webhook_id = str(uuid4())[:12]
+    webhooks_mod._webhooks[webhook_id] = {
+        "id": webhook_id,
+        "name": "test-hook",
+        "secret": secret,
+        "action": "noop",
+        "action_params": {},
+        "created_at": _time.time(),
+        "last_triggered": None,
+        "trigger_count": 0,
+        "url": f"/api/webhooks/{webhook_id}/receive",
+    }
+    return webhook_id
+
+
+@pytest.fixture(autouse=True)
+def _clear_custom_webhook_registry():
+    from api.routes import webhooks as webhooks_mod
+
+    snapshot = dict(webhooks_mod._webhooks)
+    webhooks_mod._webhooks.clear()
+    yield
+    webhooks_mod._webhooks.clear()
+    webhooks_mod._webhooks.update(snapshot)
+
+
+def _sign(secret: str, body: bytes) -> str:
+    return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def test_custom_webhook_valid_signature_accepted():
+    secret = "shh-its-a-secret"
+    webhook_id = _register_custom_webhook(secret=secret)
+    body = json.dumps({"event": "ping"}).encode()
+    client = TestClient(app)
+    r = client.post(
+        f"/api/webhooks/{webhook_id}/receive",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "x-hub-signature-256": _sign(secret, body),
+        },
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
+
+def test_custom_webhook_missing_signature_rejected_when_secret_configured():
+    secret = "another-secret"
+    webhook_id = _register_custom_webhook(secret=secret)
+    body = json.dumps({"event": "ping"}).encode()
+    client = TestClient(app)
+    r = client.post(
+        f"/api/webhooks/{webhook_id}/receive",
+        content=body,
+        headers={"content-type": "application/json"},
+    )
+    assert r.status_code == 401
+    assert "signature" in r.text.lower()
+
+
+def test_custom_webhook_invalid_signature_rejected():
+    secret = "yet-another-secret"
+    webhook_id = _register_custom_webhook(secret=secret)
+    body = json.dumps({"event": "ping"}).encode()
+    client = TestClient(app)
+    r = client.post(
+        f"/api/webhooks/{webhook_id}/receive",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "x-hub-signature-256": "sha256=deadbeef",
+        },
+    )
+    assert r.status_code == 403
+    assert "signature" in r.text.lower()
+
+
+def test_custom_webhook_without_secret_accepts_unsigned_request():
+    webhook_id = _register_custom_webhook(secret="")
+    body = json.dumps({"event": "ping"}).encode()
+    client = TestClient(app)
+    r = client.post(
+        f"/api/webhooks/{webhook_id}/receive",
+        content=body,
+        headers={"content-type": "application/json"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
