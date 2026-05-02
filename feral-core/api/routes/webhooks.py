@@ -63,12 +63,16 @@ async def receive_webhook(webhook_id: str, request: Request):
             or request.headers.get("stripe-signature", "")
             or request.headers.get("x-signature", "")
         )
-        if sig_header:
-            expected = "sha256=" + hmac.new(
-                hook["secret"].encode(), body, hashlib.sha256
-            ).hexdigest()
-            if not hmac.compare_digest(sig_header, expected):
-                return Response(status_code=403, content="Invalid signature")
+        # Fail-closed: when a secret is configured the request MUST carry
+        # a valid signature header. A missing header is rejected outright
+        # rather than silently bypassing verification.
+        if not sig_header:
+            return Response(status_code=401, content="Missing signature")
+        expected = "sha256=" + hmac.new(
+            hook["secret"].encode(), body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(sig_header, expected):
+            return Response(status_code=403, content="Invalid signature")
 
     try:
         payload = json.loads(body)
