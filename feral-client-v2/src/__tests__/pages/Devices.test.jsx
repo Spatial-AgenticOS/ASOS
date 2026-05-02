@@ -7,19 +7,23 @@
  *      without ever opening the modal. The modal must open, default to
  *      the Web phone tab, and the paired list must refresh on close.
  *
- *   2. Opening the modal auto-issued a token on the Web phone tab; if
- *      the user closed the modal without ever scanning the QR, that
- *      token was left behind as a phantom row in the Paired list. The
- *      modal must now revoke any unclaimed token it issued during the
- *      session, on close.
+ *   2. Token issuance must be explicit. Opening the modal should NOT
+ *      mint a backend row; only clicking "Generate one-time link"
+ *      does.
  *
- *   3. React StrictMode (dev) double-invoked the auto-generate effect,
- *      producing two phantom rows per open. The modal must dedupe.
+ *   3. If a generated token is never claimed, closing the modal must
+ *      revoke it so no phantom row remains.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, waitFor } from '@testing-library/react';
 import { renderV2 } from '../_helpers/renderV2';
 import Devices from '../../pages/Devices';
+
+vi.mock('qrcode', () => ({
+  default: {
+    toDataURL: vi.fn(async () => 'data:image/png;base64,mock'),
+  },
+}));
 
 beforeEach(() => {
   if (!navigator.clipboard) {
@@ -108,22 +112,87 @@ describe('Devices', () => {
     await waitFor(() => expect(calls.length).toBeGreaterThan(beforeOpen));
   });
 
-  it('auto-generates exactly one Web-phone token on open (no StrictMode double-fire)', async () => {
+  it('does not mint a token until "Generate one-time link" is clicked', async () => {
     const issued = [];
     const responder = makeDevicesResponder({
       onCall: (url) => {
         if (url.includes('/api/devices/pair/url')) issued.push(url);
       },
     });
-    const { getByRole, findByTestId } = renderV2(<Devices />, { fetch: responder });
+    const { getByRole, findByRole, getByTestId } = renderV2(<Devices />, { fetch: responder });
 
     fireEvent.click(getByRole('button', { name: /Pair new device/i }));
-    // Wait for the QR URL to render so we know generate() has resolved.
-    await findByTestId('pair-web-phone-url');
-
-    // Even under React.StrictMode (which double-invokes effects in
-    // dev) the ref guard keeps this at exactly one network call.
+    await findByRole('dialog', { name: /Pair a device/i });
+    expect(issued.length).toBe(0);
+    fireEvent.click(getByTestId('pair-web-phone-generate'));
+    await findByRole('img', { name: /Web phone pairing QR code/i });
     expect(issued.length).toBe(1);
+  });
+
+  it('switching tabs does not mint extra web-phone tokens', async () => {
+    const issued = [];
+    const responder = makeDevicesResponder({
+      onCall: (url) => {
+        if (url.includes('/api/devices/pair/url')) issued.push(url);
+      },
+    });
+    const { getByRole, findByRole, getByTestId } = renderV2(<Devices />, { fetch: responder });
+
+    fireEvent.click(getByRole('button', { name: /Pair new device/i }));
+    await findByRole('dialog', { name: /Pair a device/i });
+    fireEvent.click(getByTestId('pair-web-phone-generate'));
+    await findByRole('img', { name: /Web phone pairing QR code/i });
+    expect(issued.length).toBe(1);
+
+    fireEvent.click(getByRole('tab', { name: /Daemon token/i }));
+    fireEvent.click(getByRole('tab', { name: /Web phone/i }));
+    expect(issued.length).toBe(1);
+  });
+
+  it('shows a one-time PIN when generated with default settings', async () => {
+    const responder = (url) => {
+      if (url.includes('/api/devices/connected')) return { devices: [] };
+      if (url.includes('/api/devices/paired')) return { devices: [] };
+      if (url.includes('/api/hardware/mesh')) return { nodes: [] };
+      if (url.includes('/api/devices/pair/url')) {
+        return {
+          token: 'tok-pin',
+          device_id: 'dev-pin',
+          url: 'http://localhost:9090/pair?t=tok-pin',
+          pin_required: true,
+          pin: '2299',
+        };
+      }
+      return {};
+    };
+    const { getByRole, findByRole, getByTestId } = renderV2(<Devices />, { fetch: responder });
+
+    fireEvent.click(getByRole('button', { name: /Pair new device/i }));
+    await findByRole('dialog', { name: /Pair a device/i });
+    fireEvent.click(getByTestId('pair-web-phone-generate'));
+    expect(await findByRole('img', { name: /Web phone pairing QR code/i })).toBeInTheDocument();
+    expect(getByTestId('pair-web-phone-pin')).toHaveTextContent('2299');
+  });
+
+  it('native app tab does not mint until explicit generate click', async () => {
+    const qrCalls = [];
+    const responder = (url) => {
+      if (url.includes('/api/devices/connected')) return { devices: [] };
+      if (url.includes('/api/devices/paired')) return { devices: [] };
+      if (url.includes('/api/hardware/mesh')) return { nodes: [] };
+      if (url.includes('/api/devices/pair/qr')) {
+        qrCalls.push(url);
+      }
+      return {};
+    };
+    const { getByRole, findByRole, getByTestId } = renderV2(<Devices />, { fetch: responder });
+
+    fireEvent.click(getByRole('button', { name: /Pair new device/i }));
+    await findByRole('dialog', { name: /Pair a device/i });
+    fireEvent.click(getByRole('tab', { name: /Native app QR/i }));
+    expect(qrCalls.length).toBe(0);
+    fireEvent.click(getByTestId('pair-app-qr-generate'));
+    await waitFor(() => expect(qrCalls.length).toBe(1));
   });
 
   it('revokes the unclaimed Web-phone token when the modal closes (no phantom row)', async () => {
@@ -149,14 +218,15 @@ describe('Devices', () => {
       return {};
     };
 
-    const { getByRole, findByRole, findByTestId, getAllByRole } = renderV2(<Devices />, {
+    const { getByRole, findByRole, getByTestId, getAllByRole } = renderV2(<Devices />, {
       fetch: responder,
     });
 
     fireEvent.click(getByRole('button', { name: /Pair new device/i }));
     await findByRole('dialog', { name: /Pair a device/i });
-    // Wait for the auto-generate to resolve so the device_id is tracked.
-    await findByTestId('pair-web-phone-url');
+    fireEvent.click(getByTestId('pair-web-phone-generate'));
+    // Wait for issuance + QR rendering so the device_id is tracked.
+    await findByRole('img', { name: /Web phone pairing QR code/i });
 
     fireEvent.click(getAllByRole('button', { name: /Close/i })[0]);
 
@@ -189,13 +259,14 @@ describe('Devices', () => {
       return {};
     };
 
-    const { getByRole, findByRole, findByTestId, getAllByRole } = renderV2(<Devices />, {
+    const { getByRole, findByRole, getByTestId, getAllByRole } = renderV2(<Devices />, {
       fetch: responder,
     });
 
     fireEvent.click(getByRole('button', { name: /Pair new device/i }));
     await findByRole('dialog', { name: /Pair a device/i });
-    await findByTestId('pair-web-phone-url');
+    fireEvent.click(getByTestId('pair-web-phone-generate'));
+    await findByRole('img', { name: /Web phone pairing QR code/i });
 
     fireEvent.click(getAllByRole('button', { name: /Close/i })[0]);
 

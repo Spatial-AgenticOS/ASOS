@@ -216,7 +216,11 @@ def test_list_paired_includes_kind_and_capabilities(client):
         "node_id": "band-1",
         "capabilities": ["heart_rate", "haptic"],
     })
-    r = c.get("/api/devices/paired")
+    # The default ``/api/devices/paired`` view filters out unclaimed
+    # rows (see api/routes/devices.list_paired_devices). The pair we
+    # just minted is unclaimed — no daemon has attached yet — so we
+    # must opt into ``include_unclaimed=true`` to see it.
+    r = c.get("/api/devices/paired?include_unclaimed=true")
     assert r.status_code == 200
     devices = r.json()["devices"]
     assert len(devices) == 1
