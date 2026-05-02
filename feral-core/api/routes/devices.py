@@ -384,10 +384,27 @@ async def nodes_health():
 
 
 @router.get("/api/devices/paired")
-async def list_paired_devices():
-    """List all paired edge-node devices — with typed metadata."""
+async def list_paired_devices(include_unclaimed: bool = False):
+    """List paired edge-node devices — with typed metadata.
+
+    By default only **claimed** rows are returned (those whose
+    ``claimed_at`` is non-null), so the v2 Devices page no longer
+    flashes phantom "device showed up the moment I clicked Pair"
+    entries that were token-issuance side effects rather than real
+    device attaches.
+
+    Set ``?include_unclaimed=true`` to get every row, including
+    unclaimed pair tokens. That mode is intended for admin / cleanup
+    flows (e.g. the "Clear all unclaimed" button which feeds the
+    ``/api/devices/pair/prune`` endpoint).
+
+    The payload shape is unchanged — every key the v1/v2 client
+    already reads (``device_id``, ``name``, ``paired_at``, ``last_seen``,
+    ``kind``, ``node_id``, ``claimed_at``, ``platform``,
+    ``capabilities``) is still present; only the row count is filtered.
+    """
     store = state.device_pairing_store
-    devices = store.list_devices()
+    devices = store.list_devices(include_unclaimed=bool(include_unclaimed))
     safe = [
         {
             "device_id": d["device_id"],

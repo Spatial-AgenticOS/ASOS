@@ -278,11 +278,18 @@ _OPEN_PATHS = frozenset({
     # because it's delivered over `curl … | bash` from a laptop / phone
     # that doesn't have the key yet.
     "/install-phone-bridge.sh",
-    # /api/devices/pair/url + QR are served so a brand-new phone can
-    # reach them after scanning the Pair modal QR; they only expose
-    # one-time pairing tokens that the Brain itself issues.
-    "/api/devices/pair/url",
-    "/api/devices/pair/qr",
+    # Note: ``/api/devices/pair/url`` and ``/api/devices/pair/qr``
+    # used to be open-listed here so a brand-new phone could fetch
+    # them. That was wrong — those endpoints **mint** pairing
+    # tokens; leaving them open meant any LAN attacker could spam
+    # token issuance and pollute the paired_devices table (or, in
+    # Mode C, exfiltrate one-time tokens by guessing the URL). They
+    # are now authenticated: the dashboard (which has the API key)
+    # is the only client that issues tokens; the phone receives the
+    # already-issued URL inside the QR / Bluetooth handoff and
+    # only ever talks to the **claim** half of the flow
+    # (``/pair/check`` → ``/pair/verify_pin`` → ``/pair/complete``)
+    # which stays open below.
     "/api/devices/pair/complete",
     # Code-pair flow (SDK ↔ dashboard typed pair code).
     # Daemon announces an 8-char base32 code, dashboard claims it.

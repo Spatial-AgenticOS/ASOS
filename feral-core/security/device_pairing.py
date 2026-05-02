@@ -1099,7 +1099,17 @@ class DevicePairingStore:
         token is unknown, expired, or fails hash verification.
 
         Successful verifications also extend ``expires_at`` by
-        ``ttl_seconds`` (sliding window) and bump ``last_seen``.
+        ``ttl_seconds`` (sliding window), bump ``last_seen``, and —
+        idempotently — set ``claimed_at`` if it was still NULL. The
+        latter mirrors what ``/api/devices/pair/complete`` does so
+        that a daemon / browser-node which attaches via the WebSocket
+        handshake (``/v1/node`` or ``/v1/session``) is treated as a
+        "real" claim by the user-facing devices list, even when the
+        client never POSTs ``/pair/complete`` separately. Existing
+        ``claimed_at`` values are preserved (idempotent: first claim
+        wins so the "when was this device first attached?" timestamp
+        is stable).
+
         Failures do NOT increment any retry counter — the existing
         rate-limit logic at the HTTP layer handles brute-force
         protection (see api/server.py + tests/test_session_auth.py).
@@ -1110,7 +1120,7 @@ class DevicePairingStore:
         conn = self._conn()
         try:
             row = conn.execute(
-                "SELECT device_id, token_hash, expires_at, ttl_seconds "
+                "SELECT device_id, token_hash, expires_at, ttl_seconds, claimed_at "
                 "FROM paired_devices WHERE token_lookup = ?",
                 (lookup,),
             ).fetchone()
@@ -1132,23 +1142,58 @@ class DevicePairingStore:
 
         device_id = row["device_id"]
         new_expiry = now + int(row["ttl_seconds"] or DEFAULT_TTL_SECONDS)
+        already_claimed = row["claimed_at"] is not None
+        now_wall = time.time()
         with self._lock:
             conn = self._conn()
             try:
-                conn.execute(
-                    "UPDATE paired_devices SET last_seen = ?, expires_at = ? "
-                    "WHERE device_id = ?",
-                    (time.time(), new_expiry, device_id),
-                )
+                if already_claimed:
+                    conn.execute(
+                        "UPDATE paired_devices SET last_seen = ?, expires_at = ? "
+                        "WHERE device_id = ?",
+                        (now_wall, new_expiry, device_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE paired_devices "
+                        "SET last_seen = ?, expires_at = ?, claimed_at = ? "
+                        "WHERE device_id = ? AND claimed_at IS NULL",
+                        (now_wall, new_expiry, now_wall, device_id),
+                    )
+                    # Defensive: if a concurrent caller already set
+                    # claimed_at between SELECT and UPDATE, the guarded
+                    # UPDATE above does nothing for claimed_at; bump
+                    # last_seen / expires_at unconditionally.
+                    conn.execute(
+                        "UPDATE paired_devices SET last_seen = ?, expires_at = ? "
+                        "WHERE device_id = ?",
+                        (now_wall, new_expiry, device_id),
+                    )
                 conn.commit()
             finally:
                 conn.close()
+        if not already_claimed:
+            logger.info(
+                "device_pairing.claimed_on_verify: device_id=%s",
+                device_id,
+            )
         return device_id
 
     # ── Listing / revocation ───────────────────────────────────────
 
-    def list_devices(self) -> list[dict]:
-        """Return all paired devices with the typed metadata.
+    def list_devices(self, *, include_unclaimed: bool = True) -> list[dict]:
+        """Return paired devices with the typed metadata.
+
+        Args:
+            include_unclaimed: when ``False``, filter out rows whose
+                ``claimed_at`` is NULL — i.e. tokens that were issued
+                but never used to attach a real WebSocket. Defaults to
+                ``True`` so existing callers (CLI, MCP, tests poking
+                the store directly) continue to see every row. The
+                user-facing ``GET /api/devices/paired`` route flips
+                this to ``False`` to suppress phantom "device showed
+                up the moment I clicked Pair" entries that the v2
+                Devices page used to render before claim.
 
         Note: post-W9, ``token`` is NEVER included — the plaintext
         cannot be recovered from storage. Callers that need to identify
@@ -1160,13 +1205,14 @@ class DevicePairingStore:
         import json as _json
         conn = self._conn()
         try:
-            rows = conn.execute(
-                """SELECT device_id, name, paired_at, last_seen,
-                          kind, node_id, claimed_at, platform, capabilities,
-                          token_lookup, ttl_seconds, expires_at, hash_algo
-                   FROM paired_devices
-                   ORDER BY paired_at DESC"""
-            ).fetchall()
+            sql = """SELECT device_id, name, paired_at, last_seen,
+                            kind, node_id, claimed_at, platform, capabilities,
+                            token_lookup, ttl_seconds, expires_at, hash_algo
+                     FROM paired_devices"""
+            if not include_unclaimed:
+                sql += " WHERE claimed_at IS NOT NULL"
+            sql += " ORDER BY paired_at DESC"
+            rows = conn.execute(sql).fetchall()
             out = []
             for r in rows:
                 caps_raw = r["capabilities"] if "capabilities" in r.keys() else None
