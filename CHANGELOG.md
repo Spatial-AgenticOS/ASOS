@@ -1,8 +1,30 @@
 # Changelog
 
-<!-- feral-version: 2026.5.10 -->
+<!-- feral-version: 2026.5.11 -->
 
 All notable changes to FERAL are documented here.
+
+## [2026.5.11] - 2026-05-01 — access panel, anywhere UX cleanup, release packaging hardening
+
+### Added
+
+- Added `Settings` -> `Access` section in `feral-client-v2` with:
+  - live `/api/access/status` snapshot,
+  - one-click `Enable Anywhere` (`POST /api/access/remote-up`),
+  - one-click `Disable Anywhere` (`POST /api/access/remote-down`),
+  - direct LAN/local-only mode switching via config updates.
+- Added `feral-core/README.md` so package metadata references a real readme file during build/publish.
+
+### Changed
+
+- Updated pairing/access docs and README to reflect current UI-first Anywhere flow:
+  setup attempts remote tunnel enablement automatically, with `feral access remote-up`
+  retained as fallback and recovery path.
+- Updated Settings frontend tests to cover new Access section rendering and remote-up action wiring.
+
+### Coverage
+
+- vitest (feral-client-v2): added Access section tests in `Settings.test.jsx`.
 
 ## [2026.5.10] - 2026-05-01 — pairing lifecycle hardening, explicit issuance UX, embeddings fallback resilience
 

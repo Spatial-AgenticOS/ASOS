@@ -9,7 +9,7 @@ import { apiFetch, apiJson } from '../lib/api';
 import { API_BASE } from '../lib/config';
 
 /**
- * Settings — thirteen real sections. Self is the first section users
+ * Settings — fifteen real sections. Self is the first section users
  * expect to find for "about me / my agent's personality" and it embeds
  * the same IDENTITY / SOUL / MEMORY editors that live at /identity so
  * users never have to hunt through the ⌘K hub to find them.
@@ -17,7 +17,7 @@ import { API_BASE } from '../lib/config';
 
 const SECTIONS = [
   'Self', 'General', 'Providers', 'Memory', 'Channels', 'Autonomy', 'Voice',
-  'Twin', 'Security', 'Integrations', 'Sync', 'Handoff', 'Push', 'MCP',
+  'Access', 'Twin', 'Security', 'Integrations', 'Sync', 'Handoff', 'Push', 'MCP',
 ];
 
 export default function Settings() {
@@ -50,6 +50,7 @@ export default function Settings() {
         {section === 'Channels' && <ChannelsSection />}
         {section === 'Autonomy' && <AutonomySection />}
         {section === 'Voice' && <VoiceSection />}
+        {section === 'Access' && <AccessSection />}
         {section === 'Security' && <SecuritySection />}
         {section === 'Integrations' && <IntegrationsSection />}
         {section === 'Sync' && <SyncSection />}
@@ -131,6 +132,203 @@ function Select({ value, options, onChange, disabled }) {
 
 function Status({ tone = 'neutral', children }) {
   return <span className={`v2-chip v2-chip--${tone}`}>{children}</span>;
+}
+
+function formatApiDetail(body, fallback = 'request failed') {
+  if (!body || typeof body !== 'object') return fallback;
+  const detail = body.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail.trim();
+  if (detail && typeof detail === 'object') {
+    const message = typeof detail.message === 'string' ? detail.message.trim() : '';
+    const remediation = typeof detail.remediation === 'string' ? detail.remediation.trim() : '';
+    const code = typeof detail.code === 'string' ? detail.code.trim() : '';
+    if (message && remediation) return `${message} ${remediation}`;
+    if (message) return message;
+    if (remediation) return remediation;
+    if (code) return code;
+  }
+  if (typeof body.error === 'string' && body.error.trim()) return body.error.trim();
+  return fallback;
+}
+
+// ── Access ───────────────────────────────────────────────────
+
+function AccessSection() {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState(null);
+  const [message, setMessage] = useState('');
+
+  const refresh = useCallback(async () => {
+    try {
+      const snap = await apiJson('/api/access/status');
+      setStatus(snap);
+      setError(null);
+    } catch (e) {
+      setError(e?.message || 'failed to fetch access status');
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const setMode = useCallback(async (mode) => {
+    setBusy(mode);
+    setError(null);
+    setMessage('');
+    try {
+      const r = await apiFetch('/api/config/update', {
+        method: 'POST',
+        body: JSON.stringify({ section: 'access', key: 'pairing_mode', value: mode }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(formatApiDetail(body, `failed to set mode (${r.status})`));
+      }
+      setMessage(`Pairing mode set to ${mode}.`);
+      await refresh();
+    } catch (e) {
+      setError(e?.message || 'failed to set pairing mode');
+    } finally {
+      setBusy('');
+    }
+  }, [refresh]);
+
+  const remoteUp = useCallback(async () => {
+    setBusy('remote-up');
+    setError(null);
+    setMessage('');
+    try {
+      const r = await apiFetch('/api/access/remote-up', { method: 'POST' });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(formatApiDetail(body, `failed to enable remote mode (${r.status})`));
+      }
+      const body = await r.json().catch(() => ({}));
+      setMessage(`Anywhere mode enabled${body?.remote_url ? `: ${body.remote_url}` : ''}`);
+      await refresh();
+    } catch (e) {
+      setError(e?.message || 'failed to enable remote mode');
+    } finally {
+      setBusy('');
+    }
+  }, [refresh]);
+
+  const remoteDown = useCallback(async () => {
+    setBusy('remote-down');
+    setError(null);
+    setMessage('');
+    try {
+      const r = await apiFetch('/api/access/remote-down', { method: 'POST' });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(formatApiDetail(body, `failed to disable remote mode (${r.status})`));
+      }
+      setMessage('Anywhere mode disabled. Pairing reverted to This Mac only.');
+      await refresh();
+    } catch (e) {
+      setError(e?.message || 'failed to disable remote mode');
+    } finally {
+      setBusy('');
+    }
+  }, [refresh]);
+
+  if (!status) {
+    return (
+      <div className="v2-setting-stack">
+        {error ? <div className="v2-chip v2-chip--error">{error}</div> : <EmptyState title="Loading access mode…" />}
+      </div>
+    );
+  }
+
+  const mode = status.pairing_mode || 'localhost';
+  const ts = status.tailscale || {};
+  const funnel = status.funnel || {};
+  const modeLabel = mode === 'local' ? 'Same WiFi' : mode === 'remote' ? 'Anywhere' : 'This Mac only';
+
+  return (
+    <div className="v2-setting-stack" data-testid="settings-access-section">
+      <Row label="Current pairing mode" hint="How phones reach this brain">
+        <Status tone={mode === 'remote' ? 'live' : mode === 'local' ? 'warn' : 'neutral'}>{modeLabel}</Status>
+      </Row>
+
+      <Row label="Quick switch" hint="Set LAN or local-only mode">
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="v2-btn"
+            disabled={busy === 'local'}
+            onClick={() => setMode('local')}
+            data-testid="settings-access-mode-local"
+          >
+            Same WiFi
+          </button>
+          <button
+            type="button"
+            className="v2-btn"
+            disabled={busy === 'localhost'}
+            onClick={() => setMode('localhost')}
+            data-testid="settings-access-mode-localhost"
+          >
+            This Mac only
+          </button>
+        </div>
+      </Row>
+
+      <Row label="Anywhere (Tailscale)" hint="Enable or disable remote tunnel mode">
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="v2-btn v2-btn--primary"
+              disabled={busy === 'remote-up'}
+              onClick={remoteUp}
+              data-testid="settings-access-remote-up"
+            >
+              Enable Anywhere
+            </button>
+            <button
+              type="button"
+              className="v2-btn"
+              disabled={busy === 'remote-down'}
+              onClick={remoteDown}
+              data-testid="settings-access-remote-down"
+            >
+              Disable Anywhere
+            </button>
+            <button
+              type="button"
+              className="v2-btn v2-btn--ghost"
+              disabled={busy === 'refresh'}
+              onClick={async () => { setBusy('refresh'); try { await refresh(); } finally { setBusy(''); } }}
+              data-testid="settings-access-refresh"
+            >
+              Refresh status
+            </button>
+          </div>
+          <div className="v2-p v2-p--tiny v2-p--muted" data-testid="settings-access-remote-url">
+            Remote URL: {status.remote_url || '(none)'}
+          </div>
+        </div>
+      </Row>
+
+      <Row label="Tailscale status" hint="Live daemon/login/funnel snapshot">
+        <div style={{ display: 'grid', gap: 6 }}>
+          <div className="v2-p v2-p--tiny">
+            Installed: <strong>{ts.installed ? 'yes' : 'no'}</strong> · Running: <strong>{ts.running ? 'yes' : 'no'}</strong> · Logged in: <strong>{ts.logged_in ? 'yes' : 'no'}</strong>
+          </div>
+          <div className="v2-p v2-p--tiny">
+            Funnel: <strong>{funnel.active ? 'active' : 'inactive'}</strong>{Array.isArray(funnel.ports) && funnel.ports.length > 0 ? ` (ports: ${funnel.ports.join(', ')})` : ''}
+          </div>
+          {!!ts.dns_name && <div className="v2-p v2-p--tiny">DNS: <code>{ts.dns_name}</code></div>}
+          {!!ts.tailnet && <div className="v2-p v2-p--tiny">Tailnet: <code>{ts.tailnet}</code></div>}
+          {!!ts.error && <div className="v2-chip v2-chip--warn">Tailscale status: {ts.error}</div>}
+        </div>
+      </Row>
+
+      {message && <div className="v2-chip v2-chip--live" data-testid="settings-access-message">{message}</div>}
+      {error && <div className="v2-chip v2-chip--error" data-testid="settings-access-error">{error}</div>}
+    </div>
+  );
 }
 
 // ── General ───────────────────────────────────────────────────

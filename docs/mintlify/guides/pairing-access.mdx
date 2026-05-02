@@ -35,10 +35,11 @@ Then regenerate the link.
 
 ## Anywhere flow (Remote / Tailscale Funnel)
 
-Current behavior: setup can switch mode to `remote`, but tunnel activation still requires a terminal command.
+Current behavior: setup attempts tunnel activation automatically when you pick `Anywhere`.
+If that step fails, use the CLI fallback below (or use `Settings` -> `Access` to retry).
 
 1. In setup, select **Anywhere**.
-2. Run:
+2. If setup fails to bring tunnel up, run:
 
 ```bash
 feral access remote-up
