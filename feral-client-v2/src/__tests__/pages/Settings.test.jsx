@@ -82,7 +82,7 @@ describe('Settings', () => {
   it('renders the settings split layout with all sections including Self + Twin', () => {
     const { getAllByText, getByText } = renderV2(<Settings />);
     expect(getAllByText(/^Self$/i).length).toBeGreaterThan(0);
-    for (const s of ['General', 'Providers', 'Memory', 'Channels', 'Autonomy', 'Voice', 'Twin']) {
+    for (const s of ['General', 'Providers', 'Memory', 'Channels', 'Autonomy', 'Voice', 'Access', 'Twin']) {
       expect(getByText(s)).toBeInTheDocument();
     }
   });
@@ -136,6 +136,56 @@ describe('Settings', () => {
     fireEvent.click(getByText(/^Memory$/));
     // The MemorySection renders the backend name somewhere.
     expect(await findByText(/sqlite_vec/i)).toBeInTheDocument();
+  });
+
+  it('Access section renders current mode and tailscale snapshot', async () => {
+    const fetcher = (url) => {
+      if (url.includes('/api/access/status')) {
+        return {
+          pairing_mode: 'localhost',
+          remote_url: '',
+          tailscale: { installed: true, running: true, logged_in: false, dns_name: '', tailnet: '', error: 'not_logged_in' },
+          funnel: { active: false, ports: [] },
+        };
+      }
+      return providersResponder(url);
+    };
+    const { getByText, findByText, findByTestId } = renderV2(<Settings />, { fetch: fetcher });
+    fireEvent.click(getByText(/^Access$/));
+    expect(await findByText(/Current pairing mode/i)).toBeInTheDocument();
+    expect(await findByTestId('settings-access-section')).toBeInTheDocument();
+    expect(await findByTestId('settings-access-mode-localhost')).toBeInTheDocument();
+  });
+
+  it('Access section remote-up action calls backend endpoint', async () => {
+    const calls = [];
+    let statusSnapshot = {
+      pairing_mode: 'localhost',
+      remote_url: '',
+      tailscale: { installed: true, running: true, logged_in: true, dns_name: 'macbook.tailnet.ts.net', tailnet: 'tailnet.ts.net', error: '' },
+      funnel: { active: false, ports: [] },
+    };
+    const fetcher = (url, init) => {
+      calls.push({ url, method: init?.method || 'GET' });
+      if (url.includes('/api/access/status')) return statusSnapshot;
+      if (url.includes('/api/access/remote-up')) {
+        statusSnapshot = {
+          ...statusSnapshot,
+          pairing_mode: 'remote',
+          remote_url: 'https://macbook.tailnet.ts.net',
+          funnel: { active: true, ports: [9090] },
+        };
+        return { ok: true, pairing_mode: 'remote', remote_url: 'https://macbook.tailnet.ts.net' };
+      }
+      return providersResponder(url);
+    };
+    const { getByText, findByTestId } = renderV2(<Settings />, { fetch: fetcher });
+    fireEvent.click(getByText(/^Access$/));
+    fireEvent.click(await findByTestId('settings-access-remote-up'));
+    await waitFor(() => {
+      expect(calls.some((c) => c.url.includes('/api/access/remote-up') && c.method === 'POST')).toBe(true);
+    });
+    expect(await findByTestId('settings-access-message')).toBeInTheDocument();
   });
 
   // ── Twin honesty (no executor wired → no theatre) ────────────

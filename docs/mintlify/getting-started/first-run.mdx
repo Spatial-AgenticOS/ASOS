@@ -38,7 +38,8 @@ Choose one access mode:
 - **Anywhere**: remote pairing through Tailscale Funnel.
 - **This Mac only**: skip phone pairing for now.
 
-If you choose **Anywhere**, run this once in a terminal:
+If you choose **Anywhere**, setup attempts `remote-up` automatically.
+If it fails, run this once in a terminal:
 
 ```bash
 feral access remote-up
@@ -66,5 +67,5 @@ feral access status
 ## Common first-run mistakes
 
 - Pairing while mode is **This Mac only** (`localhost`) -> no pair URL is emitted.
-- Choosing **Anywhere** but not running `feral access remote-up`.
+- Choosing **Anywhere** and ignoring setup tunnel errors without running `feral access remote-up`.
 - LAN URL unreachable because brain is loopback-only -> restart with `FERAL_HOST=0.0.0.0`.

@@ -33,15 +33,16 @@ In the setup wizard's **Pair your phone** step, pick one:
 
 If PIN is enabled, enter the 4-digit PIN shown in the modal.
 
-## 4) Anywhere mode: one terminal command still required
+## 4) Anywhere mode (UI-first + CLI fallback)
 
-If you selected **Anywhere**, run:
+Setup now attempts to enable Anywhere automatically.
+If setup reports a tunnel error, run:
 
 ```bash
 feral access remote-up
 ```
 
-This enables the remote tunnel and stores the resolved remote URL.
+You can also toggle this later from `Settings` -> `Access` in the v2 UI.
 
 Check status:
 

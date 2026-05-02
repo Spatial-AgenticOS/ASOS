@@ -15,7 +15,7 @@
 
 <p align="center">
   <!-- sync-versions:badge -->
-  <img src="https://img.shields.io/badge/version-2026.5.10-06b6d4?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/version-2026.5.11-06b6d4?style=flat-square" alt="Version" />
   <!-- /sync-versions:badge -->
   <a href="https://github.com/FERAL-AI/FERAL-AI/stargazers"><img src="https://img.shields.io/github/stars/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Stars" /></a>
   <a href="https://github.com/FERAL-AI/FERAL-AI/commits/main"><img src="https://img.shields.io/github/last-commit/FERAL-AI/FERAL-AI?style=flat-square&color=06b6d4" alt="Last Commit" /></a>
@@ -98,10 +98,11 @@ FERAL_HOST=0.0.0.0 feral start
 
 ### Anywhere (Remote via Tailscale)
 
-Today this is a mixed UI + CLI flow:
+Setup now attempts this automatically when you choose **Anywhere**.
+You can also manage it later in `Settings` -> `Access`.
 
 1. In setup, choose **Anywhere**.
-2. In terminal, run:
+2. If setup reports a tunnel error, run:
 
 ```bash
 feral access remote-up
