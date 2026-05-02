@@ -1,17 +1,62 @@
 name: Release
 
+# Staged release pipeline.
+#
+#   build  → stage  → publish
+#
+# Flow summary:
+#   1. build   : build wheel+sdist, run a pre-publish in-tree smoke test,
+#                upload the dist/ as a workflow artifact. Nothing leaves
+#                GitHub Actions in this job.
+#   2. stage   : download the artifact, publish to TestPyPI (or the
+#                configured staging index), install from that staging
+#                index in a clean venv, and run the runtime smoke again
+#                against the *uploaded* wheel. Gated by environment
+#                `testpypi-stage` so maintainers can require manual
+#                approval before a canary upload.
+#   3. publish : gated by environment `pypi` so maintainers keep the
+#                manual-approval safety net on the production push.
+#                Publishes to PyPI and creates the GitHub Release.
+#
+# Triggers:
+#   - tag push `v*` runs the full pipeline end-to-end.
+#   - workflow_dispatch exposes two escape hatches for maintainers:
+#       skip_stage : bypass TestPyPI (emergency hot-fix only).
+#       dry_run    : stop after the stage job; do not publish to PyPI.
+#
+# Secrets / auth model:
+#   - Both `pypi` and the staging index use OIDC trusted publishing via
+#     `pypa/gh-action-pypi-publish`. Configure each on the PyPI side as
+#     a Trusted Publisher pointing at this repo + workflow filename +
+#     the matching environment name. No long-lived API token is stored
+#     in repo secrets.
+#   - `id-token: write` is required for OIDC; `contents: write` is
+#     required by `softprops/action-gh-release`.
+
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      skip_stage:
+        description: 'Skip the TestPyPI canary stage (emergency use only).'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Run build + stage only; do not publish to PyPI.'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
   id-token: write
 
 jobs:
-  release:
+  build:
+    name: Build wheel + sdist (+ pre-publish smoke)
     runs-on: ubuntu-latest
-    environment: pypi
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,47 +87,145 @@ jobs:
         run: python -m build
         working-directory: feral-core
 
-      - name: Pre-publish wheel smoke (bundle + startup contract)
+      - name: Read version from built artifact
+        id: meta
         shell: bash
         run: |
+          set -euo pipefail
+          wheel=$(ls feral-core/dist/*.whl | head -n 1)
+          # wheel filename: feral_ai-<version>-py3-none-any.whl
+          fname=$(basename "${wheel}")
+          version=$(echo "${fname}" | awk -F'-' '{print $2}')
+          if [ -z "${version}" ]; then
+            echo "could not parse version from ${fname}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "  · built feral-ai==${version}"
+
+      - name: Pre-publish wheel smoke (in-tree)
+        shell: bash
+        run: |
+          set -euo pipefail
           python -m venv .wheel-smoke
           source .wheel-smoke/bin/activate
           python -m pip install --upgrade pip
           python -m pip install feral-core/dist/*.whl
-          python - <<'PY'
-          import os
-          import importlib.metadata as md
-          from pathlib import Path
+          python scripts/release_wheel_smoke.py \
+            --expected-version "${{ steps.meta.outputs.version }}"
 
-          os.environ["FERAL_API_KEY"] = "release-wheel-smoke-key"
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: feral-ai-dist
+          path: feral-core/dist/
+          if-no-files-found: error
+          retention-days: 7
 
-          import api
-          from api.server import app
-          from fastapi.testclient import TestClient
+  stage:
+    name: Canary publish to TestPyPI + install smoke
+    needs: build
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.skip_stage != true
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi-stage
+      url: https://test.pypi.org/project/feral-ai/${{ needs.build.outputs.version }}/
+    steps:
+      - uses: actions/checkout@v4
 
-          version = md.version("feral-ai")
-          site = Path(api.__file__).resolve().parent.parent
-          v2 = site / "webui_v2"
-          index = v2 / "index.html"
-          assets = v2 / "assets"
-          js = list(assets.glob("*.js"))
-          css = list(assets.glob("*.css"))
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-          assert index.exists(), f"Missing wheel asset: {index}"
-          assert js, f"Missing webui_v2 JS assets in {assets}"
-          assert css, f"Missing webui_v2 CSS assets in {assets}"
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: feral-ai-dist
+          path: dist/
 
-          client = TestClient(app, raise_server_exceptions=False)
-          health = client.get("/health")
-          assert health.status_code == 200, f"/health failed: {health.status_code}"
-          root = client.get("/", headers={"Authorization": "Bearer release-wheel-smoke-key"})
-          assert root.status_code == 200, f"/ failed: {root.status_code}"
-          body = root.text
-          assert "FERAL" in body and "v2" in body.lower(), "Root page missing v2 markers"
-          assert "leaflet" not in body.lower(), "Root page appears to be legacy v1 fallback"
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          repository-url: https://test.pypi.org/legacy/
+          # Re-runs of the same tag (e.g. after a flake) should not fail
+          # on the "file already exists" error — TestPyPI is a canary,
+          # not a source of truth.
+          skip-existing: true
 
-          print(f"Wheel smoke passed for feral-ai=={version}")
-          PY
+      - name: Wait for TestPyPI index to surface the new release
+        # TestPyPI's index takes a few seconds to converge after upload.
+        # Poll the JSON API instead of sleeping a fixed amount.
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if curl -fsS "https://test.pypi.org/pypi/feral-ai/${EXPECTED_VERSION}/json" \
+                 -o /dev/null; then
+              echo "  · TestPyPI has feral-ai==${EXPECTED_VERSION} (attempt ${attempt})"
+              exit 0
+            fi
+            echo "  · TestPyPI not ready yet (attempt ${attempt}); sleeping"
+            sleep 10
+          done
+          echo "TestPyPI never surfaced feral-ai==${EXPECTED_VERSION}" >&2
+          exit 1
+
+      - name: Install from TestPyPI in a clean venv
+        # --extra-index-url https://pypi.org/simple is required so that
+        # runtime deps (fastapi, httpx, etc.) resolve from real PyPI
+        # instead of the sparse TestPyPI mirror.
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m venv .stage-venv
+          source .stage-venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install \
+            --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ \
+            "feral-ai==${EXPECTED_VERSION}"
+
+      - name: Canary runtime smoke (against TestPyPI install)
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          source .stage-venv/bin/activate
+          python scripts/release_wheel_smoke.py \
+            --expected-version "${EXPECTED_VERSION}"
+
+  publish:
+    name: Publish to PyPI + create GitHub Release
+    needs: [build, stage]
+    # `needs.stage.result` is "skipped" when skip_stage=true on a
+    # workflow_dispatch run; allow the prod push in that case only.
+    if: >-
+      (needs.stage.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' &&
+        inputs.skip_stage == true &&
+        needs.stage.result == 'skipped')) &&
+      (github.event_name != 'workflow_dispatch' || inputs.dry_run != true)
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/feral-ai/${{ needs.build.outputs.version }}/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: feral-ai-dist
+          path: feral-core/dist/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
