@@ -8,7 +8,7 @@ Usage
 
 The config key is ``memory.backend`` in ``~/.feral/settings.json``.
 Switching is cheap: it's just a config change. The brain reloads the
-backend on next start, or on ``POST /api/memory/reload`` if running.
+backend on next start.
 """
 
 from __future__ import annotations
