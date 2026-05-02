@@ -9,11 +9,13 @@ is re-exported from there for import compatibility.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import httpx
 from email.utils import parsedate_to_datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger("feral.llm")
@@ -276,9 +278,75 @@ class ProviderCooldownTracker:
     }
     _PROBE_INTERVAL = 30.0
 
-    def __init__(self):
+    def __init__(self, storage_path: str | None = None):
         self._cooldowns: dict[str, float] = {}
         self._last_probe: dict[str, float] = {}
+        self._storage_path = str(storage_path or "").strip()
+        self._load_state()
+
+    def _load_state(self) -> None:
+        if not self._storage_path:
+            return
+        path = Path(self._storage_path)
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.debug("cooldown state load skipped (%s): %s", path, exc)
+            return
+
+        now = time.time()
+        cool_raw = payload.get("cooldowns", {}) if isinstance(payload, dict) else {}
+        probe_raw = payload.get("last_probe", {}) if isinstance(payload, dict) else {}
+
+        if isinstance(cool_raw, dict):
+            for provider, until in cool_raw.items():
+                try:
+                    ts = float(until)
+                except Exception:
+                    continue
+                if ts > now:
+                    self._cooldowns[str(provider)] = ts
+        if isinstance(probe_raw, dict):
+            for provider, last in probe_raw.items():
+                try:
+                    ts = float(last)
+                except Exception:
+                    continue
+                if ts > 0:
+                    self._last_probe[str(provider)] = ts
+
+    def _persist_state(self) -> None:
+        if not self._storage_path:
+            return
+        path = Path(self._storage_path)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            now = time.time()
+            cooldowns = {
+                provider: until
+                for provider, until in self._cooldowns.items()
+                if float(until) > now
+            }
+            # Keep probe timestamps only for providers we currently track in
+            # cooldown; stale historical probes are not useful across restarts.
+            probes = {
+                provider: self._last_probe.get(provider, 0.0)
+                for provider in cooldowns.keys()
+                if self._last_probe.get(provider, 0.0) > 0.0
+            }
+            payload = {
+                "version": 1,
+                "saved_at": now,
+                "cooldowns": cooldowns,
+                "last_probe": probes,
+            }
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+            tmp_path.replace(path)
+        except Exception as exc:
+            logger.debug("cooldown state persist skipped (%s): %s", path, exc)
 
     def record_failure(
         self,
@@ -304,6 +372,7 @@ class ProviderCooldownTracker:
             hint = max(0.0, min(float(retry_after), RETRY_AFTER_MAX_COOLDOWN))
             cooldown_seconds = max(cooldown_seconds, hint)
         self._cooldowns[provider] = time.time() + cooldown_seconds
+        self._persist_state()
 
     def is_available(self, provider: str) -> bool:
         return time.time() >= self._cooldowns.get(provider, 0)
@@ -314,11 +383,14 @@ class ProviderCooldownTracker:
         last = self._last_probe.get(provider, 0)
         if time.time() - last >= self._PROBE_INTERVAL:
             self._last_probe[provider] = time.time()
+            self._persist_state()
             return True
         return False
 
     def record_success(self, provider: str):
         self._cooldowns.pop(provider, None)
+        self._last_probe.pop(provider, None)
+        self._persist_state()
 
 
 __all__ = [

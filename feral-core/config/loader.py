@@ -37,6 +37,11 @@ DEFAULT_SETTINGS = {
         "model": "gpt-4o-mini",
         "base_url": "",
         "fallback_providers": [],
+        # Optional spend controls for failover routing. Zero budget keeps
+        # historical provider-priority behaviour.
+        "daily_budget_usd": 0.0,
+        "daily_spend_usd": 0.0,
+        "budget_tight_ratio": 0.25,
     },
     "audio": {
         "stt_provider": "openai",
@@ -200,6 +205,9 @@ class ConfigLoader:
             "FERAL_LLM_PROVIDER": ("llm", "provider"),
             "FERAL_LLM_MODEL": ("llm", "model"),
             "FERAL_LLM_BASE_URL": ("llm", "base_url"),
+            "FERAL_LLM_DAILY_BUDGET_USD": ("llm", "daily_budget_usd"),
+            "FERAL_LLM_DAILY_SPEND_USD": ("llm", "daily_spend_usd"),
+            "FERAL_LLM_BUDGET_TIGHT_RATIO": ("llm", "budget_tight_ratio"),
             # ``FERAL_VISION_ENABLED`` is applied to ``vision.enabled``
             # here; ``_unify_feature_flags`` mirrors it into
             # ``features.vision`` so every consumer sees the same truth.

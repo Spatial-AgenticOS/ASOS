@@ -15,6 +15,7 @@ import time
 import httpx
 from typing import Any, Optional, AsyncGenerator
 
+from config.loader import feral_data_home
 from config.runtime import ollama_base_url, ollama_openai_base_url
 from agents.chat_sanitizer import sanitize_assistant_display_text
 
@@ -215,6 +216,20 @@ def _default_model_for(provider_name: str) -> str:
         return ""
 
 
+def _cooldown_state_path() -> str:
+    """Path used to persist provider cooldown circuit state."""
+    override = os.environ.get("FERAL_LLM_COOLDOWN_STATE_PATH", "").strip()
+    if override:
+        return override
+    try:
+        base = feral_data_home()
+        base.mkdir(parents=True, exist_ok=True)
+        return str(base / "llm_provider_cooldowns.json")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("cooldown state path unavailable: %s", exc)
+        return ""
+
+
 class LLMProvider:
     """
     Pluggable LLM interface.
@@ -242,7 +257,8 @@ class LLMProvider:
         self.base_url = os.getenv("FERAL_LLM_BASE_URL", "")
         self.available = True
         self._config: dict = {}
-        self._cooldown = ProviderCooldownTracker()
+        self._cooldown = ProviderCooldownTracker(storage_path=_cooldown_state_path())
+        self._last_budget_routing: dict[str, Any] = {}
 
         # Local inference engine (for provider=local or hybrid)
         self._local_engine = None
@@ -1357,6 +1373,171 @@ class LLMProvider:
         """Accept external config (e.g. from ConfigLoader) for fallback routing."""
         self._config = config
 
+    @staticmethod
+    def _float_or_default(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _budget_snapshot(self) -> dict[str, Any]:
+        raw_cfg = getattr(self, "_config", {})
+        cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
+        raw_budget = os.environ.get(
+            "FERAL_LLM_DAILY_BUDGET_USD",
+            cfg.get("daily_budget_usd", 0.0),
+        )
+        raw_spend = os.environ.get(
+            "FERAL_LLM_DAILY_SPEND_USD",
+            cfg.get("daily_spend_usd", 0.0),
+        )
+        budget = max(0.0, self._float_or_default(raw_budget, 0.0))
+        spend = max(0.0, self._float_or_default(raw_spend, 0.0))
+        tight_ratio = self._float_or_default(
+            os.environ.get(
+                "FERAL_LLM_BUDGET_TIGHT_RATIO",
+                cfg.get("budget_tight_ratio", 0.25),
+            ),
+            0.25,
+        )
+        tight_ratio = min(1.0, max(0.0, tight_ratio))
+        remaining = budget - spend
+        headroom_ratio = (remaining / budget) if budget > 0 else 1.0
+        return {
+            "enabled": bool(budget > 0.0),
+            "daily_budget_usd": budget,
+            "daily_spend_usd": spend,
+            "remaining_usd": remaining,
+            "headroom_ratio": headroom_ratio,
+            "tight_ratio": tight_ratio,
+        }
+
+    @staticmethod
+    def _message_char_count(messages: list[dict]) -> int:
+        total = 0
+        for msg in messages or []:
+            content = msg.get("content") if isinstance(msg, dict) else ""
+            if isinstance(content, str):
+                total += len(content)
+                continue
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        total += len(str(part.get("text", "") or ""))
+                    else:
+                        total += len(str(part))
+        return total
+
+    def _estimate_tokens_for_budget(
+        self,
+        messages: list[dict],
+        kwargs: dict[str, Any],
+    ) -> tuple[int, int]:
+        prompt_chars = self._message_char_count(messages)
+        # Coarse estimate used for candidate ordering only.
+        prompt_tokens = max(1, int(prompt_chars / 4) + 1)
+        max_tokens = int(kwargs.get("max_tokens", 1024) or 1024)
+        completion_tokens = max(1, min(max_tokens, 4096))
+        return prompt_tokens, completion_tokens
+
+    def _pricing_for_model(self, provider_name: str, model: str) -> dict[str, float]:
+        if not model:
+            return {"input": 0.0, "output": 0.0}
+        pid = _CATALOG_PROVIDER_MAP.get(provider_name, provider_name)
+        try:
+            from providers.catalog import get_shared_catalog
+            adapter = get_shared_catalog().get_adapter(pid)
+        except Exception:
+            adapter = None
+        if adapter is None:
+            return {"input": 0.0, "output": 0.0}
+        try:
+            pricing = adapter.pricing_per_1k(model) or {}
+        except Exception:
+            pricing = {}
+        input_cost = max(0.0, self._float_or_default(pricing.get("input", 0.0), 0.0))
+        output_cost = max(0.0, self._float_or_default(pricing.get("output", 0.0), 0.0))
+        return {"input": input_cost, "output": output_cost}
+
+    def _estimate_candidate_cost_usd(
+        self,
+        provider_name: str,
+        config: dict,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> float:
+        model = str(config.get("model", "") or "")
+        if not model and provider_name == self.provider:
+            model = str(self.model or "")
+        pricing = self._pricing_for_model(provider_name, model)
+        if pricing["input"] <= 0.0 and pricing["output"] <= 0.0:
+            return 0.0
+        in_cost = (float(prompt_tokens) / 1000.0) * pricing["input"]
+        out_cost = (float(completion_tokens) / 1000.0) * pricing["output"]
+        return max(0.0, in_cost + out_cost)
+
+    def _route_candidates_with_budget(
+        self,
+        candidates: list[tuple[str, dict]],
+        messages: list[dict],
+        kwargs: dict[str, Any],
+    ) -> tuple[list[tuple[str, dict]], dict[str, Any]]:
+        snapshot = self._budget_snapshot()
+        if not snapshot["enabled"]:
+            return candidates, snapshot
+
+        prompt_tokens, completion_tokens = self._estimate_tokens_for_budget(messages, kwargs)
+        remaining = float(snapshot.get("remaining_usd", 0.0))
+        annotated: list[dict[str, Any]] = []
+        for idx, (provider_name, config) in enumerate(candidates):
+            estimated = self._estimate_candidate_cost_usd(
+                provider_name,
+                config,
+                prompt_tokens,
+                completion_tokens,
+            )
+            affordable = estimated <= 0.0 or remaining >= estimated
+            annotated.append({
+                "idx": idx,
+                "provider": provider_name,
+                "config": config,
+                "estimated_usd": estimated,
+                "affordable": affordable,
+            })
+
+        affordable = [row for row in annotated if row["affordable"]]
+        over_budget = [row for row in annotated if not row["affordable"]]
+
+        headroom_ratio = float(snapshot.get("headroom_ratio", 1.0))
+        tight_ratio = float(snapshot.get("tight_ratio", 0.25))
+        if affordable and headroom_ratio <= tight_ratio:
+            # When budget headroom is low, prefer the cheapest affordable
+            # provider first (ties preserve initial candidate order).
+            affordable.sort(key=lambda row: (row["estimated_usd"], row["idx"]))
+            ordered = affordable + over_budget
+        elif affordable:
+            # Normal mode: preserve configured provider priority, but defer
+            # over-budget candidates to the back of the queue.
+            ordered = affordable + over_budget
+        else:
+            # If every candidate is over budget, keep the system available
+            # by trying the cheapest option first instead of hard failing.
+            ordered = sorted(over_budget, key=lambda row: (row["estimated_usd"], row["idx"]))
+
+        routed = [(row["provider"], row["config"]) for row in ordered]
+        snapshot["prompt_tokens_estimate"] = prompt_tokens
+        snapshot["completion_tokens_estimate"] = completion_tokens
+        snapshot["candidate_costs"] = [
+            {
+                "provider": row["provider"],
+                "estimated_usd": row["estimated_usd"],
+                "affordable": row["affordable"],
+            }
+            for row in ordered
+        ]
+        snapshot["over_budget_providers"] = [row["provider"] for row in over_budget]
+        return routed, snapshot
+
     def set_catalog(self, catalog) -> None:
         """Attach the shared :class:`ProviderCatalog` for metadata lookups.
 
@@ -1669,6 +1850,12 @@ class LLMProvider:
         from observability.metrics import increment, measure
 
         candidates = self._build_candidate_list()
+        candidates, budget_ctx = self._route_candidates_with_budget(
+            candidates,
+            messages,
+            kwargs,
+        )
+        self._last_budget_routing = budget_ctx
         last_error: Optional[Exception] = None
 
         # When at least one supported fallback exists beyond the
@@ -1817,10 +2004,21 @@ class LLMProvider:
                 "supported": supported,
             })
         fallbacks = list(self._config.get("fallback_providers", [])) if isinstance(self._config, dict) else []
+        budget = self._budget_snapshot()
+        last_budget = getattr(self, "_last_budget_routing", {})
+        if isinstance(last_budget, dict) and last_budget:
+            budget["last_routing"] = {
+                "remaining_usd": last_budget.get("remaining_usd"),
+                "candidate_costs": last_budget.get("candidate_costs", []),
+                "over_budget_providers": last_budget.get("over_budget_providers", []),
+                "prompt_tokens_estimate": last_budget.get("prompt_tokens_estimate", 0),
+                "completion_tokens_estimate": last_budget.get("completion_tokens_estimate", 0),
+            }
         return {
             "active": primary,
             "candidates": candidates,
             "fallback_providers": fallbacks,
+            "budget": budget,
             # Total ready-to-serve = supported AND has key AND not in cooldown.
             # Unsupported candidates were counted as "available" before W1 A3
             # whenever a lookalike env var happened to be set, inflating the
