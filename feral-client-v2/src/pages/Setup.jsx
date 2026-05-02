@@ -52,6 +52,29 @@ function statusLabel(s) {
   return s || '';
 }
 
+function formatApiDetail(body, fallback = 'request failed') {
+  if (!body || typeof body !== 'object') return fallback;
+  const detail = body.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail.trim();
+  if (detail && typeof detail === 'object') {
+    const message = typeof detail.message === 'string' ? detail.message.trim() : '';
+    const remediation = typeof detail.remediation === 'string' ? detail.remediation.trim() : '';
+    const code = typeof detail.code === 'string' ? detail.code.trim() : '';
+    if (message && remediation) return `${message} ${remediation}`;
+    if (message) return message;
+    if (remediation) return remediation;
+    if (code) return code;
+  }
+  if (typeof body.error === 'string' && body.error.trim()) return body.error.trim();
+  return fallback;
+}
+
+const ACCESS_MODE_LABELS = {
+  local: 'Same WiFi',
+  remote: 'Anywhere',
+  localhost: 'This Mac only',
+};
+
 
 export default function Setup() {
   const navigate = useNavigate();
@@ -236,21 +259,33 @@ export default function Setup() {
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
-        setPairError(err?.detail || `failed to persist mode (${r.status})`);
+        setPairError(formatApiDetail(err, `failed to persist mode (${r.status})`));
         return;
       }
       if (mode === 'localhost') {
         // Mode B does not emit a pair URL — the user is opting out
-        // of phone pairing for now. The Settings → Access panel can
-        // switch them later.
+        // of phone pairing for now.
         return;
+      }
+      if (mode === 'remote') {
+        // Attempt full remote setup from UI so users don't have to drop to
+        // terminal by default. If this fails, we surface the server-provided
+        // remediation (install/login/funnel URL).
+        const remoteResp = await apiFetch('/api/access/remote-up', {
+          method: 'POST',
+        });
+        if (!remoteResp.ok) {
+          const err = await remoteResp.json().catch(() => ({}));
+          setPairError(formatApiDetail(err, `failed to enable Anywhere mode (${remoteResp.status})`));
+          return;
+        }
       }
       const urlResp = await apiFetch('/api/devices/pair/url?name=phone-from-setup', {
         method: 'GET',
       });
       if (!urlResp.ok) {
         const err = await urlResp.json().catch(() => ({}));
-        setPairError(err?.detail || `pair URL unavailable (${urlResp.status})`);
+        setPairError(formatApiDetail(err, `pair URL unavailable (${urlResp.status})`));
         return;
       }
       const body = await urlResp.json();
@@ -731,13 +766,13 @@ function PairStep({ choice, onPick, payload, error, busy }) {
       id: 'localhost',
       icon: <Laptop2 size={20} />,
       title: 'This Mac only',
-      blurb: 'Skip phone pairing for now. You can switch later in Settings → Access.',
+      blurb: 'Skip phone pairing for now. Re-run setup later when you want to pair.',
     },
     {
       id: 'remote',
       icon: <Globe size={20} />,
       title: 'Anywhere',
-      blurb: 'Tailscale-encrypted private network. One-time login on this Mac and on your phone.',
+      blurb: 'Tailscale-encrypted private network. Setup will try to configure this automatically.',
     },
   ];
 
@@ -745,7 +780,7 @@ function PairStep({ choice, onPick, payload, error, busy }) {
     <>
       <Pane title="Pair your phone" actions={<Smartphone size={16} />}>
         <p className="v2-p v2-p--muted">
-          Where do you want to pair your phone from? You can change this later in Settings → Access.
+          Where do you want to pair your phone from?
         </p>
         <div className="v2-skills-grid" data-testid="v2-setup-pair-modes" style={{ marginTop: 12 }}>
           {cards.map((c) => {
@@ -811,7 +846,7 @@ function PairStep({ choice, onPick, payload, error, busy }) {
 
             {payload.diagnostic && (
               <div className="v2-p v2-p--tiny v2-p--muted">
-                <strong>Reachability:</strong> mode = <code>{payload.mode}</code>; brain advertised{' '}
+                <strong>Reachability:</strong> mode = <code>{ACCESS_MODE_LABELS[payload.mode] || payload.mode}</code>; brain advertised{' '}
                 <code>{payload.diagnostic.advertised_lan_ip || '—'}</code>.
                 <ul style={{ marginTop: 4, paddingLeft: 18 }}>
                   {(payload.diagnostic.honest_caveats || []).map((c, i) => (
@@ -823,7 +858,6 @@ function PairStep({ choice, onPick, payload, error, busy }) {
 
             <div className="v2-p v2-p--tiny v2-p--muted">
               Token expires {payload.expires ? new Date(payload.expires * 1000).toLocaleString() : '—'}.
-              The QR for this URL is at <code>/api/devices/pair/qr?mode=web</code>.
             </div>
           </div>
         </Pane>
@@ -832,8 +866,8 @@ function PairStep({ choice, onPick, payload, error, busy }) {
       {choice === 'localhost' && (
         <Pane>
           <p className="v2-p v2-p--muted">
-            Pairing skipped. The dashboard's "Pair Device" button stays disabled until
-            you switch to <strong>Same WiFi</strong> or <strong>Anywhere</strong> in Settings → Access.
+            Pairing skipped. You can pair later by re-running setup and choosing
+            <strong> Same WiFi</strong> or <strong>Anywhere</strong>.
           </p>
         </Pane>
       )}
@@ -863,7 +897,7 @@ function DoneStep({ saved, error, pairChoice }) {
         </p>
         {pairChoice === 'localhost' && (
           <p className="v2-p v2-p--muted" style={{ marginTop: 10 }}>
-            You skipped phone pairing. Switch to LAN or Anywhere in Settings → Access whenever you're ready.
+            You skipped phone pairing. Re-run setup any time to switch to Same WiFi or Anywhere.
           </p>
         )}
         {error && (

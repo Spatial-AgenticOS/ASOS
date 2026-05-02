@@ -71,6 +71,9 @@ FERAL merges configuration from four sources, each overriding the previous:
     "port": 9090,
     "host": "127.0.0.1"
   },
+  "access": {
+    "pairing_mode": "localhost"
+  },
   "memory": {
     "backend": "sqlite",
     "vector_store": "chroma",
@@ -131,6 +134,8 @@ export OPENROUTER_API_KEY=sk-or-...
 | `voice.enabled` | bool | `true` | Enable voice pipeline |
 | `voice.wake_word` | string | `"hey feral"` | Trigger phrase for hands-free activation |
 | `brain.port` | int | `9090` | Brain WebSocket/API port |
+| `brain.host` | string | `"127.0.0.1"` | Bind host (`0.0.0.0` if you need LAN phone reachability) |
+| `access.pairing_mode` | string | `"localhost"` | `localhost`, `local`, or `remote` |
 | `ui.theme` | string | `"dark"` | Web dashboard theme (`dark` or `light`) |
 | `memory.backend` | string | `"sqlite"` | Storage backend for episodic memory |
 | `hardware.ble_enabled` | bool | `true` | Enable Bluetooth device scanning |

@@ -1,70 +1,56 @@
 ---
-title: "FERAL — Unleashed AI"
+title: "FERAL Overview"
 sidebarTitle: "Introduction"
-description: "One local brain for every device you own. Open-source AI for your entire physical and digital world."
+description: "What FERAL is, what it controls today, and how to get started without guesswork."
 ---
 
 <img src="/images/feral-banner.png" alt="FERAL" />
 
-# What is FERAL?
+# What FERAL is
 
-FERAL is **one local brain for every device you own**. It connects to every device, every app, and every sensor in your physical and digital life. It runs locally on your machine, learns your baseline across all your devices, and proactively manages your world through natural language.
+FERAL is a local runtime that coordinates AI decisions across your software and physical devices.
 
-**Who is it for?** Developers and power users who want an AI that actually understands their life — not just answers questions, but connects to their wristband, controls their home, automates their computer, and acts on their behalf.
+- Brain runtime: tool orchestration, memory, policies, and device/session routing.
+- Web UI: setup, pairing, chat, SDUI surfaces, and operational visibility.
+- Node/device paths: phone/browser nodes and daemon bridges for hardware control.
 
-**What makes it different?**
+The product is strongest when you treat it as a supervisor layer over existing systems (LLM providers, channels, automation targets, and hardware adapters), not as a cloud replacement SaaS.
 
-- **Spatial**: connects to hardware (wristbands, glasses, robots, smart home) and software (calendar, email, Slack, Spotify) simultaneously
-- **Agentic**: doesn't wait for commands — observes your baseline, detects anomalies, acts proactively
-- **OS-level**: memory, identity, autonomy levels, voice, GenUI — not a chatbot wrapper
-- **Local-first**: all data and inference on your machine, zero cloud dependency
-- **Open source**: brain, client, mobile bridges, SDKs, desktop app — all Apache 2.0
+## What it can do now
 
-## Quick start
+- Coordinate actions across chat, tools, channels, and connected devices from one runtime.
+- Keep persistent memory and state in your local FERAL home.
+- Pair phones and browser nodes over LAN or remote tunnel modes.
+- Render server-driven UI (Gen-UI/SDUI) as structured components in the web client.
+- Enforce explicit action paths (including confirmation gates where configured).
 
-<CodeGroup>
-```bash One-liner
-curl -sSL https://raw.githubusercontent.com/FERAL-AI/FERAL-AI/main/scripts/install.sh | bash
-```
+## Connectivity model
 
-```bash Clone
-git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
-make install
-feral start
-```
+FERAL has three pairing/access modes:
 
-```bash Docker
-git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
-docker compose up
-```
-</CodeGroup>
+- **Same WiFi** (`local`): pair from phone when both devices share a network.
+- **Anywhere** (`remote`): pair/use through Tailscale Funnel.
+- **This Mac only** (`localhost`): no phone pairing yet.
 
-## What it connects to
+See [Quickstart](/quickstart) for first run and [Pairing & Access](/guides/pairing-access) for exact LAN vs Anywhere steps.
 
-| Category | Devices / Services | Data |
-|----------|-------------------|------|
-| **Wearables** | Whoop, Oura Ring, BLE wristbands | Heart rate, sleep, SpO2, skin temp |
-| **Smart Home** | Lights, thermostat, locks, appliances | Direct local mesh control |
-| **Smart Glasses** | Video stream, AR overlay | Scene understanding, hands-free |
-| **Robots** | ROS, serial, I2C, any actuator | Motor control, sensor fusion |
-| **Computer** | Screen, browser, files, terminal | Capture, automation, file ops |
-| **Phone** | iOS/Android bridges | Push notifications, location, camera |
-| **Software** | Calendar, email, Slack, Spotify, Notion | Morning briefings, auto-responses |
-| **Voice** | Wake word, 3 providers | Sub-200ms, interrupt-and-resume |
+## Gen-UI in one paragraph
+
+Gen-UI is server-driven UI. The brain emits structured UI payloads and patches; the client renders supported components. This is controlled, contract-based rendering, not arbitrary HTML generation.
 
 ## Start here
 
 <CardGroup cols={2}>
-  <Card title="Installation" icon="download" href="/getting-started/installation">
-    Three install paths with step-by-step guides.
+  <Card title="Quickstart" icon="play" href="/quickstart">
+    PyPI-first install, first run, and first pairing flow.
+  </Card>
+  <Card title="Pairing & Access" icon="wifi" href="/guides/pairing-access">
+    Same WiFi vs Anywhere, with exact commands and failure recovery.
+  </Card>
+  <Card title="Gen-UI Guide" icon="sparkles" href="/guides/genui">
+    What SDUI does in this repo and where the current limits are.
   </Card>
   <Card title="Architecture" icon="sitemap" href="/architecture">
-    How the brain, clients, and hardware mesh work together.
-  </Card>
-  <Card title="Writing Skills" icon="puzzle-piece" href="/guides/skills">
-    Build plugins that extend FERAL's capabilities.
-  </Card>
-  <Card title="Hardware Mesh" icon="microchip" href="/guides/hardware">
-    Connect physical devices via the HUP protocol.
+    Runtime components and how requests flow through the brain.
   </Card>
 </CardGroup>

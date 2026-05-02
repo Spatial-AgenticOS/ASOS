@@ -8,9 +8,9 @@ description: "Frequently asked questions about FERAL — what it is, how it work
 
 <AccordionGroup>
   <Accordion title="What is FERAL?">
-    FERAL is **one local brain for every device you own** — an open-source AI that connects to every device and app in your life. It runs locally on your machine and integrates with wearables (wristbands, smart glasses), smart-home devices, your computer, your phone, and software like calendar, email, and Slack.
+    FERAL is a local-first AI runtime that coordinates tools, memory, channels, and device actions from one brain process.
 
-    Unlike chatbots, FERAL has persistent memory, proactive intelligence (it acts without being asked), three autonomy levels, a voice pipeline with sub-200ms latency, and a hardware mesh that controls physical devices.
+    It can run only on your machine, or integrate with cloud providers depending on your chosen setup.
   </Accordion>
 
   <Accordion title="How is FERAL different from ChatGPT or Siri?">
@@ -26,24 +26,27 @@ description: "Frequently asked questions about FERAL — what it is, how it work
   </Accordion>
 
   <Accordion title="How is FERAL different from Open Interpreter or other agent frameworks?">
-    Open Interpreter and similar tools are **terminal-based coding assistants** — they execute code on your machine via an LLM. FERAL is a **full operating system layer**:
-
-    - Hardware mesh with direct device control
-    - Real-time biometric streaming from wearables
-    - Proactive intelligence engine (rule + LLM hybrid)
-    - Voice pipeline with wake word detection
-    - Server-driven UI generation
-    - Digital twin that models your decisions
-    - Three enforced autonomy levels
-    - Persistent 4-tier memory with knowledge graph
-
-    FERAL isn't a better terminal agent — it's a different category.
+    FERAL focuses on operational orchestration: one runtime for chat, tools, memory, pairing, channels, and device control paths. It is not only a terminal code assistant.
   </Accordion>
 </AccordionGroup>
 
 ## Privacy & Security
 
 <AccordionGroup>
+  <Accordion title="How do I pair from Anywhere (outside my WiFi)?">
+    Choose **Anywhere** during setup, then run:
+
+    ```bash
+    feral access remote-up
+    ```
+
+    This enables remote pairing through Tailscale Funnel. Check status with:
+
+    ```bash
+    feral access status
+    ```
+  </Accordion>
+
   <Accordion title="What data leaves my machine?">
     **Only LLM API calls** — and only if you choose a cloud provider (Anthropic, OpenAI, etc.). The text of your query is sent to the provider for inference.
 
@@ -70,19 +73,9 @@ description: "Frequently asked questions about FERAL — what it is, how it work
 
 <AccordionGroup>
   <Accordion title="Which LLM models are supported?">
-    FERAL supports 9 LLM providers out of the box:
+    FERAL supports multiple cloud and local providers. The exact live catalog can change by release and provider API.
 
-    | Provider | Models | Local? |
-    |----------|--------|--------|
-    | **Ollama** | Llama 3, Mistral, Phi-3, CodeLlama, any GGUF | Yes |
-    | **Anthropic** | Claude Opus, Sonnet, Haiku | No |
-    | **OpenAI** | GPT-4o, GPT-4, GPT-3.5 | No |
-    | **OpenRouter** | Any model on OpenRouter | No |
-    | **Google** | Gemini Pro, Gemini Flash | No |
-    | **Groq** | Llama 3, Mixtral (fast inference) | No |
-    | **Together** | Various open models | No |
-    | **Fireworks** | Various open models | No |
-    | **Local GGUF** | Any GGUF via llama.cpp | Yes |
+    For current provider/model behavior, check Settings in the running dashboard or the provider docs in this site.
   </Accordion>
 
   <Accordion title="Can I use FERAL without internet (fully offline)?">
@@ -132,7 +125,7 @@ description: "Frequently asked questions about FERAL — what it is, how it work
     ```bash
     git clone https://github.com/FERAL-AI/FERAL-AI.git && cd FERAL-AI
     cd feral-core && pip install -e ".[llm,dev]"
-    cd ../feral-client && npm install && npm run dev
+    cd ../feral-client-v2 && npm install && npm run dev
     ```
 
     Read the [CONTRIBUTING.md](https://github.com/FERAL-AI/FERAL-AI/blob/main/CONTRIBUTING.md) for coding standards, PR guidelines, and architecture docs. Issues labeled `good first issue` are a great starting point.

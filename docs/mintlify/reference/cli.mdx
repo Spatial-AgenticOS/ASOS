@@ -139,6 +139,7 @@ feral pair [options]
 | `--name <name>` | Friendly name for the new device (default: "unnamed") |
 | `--list` | List all paired devices |
 | `--revoke <device_id>` | Revoke a device by its ID |
+| `--prune <seconds>` | Revoke unclaimed tokens older than N seconds (`0` = all) |
 
 <CodeGroup>
 ```bash Pair a new device
@@ -149,6 +150,35 @@ feral pair --list
 ```
 ```bash Revoke a device
 feral pair --revoke abc123def456
+```
+```bash Prune unclaimed tokens
+feral pair --prune 0
+```
+</CodeGroup>
+
+### `feral access`
+
+Manage pairing access mode and remote tunnel state.
+
+```bash
+feral access <action>
+```
+
+| Action | Description |
+|--------|-------------|
+| `status` | Show pairing mode + Tailscale status |
+| `remote-up` | Enable Tailscale Funnel and switch to remote pairing |
+| `remote-down` | Disable Funnel and switch back to localhost mode |
+
+<CodeGroup>
+```bash Show current mode
+feral access status
+```
+```bash Enable Anywhere mode
+feral access remote-up
+```
+```bash Disable Anywhere mode
+feral access remote-down
 ```
 </CodeGroup>
 

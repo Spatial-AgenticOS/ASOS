@@ -122,14 +122,28 @@ curl -X POST http://localhost:9090/api/identity/twin/ask \
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/devices/connected` | List all connected devices with types and metrics |
-| `GET` | `/api/devices/paired` | List all paired edge-node devices |
-| `POST` | `/api/devices/pair` | Pair a new edge-node device (returns device token) |
+| `GET` | `/api/devices/paired` | List paired devices (claimed by default; `include_unclaimed=true` optional) |
+| `POST` | `/api/devices/pair` | Mint daemon/browser pairing token |
+| `GET` | `/api/devices/pair/url` | Mint one-time pair URL payload |
+| `GET` | `/api/devices/pair/qr` | Render pair payload as QR image |
+| `GET` | `/api/devices/pair/check` | Check token state (and PIN requirement) |
+| `POST` | `/api/devices/pair/verify_pin` | Verify pairing PIN |
+| `POST` | `/api/devices/pair/complete` | Complete phone/browser pairing |
+| `POST` | `/api/devices/pair/prune` | Revoke unclaimed tokens in bulk |
 | `POST` | `/api/devices/handoff` | Initiate a session handoff between devices |
 | `DELETE` | `/api/devices/{device_id}` | Revoke (un-pair) a device |
 | `GET` | `/api/nodes/health` | All node health status with heartbeat freshness |
 | `GET` | `/api/commands/recent` | Recent commands with full lifecycle state |
 | `GET` | `/api/commands/{command_id}` | Single command detail including state history |
 | `POST` | `/api/proactive/dismiss` | Dismiss a proactive alert (learns from it) |
+
+## Access Mode & Remote Reachability
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/access/status` | Current pairing mode + Tailscale/Funnel status |
+| `POST` | `/api/access/remote-up` | Enable remote mode and Tailscale Funnel |
+| `POST` | `/api/access/remote-down` | Disable remote mode and return to localhost mode |
 
 ## Channels
 
