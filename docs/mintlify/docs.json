@@ -153,7 +153,9 @@
           "reference/websocket",
           "reference/environment",
           "reference/cli",
-          "reference/a2ui-schema"
+          "reference/a2ui-schema",
+          "providers/model-classes",
+          "providers/reasoning-models"
         ]
       },
       {

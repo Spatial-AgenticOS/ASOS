@@ -145,6 +145,94 @@ curl -X POST http://localhost:9090/api/identity/twin/ask \
 | `POST` | `/api/access/remote-up` | Enable remote mode and Tailscale Funnel |
 | `POST` | `/api/access/remote-down` | Disable remote mode and return to localhost mode |
 
+## Approvals (Execution Inbox)
+
+The approval inbox lets a non-chat client (web UI, CLI, mobile, automation) resolve pending tool-execution approvals without having to type an acknowledgement into a chat session. A pending request is created by the orchestrator whenever `enforce_safety()` blocks a tool call (see [Autonomy Levels](/guides/autonomy)).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/approvals` | List pending tool-approval requests. Optional query params: `session_id` (filter), `limit` (1–500, default 100). |
+| `POST` | `/api/approvals/{request_id}/approve` | Approve a pending request and execute the tool. |
+| `POST` | `/api/approvals/{request_id}/reject` | Reject a pending request without executing. |
+
+Both `approve` and `reject` accept an optional JSON body:
+
+```json
+{ "session_id": "s-abc123" }
+```
+
+When `session_id` is provided it must match the session that originated the request, or the call returns `409 session_mismatch`.
+
+### Example: list pending approvals
+
+```bash
+curl "http://localhost:9090/api/approvals?session_id=s-abc123&limit=50"
+```
+
+```json
+{
+  "count": 1,
+  "approvals": [
+    {
+      "request_id": "apr_01HXYZ...",
+      "session_id": "s-abc123",
+      "tool_name": "browser__navigate",
+      "args": { "url": "https://example.com" },
+      "safety_level": "privileged",
+      "created_at": 1746230412.81,
+      "status": "pending"
+    }
+  ]
+}
+```
+
+### Example: approve
+
+```bash
+curl -X POST "http://localhost:9090/api/approvals/apr_01HXYZ.../approve" \
+  -H "Content-Type: application/json" \
+  -d '{ "session_id": "s-abc123" }'
+```
+
+```json
+{
+  "success": true,
+  "status": "approved",
+  "request_id": "apr_01HXYZ...",
+  "session_id": "s-abc123",
+  "tool_name": "browser__navigate",
+  "summary": "Navigated to https://example.com",
+  "result": { "ok": true }
+}
+```
+
+### Example: reject
+
+```bash
+curl -X POST "http://localhost:9090/api/approvals/apr_01HXYZ.../reject" \
+  -H "Content-Type: application/json" \
+  -d '{ "session_id": "s-abc123" }'
+```
+
+```json
+{
+  "success": true,
+  "status": "rejected",
+  "request_id": "apr_01HXYZ...",
+  "session_id": "s-abc123",
+  "tool_name": "browser__navigate"
+}
+```
+
+### Status codes
+
+| Code | Meaning |
+|------|---------|
+| `200` | Resolved (approved or rejected). |
+| `404` | Unknown `request_id` (already resolved, expired, or never existed). |
+| `409` | `session_mismatch` — supplied `session_id` does not match the pending request. |
+| `503` | Orchestrator or tool runner not initialised yet. |
+
 ## Channels
 
 | Method | Path | Description |

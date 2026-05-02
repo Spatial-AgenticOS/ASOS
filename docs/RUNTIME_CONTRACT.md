@@ -56,6 +56,17 @@ The server creates `FERAL_HOME` and `memory.db` on first startup if they do not 
 
 Provider presets are defined in `feral-core/agents/llm_provider.py` (`PROVIDER_PRESETS`). Apply with `POST /api/llm/presets/apply`. The `ollama_vision` preset activates the local VLM path (model `llava`).
 
+### LLM Failover and Spend Controls
+
+| Variable | Default | Purpose |
+|:---------|:--------|:--------|
+| `FERAL_LLM_COOLDOWN_STATE_PATH` | `<FERAL_HOME>/llm_provider_cooldowns.json` | Persisted cooldown circuit state. Survives restarts so a 24h `auth_permanent` lock-out is not reset by a redeploy. |
+| `FERAL_LLM_DAILY_BUDGET_USD` | `0` | Daily spend ceiling in USD. `0` disables budget-aware routing. Mirrors `llm.daily_budget_usd` in settings. |
+| `FERAL_LLM_DAILY_SPEND_USD` | `0` | Spend already accounted for today. Mirrors `llm.daily_spend_usd`. |
+| `FERAL_LLM_BUDGET_TIGHT_RATIO` | `0.25` | Headroom fraction below which affordable candidates are reordered cheapest-first. Mirrors `llm.budget_tight_ratio`. |
+
+The `GET /api/llm/health` snapshot now includes a `budget` block (`daily_budget_usd`, `daily_spend_usd`, `remaining_usd`, `headroom_ratio`, `tight_ratio`, plus per-candidate cost estimates from the most recent dispatch) when budget routing is enabled.
+
 ## Audio Pipeline
 
 | Variable | Default | Purpose |
@@ -85,6 +96,18 @@ When vision is requested on a model that does not support it, the provider retur
 | `NODE_API_KEY` | `""` | Daemon WebSocket auth token |
 | `FERAL_MAX_TIER` | `active` | Execution sandbox max tier |
 | `FERAL_KEY_*` | none | Blind vault keys (never exposed to the LLM) |
+
+### Docker Sandbox Hardening
+
+Defaults applied to every container started by `security/docker_sandbox.py`: `--cap-drop ALL`, `--security-opt no-new-privileges`, `--pids-limit 128`, `--read-only` root with a 128 MB tmpfs `/tmp`, `--network none` unless network is explicitly requested, and the unprivileged `sandbox` user inside the image.
+
+| Variable | Default | Purpose |
+|:---------|:--------|:--------|
+| `FERAL_SANDBOX_PIDS_LIMIT` | `128` | `--pids-limit` value (floor `16`). |
+| `FERAL_SANDBOX_CAP_DROP` | `ALL` | `--cap-drop` value. Empty string skips the flag. |
+| `FERAL_SANDBOX_NO_NEW_PRIVILEGES` | `true` | Apply `--security-opt no-new-privileges`. |
+| `FERAL_SANDBOX_SECCOMP_PROFILE` | — | Path to a custom seccomp JSON profile. The literal `unconfined` is rejected. |
+| `FERAL_SANDBOX_PREFER_REGISTRY` | `false` | Resolve sandbox image tag from the published registry first. |
 
 ## External Services
 

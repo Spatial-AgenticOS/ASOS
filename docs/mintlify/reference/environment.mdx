@@ -22,6 +22,19 @@ Environment variables are the highest-priority configuration source — they ove
 | `FERAL_LLM_TEMPERATURE` | `0.7` | Default sampling temperature |
 | `FERAL_LLM_MAX_TOKENS` | `4096` | Maximum tokens per response |
 
+### LLM failover & spend controls
+
+These control the resilience layer in `agents/llm_provider.py`. They are optional — leaving every value at its default keeps the historical primary-then-fallback ordering.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_LLM_COOLDOWN_STATE_PATH` | `<FERAL_HOME>/llm_provider_cooldowns.json` | Override path for the persisted provider cooldown / circuit state. Survives process restarts so a 24h `auth_permanent` lock-out is not reset by a redeploy. |
+| `FERAL_LLM_DAILY_BUDGET_USD` | `0` | Daily spend ceiling, in USD. `0` disables budget-aware routing. Overrides `llm.daily_budget_usd` in `settings.json`. |
+| `FERAL_LLM_DAILY_SPEND_USD` | `0` | Spend already accounted for today, in USD. Used to compute remaining headroom. Overrides `llm.daily_spend_usd`. |
+| `FERAL_LLM_BUDGET_TIGHT_RATIO` | `0.25` | Fraction of remaining budget below which the failover loop reorders affordable candidates by cheapest-first instead of configured priority. Clamped to `[0.0, 1.0]`. Overrides `llm.budget_tight_ratio`. |
+
+When budget routing is enabled, `GET /api/llm/health` (the v2 "Fallbacks" card source) includes a `budget` block with `daily_budget_usd`, `daily_spend_usd`, `remaining_usd`, `headroom_ratio`, `tight_ratio`, and per-candidate cost estimates from the most recent dispatch.
+
 ## Core Settings
 
 | Variable | Default | Description |
@@ -42,6 +55,18 @@ Environment variables are the highest-priority configuration source — they ove
 | `FERAL_SANDBOX_ENABLED` | `true` | Enable WASM sandbox for skill execution |
 | `FERAL_APPROVAL_TIMEOUT` | `30` | Seconds to wait for user approval before timing out |
 | `FERAL_VAULT_KEY` | — | Override vault encryption key (not recommended) |
+
+### Docker sandbox hardening
+
+These tune the runtime flags applied to every container started by `security/docker_sandbox.py`. Defaults are the safe values — only override when you have a concrete reason.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FERAL_SANDBOX_PIDS_LIMIT` | `128` | Max processes inside the container (`--pids-limit`). Floor of `16` is enforced. |
+| `FERAL_SANDBOX_CAP_DROP` | `ALL` | Linux capabilities to drop (`--cap-drop`). Set to empty string to skip the flag entirely (not recommended). |
+| `FERAL_SANDBOX_NO_NEW_PRIVILEGES` | `true` | Apply `--security-opt no-new-privileges`. Accepts `1/0/true/false/yes/no/on/off`. |
+| `FERAL_SANDBOX_SECCOMP_PROFILE` | — | Path to a custom seccomp JSON profile applied via `--security-opt seccomp=…`. The literal value `unconfined` is rejected with a warning. |
+| `FERAL_SANDBOX_PREFER_REGISTRY` | `false` | When `true`, resolve the sandbox image tag from the published registry first instead of the locally-built tag. |
 
 ## Voice
 
