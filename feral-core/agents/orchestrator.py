@@ -535,6 +535,110 @@ class Orchestrator:
             "deny",
         }
 
+    async def _execute_approved_pending_tool(
+        self,
+        session_id: str,
+        *,
+        request_id: str,
+        tool_name: str,
+        args: dict,
+    ) -> dict:
+        """Execute a previously-approved pending tool call."""
+        self.tool_runner.grant_session_approval(tool_name, session_id)
+        tool_call = {
+            "name": tool_name,
+            "args": args or {},
+            "id": request_id,
+        }
+        await self._emit_tool_start(session_id, tool_call)
+        t_start = time.time()
+        result_data = await self._execute_tool_call_for_llm(session_id, tool_call, [])
+        latency_ms = (time.time() - t_start) * 1000
+        await self._emit_tool_result(session_id, tool_call, result_data, latency_ms)
+        await self._try_genui_for_result(session_id, tool_call, result_data)
+        summary = self._summarize_action_result(tool_call, result_data)
+        await self._send_text(session_id, summary)
+        if self.memory:
+            self.memory.working_push(
+                session_id,
+                {"role": "assistant", "text": summary[:300]},
+            )
+        return {
+            "status": "approved",
+            "request_id": request_id,
+            "session_id": session_id,
+            "tool_name": tool_name,
+            "args": args or {},
+            "summary": summary,
+            "result": result_data,
+        }
+
+    async def resolve_tool_approval_request(
+        self,
+        request_id: str,
+        *,
+        approved: bool,
+        session_id: str | None = None,
+        actor: str = "api",
+    ) -> dict:
+        """Resolve a pending tool approval request by id.
+
+        Returns a status payload:
+          * ``{"status": "not_found"}``
+          * ``{"status": "session_mismatch", ...}``
+          * ``{"status": "rejected", ...}``
+          * ``{"status": "approved", ...}`` (includes execution summary/result)
+        """
+        pending = self.tool_runner.get_pending(request_id)
+        if not pending:
+            return {"status": "not_found", "request_id": request_id}
+
+        pending_session = str(pending.get("session_id", "") or "")
+        effective_session = str(session_id or pending_session)
+        if effective_session != pending_session:
+            return {
+                "status": "session_mismatch",
+                "request_id": request_id,
+                "session_id": effective_session,
+                "pending_session_id": pending_session,
+            }
+
+        tool_name = str(pending.get("tool_name", "") or "")
+        args = pending.get("args") or {}
+        if not tool_name:
+            self.tool_runner.deny_pending(request_id, session_id=effective_session)
+            return {
+                "status": "not_found",
+                "request_id": request_id,
+                "session_id": effective_session,
+            }
+
+        if not approved:
+            denied = self.tool_runner.deny_pending(request_id, session_id=effective_session)
+            if denied is None:
+                return {"status": "not_found", "request_id": request_id}
+            await self._send_text(effective_session, f"Cancelled `{tool_name}`.")
+            return {
+                "status": "rejected",
+                "request_id": request_id,
+                "session_id": effective_session,
+                "tool_name": tool_name,
+                "resolved_by": actor,
+            }
+
+        accepted = self.tool_runner.approve_pending(
+            request_id,
+            session_id=effective_session,
+        )
+        if accepted is None:
+            return {"status": "not_found", "request_id": request_id}
+        return await self._execute_approved_pending_tool(
+            effective_session,
+            request_id=request_id,
+            tool_name=tool_name,
+            args=args,
+        )
+
     async def _maybe_handle_pending_tool_approval_text(
         self,
         session_id: str,
@@ -554,44 +658,28 @@ class Orchestrator:
             return False
 
         if self.refusal_handler.is_ack_execution(text):
-            approved = self.tool_runner.pop_latest_pending_for_session(session_id)
-            if not approved:
+            req_id = str(pending.get("request_id", "") or "")
+            if not req_id:
                 return False
-            tool_name = str(approved.get("tool_name", ""))
-            args = approved.get("args") or {}
-            if not tool_name:
-                return False
-
-            # Persist session-scoped grant so the re-run below does not
-            # trip the same gate again.
-            self.tool_runner.grant_session_approval(tool_name, session_id)
-            tool_call = {
-                "name": tool_name,
-                "args": args,
-                "id": str(approved.get("request_id", "")),
-            }
-            await self._emit_tool_start(session_id, tool_call)
-            t_start = time.time()
-            result_data = await self._execute_tool_call_for_llm(session_id, tool_call, [])
-            latency_ms = (time.time() - t_start) * 1000
-            await self._emit_tool_result(session_id, tool_call, result_data, latency_ms)
-            await self._try_genui_for_result(session_id, tool_call, result_data)
-            summary = self._summarize_action_result(tool_call, result_data)
-            await self._send_text(session_id, summary)
-            if self.memory:
-                self.memory.working_push(
-                    session_id,
-                    {"role": "assistant", "text": summary[:300]},
-                )
-            return True
+            outcome = await self.resolve_tool_approval_request(
+                req_id,
+                approved=True,
+                session_id=session_id,
+                actor="chat_text",
+            )
+            return outcome.get("status") == "approved"
 
         if self._is_reject_execution_ack(text):
-            denied = self.tool_runner.pop_latest_pending_for_session(session_id)
-            if not denied:
+            req_id = str(pending.get("request_id", "") or "")
+            if not req_id:
                 return False
-            tool_name = str(denied.get("tool_name", "that action"))
-            await self._send_text(session_id, f"Cancelled `{tool_name}`.")
-            return True
+            outcome = await self.resolve_tool_approval_request(
+                req_id,
+                approved=False,
+                session_id=session_id,
+                actor="chat_text",
+            )
+            return outcome.get("status") == "rejected"
 
         return False
 

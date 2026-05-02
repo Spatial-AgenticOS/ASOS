@@ -180,6 +180,23 @@ class ToolRunner:
         rows.sort(key=lambda p: float(p.get("created_at", 0.0)))
         return rows
 
+    def list_pending(self, *, session_id: Optional[str] = None, limit: int = 100) -> list[dict]:
+        """Return pending approvals, optionally filtered by session."""
+        rows = list(self._pending_approvals.values())
+        if session_id:
+            rows = [p for p in rows if p.get("session_id") == session_id]
+        rows.sort(key=lambda p: float(p.get("created_at", 0.0)))
+        if limit > 0:
+            rows = rows[:limit]
+        return [dict(p) for p in rows]
+
+    def get_pending(self, request_id: str) -> Optional[dict]:
+        """Return a copy of a pending approval by id, if present."""
+        pending = self._pending_approvals.get(request_id)
+        if pending is None:
+            return None
+        return dict(pending)
+
     def latest_pending_for_session(self, session_id: str) -> Optional[dict]:
         rows = self.pending_for_session(session_id)
         return rows[-1] if rows else None
@@ -197,19 +214,25 @@ class ToolRunner:
         """Persist a per-session approval used to execute a confirmed call."""
         self._approval_mgr.grant_approval(tool_name, session_id, scope="session")
 
-    def approve_pending(self, request_id: str) -> Optional[dict]:
+    def approve_pending(self, request_id: str, *, session_id: Optional[str] = None) -> Optional[dict]:
         """Approve a pending request; returns tool_name + args for re-execution."""
-        pending = self._pending_approvals.pop(request_id, None)
+        pending = self._pending_approvals.get(request_id)
         if pending is None:
             return None
+        if session_id and pending.get("session_id") != session_id:
+            return None
+        self._pending_approvals.pop(request_id, None)
         logger.info(f"Approved pending request {request_id} for {pending['tool_name']}")
         return {"tool_name": pending["tool_name"], "args": pending["args"]}
 
-    def deny_pending(self, request_id: str) -> Optional[dict]:
+    def deny_pending(self, request_id: str, *, session_id: Optional[str] = None) -> Optional[dict]:
         """Deny and remove a pending request."""
-        pending = self._pending_approvals.pop(request_id, None)
+        pending = self._pending_approvals.get(request_id)
         if pending is None:
             return None
+        if session_id and pending.get("session_id") != session_id:
+            return None
+        self._pending_approvals.pop(request_id, None)
         logger.info(f"Denied pending request {request_id} for {pending['tool_name']}")
         return {
             "status": "PermissionOutcome::Deny",

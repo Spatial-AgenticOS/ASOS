@@ -350,6 +350,26 @@ class TestApprovalLifecycle:
     def test_deny_nonexistent_returns_none(self):
         assert self.runner.deny_pending("does-not-exist") is None
 
+    def test_approve_pending_with_wrong_session_returns_none(self):
+        pending = self.runner.enforce_safety(
+            "messaging__send_sms", {"to": "+1"}, session_id="s1",
+        )
+        assert pending is not None
+        req_id = pending["request_id"]
+        assert self.runner.approve_pending(req_id, session_id="s2") is None
+        # Original request remains pending.
+        assert self.runner.get_pending(req_id) is not None
+
+    def test_deny_pending_with_wrong_session_returns_none(self):
+        pending = self.runner.enforce_safety(
+            "messaging__send_sms", {"to": "+1"}, session_id="s1",
+        )
+        assert pending is not None
+        req_id = pending["request_id"]
+        assert self.runner.deny_pending(req_id, session_id="s2") is None
+        # Original request remains pending.
+        assert self.runner.get_pending(req_id) is not None
+
     def test_double_approve_returns_none(self):
         pending = self.runner.enforce_safety(
             "messaging__send_sms", {"to": "+1"}, session_id="s1",
