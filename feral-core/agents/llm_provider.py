@@ -25,9 +25,12 @@ from agents.chat_sanitizer import sanitize_assistant_display_text
 from agents.llm_failover import (
     MAX_RETRIES,
     RETRY_DELAYS,
+    RETRY_AFTER_MAX_INLINE_SLEEP,
+    RETRY_AFTER_MAX_COOLDOWN,
     _RETRIABLE_CODES,
     _SSE_KEEPALIVE_PREFIXES,
     _retry_llm_call,
+    parse_retry_after,
     FailoverReason,
     classify_error,
     _describe_http_status_error,
@@ -35,6 +38,14 @@ from agents.llm_failover import (
     _chat_completions_model_guard,
     ProviderCooldownTracker,
 )
+
+# When the failover loop has more than one viable candidate, we cap
+# same-provider retries to a single fast attempt. The historical
+# 3 × [1, 2, 4]s policy meant up to 7s of dead air on a transient 5xx
+# before *any* fallback got tried. With multiple candidates available,
+# spending that budget on a known-bad provider is the wrong trade.
+_FAILOVER_FAST_MAX_RETRIES = 2
+_FAILOVER_FAST_DELAYS: list[float] = [0.5]
 from agents.llm_reasoning import (
     _apply_openai_reasoning_fork,
     _apply_deepseek_reasoning_fork,
@@ -1491,7 +1502,16 @@ class LLMProvider:
         tools: Optional[list[dict]],
         **kwargs,
     ) -> dict:
-        """Make a chat request to a specific provider. Raises on error."""
+        """Make a chat request to a specific provider. Raises on error.
+
+        ``_retry_max`` / ``_retry_delays`` (popped from ``kwargs``) let
+        the failover orchestrator dial down same-provider retries when
+        a healthy fallback is configured — avoids spending the full
+        ``RETRY_DELAYS`` budget on a known-bad provider before routing.
+        Defaults preserve historical behaviour for direct callers.
+        """
+        retry_max = kwargs.pop("_retry_max", None)
+        retry_delays = kwargs.pop("_retry_delays", None)
         # Refuse up front for provider ids that have no runtime
         # adapter. Previously the fallback path built an httpx client
         # against whatever default ``_get_provider_config`` handed
@@ -1523,7 +1543,11 @@ class LLMProvider:
                     resp.raise_for_status()
                     return resp.json()
 
-                data = await _retry_llm_call(_do_primary_anthropic)
+                data = await _retry_llm_call(
+                    _do_primary_anthropic,
+                    max_retries=retry_max,
+                    delays=retry_delays,
+                )
                 return self._normalize_anthropic_response(data)
 
             body = {
@@ -1552,7 +1576,11 @@ class LLMProvider:
                 resp.raise_for_status()
                 return resp.json()
 
-            return await _retry_llm_call(_do_primary)
+            return await _retry_llm_call(
+                _do_primary,
+                max_retries=retry_max,
+                delays=retry_delays,
+            )
 
         # Fallback provider — build a temporary client
         base_url = config["base_url"]
@@ -1579,7 +1607,11 @@ class LLMProvider:
                     resp.raise_for_status()
                     return resp.json()
 
-                data = await _retry_llm_call(_do_fb_anthropic)
+                data = await _retry_llm_call(
+                    _do_fb_anthropic,
+                    max_retries=retry_max,
+                    delays=retry_delays,
+                )
                 return self._normalize_anthropic_response(data)
 
             body = {
@@ -1608,7 +1640,11 @@ class LLMProvider:
                 resp.raise_for_status()
                 return resp.json()
 
-            return await _retry_llm_call(_do_fb)
+            return await _retry_llm_call(
+                _do_fb,
+                max_retries=retry_max,
+                delays=retry_delays,
+            )
 
     async def chat_with_failover(
         self,
@@ -1635,6 +1671,22 @@ class LLMProvider:
         candidates = self._build_candidate_list()
         last_error: Optional[Exception] = None
 
+        # When at least one supported fallback exists beyond the
+        # primary, use the fast-fail retry profile so a transient 5xx
+        # on the primary doesn't burn the whole RETRY_DELAYS budget
+        # before we even try the fallback. With a single candidate
+        # there's nowhere else to go, so keep the historical
+        # 3 × [1, 2, 4]s policy.
+        viable = [
+            name for name, cfg in candidates
+            if cfg.get("supported", True)
+        ]
+        use_fast_retry = len(viable) > 1
+        retry_kwargs: dict[str, Any] = {}
+        if use_fast_retry:
+            retry_kwargs["_retry_max"] = _FAILOVER_FAST_MAX_RETRIES
+            retry_kwargs["_retry_delays"] = _FAILOVER_FAST_DELAYS
+
         for provider_name, config in candidates:
             if not config.get("supported", True):
                 # Skip catalog-only providers with no runtime adapter.
@@ -1655,13 +1707,22 @@ class LLMProvider:
             increment("feral.llm.calls_total", attributes={"provider": provider_name, "model": config.get("model", self.model)})
             try:
                 with measure("feral.llm.latency", {"provider": provider_name, "model": config.get("model", self.model)}):
-                    result = await self._call_provider(provider_name, config, messages, tools, **kwargs)
+                    result = await self._call_provider(
+                        provider_name, config, messages, tools,
+                        **retry_kwargs, **kwargs,
+                    )
                 self._cooldown.record_success(provider_name)
                 return result
             except Exception as e:
                 increment("feral.llm.errors_total", attributes={"provider": provider_name})
                 reason = classify_error(e)
-                self._cooldown.record_failure(provider_name, reason)
+                # Honour upstream Retry-After hint when present so the
+                # cooldown reflects the provider's actual recovery
+                # window instead of our static 60s default.
+                retry_after = parse_retry_after(e)
+                self._cooldown.record_failure(
+                    provider_name, reason, retry_after=retry_after,
+                )
                 # A5: surface the upstream HTTP body (status + JSON
                 # ``error.message`` / ``type`` / ``code`` / ``param``)
                 # instead of opaque ``str(e)`` which for

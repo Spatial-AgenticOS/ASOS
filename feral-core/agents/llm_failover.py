@@ -12,14 +12,27 @@ import asyncio
 import logging
 import time
 import httpx
+from email.utils import parsedate_to_datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger("feral.llm")
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # seconds
 _RETRIABLE_CODES = ("429", "500", "502", "503", "504", "timeout", "connection")
+
+# Hard ceiling for how long a single same-provider retry will block on a
+# server-supplied Retry-After hint. If the upstream asks us to wait longer
+# than this, we'd rather hand control back to the failover loop so a
+# healthy fallback (when configured) can serve the request immediately.
+RETRY_AFTER_MAX_INLINE_SLEEP = 5.0  # seconds
+
+# Upper bound for cooldown windows derived from a Retry-After header. We
+# trust the upstream's hint, but cap it so a misconfigured proxy that
+# returns ``Retry-After: 31536000`` can't pull a provider out of rotation
+# for a year.
+RETRY_AFTER_MAX_COOLDOWN = 24 * 3600.0  # 24h
 
 # DeepSeek's streaming SSE keeps the connection open by sending
 # ``: keep-alive`` comment lines (per the 2026-04-26 spec, the
@@ -28,19 +41,111 @@ _RETRIABLE_CODES = ("429", "500", "502", "503", "504", "timeout", "connection")
 _SSE_KEEPALIVE_PREFIXES = (": ", ":", ": keep-alive", ":OPENROUTER PROCESSING")
 
 
-async def _retry_llm_call(coro_factory):
-    """Retry an LLM HTTP call with exponential backoff on transient errors."""
-    for attempt in range(MAX_RETRIES):
+def parse_retry_after(
+    error: Exception,
+    *,
+    max_seconds: float = RETRY_AFTER_MAX_COOLDOWN,
+) -> Optional[float]:
+    """Extract the upstream ``Retry-After`` value from an LLM error.
+
+    Returns the requested wait in seconds, or ``None`` when the error
+    carries no usable hint. Handles both numeric ("``Retry-After: 30``")
+    and HTTP-date ("``Retry-After: Wed, 21 Oct 2026 07:28:00 GMT``")
+    encodings as documented in RFC 7231 §7.1.3.
+
+    The value is clamped to ``[0, max_seconds]`` so a misbehaving
+    upstream cannot keep a provider out of rotation indefinitely.
+    """
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("Retry-After") or headers.get("retry-after")
+    if raw is None:
+        return None
+    raw = str(raw).strip()
+    if not raw:
+        return None
+
+    seconds: Optional[float] = None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        try:
+            target = parsedate_to_datetime(raw)
+        except (TypeError, ValueError):
+            target = None
+        if target is not None:
+            try:
+                from datetime import datetime, timezone
+                now = datetime.now(target.tzinfo or timezone.utc)
+                seconds = max(0.0, (target - now).total_seconds())
+            except Exception:
+                seconds = None
+
+    if seconds is None:
+        return None
+    if seconds < 0:
+        seconds = 0.0
+    if seconds > max_seconds:
+        seconds = max_seconds
+    return seconds
+
+
+async def _retry_llm_call(
+    coro_factory,
+    *,
+    max_retries: Optional[int] = None,
+    delays: Optional[list[float]] = None,
+):
+    """Retry an LLM HTTP call with exponential backoff on transient errors.
+
+    ``max_retries`` and ``delays`` are optional overrides used by the
+    failover loop to fail fast on the current provider when fallbacks
+    are configured. When omitted, the historical defaults
+    (``MAX_RETRIES`` / ``RETRY_DELAYS``) are used so direct callers see
+    no behaviour change.
+
+    On HTTP 429 responses that carry a ``Retry-After`` header we honour
+    the upstream hint instead of blindly sleeping the static backoff —
+    but only if the requested wait fits inside
+    ``RETRY_AFTER_MAX_INLINE_SLEEP``. Anything longer is re-raised so
+    the caller (typically ``chat_with_failover``) can route around the
+    rate-limited provider immediately.
+    """
+    eff_max = max_retries if max_retries is not None else MAX_RETRIES
+    eff_delays = delays if delays is not None else RETRY_DELAYS
+    if eff_max < 1:
+        eff_max = 1
+
+    for attempt in range(eff_max):
         try:
             return await coro_factory()
         except Exception as e:
             err_str = str(e).lower()
             retriable = any(code in err_str for code in _RETRIABLE_CODES)
-            if not retriable or attempt == MAX_RETRIES - 1:
+            if not retriable or attempt == eff_max - 1:
                 raise
-            logger.warning("LLM call failed (attempt %d/%d): %s — retrying in %ds",
-                           attempt + 1, MAX_RETRIES, e, RETRY_DELAYS[attempt])
-            await asyncio.sleep(RETRY_DELAYS[attempt])
+
+            base_delay = eff_delays[attempt] if attempt < len(eff_delays) else eff_delays[-1]
+            sleep_for = float(base_delay)
+
+            retry_after = parse_retry_after(e)
+            if retry_after is not None:
+                if retry_after > RETRY_AFTER_MAX_INLINE_SLEEP:
+                    logger.warning(
+                        "LLM call rate-limited; Retry-After=%.1fs exceeds "
+                        "inline-sleep cap (%.1fs) — handing off to failover.",
+                        retry_after, RETRY_AFTER_MAX_INLINE_SLEEP,
+                    )
+                    raise
+                sleep_for = max(sleep_for, retry_after)
+
+            logger.warning(
+                "LLM call failed (attempt %d/%d): %s — retrying in %.2fs",
+                attempt + 1, eff_max, e, sleep_for,
+            )
+            await asyncio.sleep(sleep_for)
 
 
 class FailoverReason(str, Enum):
@@ -175,8 +280,29 @@ class ProviderCooldownTracker:
         self._cooldowns: dict[str, float] = {}
         self._last_probe: dict[str, float] = {}
 
-    def record_failure(self, provider: str, reason: FailoverReason):
-        cooldown_seconds = self._COOLDOWN_MAP.get(reason, 10)
+    def record_failure(
+        self,
+        provider: str,
+        reason: FailoverReason,
+        retry_after: Optional[float] = None,
+    ):
+        """Record a provider failure and start the cooldown clock.
+
+        When the upstream supplies an explicit ``Retry-After`` hint
+        (parsed via :func:`parse_retry_after`), it overrides the
+        reason-based default for rate-limit / overloaded / timeout
+        failures. The hint is clamped to
+        ``RETRY_AFTER_MAX_COOLDOWN`` so a misconfigured proxy can't
+        sideline a provider for a year.
+        """
+        cooldown_seconds = float(self._COOLDOWN_MAP.get(reason, 10))
+        if retry_after is not None and reason in (
+            FailoverReason.RATE_LIMIT,
+            FailoverReason.OVERLOADED,
+            FailoverReason.TIMEOUT,
+        ):
+            hint = max(0.0, min(float(retry_after), RETRY_AFTER_MAX_COOLDOWN))
+            cooldown_seconds = max(cooldown_seconds, hint)
         self._cooldowns[provider] = time.time() + cooldown_seconds
 
     def is_available(self, provider: str) -> bool:
@@ -198,9 +324,12 @@ class ProviderCooldownTracker:
 __all__ = [
     "MAX_RETRIES",
     "RETRY_DELAYS",
+    "RETRY_AFTER_MAX_INLINE_SLEEP",
+    "RETRY_AFTER_MAX_COOLDOWN",
     "_RETRIABLE_CODES",
     "_SSE_KEEPALIVE_PREFIXES",
     "_retry_llm_call",
+    "parse_retry_after",
     "FailoverReason",
     "classify_error",
     "_describe_http_status_error",
