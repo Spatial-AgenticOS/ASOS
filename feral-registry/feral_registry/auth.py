@@ -1,7 +1,9 @@
-"""JWT + GitHub OAuth helpers."""
+"""JWT + GitHub OAuth helpers + reviewer auth."""
 
 from __future__ import annotations
 
+import hmac
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -55,6 +57,62 @@ async def current_publisher(
     if pub.blocked:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "publisher is blocked")
     return pub
+
+
+@dataclass(frozen=True)
+class Reviewer:
+    """Authenticated org reviewer principal.
+
+    The shared reviewer secret proves org membership; ``actor`` is a
+    free-form audit label supplied by the caller via
+    ``X-Reviewer-Actor`` header (defaults to ``feral-org`` when absent).
+    Once we add GH org OAuth on the website the actor will become the
+    reviewer's GitHub login without any API change here.
+    """
+
+    actor: str
+
+
+async def current_reviewer(
+    authorization: str | None = Header(default=None),
+    x_reviewer_actor: str | None = Header(default=None, alias="X-Reviewer-Actor"),
+    settings: Settings = Depends(get_settings),
+) -> Reviewer:
+    if not settings.reviewer_secret:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "reviewer auth is not configured on this registry",
+        )
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token")
+    token = authorization.split(" ", 1)[1].strip()
+    if not hmac.compare_digest(token, settings.reviewer_secret):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "invalid reviewer credential")
+    actor = (x_reviewer_actor or "feral-org").strip()[:200] or "feral-org"
+    return Reviewer(actor=f"reviewer:{actor}")
+
+
+async def optional_reviewer(
+    authorization: str | None = Header(default=None),
+    x_reviewer_actor: str | None = Header(default=None, alias="X-Reviewer-Actor"),
+    settings: Settings = Depends(get_settings),
+) -> Reviewer | None:
+    """Reviewer dependency that returns ``None`` instead of raising.
+
+    Used by catalog/item/blob endpoints so that an authenticated
+    reviewer can see private/non-approved rows while public callers
+    keep getting a strict approved+public filter.
+    """
+
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    if not settings.reviewer_secret:
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    if not hmac.compare_digest(token, settings.reviewer_secret):
+        return None
+    actor = (x_reviewer_actor or "feral-org").strip()[:200] or "feral-org"
+    return Reviewer(actor=f"reviewer:{actor}")
 
 
 async def github_exchange_code(code: str, settings: Settings) -> dict[str, Any]:
