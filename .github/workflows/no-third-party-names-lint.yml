@@ -2,8 +2,16 @@ name: no-third-party-names-lint
 
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '**/*.mdx'
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '**/*.mdx'
 
 concurrency:
   group: no-third-party-names-lint-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}

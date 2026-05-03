@@ -71,6 +71,7 @@ jobs:
     name: README test-count auto-bump (push-to-main only)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -81,13 +82,39 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Decide whether test-count reconciliation is needed
+        id: recount_gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "recount=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="${{ github.event.before }}"
+          head="${{ github.sha }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "recount=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$base" "$head" || true)
+          if echo "$changed" | grep -Eq \
+            '^(feral-core/tests/|feral-client-v2/src/__tests__/|feral-client-v2/vitest\.config|feral-core/pyproject\.toml|feral-core/pytest\.ini|feral-client-v2/package(\-lock)?\.json|README\.md)'; then
+            echo "recount=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "recount=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping README test-count auto-bump (no test-count-affecting files changed)."
+          fi
+
       - name: Set up Python
+        if: steps.recount_gate.outputs.recount == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Set up Node
+        if: steps.recount_gate.outputs.recount == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -95,15 +122,18 @@ jobs:
           cache-dependency-path: feral-client-v2/package-lock.json
 
       - name: Install feral-core (for pytest collection)
+        if: steps.recount_gate.outputs.recount == 'true'
         working-directory: feral-core
         run: pip install -e ".[all,dev]"
 
       - name: Install feral-client-v2 deps (for vitest list)
+        if: steps.recount_gate.outputs.recount == 'true'
         working-directory: feral-client-v2
         run: npm ci
 
       - name: Compute live pytest count
         id: pytest_count
+        if: steps.recount_gate.outputs.recount == 'true'
         working-directory: feral-core
         # ``pytest --collect-only -q`` ends with a line like
         # "1964 tests collected in 4.56s". We grep for that and emit
@@ -122,6 +152,7 @@ jobs:
 
       - name: Compute live vitest count
         id: vitest_count
+        if: steps.recount_gate.outputs.recount == 'true'
         working-directory: feral-client-v2
         # ``vitest list`` prints one test per line ("file > suite > name").
         run: |
@@ -136,6 +167,7 @@ jobs:
           echo "vitest live count: $n"
 
       - name: Auto-bump README marker if drifted
+        if: steps.recount_gate.outputs.recount == 'true'
         env:
           LIVE_PYTEST: ${{ steps.pytest_count.outputs.live_pytest }}
           LIVE_VITEST: ${{ steps.vitest_count.outputs.live_vitest }}

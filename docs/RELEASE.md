@@ -40,8 +40,9 @@ Both the stage and publish jobs run under GitHub Actions **environments**
 reviewers on each environment and keep a manual approval step in front
 of the canary upload and the production upload.
 
-After `publish` completes, `install-smoke.yml` continues to run as a
-post-prod matrix check against real PyPI (Ubuntu/macOS × Py 3.11/3.12).
+After `publish` completes, `install-smoke.yml` runs a post-prod Linux
+matrix check against real PyPI (Ubuntu × Py 3.11/3.12). Optional macOS
+lanes are available via manual `workflow_dispatch` when needed.
 
 ## One-time setup
 
@@ -97,15 +98,33 @@ after that the workflow owns it via trusted publishing).
 ## `workflow_dispatch` inputs
 
 From *Actions → Release → Run workflow* you can trigger the pipeline
-manually. Two inputs are available:
+manually. One input is available:
 
 | Input | Default | When to use |
 |---|---|---|
-| `skip_stage` | `false` | **Emergency only.** Bypass the TestPyPI canary and publish straight to PyPI from a dispatched run. Use when TestPyPI itself is down and a hot-fix must ship. Document the reason in the release PR. |
-| `dry_run` | `false` | Run **build + stage** only. Useful to exercise the pipeline end-to-end (including a real TestPyPI upload) without touching production PyPI. Pair with `skip_stage=false`. |
+| `dry_run` | `false` | Run **build + stage** only. Useful to exercise the pipeline end-to-end (including a real TestPyPI upload) without touching production PyPI. |
 
 Tag-push events (`v*`) always run the full three-stage flow; the
 dispatch inputs are only read when the trigger is `workflow_dispatch`.
+
+## Troubleshooting: `invalid-publisher` on TestPyPI
+
+If the stage job fails in `Publish to TestPyPI` with:
+
+`invalid-publisher: valid token, but no corresponding publisher`
+
+the trusted-publisher mapping on TestPyPI does not match the workflow
+claims. Fix it in TestPyPI project settings:
+
+1. TestPyPI → project `feral-ai` → *Publishing* → *Add pending publisher*
+2. Set:
+   - Owner: `FERAL-AI`
+   - Repository: `FERAL-AI`
+   - Workflow filename: `publish.yml`
+   - Environment: `testpypi-stage`
+3. Save and rerun the failed release job.
+
+PyPI production publisher must also exist with environment `pypi`.
 
 ## What the runtime smoke asserts
 
