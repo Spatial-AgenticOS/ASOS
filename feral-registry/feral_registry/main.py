@@ -17,6 +17,8 @@ from .routes import (
     health,
     item,
     publish,
+    review,
+    submissions,
 )
 
 API_PREFIX = "/api/v1"
@@ -46,6 +48,8 @@ def create_app() -> FastAPI:
     app.include_router(flag.router, prefix=API_PREFIX, tags=["flag"])
     app.include_router(auth_github.router, prefix=API_PREFIX, tags=["auth"])
     app.include_router(blobs.router, prefix=API_PREFIX, tags=["blobs"])
+    app.include_router(review.router, prefix=API_PREFIX, tags=["review"])
+    app.include_router(submissions.router, prefix=API_PREFIX, tags=["submissions"])
     return app
 
 
