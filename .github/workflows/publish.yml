@@ -171,9 +171,10 @@ jobs:
           exit 1
 
       - name: Install from TestPyPI in a clean venv
-        # --extra-index-url https://pypi.org/simple is required so that
-        # runtime deps (fastapi, httpx, etc.) resolve from real PyPI
-        # instead of the sparse TestPyPI mirror.
+        # Pull ONLY the target wheel from TestPyPI, then install that
+        # local wheel while resolving dependencies from real PyPI.
+        # This avoids dependency shadowing when TestPyPI has stale or
+        # malformed third-party packages with the same names.
         shell: bash
         env:
           EXPECTED_VERSION: ${{ needs.build.outputs.version }}
@@ -182,10 +183,23 @@ jobs:
           python -m venv .stage-venv
           source .stage-venv/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install \
+          rm -rf .stage-dist
+          mkdir -p .stage-dist
+          python -m pip download \
+            --no-deps \
             --index-url https://test.pypi.org/simple/ \
-            --extra-index-url https://pypi.org/simple/ \
+            --dest .stage-dist \
             "feral-ai==${EXPECTED_VERSION}"
+          shopt -s nullglob
+          wheels=(.stage-dist/feral_ai-"${EXPECTED_VERSION}"-*.whl)
+          if [ "${#wheels[@]}" -eq 0 ]; then
+            echo "No wheel for feral-ai==${EXPECTED_VERSION} was downloaded from TestPyPI." >&2
+            ls -la .stage-dist >&2
+            exit 1
+          fi
+          python -m pip install \
+            --index-url https://pypi.org/simple/ \
+            "${wheels[0]}"
 
       - name: Canary runtime smoke (against TestPyPI install)
         shell: bash
