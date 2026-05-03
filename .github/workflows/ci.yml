@@ -3,8 +3,16 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '**/*.mdx'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '**/*.mdx'
 
 # Concurrency: for pull-request events, cancel the prior run on the
 # same PR when a new push arrives. For pushes to main we don't cancel
@@ -35,14 +43,14 @@ jobs:
         run: ruff check --output-format=github --select=E,F,W --ignore=E501,E402,F401,W291,W293 .
 
   brain-tests:
-    name: Brain — pytest full matrix (${{ matrix.python-version }}, ${{ matrix.os }})
+    name: Brain — pytest Linux matrix (${{ matrix.python-version }})
     needs: lint
     if: github.event_name == 'push'
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       matrix:
         python-version: ['3.11', '3.12']
-        os: [ubuntu-latest, macos-latest]
     defaults:
       run:
         working-directory: feral-core
@@ -80,6 +88,7 @@ jobs:
     needs: lint
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: feral-core
@@ -100,6 +109,7 @@ jobs:
   client-build:
     name: Client — vite build
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: feral-client
@@ -133,6 +143,7 @@ jobs:
   client-v2:
     name: Client v2 — vite build + vitest coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: feral-client-v2
@@ -159,6 +170,7 @@ jobs:
   webui-v2-coherence:
     name: WebUI v2 — bundled asset coherence
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 

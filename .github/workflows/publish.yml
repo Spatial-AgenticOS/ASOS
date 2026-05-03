@@ -20,9 +20,8 @@ name: Release
 #
 # Triggers:
 #   - tag push `v*` runs the full pipeline end-to-end.
-#   - workflow_dispatch exposes two escape hatches for maintainers:
-#       skip_stage : bypass TestPyPI (emergency hot-fix only).
-#       dry_run    : stop after the stage job; do not publish to PyPI.
+#   - workflow_dispatch supports dry-run validation against the staged
+#     path; production publish remains gated by successful canary.
 #
 # Secrets / auth model:
 #   - Both `pypi` and the staging index use OIDC trusted publishing via
@@ -38,10 +37,6 @@ on:
     tags: ['v*']
   workflow_dispatch:
     inputs:
-      skip_stage:
-        description: 'Skip the TestPyPI canary stage (emergency use only).'
-        type: boolean
-        default: false
       dry_run:
         description: 'Run build + stage only; do not publish to PyPI.'
         type: boolean
@@ -55,6 +50,7 @@ jobs:
   build:
     name: Build wheel + sdist (+ pre-publish smoke)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:
@@ -125,10 +121,8 @@ jobs:
   stage:
     name: Canary publish to TestPyPI + install smoke
     needs: build
-    if: >-
-      github.event_name != 'workflow_dispatch' ||
-      inputs.skip_stage != true
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     environment:
       name: testpypi-stage
       url: https://test.pypi.org/project/feral-ai/${{ needs.build.outputs.version }}/
@@ -206,17 +200,13 @@ jobs:
   publish:
     name: Publish to PyPI + create GitHub Release
     needs: [build, stage]
-    # `needs.stage.result` is "skipped" when skip_stage=true on a
-    # workflow_dispatch run; allow the prod push in that case only.
+    # Production publish requires a successful canary stage.
     if: >-
-      always() &&
       needs.build.result == 'success' &&
-      (needs.stage.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' &&
-        inputs.skip_stage == true &&
-        needs.stage.result == 'skipped')) &&
+      needs.stage.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || inputs.dry_run != true)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment:
       name: pypi
       url: https://pypi.org/project/feral-ai/${{ needs.build.outputs.version }}/

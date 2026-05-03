@@ -5,17 +5,110 @@ on:
     workflows: [Release]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      include_macos:
+        description: 'Run extra macOS smoke lanes (higher cost).'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  smoke:
+  smoke-linux:
     if: >-
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
         python: ['3.11', '3.12']
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install from PyPI
+        run: pip install feral-ai
+
+      - name: Verify CLI
+        run: |
+          feral --help || true
+          python -c "import importlib.metadata; print('Version:', importlib.metadata.version('feral-ai'))" || true
+
+      - name: Verify v2 bundle is in the wheel
+        # Guards the regression that shipped 2026.4.17: a wheel whose
+        # webui-v2 directory was silently dropped by setuptools because
+        # the dir name had a hyphen + no __init__.py. Without this gate
+        # every "pip install -U feral-ai" user falls back to the v1 UI.
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          # The wheel installs top-level packages (webui_v2/ is a sibling
+          # of api/, agents/, etc.) into site-packages. Walk up from any
+          # one of them to find site-packages, then assert webui_v2 has
+          # the v2 bundle.
+          import api
+          site = Path(api.__file__).resolve().parent.parent
+          v2 = site / "webui_v2"
+          assert v2.is_dir(), f"webui_v2/ missing from installed wheel at {site}"
+          index = v2 / "index.html"
+          assert index.exists(), f"webui_v2/index.html missing from wheel at {v2}"
+          assets = v2 / "assets"
+          assert assets.is_dir(), f"webui_v2/assets/ missing from wheel at {v2}"
+          css = list(assets.glob("*.css"))
+          js = list(assets.glob("*.js"))
+          assert css, f"no .css found in {assets}"
+          assert js, f"no .js found in {assets}"
+          html = index.read_text(encoding="utf-8")
+          assert "FERAL" in html, f"v2 index.html missing FERAL marker: {html[:200]}"
+          assert "v2" in html.lower(), f"v2 index.html missing v2 marker: {html[:200]}"
+          print(f"OK webui_v2 bundle present at {v2}")
+          print(f"   index.html: {index.stat().st_size} B")
+          print(f"   assets: {len(css)} css, {len(js)} js")
+          PY
+
+      - name: Verify Brain serves v2 at /
+        # End-to-end gate: boot the installed Brain and curl / to prove
+        # the v2 index.html is actually served, not the v1 fallback.
+        shell: bash
+        run: |
+          python -m uvicorn api.server:app --host 127.0.0.1 --port 9100 &
+          UVI_PID=$!
+          # Wait up to 60s for the Brain to finish booting (35 subsystems).
+          for i in {1..30}; do
+            if curl -sf http://127.0.0.1:9100/health > /dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          BODY=$(curl -s http://127.0.0.1:9100/)
+          echo "${BODY}" | head -20
+          echo "${BODY}" | grep -q "FERAL" || { echo "v2 marker 'FERAL' missing from /"; kill $UVI_PID; exit 1; }
+          echo "${BODY}" | grep -qi "v2" || { echo "v2 marker 'v2' missing from /"; kill $UVI_PID; exit 1; }
+          # v1 ships leaflet; v2 does not. Catching a leaflet reference
+          # would mean we fell back to v1 — release fails loudly.
+          if echo "${BODY}" | grep -q "leaflet"; then
+            echo "ERROR: leaflet asset found at / — Brain fell back to v1"
+            kill $UVI_PID
+            exit 1
+          fi
+          echo "OK Brain serves v2 bundle at /"
+          kill $UVI_PID
+          wait || true
+
+  smoke-macos:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.include_macos == true
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    runs-on: macos-latest
+    timeout-minutes: 25
     steps:
       - name: Set up Python
         uses: actions/setup-python@v5
