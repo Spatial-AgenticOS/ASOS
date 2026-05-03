@@ -209,6 +209,8 @@ jobs:
     # `needs.stage.result` is "skipped" when skip_stage=true on a
     # workflow_dispatch run; allow the prod push in that case only.
     if: >-
+      always() &&
+      needs.build.result == 'success' &&
       (needs.stage.result == 'success' ||
        (github.event_name == 'workflow_dispatch' &&
         inputs.skip_stage == true &&
