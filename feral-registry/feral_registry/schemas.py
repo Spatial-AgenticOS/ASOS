@@ -110,11 +110,21 @@ def validate_manifest_for_kind(manifest: Manifest) -> list[str]:
     return [key for key in required if key not in raw or raw[key] in (None, "", [], {})]
 
 
+ItemStatus = Literal["submitted", "approved", "rejected", "quarantined"]
+Visibility = Literal["private", "public"]
+
+
 class PublishResponse(BaseModel):
     id: str
     sha256: str
     download_url: str
     verified: bool
+    status: ItemStatus = "submitted"
+    visibility: Visibility = "private"
+    message: str = (
+        "submission received, pending review by FERAL org reviewers; "
+        "this item is not user-installable until approved"
+    )
 
 
 class CatalogItem(BaseModel):
@@ -127,6 +137,8 @@ class CatalogItem(BaseModel):
     downloads: int
     verified: bool
     created_at: datetime
+    status: ItemStatus = "approved"
+    visibility: Visibility = "public"
 
 
 class CatalogResponse(BaseModel):
@@ -149,6 +161,72 @@ class ItemDetail(BaseModel):
     downloads: int
     verified: bool
     created_at: datetime
+    status: ItemStatus = "approved"
+    visibility: Visibility = "public"
+
+
+class ReviewEventOut(BaseModel):
+    id: str
+    item_id: str
+    event: str
+    actor: str
+    notes: str | None
+    created_at: datetime
+
+
+class ReviewQueueItem(BaseModel):
+    id: str
+    kind: Kind
+    name: str
+    version: str
+    description: str | None = None
+    publisher: str
+    sha256: str
+    size_bytes: int
+    status: ItemStatus
+    visibility: Visibility
+    reviewed_by: str | None
+    reviewed_at: datetime | None
+    review_notes: str | None
+    created_at: datetime
+    events: list[ReviewEventOut]
+
+
+class ReviewQueueResponse(BaseModel):
+    items: list[ReviewQueueItem]
+    total: int
+
+
+class ReviewActionRequest(BaseModel):
+    notes: str | None = Field(default=None, max_length=4000)
+
+
+class ReviewActionResponse(BaseModel):
+    id: str
+    status: ItemStatus
+    visibility: Visibility
+    reviewed_by: str
+    reviewed_at: datetime
+
+
+class PublisherSubmissionItem(BaseModel):
+    id: str
+    kind: Kind
+    name: str
+    version: str
+    sha256: str
+    status: ItemStatus
+    visibility: Visibility
+    reviewed_by: str | None
+    reviewed_at: datetime | None
+    review_notes: str | None
+    created_at: datetime
+
+
+class PublisherSubmissionsResponse(BaseModel):
+    publisher: str
+    items: list[PublisherSubmissionItem]
+    total: int
 
 
 class FlagRequest(BaseModel):
