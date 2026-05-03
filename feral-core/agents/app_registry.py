@@ -44,6 +44,7 @@ import sqlite3
 import tarfile
 import tempfile
 import time
+from datetime import datetime, timezone
 from base64 import b64decode
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +101,18 @@ class UnverifiedManifestError(AppRegistryError):
     The exception message is meant to be surfaced verbatim to the
     publisher / installer so they understand why the install was
     refused (e.g. missing signature, tampered manifest, key mismatch).
+    """
+
+
+class UnapprovedRegistryItemError(AppRegistryError):
+    """Raised when the registry exposes an item that is not approved+public.
+
+    The acceptance gate on the registry side already returns 404 for
+    non-approved items to anonymous callers, so this exception is
+    primarily a defence-in-depth layer for cases where a misconfigured
+    or out-of-band response leaks the moderation state to the install
+    path. It is also raised when an explicit override is required but
+    not supplied. The message is safe to show to users.
     """
 
 
@@ -367,6 +380,7 @@ class AppRegistry:
         overwrite: bool = True,
         supervisor: Optional[Any] = None,
         audit_callback: Optional[Callable[[dict], None]] = None,
+        internal_override: bool = False,
     ) -> InstalledApp:
         """Install an app bundle from the remote registry.
 
@@ -377,7 +391,18 @@ class AppRegistry:
                 "sha256": "<hex>",
                 "signature_b64": "...",          # optional when allow_unsigned
                 "publisher_pubkey_hex": "...",   # optional when allow_unsigned
+                "status": "approved",            # acceptance gate
+                "visibility": "public",          # acceptance gate
             }
+
+        Acceptance gate (defence in depth): the registry already 404s
+        non-approved items to anonymous callers, but if a response
+        does include moderation metadata we additionally refuse any
+        item that is not ``status=approved`` AND ``visibility=public``.
+        Only a caller that explicitly passes ``internal_override=True``
+        AND has set the env flag ``FERAL_INTERNAL_ALLOW_UNAPPROVED=1``
+        can bypass this -- both must agree, so neither a bare env flag
+        nor a stray API parameter alone can install pending bundles.
 
         The tarball SHA-256 is always enforced. Detached signature
         verification is enforced unless ``allow_unsigned=True``.
@@ -420,6 +445,40 @@ class AppRegistry:
                     raise AppRegistryError(
                         f"registry item {registry_id!r} is kind {kind!r}, expected 'app'"
                     )
+
+                # Acceptance gate. Older registries that don't expose
+                # ``status``/``visibility`` are treated as ``approved``/
+                # ``public`` so we don't break clients pointing at a
+                # legacy registry that has already vetted its items;
+                # any registry that exposes the fields must show
+                # approved + public to be installable.
+                item_status = str(item.get("status") or "approved").lower()
+                item_visibility = str(item.get("visibility") or "public").lower()
+                if item_status != "approved" or item_visibility != "public":
+                    env_allow = os.environ.get(
+                        "FERAL_INTERNAL_ALLOW_UNAPPROVED", ""
+                    ).strip().lower() in {"1", "true", "yes", "on"}
+                    if not (internal_override and env_allow):
+                        logger.info(
+                            "app_install rejected_unapproved %s",
+                            json.dumps(
+                                {
+                                    "registry_id": registry_id,
+                                    "registry_url": base,
+                                    "status": item_status,
+                                    "visibility": item_visibility,
+                                }
+                            ),
+                        )
+                        raise UnapprovedRegistryItemError(
+                            f"registry item {registry_id!r} is not yet approved "
+                            f"for public install (status={item_status!r}, "
+                            f"visibility={item_visibility!r}); wait for FERAL "
+                            "org reviewers to approve this submission, or set "
+                            "FERAL_INTERNAL_ALLOW_UNAPPROVED=1 and pass "
+                            "internal_override=True for an internal-only "
+                            "override"
+                        )
 
                 download_url = str(item.get("download_url") or "")
                 if not download_url:
@@ -1049,6 +1108,8 @@ class HybridGenerator:
         self._genui = genui_engine
         self._cache_dir = Path(cache_dir) if cache_dir else Path("/tmp/feral-hybrid-cache")
         self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self._trace_dir = self._cache_dir / "_render_traces"
+        self._trace_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def cache_dir(self) -> Path:
@@ -1069,28 +1130,75 @@ class HybridGenerator:
         bundle_dir: Optional[Path] = None,
     ) -> dict:
         kind = surface.kind
-
-        if kind == "authored":
-            assert surface.template_root is not None
-            return _hydrate(surface.template_root, data)
-
         cache_path = self._cache_path_for(
             app_id, surface.surface_id, user_fingerprint, surface.schema_version
         )
+
+        if kind == "authored":
+            assert surface.template_root is not None
+            rendered = _hydrate(surface.template_root, data)
+            self._trace_render(
+                app_id=app_id,
+                manifest=manifest,
+                surface=surface,
+                user_fingerprint=user_fingerprint,
+                regenerate=regenerate,
+                source="authored_template",
+                cache_path=cache_path,
+                data=data,
+                output_tree=rendered,
+            )
+            return rendered
 
         if kind == "generated":
             if not regenerate and cache_path.is_file():
                 cached_tree = _safe_read_json(cache_path)
                 if cached_tree is not None:
-                    return _hydrate(cached_tree, data)
+                    rendered = _hydrate(cached_tree, data)
+                    self._trace_render(
+                        app_id=app_id,
+                        manifest=manifest,
+                        surface=surface,
+                        user_fingerprint=user_fingerprint,
+                        regenerate=regenerate,
+                        source="generated_cache_hit",
+                        cache_path=cache_path,
+                        data=data,
+                        output_tree=rendered,
+                    )
+                    return rendered
             # Prefer publisher default before we hit the LLM.
             default_tree = _read_publisher_default(bundle_dir, surface.surface_id)
             if default_tree is not None and not regenerate:
                 self._write_cache(cache_path, default_tree)
-                return _hydrate(default_tree, data)
-            generated = await self._llm_generate(manifest, surface, data)
+                rendered = _hydrate(default_tree, data)
+                self._trace_render(
+                    app_id=app_id,
+                    manifest=manifest,
+                    surface=surface,
+                    user_fingerprint=user_fingerprint,
+                    regenerate=regenerate,
+                    source="publisher_default",
+                    cache_path=cache_path,
+                    data=data,
+                    output_tree=rendered,
+                )
+                return rendered
+            generated, gen_source = await self._llm_generate(manifest, surface, data)
             self._write_cache(cache_path, generated)
-            return _hydrate(generated, data)
+            rendered = _hydrate(generated, data)
+            self._trace_render(
+                app_id=app_id,
+                manifest=manifest,
+                surface=surface,
+                user_fingerprint=user_fingerprint,
+                regenerate=regenerate,
+                source=gen_source,
+                cache_path=cache_path,
+                data=data,
+                output_tree=rendered,
+            )
+            return rendered
 
         if kind == "hybrid":
             assert surface.template_root is not None
@@ -1100,15 +1208,63 @@ class HybridGenerator:
                 default_tree = _read_publisher_default(bundle_dir, surface.surface_id)
                 if default_tree is not None and self._genui is None:
                     self._write_cache(cache_path, default_tree)
-                    return _hydrate(default_tree, data)
-                generated = await self._llm_generate(manifest, surface, data)
+                    rendered = _hydrate(default_tree, data)
+                    self._trace_render(
+                        app_id=app_id,
+                        manifest=manifest,
+                        surface=surface,
+                        user_fingerprint=user_fingerprint,
+                        regenerate=regenerate,
+                        source="publisher_default_no_llm",
+                        cache_path=cache_path,
+                        data=data,
+                        output_tree=rendered,
+                    )
+                    return rendered
+                generated, gen_source = await self._llm_generate(manifest, surface, data)
                 self._write_cache(cache_path, generated)
-                return _hydrate(generated, data)
+                rendered = _hydrate(generated, data)
+                self._trace_render(
+                    app_id=app_id,
+                    manifest=manifest,
+                    surface=surface,
+                    user_fingerprint=user_fingerprint,
+                    regenerate=regenerate,
+                    source=gen_source,
+                    cache_path=cache_path,
+                    data=data,
+                    output_tree=rendered,
+                )
+                return rendered
             if cache_path.is_file():
                 cached_tree = _safe_read_json(cache_path)
                 if cached_tree is not None:
-                    return _hydrate(cached_tree, data)
-            return _hydrate(surface.template_root, data)
+                    rendered = _hydrate(cached_tree, data)
+                    self._trace_render(
+                        app_id=app_id,
+                        manifest=manifest,
+                        surface=surface,
+                        user_fingerprint=user_fingerprint,
+                        regenerate=regenerate,
+                        source="hybrid_cache_hit",
+                        cache_path=cache_path,
+                        data=data,
+                        output_tree=rendered,
+                    )
+                    return rendered
+            rendered = _hydrate(surface.template_root, data)
+            self._trace_render(
+                app_id=app_id,
+                manifest=manifest,
+                surface=surface,
+                user_fingerprint=user_fingerprint,
+                regenerate=regenerate,
+                source="hybrid_authored_template",
+                cache_path=cache_path,
+                data=data,
+                output_tree=rendered,
+            )
+            return rendered
 
         # Fallback — should be caught by manifest validator but safe-guard anyway.
         raise AppRegistryError(f"unknown surface kind {kind!r}")
@@ -1139,7 +1295,7 @@ class HybridGenerator:
     def _cache_path_for(
         self, app_id: str, surface_id: str, fingerprint: str, schema_version: int
     ) -> Path:
-        safe_finger = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:12]
+        safe_finger = self._fingerprint_token(fingerprint)
         path = (
             self._cache_dir
             / app_id
@@ -1156,25 +1312,90 @@ class HybridGenerator:
         }
         path.write_text(json.dumps(payload))
 
+    @staticmethod
+    def _fingerprint_token(fingerprint: str) -> str:
+        return hashlib.sha1(str(fingerprint).encode("utf-8")).hexdigest()[:12]
+
+    @staticmethod
+    def _data_summary(data: dict) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            return {"type": type(data).__name__}
+        keys = sorted(str(k) for k in data.keys())
+        return {
+            "keys": keys[:40],
+            "key_count": len(keys),
+        }
+
+    def _trace_render(
+        self,
+        *,
+        app_id: str,
+        manifest: AppManifest,
+        surface: SurfaceSpec,
+        user_fingerprint: str,
+        regenerate: bool,
+        source: str,
+        cache_path: Path,
+        data: dict,
+        output_tree: dict,
+    ) -> None:
+        """Append one deterministic render trace line for replay/audits."""
+        try:
+            trace_path = (
+                self._trace_dir
+                / app_id
+                / f"{surface.surface_id}.jsonl"
+            )
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+
+            action_ids = [a.action_id for a in surface.action_contract]
+            record = {
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "app_id": app_id,
+                "app_version": manifest.version,
+                "surface_id": surface.surface_id,
+                "surface_kind": surface.kind,
+                "surface_schema_version": surface.schema_version,
+                "manifest_schema_version": manifest.contract.manifest_schema_version,
+                "a2ui_version": manifest.contract.a2ui_version,
+                "compatibility_mode": manifest.contract.compatibility_mode,
+                "user_fingerprint_hash": self._fingerprint_token(user_fingerprint),
+                "regenerate": bool(regenerate),
+                "source": source,
+                "cache_path": str(cache_path),
+                "action_ids": action_ids,
+                "data_summary": self._data_summary(data),
+                "output_root_type": (
+                    output_tree.get("type")
+                    if isinstance(output_tree, dict)
+                    else type(output_tree).__name__
+                ),
+            }
+            with trace_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, sort_keys=True) + "\n")
+        except Exception as exc:
+            logger.debug("HybridGenerator trace write failed: %s", exc)
+
     async def _llm_generate(
         self, manifest: AppManifest, surface: SurfaceSpec, data: dict
-    ) -> dict:
+    ) -> tuple[dict, str]:
         """Generate SDUI via the shared GenUIEngine with publisher style."""
         if self._genui is None:
-            return _deterministic_fallback(manifest, surface)
+            return _deterministic_fallback(manifest, surface), "deterministic_fallback_no_llm"
         prompt = _build_llm_prompt(manifest, surface, data)
         try:
             tree = await self._genui.generate_from_prompt(
                 prompt, context={"brand": manifest.brand.model_dump()}
             )
             if isinstance(tree, dict) and tree.get("type"):
-                return tree
+                return tree, "llm_generated"
         except Exception as exc:
             logger.warning(
                 "HybridGenerator LLM call failed for %s/%s: %s — falling back",
                 manifest.app_id, surface.surface_id, exc,
             )
-        return _deterministic_fallback(manifest, surface)
+            return _deterministic_fallback(manifest, surface), "deterministic_fallback_llm_error"
+        return _deterministic_fallback(manifest, surface), "deterministic_fallback_invalid_llm_output"
 
 
 # ----------------------------------------------------------------------

@@ -1,4 +1,11 @@
-"""Catalog listing with filtering and simple sorting."""
+"""Catalog listing with filtering and simple sorting.
+
+Public callers see only ``status=approved`` AND ``visibility=public``
+items. Authenticated reviewers (``Authorization: Bearer <reviewer
+secret>``) see all rows and may filter by status, including the
+``submitted`` queue. Failing closed for the public surface is the
+whole point of the moderation gate.
+"""
 
 from __future__ import annotations
 
@@ -9,8 +16,15 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..auth import Reviewer, optional_reviewer
 from ..db import get_session
-from ..models import Item, Publisher
+from ..models import (
+    ITEM_STATUS_APPROVED,
+    ITEM_STATUSES,
+    ITEM_VISIBILITY_PUBLIC,
+    Item,
+    Publisher,
+)
 from ..schemas import CatalogItem, CatalogResponse, Kind
 
 router = APIRouter()
@@ -23,9 +37,24 @@ async def catalog(
     sort: Literal["newest", "popular"] = Query(default="newest"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    status_filter: str | None = Query(default=None, alias="status"),
     session: AsyncSession = Depends(get_session),
+    reviewer: Reviewer | None = Depends(optional_reviewer),
 ) -> CatalogResponse:
     base = select(Item, Publisher).join(Publisher, Item.author_id == Publisher.id)
+
+    if reviewer is None:
+        # Public surface: hard fail-closed filter.
+        base = base.where(
+            Item.status == ITEM_STATUS_APPROVED,
+            Item.visibility == ITEM_VISIBILITY_PUBLIC,
+        )
+    elif status_filter is not None:
+        if status_filter not in ITEM_STATUSES:
+            # Unknown status -> empty result, no leak about other items.
+            base = base.where(Item.id == "__none__")
+        else:
+            base = base.where(Item.status == status_filter)
 
     if kind is not None:
         base = base.where(Item.kind == kind)
@@ -62,6 +91,8 @@ async def catalog(
                 downloads=item.downloads,
                 verified=item.verified,
                 created_at=item.created_at,
+                status=item.status,  # type: ignore[arg-type]
+                visibility=item.visibility,  # type: ignore[arg-type]
             )
         )
     return CatalogResponse(items=results, total=int(total))

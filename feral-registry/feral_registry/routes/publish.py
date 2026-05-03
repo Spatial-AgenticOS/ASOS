@@ -14,7 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import current_publisher
 from ..config import Settings, get_settings
 from ..db import get_session
-from ..models import Item, Publisher
+from ..models import (
+    ITEM_STATUS_SUBMITTED,
+    ITEM_VISIBILITY_PRIVATE,
+    Item,
+    Publisher,
+    ReviewEvent,
+)
 from ..schemas import Manifest, PublishResponse, validate_manifest_for_kind
 from ..signing import sha256_bytes, verify_bundle_signature
 
@@ -90,8 +96,19 @@ async def publish(
         size_bytes=len(data),
         signature_b64=signature,
         verified=verified,
+        status=ITEM_STATUS_SUBMITTED,
+        visibility=ITEM_VISIBILITY_PRIVATE,
     )
     session.add(item)
+    await session.flush()  # populate item.id without ending the txn
+    session.add(
+        ReviewEvent(
+            item_id=item.id,
+            event="publish_received",
+            actor=f"publisher:{publisher.github_login}",
+            notes=None,
+        )
+    )
     await session.commit()
     await session.refresh(item)
 
@@ -100,4 +117,6 @@ async def publish(
         sha256=sha,
         download_url=f"{settings.public_base_url}/api/v1/blobs/{sha}",
         verified=verified,
+        status=item.status,  # type: ignore[arg-type]
+        visibility=item.visibility,  # type: ignore[arg-type]
     )

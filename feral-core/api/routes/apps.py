@@ -28,7 +28,11 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from agents.app_registry import AppRegistryError, UnverifiedManifestError
+from agents.app_registry import (
+    AppRegistryError,
+    UnapprovedRegistryItemError,
+    UnverifiedManifestError,
+)
 from api.state import state
 from genui.permissions_policy import PolicyViolation
 
@@ -54,8 +58,14 @@ def _manifest_summary(app) -> dict:
         "brand": m.brand.model_dump(),
         "entry_surface_id": m.entry_surface_id,
         "surfaces": [s.surface_id for s in m.surfaces],
-        "permissions": list(m.permissions),
+        "contract": m.contract.model_dump() if getattr(m, "contract", None) else {},
+        "permissions": (
+            m.permissions if isinstance(m.permissions, dict) else list(m.permissions)
+        ),
         "skill_dependencies": list(getattr(m, "skill_dependencies", []) or []),
+        "surface_schema_versions": {
+            s.surface_id: s.schema_version for s in m.surfaces
+        },
         "install_dir": str(app.install_dir),
         "installed_at": app.installed_at,
     }
@@ -254,11 +264,19 @@ async def validate_manifest(req: ValidateRequest):
         "summary": {
             "app_id": manifest.app_id,
             "version": manifest.version,
+            "contract": manifest.contract.model_dump(),
             "surfaces": [s.surface_id for s in manifest.surfaces],
             "actions": actions,
-            "permissions": list(manifest.permissions),
+            "permissions": (
+                manifest.permissions
+                if isinstance(manifest.permissions, dict)
+                else list(manifest.permissions)
+            ),
             "skill_dependencies": list(getattr(manifest, "skill_dependencies", []) or []),
             "entry_surface_id": manifest.entry_surface_id,
+            "surface_schema_versions": {
+                s.surface_id: s.schema_version for s in manifest.surfaces
+            },
         },
     }
 
@@ -275,6 +293,13 @@ class InstallRequest(BaseModel):
     # audit "unsigned_install" event without verification.
     unsigned: bool = False
     user_high_trust: bool = False
+    # Registry acceptance gate override. When True AND the env flag
+    # FERAL_INTERNAL_ALLOW_UNAPPROVED=1 is set on the brain, registry
+    # installs may proceed for items that the registry has not yet
+    # marked approved+public. Both knobs are required so neither a
+    # stray request body nor a leaked env var alone can bypass the
+    # gate.
+    internal_override: bool = False
 
 
 def _verified_install_kwargs(req: InstallRequest) -> dict:
@@ -377,6 +402,7 @@ async def install_app(req: InstallRequest, unsigned: Optional[bool] = None):
                 user_high_trust=bool(req.user_high_trust),
                 overwrite=req.overwrite,
                 supervisor=getattr(state, "supervisor", None),
+                internal_override=bool(req.internal_override),
             )
         except UnverifiedManifestError as exc:
             raise HTTPException(
@@ -387,6 +413,20 @@ async def install_app(req: InstallRequest, unsigned: Optional[bool] = None):
                     "remediation": (
                         "Ensure the registry item has a valid signature and "
                         "publisher key, or retry with unsigned=true in dev."
+                    ),
+                },
+            )
+        except UnapprovedRegistryItemError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "registry_item_not_approved",
+                    "message": str(exc),
+                    "remediation": (
+                        "Wait for FERAL org reviewers to approve this "
+                        "submission. Internal users with prior coordination "
+                        "may bypass with FERAL_INTERNAL_ALLOW_UNAPPROVED=1 "
+                        "AND internal_override=true on the request."
                     ),
                 },
             )

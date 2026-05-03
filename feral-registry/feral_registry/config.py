@@ -32,6 +32,13 @@ class Settings(BaseSettings):
 
     featured_publishers_raw: str = Field(default="", alias="FEATURED_PUBLISHERS")
 
+    # Org-side reviewer auth. Held only in deployment secrets; if unset
+    # the reviewer routes fail closed (503) so an unconfigured registry
+    # cannot accidentally expose moderation actions. Distinct from the
+    # publisher JWT secret so reviewer credentials cannot be used to
+    # publish and vice versa.
+    reviewer_secret: str | None = Field(default=None, alias="FERAL_REGISTRY_REVIEWER_SECRET")
+
     public_base_url: str = Field(
         default="http://localhost:8080", alias="FERAL_REGISTRY_PUBLIC_URL"
     )
