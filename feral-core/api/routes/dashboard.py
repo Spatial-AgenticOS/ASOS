@@ -172,9 +172,39 @@ async def _get_dashboard_data() -> dict:
     stats = state.memory.stats()
     devices_list = []
     latest_health = {}
+    online_node_ids: set[str] = set()
     for node_id in state.daemons:
         dev = state.devices.get(node_id, {})
         devices_list.append({"node_id": node_id, "type": dev.get("device_type", dev.get("node_type", "unknown")), "connected": True})
+        online_node_ids.add(node_id)
+
+    # Add paired-but-offline devices so the home page can distinguish
+    # "no devices have ever been paired" from "you have N paired
+    # devices, none of them are talking to the brain right now". The
+    # previous behaviour conflated these and looked like pairing had
+    # silently failed.
+    paired_count = 0
+    paired_offline = 0
+    pairing_store = getattr(state, "device_pairing_store", None)
+    if pairing_store is not None and hasattr(pairing_store, "list_devices"):
+        try:
+            paired_rows = pairing_store.list_devices(include_unclaimed=False) or []
+        except Exception:
+            paired_rows = []
+        paired_count = len(paired_rows)
+        for row in paired_rows:
+            node_id = row.get("device_id") or row.get("node_id")
+            if not node_id or node_id in online_node_ids:
+                continue
+            paired_offline += 1
+            devices_list.append({
+                "node_id": node_id,
+                "type": row.get("kind") or row.get("type") or "unknown",
+                "name": row.get("name"),
+                "connected": False,
+                "paired_at": row.get("paired_at"),
+                "last_seen": row.get("last_seen"),
+            })
     for sid in state.sessions:
         frame = state.perception.get_frame(sid)
         if frame:
@@ -209,7 +239,16 @@ async def _get_dashboard_data() -> dict:
                 channel_types.append({"type": ch_id, "connected": getattr(ch, '_running', False)})
 
     return {
-        "devices": devices_list, "device_count": len(state.daemons),
+        # `devices` now includes paired-but-offline rows alongside
+        # live ones (each row carries `connected: bool`). The legacy
+        # `device_count` stays as live-only for back-compat with any
+        # client that already keys off it; new clients should prefer
+        # `online_count` + `paired_count`.
+        "devices": devices_list,
+        "device_count": len(state.daemons),
+        "online_count": len(state.daemons),
+        "paired_count": paired_count,
+        "paired_offline_count": paired_offline,
         "channels": channel_types,
         "session_count": len(state.sessions), "health": latest_health,
         "memory": stats, "skills_count": len(state.skill_registry.skills),

@@ -486,8 +486,14 @@ class BrainState:
 
         self.wasm_sandbox = WASMSandbox()
 
+        # Default OFF so a fresh install does not start listening to
+        # the microphone without the user explicitly opting in. The
+        # setup wizard and Settings expose a toggle that flips
+        # FERAL_WAKE_WORD (and persists in config) when the user
+        # consents. Pre-2026.5.13 builds defaulted to ON, which made
+        # privacy-sensitive testers uncomfortable.
         self.wake_word = WakeWordDetector(WakeWordConfig(
-            enabled=os.getenv("FERAL_WAKE_WORD", "true").lower() in ("true", "1", "yes"),
+            enabled=os.getenv("FERAL_WAKE_WORD", "false").lower() in ("true", "1", "yes"),
         ))
 
         from skills.impl import register_instance

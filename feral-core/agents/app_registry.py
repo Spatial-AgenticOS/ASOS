@@ -412,8 +412,22 @@ class AppRegistry:
         if httpx is None:
             raise AppRegistryError("httpx is required for registry installs")
 
-        base = (registry_url or os.environ.get("FERAL_REGISTRY_URL") or REGISTRY_DEFAULT_URL).rstrip("/")
-        item_url = f"{base}/api/v1/item/{registry_id}"
+        # Build the ordered list of candidate base URLs (primary +
+        # fallbacks for networks that can't resolve our IPv6-only
+        # canonical host). cli.publish.registry_base_urls is the
+        # single source of truth so install/CLI/marketplace agree.
+        try:
+            from cli.publish import registry_base_urls
+        except Exception:  # defensive: cli/publish optional in some configs
+            registry_base_urls = None  # type: ignore[assignment]
+        if registry_url is not None:
+            bases = [registry_url.rstrip("/")]
+        elif registry_base_urls is not None:
+            bases = registry_base_urls()
+        else:
+            bases = [
+                (os.environ.get("FERAL_REGISTRY_URL") or REGISTRY_DEFAULT_URL).rstrip("/")
+            ]
 
         stage_root = Path(tempfile.mkdtemp(prefix="feral-app-registry-"))
         tarball = stage_root / "bundle.tar.gz"
@@ -421,10 +435,36 @@ class AppRegistry:
 
         try:
             with httpx.Client(timeout=30.0, follow_redirects=True) as client:  # type: ignore[union-attr]
-                try:
-                    item_resp = client.get(item_url)
-                except Exception as exc:
-                    raise AppRegistryError(f"registry lookup failed: {exc}") from exc
+                item_resp = None
+                base = bases[0]
+                last_lookup_err: Exception | None = None
+                last_status: int | None = None
+                for candidate in bases:
+                    try:
+                        item_resp = client.get(f"{candidate}/api/v1/item/{registry_id}")
+                    except Exception as exc:
+                        last_lookup_err = exc
+                        continue
+                    if item_resp.status_code == 404:
+                        # 404 is authoritative: the item really doesn't
+                        # exist on this registry. Bail rather than try
+                        # fallbacks (which would return the same 404).
+                        base = candidate
+                        break
+                    if item_resp.status_code >= 400:
+                        last_status = item_resp.status_code
+                        item_resp = None
+                        continue
+                    base = candidate
+                    break
+                if item_resp is None:
+                    if last_lookup_err is not None:
+                        raise AppRegistryError(
+                            f"registry lookup failed: {last_lookup_err}"
+                        ) from last_lookup_err
+                    raise AppRegistryError(
+                        f"registry lookup failed ({last_status})"
+                    )
                 if item_resp.status_code == 404:
                     raise AppRegistryError(f"registry item {registry_id!r} not found")
                 if item_resp.status_code >= 400:
