@@ -260,6 +260,15 @@ class LLMProvider:
         self._cooldown = ProviderCooldownTracker(storage_path=_cooldown_state_path())
         self._last_budget_routing: dict[str, Any] = {}
 
+        # When `chat()` (the direct path, not chat_with_failover) sees a
+        # permanent auth failure for a provider+key combination, we
+        # remember it so subsequent calls short-circuit instead of
+        # hammering the API and spamming ERROR-level logs every minute.
+        # Cleared by `switch_provider()` (which is what /api/config/credentials
+        # calls when the user updates their key in Settings).
+        self._auth_permanent_until: dict[str, float] = {}
+        self._auth_permanent_logged: set[str] = set()
+
         # Local inference engine (for provider=local or hybrid)
         self._local_engine = None
         self._hybrid_cloud_provider = None
@@ -471,6 +480,29 @@ class LLMProvider:
         caller (digital twin, proactive, ideas engine, wherever) gains
         cross-provider failover without knowing about the distinction.
         """
+        # Permanent-auth short-circuit. If a previous call established
+        # that the current key is invalid (HTTP 401 + "invalid_api_key"),
+        # don't keep poking the wire every 60s -- return the cached
+        # error so the user gets a clear reason and the log stays quiet.
+        # `switch_provider` clears the entry, so the moment the user
+        # updates their key in Settings the brain starts trying again.
+        # Defensive getattr because some test stubs subclass LLMProvider
+        # without invoking __init__ (the cache + provider/model attrs
+        # may not exist).
+        auth_block_map = getattr(self, "_auth_permanent_until", None)
+        if auth_block_map:
+            auth_key = f"{getattr(self, 'provider', '?')}:{getattr(self, 'model', '?')}"
+            auth_block = auth_block_map.get(auth_key)
+            if auth_block and time.time() < auth_block:
+                return {
+                    "error": (
+                        f"{getattr(self, 'provider', 'LLM').upper()} API key "
+                        "invalid (HTTP 401). Update the key in Settings to retry."
+                    ),
+                    "choices": [],
+                    "auth_permanent": True,
+                }
+
         fallbacks = self._config.get("fallback_providers") if isinstance(self._config, dict) else None
         if fallbacks and not (self._local_engine and self.provider in ("local", "hybrid")):
             try:
@@ -569,7 +601,28 @@ class LLMProvider:
         except httpx.HTTPStatusError as e:
             increment("feral.llm.errors_total", attributes={"provider": self.provider, "model": self.model})
             detail = _describe_http_status_error(e)
-            logger.error("LLM API error: %s", detail)
+            # Classify so we can short-circuit the next call instead of
+            # hitting the wire every 60s when the key is dead.
+            try:
+                reason = classify_error(e)
+            except Exception:
+                reason = None
+            auth_key = f"{self.provider}:{self.model}"
+            if reason == FailoverReason.AUTH_PERMANENT:
+                # 24h block; user updating the key in Settings clears it
+                # immediately via switch_provider.
+                self._auth_permanent_until[auth_key] = time.time() + 24 * 3600
+                if auth_key not in self._auth_permanent_logged:
+                    self._auth_permanent_logged.add(auth_key)
+                    logger.error(
+                        "LLM API error: %s — disabling provider until key is updated. "
+                        "Open Settings and refresh the %s API key.",
+                        detail, self.provider,
+                    )
+                else:
+                    logger.debug("LLM API error (suppressed, key still invalid): %s", detail)
+            else:
+                logger.error("LLM API error: %s", detail)
             return {"error": detail, "choices": []}
         except Exception as e:
             increment("feral.llm.errors_total", attributes={"provider": self.provider, "model": self.model})
@@ -1188,6 +1241,12 @@ class LLMProvider:
         client = getattr(self, "client", None)
         if client is not None:
             await client.aclose()
+
+        # Reset the permanent-auth short-circuit. Whatever was wrong
+        # before, the user just supplied fresh credentials -- start
+        # trying again immediately. Same on switching providers.
+        self._auth_permanent_until = {}
+        self._auth_permanent_logged = set()
 
         self.provider = provider
         if model:
