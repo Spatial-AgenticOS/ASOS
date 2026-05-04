@@ -28,27 +28,52 @@ async def marketplace_catalog(kind: str = "skill", q: str = "", sort: str = "new
     kind ∈ {"skill", "daemon", "mcp"}. Proxies to the configured
     ``FERAL_REGISTRY_URL`` (default https://registry.feral.sh) so the
     Settings UI has a single, stable endpoint across install targets.
-    If the registry is unreachable the client displays a graceful
-    "service being provisioned" banner.
-    """
-    import os
 
+    Walks the fallback URL list (see ``cli.publish.registry_base_urls``)
+    on connection / DNS failures so a user whose network can't resolve
+    the primary host (e.g. IPv6-only AAAA records) still reaches the
+    registry via the direct Fly URL.
+    """
     import httpx
 
-    registry_url = os.environ.get("FERAL_REGISTRY_URL", "https://registry.feral.sh").rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{registry_url}/api/v1/catalog",
-                params={"kind": kind, "q": q, "sort": sort},
-            )
-            if resp.status_code != 200:
-                return {"items": [], "error": f"registry returned {resp.status_code}"}
-            data = resp.json()
-            items = data.get("items") or data.get("results") or []
-            return {"items": items, "kind": kind, "source": registry_url}
-    except Exception as exc:
-        return {"items": [], "error": f"registry unreachable: {exc}"}
+    from cli.publish import registry_base_urls
+
+    bases = registry_base_urls()
+    last_error: Exception | None = None
+    last_status: int | None = None
+    for base in bases:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{base}/api/v1/catalog",
+                    params={"kind": kind, "q": q, "sort": sort},
+                )
+                if resp.status_code != 200:
+                    last_status = resp.status_code
+                    continue
+                data = resp.json()
+                items = data.get("items") or data.get("results") or []
+                return {
+                    "items": items,
+                    "kind": kind,
+                    "source": base,
+                    "tried": bases,
+                }
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    if last_error is not None:
+        return {
+            "items": [],
+            "error": f"registry unreachable: {last_error}",
+            "tried": bases,
+        }
+    return {
+        "items": [],
+        "error": f"registry returned {last_status}",
+        "tried": bases,
+    }
 
 
 @router.post("/api/marketplace/install")
