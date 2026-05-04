@@ -118,7 +118,8 @@
         "group": "Security",
         "pages": [
           "genui/signing",
-          "genui/sandbox"
+          "genui/sandbox",
+          "genui/contracts"
         ]
       },
       {
@@ -136,6 +137,7 @@
           "guides/observability",
           "guides/federated-sync",
           "operations/soak",
+          "operations/benchmarks",
           "operations/metrics"
         ]
       },
@@ -178,5 +180,11 @@
   "feedback": {
     "thumbsRating": true,
     "suggestEdit": true
+  },
+  "integrations": {
+    "posthog": {
+      "apiKey": "phc_pqVzXEN2FSPpjkueNQNwQnLEUQEwvHifa3ho8hMRifHd",
+      "apiHost": "https://us.i.posthog.com"
+    }
   }
 }
