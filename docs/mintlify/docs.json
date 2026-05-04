@@ -2,7 +2,7 @@
   "$schema": "https://mintlify.com/schema.json",
   "theme": "mint",
   "name": "FERAL",
-  "description": "One local brain for every device you own. Open-source AI that connects to your entire physical and digital world.",
+  "description": "One local brain for apps, devices, memory, and policy-gated actions.",
   "logo": {
     "dark": "/images/feral-banner.png",
     "light": "/images/feral-banner.png",

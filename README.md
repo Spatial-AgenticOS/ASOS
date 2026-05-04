@@ -2,8 +2,8 @@
   <img src="feral-banner.png" width="640" alt="FERAL" />
 </p>
 
-<h3 align="center">One local brain. Every device you own.</h3>
-<p align="center"><em>Open-source AI orchestration for your computer, phone, hardware, and channels - with explicit control over where it runs and how it reaches devices.</em></p>
+<h3 align="center">One local brain for apps, devices, and memory.</h3>
+<p align="center"><em>Install FERAL on your machine. It connects software and hardware, keeps long-lived memory, learns your baseline, and executes with explicit control.</em></p>
 
 <p align="center">
   <a href="#quickstart-pypi-first">Quickstart</a> &nbsp;·&nbsp;
@@ -27,17 +27,21 @@
 
 ## What FERAL Is
 
-FERAL is a brain-centered product we are building toward a full AI operating system: one brain in the middle, connected to your software, memory, and physical devices.
+FERAL is a local-first brain that sits in the middle of your software and physical devices. You run it on your own machine and connect apps, channels, and hardware through one runtime.
 
-Today that ships as `feral-core` (brain runtime), `feral-client-v2` (web control surface), and `feral-nodes` (device/node bridges). The open-source community path is to keep advancing that brain into the system-level center of your stack.
+Core model:
 
-- Brain: FastAPI + WebSocket runtime for orchestration, memory, and routing.
-- Client: React dashboard for chat, setup, pairing, and SDUI rendering.
-- Nodes: optional daemons and bridges for hardware and mobile/device telemetry.
+- 4-layer memory: working context, episodic events, semantic/graph retrieval, and execution history.
+- Baseline learning: rolling metrics and anomaly/trend detection for what "normal" looks like for you.
+- Digital twin actions: policy-gated autonomy with approval, time-window, and daily-cap controls.
+- Publisher model: developers ship headless API/CLI contracts and app manifests; FERAL renders structured Gen-UI surfaces locally.
+- Registry review gate: submissions are not user-installable until approved by FERAL org reviewers.
+
+Today this ships as `feral-core` (brain runtime), `feral-client-v2` (web control surface), and `feral-nodes` (device/node bridges).
 
 ## Status
 
-- Package: `feral-ai` on PyPI, current CalVer `2026.5.10`.
+- Package: `feral-ai` on PyPI, current CalVer `2026.5.13`.
 - Maturity: Beta (single-user local deployment is the primary target).
 - Default startup mode: "This Mac only" pairing until you opt into LAN or Anywhere.
 
