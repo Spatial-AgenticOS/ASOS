@@ -6,49 +6,49 @@ description: "What Gen-UI means in this repo today, what is stable, and what is 
 
 # Gen-UI in FERAL
 
-Gen-UI is server-driven UI (SDUI): the brain emits structured UI payloads, the web client renders supported components.
+Gen-UI is server-driven UI (SDUI): the brain emits structured UI payloads and
+the client renders known component contracts.
 
-## What is shipping now
+## Stable today
 
-- SDUI payload rendering in the web UI (`SduiRenderer` path).
-- SDUI patch updates (`sdui_patch`) for incremental UI changes.
-- App surface routing and sandboxed rendering flows.
-- Live frame inspection in `/canvas`.
+- SDUI payload rendering in the web client (`SduiRenderer`).
+- Incremental updates via `sdui_patch`.
+- Third-party app install/open/dispatch API surface (`/api/apps/...`).
+- Manifest signing + AppSurface sandbox + strict postMessage schema.
+- Per-surface schema-version cache invalidation.
+
+## Stable contract strategy for publishers
+
+Use explicit contract versions in your app manifest:
+
+- `manifest.contract.manifest_schema_version`
+- `manifest.contract.a2ui_version`
+- `surfaces[*].schema_version`
+- `surfaces[*].action_contract`
+
+Full policy (what to bump and when):
+
+- [Gen-UI contracts & versioning](/genui/contracts)
+
+## Headless vs UI
+
+You can ship headless-first today:
+
+- install: `POST /api/apps/install`
+- render: `POST /api/apps/{app_id}/surfaces/{surface_id}/render`
+- dispatch: `POST /api/apps/{app_id}/dispatch`
+
+UI is still first-class for users, but agent integrations can run directly on
+the headless API contract without building bespoke frontends.
+
+## Deterministic traces
+
+Hybrid surface renders emit replay/audit traces under the hybrid cache tree
+(`_render_traces/*.jsonl`) with source, schema versions, and action contract
+context. This is the debugging path for render drift and failure analysis.
 
 ## What this is not
 
 - Not arbitrary HTML generation.
-- Not full native SDUI parity across every client surface.
-- Not a claim that all marketplace trust/signing flows are complete end-to-end.
-
-## Core shape
-
-Example SDUI payload:
-
-```json
-{
-  "type": "sdui_payload",
-  "payload": {
-    "component": "MetricCard",
-    "props": {
-      "title": "CPU temperature",
-      "value": "72C"
-    }
-  }
-}
-```
-
-The brain decides component + props; the client renders known component contracts.
-
-## Where to look
-
-- Brain-side generation/contracts: `feral-core/genui/`
-- Runtime routing and app registry: `feral-core/agents/`
-- Client renderer: `feral-client-v2/src/ui/SduiRenderer.jsx`
-- Live inspector: `feral-client-v2/src/pages/GenUICanvas.jsx`
-
-## Practical guidance
-
-- Use Gen-UI for structured operational surfaces: cards, forms, metrics, stateful action flows.
-- Keep component contracts explicit and versioned.
-- Treat unsupported component types as fallback-only until renderer support is shipped.
+- Not "any component works everywhere instantly."
+- Not a guarantee of parity across every client surface yet.

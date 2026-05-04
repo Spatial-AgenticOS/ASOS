@@ -53,6 +53,7 @@ from models.skill_manifest import BrandProfile
 
 
 APP_ID_RE = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
+SEMVER_LIKE_RE = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
 
 SurfaceKind = Literal["authored", "generated", "hybrid"]
 ActionHandler = Literal[
@@ -64,6 +65,18 @@ ActionHandler = Literal[
 ]
 
 NotificationPriority = Literal["low", "normal", "high", "critical"]
+
+
+def _parse_semver_like(value: str) -> tuple[int, int, int]:
+    """Parse `major.minor` or `major.minor.patch` into a numeric tuple."""
+    if not SEMVER_LIKE_RE.match(value):
+        raise ValueError(
+            f"version {value!r} must match 'major.minor' or 'major.minor.patch'"
+        )
+    parts = [int(p) for p in value.split(".")]
+    if len(parts) == 2:
+        parts.append(0)
+    return parts[0], parts[1], parts[2]
 
 
 # ----------------------------------------------------------------------
@@ -239,7 +252,14 @@ class SurfaceSpec(BaseModel):
     data_schema_ref: Optional[str] = None
     # Increment to invalidate cached agent-generated renders for this
     # surface. Part of the per-user cache key.
-    schema_version: int = 1
+    schema_version: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Surface contract version. Bump this when action ids, "
+            "bindings, or required shape changes."
+        ),
+    )
     action_contract: list[ActionSpec] = Field(default_factory=list)
 
     def action_ids(self) -> set[str]:
@@ -273,6 +293,34 @@ class NotificationSchema(BaseModel):
     default_deep_link_surface_id: Optional[str] = None
 
 
+class ContractSpec(BaseModel):
+    """Publisher-declared contract versions for compatibility checks.
+
+    `manifest_schema_version` governs the AppManifest shape.
+    `a2ui_version` pins the message/render contract expected by this app.
+    """
+
+    manifest_schema_version: str = Field(
+        default="1.0",
+        description="Publisher manifest contract version (major.minor[.patch]).",
+    )
+    a2ui_version: str = Field(
+        default="1.0",
+        description="A2UI contract version expected by this app bundle.",
+    )
+    compatibility_mode: Literal["strict", "backward_compatible"] = Field(
+        default="backward_compatible",
+        description="Whether runtime should allow additive contract drift.",
+    )
+    notes: str = ""
+
+    @field_validator("manifest_schema_version", "a2ui_version")
+    @classmethod
+    def _valid_contract_version(cls, v: str) -> str:
+        _parse_semver_like(v)
+        return v
+
+
 # ----------------------------------------------------------------------
 # Root manifest
 # ----------------------------------------------------------------------
@@ -290,6 +338,7 @@ class AppManifest(BaseModel):
     version: str = "1.0.0"
     author: str = ""
     description: str = ""
+    contract: ContractSpec = Field(default_factory=ContractSpec)
 
     brand: BrandProfile
     # Permissions accept either the legacy opaque-tag list shape
@@ -327,6 +376,14 @@ class AppManifest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_cross_refs(self) -> "AppManifest":
+        manifest_major, _, _ = _parse_semver_like(self.contract.manifest_schema_version)
+        if manifest_major != 1:
+            raise ValueError(
+                "unsupported contract.manifest_schema_version: "
+                f"{self.contract.manifest_schema_version!r}. "
+                "This runtime currently supports major version 1 only."
+            )
+
         surface_ids = {s.surface_id for s in self.surfaces}
         if not surface_ids:
             raise ValueError("AppManifest must declare at least one surface")
