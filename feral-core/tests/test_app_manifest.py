@@ -98,6 +98,39 @@ class TestRoundTrip:
         assert m.get_data_schema("bogus") is None
 
 
+class TestContractVersioning:
+    def test_default_contract_is_present(self):
+        m = _minimal_manifest()
+        assert m.contract.manifest_schema_version == "1.0"
+        assert m.contract.a2ui_version == "1.0"
+
+    def test_rejects_invalid_contract_semver(self):
+        with pytest.raises(Exception):
+            _minimal_manifest(
+                contract={"manifest_schema_version": "v1", "a2ui_version": "1.0"}
+            )
+
+    def test_rejects_unsupported_contract_major(self):
+        with pytest.raises(Exception) as exc:
+            _minimal_manifest(
+                contract={"manifest_schema_version": "2.0", "a2ui_version": "1.0"}
+            )
+        assert "supports major version 1 only" in str(exc.value)
+
+    def test_rejects_non_positive_surface_schema_version(self):
+        surfaces = [
+            {
+                "surface_id": "home",
+                "kind": "authored",
+                "template_root": {"type": "Text", "value": "hi"},
+                "schema_version": 0,
+                "action_contract": [],
+            },
+        ]
+        with pytest.raises(Exception):
+            _minimal_manifest(surfaces=surfaces, entry_surface_id="home")
+
+
 class TestAppIdValidation:
     @pytest.mark.parametrize(
         "bad",

@@ -281,6 +281,37 @@ class TestCachePurge:
         assert gen.purge_app_cache("demo-app") == 0  # idempotent
 
 
+class TestRenderTraces:
+    @pytest.mark.asyncio
+    async def test_render_writes_audit_trace(self, tmp_cache):
+        gen = HybridGenerator(genui_engine=FakeGenUIEngine(), cache_dir=tmp_cache)
+        surface = SurfaceSpec(
+            surface_id="home",
+            kind="authored",
+            template_root={"type": "Text", "value": "$data.msg"},
+            action_contract=[],
+        )
+        manifest = _manifest([surface], entry="home")
+
+        await gen.render(
+            app_id="demo-app",
+            manifest=manifest,
+            surface=surface,
+            data={"msg": "hello"},
+            user_fingerprint="trace-user",
+        )
+
+        trace_file = tmp_cache / "_render_traces" / "demo-app" / "home.jsonl"
+        assert trace_file.exists()
+        lines = [line for line in trace_file.read_text().splitlines() if line.strip()]
+        assert lines
+        row = json.loads(lines[-1])
+        assert row["source"] == "authored_template"
+        assert row["app_id"] == "demo-app"
+        assert row["surface_schema_version"] == 1
+        assert row["user_fingerprint_hash"]
+
+
 class TestLLMPromptIncludesRules:
     @pytest.mark.asyncio
     async def test_llm_prompt_contains_interaction_rules(self, tmp_cache):

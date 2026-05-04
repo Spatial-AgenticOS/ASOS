@@ -163,8 +163,19 @@ class TestInstall:
         thread_surface = app.manifest.get_surface("thread")
         assert thread_surface.template_root == {"type": "Text", "value": "hydrated"}
 
-    def test_install_from_registry_downloads_bundle_and_installs(self, registry, monkeypatch):
-        manifest = _sample_manifest("registry-demo")
+    def _registry_install_harness(
+        self, registry, registry_id, monkeypatch, *, status=None, visibility=None
+    ):
+        """Build a mocked registry that serves one item + bundle.
+
+        Returns ``(install_fn, manifest)`` where ``install_fn(**kw)``
+        invokes ``registry.install_from_registry`` with the harness in
+        place. Tests parameterise the registry's reported moderation
+        state via ``status`` / ``visibility``; when both are ``None``
+        the response omits the fields entirely (legacy behaviour).
+        """
+
+        manifest = _sample_manifest(f"acceptance-{registry_id.replace('.', '-')}")
         bundle = io.BytesIO()
         with tarfile.open(fileobj=bundle, mode="w:gz") as tar:
             data = manifest.model_dump_json().encode("utf-8")
@@ -174,17 +185,20 @@ class TestInstall:
         bundle_bytes = bundle.getvalue()
         bundle_sha = hashlib.sha256(bundle_bytes).hexdigest()
 
-        registry_id = "publisher.registry-demo"
         metadata = {
             "kind": "app",
-            "download_url": "https://registry.test/downloads/registry-demo.tar.gz",
+            "download_url": f"https://registry.test/downloads/{registry_id}.tar.gz",
             "sha256": bundle_sha,
         }
+        if status is not None:
+            metadata["status"] = status
+        if visibility is not None:
+            metadata["visibility"] = visibility
 
         def _handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == f"/api/v1/item/{registry_id}":
                 return httpx.Response(200, json=metadata)
-            if request.url.path == "/downloads/registry-demo.tar.gz":
+            if request.url.path == f"/downloads/{registry_id}.tar.gz":
                 return httpx.Response(200, content=bundle_bytes)
             return httpx.Response(404, json={"detail": "not found"})
 
@@ -197,13 +211,101 @@ class TestInstall:
 
         monkeypatch.setattr("agents.app_registry.httpx.Client", _client_factory)
 
-        installed = registry.install_from_registry(
-            registry_id,
-            registry_url="https://registry.test",
-            allow_unsigned=True,
+        def _install(**kw):
+            return registry.install_from_registry(
+                registry_id,
+                registry_url="https://registry.test",
+                allow_unsigned=True,
+                **kw,
+            )
+
+        return _install, manifest
+
+    def test_install_from_registry_downloads_bundle_and_installs(self, registry, monkeypatch):
+        install, _manifest = self._registry_install_harness(
+            registry, "publisher.registry-demo",
+            monkeypatch,
+            status="approved",
+            visibility="public",
         )
-        assert installed.app_id == "registry-demo"
-        assert registry.get("registry-demo") is not None
+        installed = install()
+        assert installed.app_id.startswith("acceptance-")
+        assert registry.get(installed.app_id) is not None
+
+    def test_install_from_registry_legacy_response_is_treated_approved(
+        self, registry, monkeypatch
+    ):
+        """A registry that pre-dates the moderation gate must still work.
+
+        When the response omits ``status`` and ``visibility`` we
+        default to approved+public so feral-core stays compatible
+        with older or third-party registries that have already vetted
+        their items out-of-band.
+        """
+
+        install, _manifest = self._registry_install_harness(
+            registry, "publisher.legacy-demo", monkeypatch
+        )
+        installed = install()
+        assert installed.app_id.startswith("acceptance-")
+
+    def test_install_from_registry_rejects_submitted(self, registry, monkeypatch):
+        from agents.app_registry import UnapprovedRegistryItemError
+
+        install, _manifest = self._registry_install_harness(
+            registry, "publisher.pending-demo",
+            monkeypatch,
+            status="submitted",
+            visibility="private",
+        )
+        with pytest.raises(UnapprovedRegistryItemError) as exc:
+            install()
+        # Error message must be safe to surface to a user and explain
+        # why the install was refused without leaking internal state.
+        msg = str(exc.value).lower()
+        assert "not yet approved" in msg
+        assert "submitted" in msg
+
+    def test_install_from_registry_rejects_rejected(self, registry, monkeypatch):
+        from agents.app_registry import UnapprovedRegistryItemError
+
+        install, _manifest = self._registry_install_harness(
+            registry, "publisher.rejected-demo",
+            monkeypatch,
+            status="rejected",
+            visibility="private",
+        )
+        with pytest.raises(UnapprovedRegistryItemError):
+            install()
+
+    def test_install_from_registry_internal_override_requires_env_and_flag(
+        self, registry, monkeypatch
+    ):
+        """Override is fail-closed unless BOTH env and flag are set."""
+
+        from agents.app_registry import UnapprovedRegistryItemError
+
+        install, _manifest = self._registry_install_harness(
+            registry, "publisher.override-demo",
+            monkeypatch,
+            status="submitted",
+            visibility="private",
+        )
+
+        # Env alone -> still rejected.
+        monkeypatch.setenv("FERAL_INTERNAL_ALLOW_UNAPPROVED", "1")
+        with pytest.raises(UnapprovedRegistryItemError):
+            install()
+
+        # Flag alone (env removed) -> still rejected.
+        monkeypatch.delenv("FERAL_INTERNAL_ALLOW_UNAPPROVED", raising=False)
+        with pytest.raises(UnapprovedRegistryItemError):
+            install(internal_override=True)
+
+        # Both -> install proceeds.
+        monkeypatch.setenv("FERAL_INTERNAL_ALLOW_UNAPPROVED", "1")
+        installed = install(internal_override=True, overwrite=True)
+        assert installed.app_id.startswith("acceptance-")
 
 
 class TestListAndGet:
