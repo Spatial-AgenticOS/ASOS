@@ -68,7 +68,15 @@ def ws_base_url() -> str:
 
 
 def market_registry_url() -> str:
-    return os.getenv("FERAL_MARKETPLACE_URL", "http://localhost:8080/api/v1")
+    """Resolve the marketplace registry URL (with API path).
+
+    Default points at the production registry so a fresh install can
+    browse + install community items without configuration. Old builds
+    defaulted to ``http://localhost:8080/api/v1`` which was a vestige
+    of local-registry development and surprised every user who didn't
+    have one running.
+    """
+    return os.getenv("FERAL_MARKETPLACE_URL", "https://registry.feral.sh/api/v1")
 
 
 def brain_tls_enabled() -> bool:

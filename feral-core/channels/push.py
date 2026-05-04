@@ -55,12 +55,19 @@ class PushChannel:
                 self._firebase_project_id = sa.get("project_id")
                 logger.info(f"Firebase credentials loaded (project: {self._firebase_project_id})")
             except Exception as exc:
+                # Real failure (creds present but unreadable) -- keep WARN.
                 logger.warning(f"Failed to load Firebase credentials: {exc}")
         else:
-            logger.warning("FERAL_FIREBASE_CREDENTIALS not set or file missing — FCM disabled")
+            # Expected on fresh installs that don't push to mobile devices.
+            # INFO so it doesn't spook a first-time user reading the boot log.
+            logger.info(
+                "FCM disabled (set FERAL_FIREBASE_CREDENTIALS to enable Android push)."
+            )
 
         if not self._apns_key_path or not Path(self._apns_key_path).exists():
-            logger.warning("FERAL_APNS_KEY_PATH not set or file missing — APNs disabled")
+            logger.info(
+                "APNs disabled (set FERAL_APNS_KEY_PATH to enable iOS push)."
+            )
 
     def _init_db(self) -> None:
         with self._conn:
