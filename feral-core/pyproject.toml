@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "feral-ai"
-version = "2026.5.12"
+version = "2026.5.13"
 description = "FERAL — Open-source AI agent with computer use, GenUI, voice, hardware control, and persistent memory."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -19,6 +19,7 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
@@ -194,8 +195,13 @@ include = [
     "genui*", "hardware*", "identity*", "infra*", "integrations*",
     "mcp*", "memory*", "models*", "observability*", "perception*",
     "providers*", "security*", "services*", "skills*", "voice*",
-    "webui*", "webui_v2*", "tests*",
+    "webui*", "webui_v2*",
 ]
+# `tests*` was previously included here, which shipped the entire
+# pytest suite inside the wheel. That bloated the install and risked
+# top-level name collisions on `tests` (a common module name). Drop
+# them from the published artifact in 2026.5.13.
+exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 "skills.manifests" = ["*.json"]

@@ -53,6 +53,11 @@ except ImportError:
 
 
 DEFAULT_REGISTRY_URL = "https://registry.feral.sh"
+# Fallback host that has BOTH A (IPv4) and AAAA (IPv6) records, used when
+# the canonical hostname can't be resolved (e.g. networks without IPv6
+# connectivity hitting our IPv6-only Fly anycast). The Fly app itself is
+# what registry.feral.sh proxies to, so the response shape is identical.
+DEFAULT_REGISTRY_FALLBACK_URLS = ("https://feral-registry.fly.dev",)
 _HTTP_TIMEOUT = 30.0
 
 
@@ -82,22 +87,64 @@ def registry_base_url(cli_override: Optional[str] = None) -> str:
     ``~/.feral/config.yaml`` ``registry_url`` > default
     ``https://registry.feral.sh``.
     """
-    if cli_override:
-        return cli_override.rstrip("/")
-    env_url = os.environ.get("FERAL_REGISTRY_URL", "").strip()
-    if env_url:
-        return env_url.rstrip("/")
-    cfg = _config_path()
-    if cfg.exists():
-        try:
-            import yaml  # type: ignore
+    return registry_base_urls(cli_override)[0]
 
-            data = yaml.safe_load(cfg.read_text()) or {}
-            if isinstance(data, dict) and data.get("registry_url"):
-                return str(data["registry_url"]).rstrip("/")
-        except Exception:
-            pass
-    return DEFAULT_REGISTRY_URL
+
+def registry_base_urls(cli_override: Optional[str] = None) -> list[str]:
+    """Return the ordered list of registry URLs to try.
+
+    The first entry is the primary URL (same precedence as
+    :func:`registry_base_url`). When the primary is the canonical
+    public host and no override is in place, we additionally append
+    fallback URLs (e.g. the direct Fly app URL) so callers on
+    networks with broken IPv6 still reach the registry. Honors the
+    env var ``FERAL_REGISTRY_FALLBACK_URLS`` (comma-separated) if you
+    want to override the fallback list.
+    """
+    primary: Optional[str] = None
+    if cli_override:
+        primary = cli_override.rstrip("/")
+    else:
+        env_url = os.environ.get("FERAL_REGISTRY_URL", "").strip()
+        if env_url:
+            primary = env_url.rstrip("/")
+        else:
+            cfg = _config_path()
+            if cfg.exists():
+                try:
+                    import yaml  # type: ignore
+
+                    data = yaml.safe_load(cfg.read_text()) or {}
+                    if isinstance(data, dict) and data.get("registry_url"):
+                        primary = str(data["registry_url"]).rstrip("/")
+                except Exception:
+                    pass
+    if primary is None:
+        primary = DEFAULT_REGISTRY_URL
+
+    # Build the fallback list. Operators can override with an env var;
+    # by default we only attach the canonical fallbacks when the user
+    # is talking to the canonical primary (so a custom self-hosted
+    # registry never accidentally falls back to feral.sh's Fly app).
+    env_fallbacks = os.environ.get("FERAL_REGISTRY_FALLBACK_URLS", "").strip()
+    if env_fallbacks:
+        fallbacks = [
+            u.strip().rstrip("/")
+            for u in env_fallbacks.split(",")
+            if u.strip()
+        ]
+    elif primary == DEFAULT_REGISTRY_URL:
+        fallbacks = list(DEFAULT_REGISTRY_FALLBACK_URLS)
+    else:
+        fallbacks = []
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for url in [primary, *fallbacks]:
+        if url and url not in seen:
+            seen.add(url)
+            ordered.append(url)
+    return ordered
 
 
 def _require_nacl() -> None:

@@ -163,7 +163,15 @@ export default function Home() {
     }
   };
 
-  const deviceCount = dashboard?.device_count ?? 0;
+  // `device_count` (legacy) counts only currently-online HUP nodes.
+  // `online_count` and `paired_count` were added in 2026.5.13 so the
+  // home empty-state can distinguish "no pairings ever" from "you
+  // have devices, none of them are talking right now". Fall back
+  // gracefully if the brain is older than the dashboard payload.
+  const onlineCount = dashboard?.online_count ?? dashboard?.device_count ?? 0;
+  const pairedCount = dashboard?.paired_count ?? onlineCount;
+  const pairedOfflineCount = dashboard?.paired_offline_count ?? Math.max(pairedCount - onlineCount, 0);
+  const deviceCount = onlineCount;
   const skillCount = dashboard?.skills_count ?? skills.length;
   const hr = Math.round(dashboard?.health?.heart_rate || somatic.heartRate || 0);
   const cog = Math.round(((dashboard?.health?.cognitive_load ?? somatic.cognitiveLoad) || 0) * 100);
@@ -261,12 +269,12 @@ export default function Home() {
         </Glass>
       )}
 
-      {deviceCount === 0 && (
+      {pairedCount === 0 ? (
         <Glass level={1} radius="lg" padding="md" className="v2-dash-cta">
           <div className="v2-dash-cta-body">
             <Plug size={18} aria-hidden="true" />
             <div>
-              <div className="v2-dash-cta-title">No devices connected</div>
+              <div className="v2-dash-cta-title">No devices paired yet</div>
               <div className="v2-dash-cta-hint">
                 Pair a phone browser, wristband, smart glasses, laptop bridge, or any HUP node. FERAL starts reading their sensors the moment they attach.
               </div>
@@ -274,7 +282,36 @@ export default function Home() {
             <Link to="/devices" className="v2-btn v2-btn--primary">Pair</Link>
           </div>
         </Glass>
-      )}
+      ) : onlineCount === 0 ? (
+        <Glass level={1} radius="lg" padding="md" className="v2-dash-cta">
+          <div className="v2-dash-cta-body">
+            <Plug size={18} aria-hidden="true" />
+            <div>
+              <div className="v2-dash-cta-title">
+                {pairedCount === 1
+                  ? '1 paired device — currently offline'
+                  : `${pairedCount} paired devices — none online right now`}
+              </div>
+              <div className="v2-dash-cta-hint">
+                Pairing succeeded. Re-open the device's FERAL app or HUP daemon to bring it back online. The brain will pick the WebSocket session up automatically.
+              </div>
+            </div>
+            <Link to="/devices" className="v2-btn">Manage devices</Link>
+          </div>
+        </Glass>
+      ) : pairedOfflineCount > 0 ? (
+        <Glass level={1} radius="lg" padding="sm" className="v2-dash-cta">
+          <div className="v2-dash-cta-body">
+            <Plug size={16} aria-hidden="true" />
+            <div>
+              <div className="v2-dash-cta-title">
+                {onlineCount} online · {pairedOfflineCount} paired but offline
+              </div>
+            </div>
+            <Link to="/devices" className="v2-btn v2-btn--ghost">View</Link>
+          </div>
+        </Glass>
+      ) : null}
 
       <Pane title={`Skills (${skillCount})`} actions={(
         <button type="button" className="v2-btn v2-btn--ghost" onClick={() => setLauncherOpen(true)}>

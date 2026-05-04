@@ -566,9 +566,16 @@ class SyncEngine:
                 )
 
         except ImportError:
-            logger.warning("zeroconf not installed — mDNS discovery disabled. Install with: pip install zeroconf")
+            logger.info("zeroconf not installed — mDNS discovery disabled. Install with: pip install zeroconf")
         except Exception as e:
-            logger.warning(f"mDNS discovery failed: {e}")
+            # Always include the exception class so a blank message
+            # doesn't show up as `mDNS discovery failed:` with nothing
+            # after the colon. INFO when there is no concrete error
+            # text (typically "no networks available" on single-machine
+            # boots), WARNING when there is something to look at.
+            detail = str(e) or repr(e)
+            level = logger.warning if detail else logger.info
+            level("mDNS discovery skipped: %s (%s)", detail or "no peers", type(e).__name__)
 
         if not mdns_ok:
             self._running = True
@@ -576,7 +583,9 @@ class SyncEngine:
                 logger.info("Using static peer list as primary discovery method")
                 self._load_static_peers()
             else:
-                logger.warning("No mDNS and no static peers configured — sync is offline")
+                # Single-machine setups have no peers by design --
+                # advertise that, don't alarm.
+                logger.info("Sync is local-only (no mDNS peers, no static peers configured).")
 
     def _check_mdns_fallback(self):
         """Called after mDNS timeout; adds static peers if no mDNS peers were found."""

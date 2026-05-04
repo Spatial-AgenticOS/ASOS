@@ -1,8 +1,80 @@
 # Changelog
 
-<!-- feral-version: 2026.5.12 -->
+<!-- feral-version: 2026.5.13 -->
 
 All notable changes to FERAL are documented here.
+
+## [2026.5.13] — first-user-feedback hardening
+
+Real-user testing on `2026.5.12` surfaced a handful of papercuts and one
+genuine UX bug in the home dashboard. This release ships fixes for all
+of them plus the registry acceptance gate work that landed on `main`
+between `2026.5.12` and now.
+
+### Fixed
+
+- **Home dashboard now distinguishes "no devices paired" from "paired
+  but offline".** The previous build computed the home empty-state from
+  `device_count = len(state.daemons)` (live WebSocket sessions only),
+  so a successful pairing whose daemon was not currently connected
+  looked identical to never having paired anything. `/api/dashboard`
+  now returns `online_count`, `paired_count`, and
+  `paired_offline_count` alongside the legacy `device_count`, and the
+  v2 home renders three distinct states ("no devices paired yet",
+  "N paired devices — none online right now", or a thin "X online · Y
+  paired but offline" pill on the happy path).
+- **Marketplace tolerates IPv6-only DNS failures.** `registry.feral.sh`
+  has an AAAA-only record at the time of writing, which made the
+  marketplace unreachable for any user on a network without IPv6
+  egress (`registry unreachable: [Errno 8] nodename nor servname
+  provided, or not known`). `cli.publish.registry_base_urls()` is the
+  new single source of truth for "primary URL plus fallbacks";
+  `marketplace_browser.py` and `agents.app_registry.install_from_registry`
+  now walk the list and fall back to `https://feral-registry.fly.dev`
+  (which has both A and AAAA records) on connect / DNS failure. Override
+  the fallback list with the `FERAL_REGISTRY_FALLBACK_URLS` env var.
+- **OpenAI 401 no longer spams the log every 60 s.** When the LLM
+  provider returns HTTP 401 with `invalid_api_key`, `LLMProvider.chat()`
+  now classifies the failure as `AUTH_PERMANENT`, returns a user-safe
+  `"<provider> API key invalid (HTTP 401). Update the key in Settings
+  to retry."` envelope, and short-circuits subsequent calls for 24 h
+  (or until the user hits *Save* on a fresh key in Settings, which
+  clears the block). The first occurrence still logs at ERROR; repeats
+  drop to DEBUG so the boot log stays readable.
+- **`device_pairing.drop_column_unsupported` is no longer alarming.**
+  This is a documented one-time SQLite limitation (DROP COLUMN on a
+  UNIQUE column requires SQLite >= 3.35) and the existing fallback
+  rebuild already does the right thing. The breadcrumb dropped from
+  WARNING to INFO with a friendlier message: *"DROP COLUMN unsupported
+  by this SQLite — rebuilding paired_devices to drop the legacy
+  `token` column. No action needed."*
+- **mDNS / FCM / APNs no longer log WARNING when the feature is
+  intentionally unconfigured.** `FCM disabled (set
+  FERAL_FIREBASE_CREDENTIALS to enable Android push)` and the
+  equivalents now log at INFO. Real load failures (creds present but
+  unreadable) still log at WARNING. The mDNS empty-error path now
+  always includes the exception class name so the boot log no longer
+  shows `mDNS discovery failed:` with nothing after the colon.
+
+### Changed
+
+- **Wake-word detection defaults to OFF.** `FERAL_WAKE_WORD` previously
+  defaulted to `"true"` (microphone on at boot, opt-out). It now
+  defaults to `"false"`; the setup wizard and Settings expose a
+  toggle to enable it after explicit user consent. Existing installs
+  with `FERAL_WAKE_WORD` already set in env or config are unaffected.
+- **Default marketplace registry URL is the production host.**
+  `FERAL_MARKETPLACE_URL` defaults to `https://registry.feral.sh/api/v1`
+  instead of `http://localhost:8080/api/v1`. The localhost default was
+  a vestige of local-registry development and surprised every user who
+  did not have one running.
+- **Wheel no longer ships `tests*`.** The pytest suite was being
+  installed into `site-packages/tests/` on every `pip install feral-ai`,
+  which both bloated the install and risked top-level name collisions
+  with any other library named `tests`. Excluded from the wheel via
+  `[tool.setuptools.packages.find].exclude`.
+- **`feral-ai` now advertises Python 3.13 support** in classifiers
+  (the package already worked on 3.13; the marker had not been added).
 
 ## [Unreleased] — wave-2 hardening (approvals inbox, sandbox defaults, LLM resilience)
 

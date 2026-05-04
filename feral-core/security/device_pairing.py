@@ -526,9 +526,16 @@ class DevicePairingStore:
             conn.execute("ALTER TABLE paired_devices DROP COLUMN token")
             dropped = True
         except sqlite3.OperationalError as exc:
-            logger.warning(
-                "device_pairing.drop_column_unsupported: %s — attempting "
-                "table rebuild to remove the legacy `token` column.",
+            # SQLite < 3.35 (and older schemas with UNIQUE on the
+            # legacy `token` column) cannot run DROP COLUMN directly.
+            # That's expected on first upgrade -- we fall back to a
+            # safe table rebuild below. Log INFO so a first-time
+            # user reading the boot log doesn't think something is
+            # broken; the rebuild outcome is logged as well.
+            logger.info(
+                "device_pairing.migration: DROP COLUMN unsupported by this "
+                "SQLite (%s) — rebuilding paired_devices to drop the "
+                "legacy `token` column. No action needed.",
                 exc,
             )
             try:

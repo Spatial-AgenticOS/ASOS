@@ -171,10 +171,13 @@ def test_rebuild_logs_unique_rebuild_ok(
         f"got messages={messages}"
     )
     assert any(
-        "device_pairing.drop_column_unsupported" in m for m in messages
+        "device_pairing.migration: DROP COLUMN unsupported" in m for m in messages
     ), (
-        "the WARNING from the failed DROP must still be emitted BEFORE the "
-        "rebuild runs so operators keep the breadcrumb trail"
+        "the breadcrumb from the unsupported DROP COLUMN must still be "
+        "emitted BEFORE the rebuild runs so operators keep the trail. "
+        "(In 2026.5.13 the level dropped from WARNING to INFO with a "
+        "friendlier 'no action needed' message; the breadcrumb itself "
+        "is still required.)"
     )
 
 
