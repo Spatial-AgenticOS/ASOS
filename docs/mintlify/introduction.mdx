@@ -1,28 +1,32 @@
 ---
 title: "FERAL Overview"
 sidebarTitle: "Introduction"
-description: "What FERAL is, what it controls today, and how to get started without guesswork."
+description: "Local AI brain for apps, devices, memory, and policy-gated actions."
 ---
 
 <img src="/images/feral-banner.png" alt="FERAL" />
 
 # What FERAL is
 
-FERAL is a local runtime that coordinates AI decisions across your software and physical devices.
+FERAL is a local-first brain you install on your machine. It sits in the middle of your software and physical devices, so one runtime can keep context, apply policy, and execute actions.
 
-- Brain runtime: tool orchestration, memory, policies, and device/session routing.
-- Web UI: setup, pairing, chat, SDUI surfaces, and operational visibility.
-- Node/device paths: phone/browser nodes and daemon bridges for hardware control.
+Core model:
 
-The product is strongest when you treat it as a supervisor layer over existing systems (LLM providers, channels, automation targets, and hardware adapters), not as a cloud replacement SaaS.
+- **4-layer memory:** working context, episodic events, semantic/graph retrieval, and execution history.
+- **Baseline learning:** rolling metrics + anomaly/trend detection for what "normal" looks like.
+- **Digital twin actions:** policy-gated autonomy with approvals, time windows, and daily caps.
+- **Publisher workflow:** developers ship headless API/CLI contracts + app manifests; FERAL renders structured Gen-UI surfaces.
+- **Org review gate:** submitted registry apps are not user-installable until approved by FERAL reviewers.
+
+Treat FERAL as a supervisor layer over existing systems (providers, channels, automation targets, hardware adapters), not as a cloud replacement SaaS.
 
 ## What it can do now
 
 - Coordinate actions across chat, tools, channels, and connected devices from one runtime.
-- Keep persistent memory and state in your local FERAL home.
+- Keep persistent memory, baseline state, and execution history in your local FERAL home.
 - Pair phones and browser nodes over LAN or remote tunnel modes.
 - Render server-driven UI (Gen-UI/SDUI) as structured components in the web client.
-- Enforce explicit action paths (including confirmation gates where configured).
+- Enforce explicit action paths (including approval gates where configured).
 
 ## Connectivity model
 
