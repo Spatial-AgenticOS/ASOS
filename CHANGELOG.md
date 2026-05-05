@@ -1,8 +1,31 @@
 # Changelog
 
-<!-- feral-version: 2026.5.13 -->
+<!-- feral-version: 2026.5.14 -->
 
 All notable changes to FERAL are documented here.
+
+## [2026.5.14] — `feral app publish` signature compatibility
+
+### Fixed
+
+- **`feral app publish` now actually authenticates with the
+  registry.** `cli/app_commands.cmd_app_publish` was signing the
+  **raw 32-byte SHA-256 digest** of the bundle while the registry's
+  `verify_bundle_signature` (in `feral-registry/feral_registry/signing.py`)
+  verifies a detached Ed25519 signature over the **SHA-256 hex
+  digest encoded as ASCII**. Result: every GenUI app publish
+  against a canonical registry returned `400 signature verification
+  failed`, even with a valid keypair correctly registered via
+  `feral publisher register`. The skill-publish path in
+  `cli/publish.py` was already doing this correctly; this commit
+  brings the GenUI app-publish path in line. Caught while
+  rehearsing the Gen-UI app-store demo on `v2026.5.13`.
+
+### Internal
+
+- Genrelease patches all `feral-version` literals in the repo to
+  `2026.5.14`, including the legacy `feral-client/` files that
+  `scripts/sync_versions.py` does not yet declare.
 
 ## [2026.5.13] — first-user-feedback hardening
 
