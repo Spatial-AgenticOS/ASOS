@@ -466,8 +466,17 @@ def cmd_app_publish(path: str, registry: Optional[str] = None) -> None:
     token = _load_token_or_exit()
     signing_key = load_or_create_signing_key(verbose=False)
 
+    # The registry verifies the detached signature over the SHA-256
+    # *hex digest as ASCII bytes*, not the raw 32-byte digest, to
+    # match feral_registry/signing.py::verify_bundle_signature. The
+    # skill-publish path in cli/publish.py already does this; the
+    # GenUI app-publish path was signing the raw digest, so every
+    # `feral app publish` returned 400 "signature verification failed"
+    # against any registry that ran the canonical verifier (i.e.
+    # production). Mirror the skill-publish behaviour here.
     digest = _sha256_file(out_path)
-    signature = signing_key.sign(digest).signature
+    sha_hex = digest.hex()
+    signature = signing_key.sign(sha_hex.encode("ascii")).signature
     sig_b64 = base64.b64encode(signature).decode("ascii")
 
     base = registry_base_url(registry)
