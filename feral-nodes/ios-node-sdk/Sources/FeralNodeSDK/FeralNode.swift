@@ -189,52 +189,63 @@ public actor FeralNode {
 
     /// Send a chat message as a phone-as-peer node. Brain replies
     /// with a `chat_response` frame on ``inboundFrames``.
-    /// - Parameters:
-    ///   - text: User's text.
-    ///   - sessionId: Conversation id. Pass `nil` and the brain will
-    ///     allocate one and echo it back in `chat_response.payload.session_id`.
-    ///   - replyMode: `"text"` or `"voice"`. Default `"text"`.
-    ///   - channel: Logical channel name; default `"phone"`.
+    ///
+    /// Field semantics match `feral-core/models/protocol.py`
+    /// `ChatRequestPayload` exactly. `session_id` is REQUIRED; pass
+    /// the same value across the lifetime of one conversation so the
+    /// brain orchestrator can thread context. `reply_mode` MUST be
+    /// `"final"` (one-shot) or `"stream"` (token deltas). `channel`
+    /// MUST be `"chat"` or `"vision_ask"`.
     public func sendChatRequest(
         text: String,
-        sessionId: String? = nil,
-        replyMode: String = "text",
-        channel: String = "phone"
+        sessionId: String,
+        replyMode: ChatReplyMode = .final,
+        channel: ChatChannel = .chat,
+        replyTo: String? = nil
     ) async throws {
         guard let socket, connected else { throw FeralNodeError.notConnected }
         var payload: [String: AnyCodable] = [
-            "node_id": .string(nodeId),
+            "session_id": .string(sessionId),
             "text": .string(text),
-            "channel": .string(channel),
-            "reply_mode": .string(replyMode),
+            "channel": .string(channel.rawValue),
+            "reply_mode": .string(replyMode.rawValue),
         ]
-        if let sessionId = sessionId {
-            payload["session_id"] = .string(sessionId)
+        if let replyTo = replyTo {
+            payload["reply_to"] = .string(replyTo)
         }
         try await socket.send(HUPFrame(type: "chat_request", payload: payload))
     }
 
-    /// Begin a voice session. The brain replies with `voice_config_ack`
-    /// (or surfaces errors via `error` frames). After the ack lands,
-    /// the host can stream PCM via ``sendAudioChunk(_:isFinal:)``.
-    /// - Parameters:
-    ///   - voiceMode: `"realtime"` (default) for full-duplex via
-    ///     OpenAI Realtime / Gemini Live, or `"chunked"` for
-    ///     turn-by-turn STT then TTS.
-    ///   - sampleRate: Phone-side capture rate. Default 24000.
-    ///   - encoding: PCM encoding. Default `"pcm16"`.
+    /// Begin a voice session. Field semantics match
+    /// `feral-core/models/protocol.py` `VoiceSessionStartPayload`:
+    /// `stream_id` REQUIRED, `sample_rate` REQUIRED, `channels`
+    /// REQUIRED. `voice_mode` is read off the raw payload by the
+    /// brain's daemon_session voice path and must be one of
+    /// `openai_realtime`, `gemini_live`, `chained` (others log a
+    /// warning and coerce to `openai_realtime`).
     public func startVoiceSession(
-        voiceMode: String = "realtime",
+        streamId: String = UUID().uuidString,
+        voiceMode: VoiceMode = .openaiRealtime,
         sampleRate: Int = 24000,
-        encoding: String = "pcm16"
+        channels: Int = 1,
+        languageHint: String = "en-US",
+        mode: VoiceCaptureMode = .vad,
+        interruptPolicy: InterruptPolicy = .bargeIn,
+        cameraLinked: Bool = false
     ) async throws {
         guard let socket, connected else { throw FeralNodeError.notConnected }
         let payload: [String: AnyCodable] = [
-            "node_id": .string(nodeId),
-            "voice_mode": .string(voiceMode),
+            "stream_id": .string(streamId),
             "sample_rate": .int(sampleRate),
-            "encoding": .string(encoding),
-            "supports_realtime": .bool(voiceMode == "realtime"),
+            "channels": .int(channels),
+            "language_hint": .string(languageHint),
+            "mode": .string(mode.rawValue),
+            "interrupt_policy": .string(interruptPolicy.rawValue),
+            "camera_linked": .bool(cameraLinked),
+            // voice_mode is read off the raw payload by daemon_session
+            // (not on the Pydantic model) — must be one of the literal
+            // values the router accepts.
+            "voice_mode": .string(voiceMode.rawValue),
         ]
         try await socket.send(HUPFrame(type: "voice_session_start", payload: payload))
     }

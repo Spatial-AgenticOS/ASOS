@@ -61,44 +61,62 @@ final class FeralNodeEnvelopeTests: XCTestCase {
         XCTAssertNil(frame.payload["result"])
     }
 
-    /// `chat_request` payload shape matches `feral-core/api/server.py`
-    /// `daemon_session` chat branch (text, channel, reply_mode,
-    /// optional session_id).
+    /// `chat_request` payload shape matches
+    /// `feral-core/models/protocol.py` `ChatRequestPayload`:
+    ///   * `session_id` REQUIRED
+    ///   * `reply_mode` MUST be "stream" or "final"
+    ///   * `channel` MUST be "chat" or "vision_ask"
+    /// Sending "text" / "phone" caused live `bad_payload` errors during
+    /// iPhone testing; this test guards against regression.
     func testChatRequestShape() {
         let frame = HUPFrame(
             type: "chat_request",
             payload: [
-                "node_id": .string("feral-phone-test"),
+                "session_id": .string("feral-session-test"),
                 "text": .string("what's my heart rate"),
-                "channel": .string("phone"),
-                "reply_mode": .string("text"),
+                "channel": .string(ChatChannel.chat.rawValue),
+                "reply_mode": .string(ChatReplyMode.final.rawValue),
             ]
         )
         XCTAssertEqual(frame.type, "chat_request")
-        if case .string(let s) = frame.payload["text"] {
-            XCTAssertEqual(s, "what's my heart rate")
-        } else { XCTFail("text missing") }
+        XCTAssertEqual(ChatChannel.chat.rawValue, "chat")
+        XCTAssertEqual(ChatChannel.vision_ask.rawValue, "vision_ask")
+        XCTAssertEqual(ChatReplyMode.final.rawValue, "final")
+        XCTAssertEqual(ChatReplyMode.stream.rawValue, "stream")
+        if case .string(let s) = frame.payload["session_id"] {
+            XCTAssertEqual(s, "feral-session-test")
+        } else { XCTFail("session_id missing") }
     }
 
-    /// `voice_session_start` carries the codec metadata the brain's
-    /// voice_router needs to bind a session.
+    /// `voice_session_start` matches `VoiceSessionStartPayload`:
+    /// stream_id, sample_rate, channels REQUIRED. voice_mode literals
+    /// must match what daemon_session/voice_router accepts.
     func testVoiceSessionStartShape() {
         let frame = HUPFrame(
             type: "voice_session_start",
             payload: [
-                "node_id": .string("feral-phone-test"),
-                "voice_mode": .string("realtime"),
+                "stream_id": .string("strm-test-1"),
                 "sample_rate": .int(24000),
-                "encoding": .string("pcm16"),
-                "supports_realtime": .bool(true),
+                "channels": .int(1),
+                "language_hint": .string("en-US"),
+                "mode": .string(VoiceCaptureMode.vad.rawValue),
+                "interrupt_policy": .string(InterruptPolicy.bargeIn.rawValue),
+                "camera_linked": .bool(false),
+                "voice_mode": .string(VoiceMode.openaiRealtime.rawValue),
             ]
         )
-        if case .int(let sr) = frame.payload["sample_rate"] {
-            XCTAssertEqual(sr, 24000)
-        } else { XCTFail("sample_rate missing") }
-        if case .string(let enc) = frame.payload["encoding"] {
-            XCTAssertEqual(enc, "pcm16")
-        } else { XCTFail("encoding missing") }
+        XCTAssertEqual(VoiceMode.openaiRealtime.rawValue, "openai_realtime")
+        XCTAssertEqual(VoiceMode.geminiLive.rawValue, "gemini_live")
+        XCTAssertEqual(VoiceMode.chained.rawValue, "chained")
+        XCTAssertEqual(VoiceCaptureMode.vad.rawValue, "vad")
+        XCTAssertEqual(VoiceCaptureMode.pushToTalk.rawValue, "push_to_talk")
+        XCTAssertEqual(InterruptPolicy.bargeIn.rawValue, "barge_in")
+        if case .string(let sid) = frame.payload["stream_id"] {
+            XCTAssertEqual(sid, "strm-test-1")
+        } else { XCTFail("stream_id missing") }
+        if case .int(let ch) = frame.payload["channels"] {
+            XCTAssertEqual(ch, 1)
+        } else { XCTFail("channels missing") }
     }
 
     /// `audio_chunk` carries base64-encoded PCM, an index, an
