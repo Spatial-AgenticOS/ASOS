@@ -1,10 +1,12 @@
 # FeralNodeSDK — iOS phone-as-HUP-daemon bridge
 
-> **Status:** scaffold (2026.4.22). Structure + public API defined; the
-> three vendor-SDK adapters (Veepoo wristband, JW Ble glasses, QCSDK
-> W610) have placeholders that intentionally refuse to return fake
-> data. When the hardware is in reach and you hand the SDKs to the
-> iOS project the adapters get wired in one focused session.
+> **Status:** v0.2 (2026-05-05). HUP wire-protocol surface is at v1.3.0
+> with phone-as-peer envelopes (`chat_request`, `voice_session_start`,
+> `audio_chunk`), action-response sender, inbound AsyncStream, and
+> jittered exponential-backoff reconnect (HUP_SPEC §2). The three
+> vendor-SDK adapters (Veepoo wristband, JW Ble glasses, QCSDK W610)
+> still throw `adapterNotWired` until the host app links the vendor
+> `.framework` files — see "Vendor adapter status" below.
 
 ## Why this exists
 
@@ -71,8 +73,29 @@ node.register(adapter: JWBleAdapter())
 node.register(adapter: QCSDKAdapter())
 
 try await node.connect()
-// Blocks the run loop. Adapters emit device_event frames directly;
-// FeralNode handles reconnection + heartbeat + HUP ack/nak.
+// Adapters emit device_event frames directly. FeralNode handles
+// reconnection (jittered backoff per HUP_SPEC §2) + heartbeat
+// + HUP ack/nak. The first node_register is sent automatically;
+// reconnects re-send it without adapter intervention.
+
+// Observe inbound frames the brain sends back (chat_response,
+// audio_response, transcript, ...). Single subscriber.
+Task {
+    for await frame in await node.inboundFrames {
+        switch frame.type {
+        case "chat_response": ...
+        case "audio_response": ...
+        case "transcript": ...
+        default: break
+        }
+    }
+}
+
+// Phone-as-peer helpers (HUP v1.3):
+try await node.sendChatRequest(text: "what's my heart rate")
+try await node.startVoiceSession(voiceMode: "realtime", sampleRate: 24000)
+try await node.sendAudioChunk(pcmData: micPCM, isFinal: false)
+try await node.interruptVoiceSession()
 ```
 
 ## Adapter contract
@@ -176,13 +199,28 @@ in reach, each adapter is ≤ 1 day of real work.
 
 Unit tests in `Tests/FeralNodeSDKTests/` exercise:
 
-- HUP frame codable round-trip (node_register, device_event,
-  heartbeat, node_bye).
-- HUPWebSocket reconnect backoff against a `URLProtocol` fake.
-- VendorAdapter protocol conformance of each adapter.
+- HUP frame codable round-trip — `HUPFrameTests.testHUPFrameRoundTrip`.
+- HUP frame inbound tolerance — missing `hup_version` / `ts` /
+  `payload` fields decode cleanly without throwing
+  (`HUPFrameTests.testHUPFrameToleratesMissingVersionAndTs`).
+- HUP frame outbound strictness — encoded frames always carry
+  `hup_version` and `ts` so the brain's strict Pydantic models
+  validate (`HUPFrameTests.testHUPFrameEncodeFillsInDefaultsForOutbound`).
+- Heartbeat frame shape, `node_bye`, `node_ack` decoding, register
+  payload snake-case (`HeartbeatTests`).
+- Phone-as-peer envelope shapes — `chat_request`,
+  `voice_session_start`, `voice_interrupt`, `audio_chunk`,
+  `hup_action_response` (`FeralNodeEnvelopeTests`).
+- Reconnect backoff policy values match HUP_SPEC §2 (initial 100 ms,
+  factor 2, cap 30 s) — `HUPWebSocketReconnectTests`.
+- VendorAdapter protocol conformance of each adapter
+  (`AdapterConformanceTests`).
 - `adapterNotWired` error is raised when `attach()` is called on a
   pre-wire-up adapter.
 
 No live-hardware tests in the package itself — those live in the
 host app's UI tests and are gated behind an environment flag the
-same way the Python daemons use `FERAL_LIVE_WRISTBAND_TEST`.
+same way the Python daemons use `FERAL_LIVE_WRISTBAND_TEST`. The
+end-to-end reconnect integration test (driving a real WebSocket
+through forced disconnect) lives in the host app at
+`feral-companion-ios/Tests/FeralCompanionTests/IntegrationTests/`.

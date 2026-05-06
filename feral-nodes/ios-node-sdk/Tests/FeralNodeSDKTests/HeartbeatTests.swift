@@ -9,9 +9,11 @@ import XCTest
 /// without a real network connection.
 final class HeartbeatTests: XCTestCase {
 
-    /// Verify HUP version is bumped to 1.2.0.
-    func testHupVersionIs1_2_0() {
-        XCTAssertEqual(FeralNodeSDKInfo.hupVersion, "1.2.0")
+    /// Verify HUP version is at the canonical 1.3.0 — the version
+    /// `feral-core/models/protocol.py` and `feral-nodes/HUP_SPEC.md`
+    /// both target post-companion fixes.
+    func testHupVersionIs1_3_0() {
+        XCTAssertEqual(FeralNodeSDKInfo.hupVersion, "1.3.0")
     }
 
     /// Verify that an HUPFrame with type "node_heartbeat" is
@@ -22,7 +24,7 @@ final class HeartbeatTests: XCTestCase {
             payload: ["ts": .double(Date().timeIntervalSince1970)]
         )
         XCTAssertEqual(frame.type, "node_heartbeat")
-        XCTAssertEqual(frame.hupVersion, "1.2.0")
+        XCTAssertEqual(frame.hupVersion, FeralNodeSDKInfo.hupVersion)
 
         if case .double(let ts) = frame.payload["ts"] {
             XCTAssertGreaterThan(ts, 0)
@@ -52,7 +54,7 @@ final class HeartbeatTests: XCTestCase {
     func testNodeAckDecoding() throws {
         let json = """
         {
-            "hup_version": "1.2.0",
+            "hup_version": "1.3.0",
             "type": "node_ack",
             "ts": 1234567890.0,
             "payload": {

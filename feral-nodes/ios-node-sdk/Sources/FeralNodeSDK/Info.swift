@@ -1,8 +1,14 @@
 import Foundation
 
 public enum FeralNodeSDKInfo {
-    public static let version = "0.1.0-scaffold"
-    public static let hupVersion = "1.2.0"
+    public static let version = "0.2.0"
+    /// HUP wire-protocol version this SDK implements. Bumped from 1.2.0
+    /// when phone-as-peer envelopes (chat_request, voice_session_start,
+    /// audio_chunk) and the action_response sender landed.
+    /// `feral-core/models/protocol.py` reports 1.3.1; we declare 1.3.0
+    /// because the SDK does not yet emit the v1.3.1-only `location_update`
+    /// shape — adding it is a v0.3 follow-up.
+    public static let hupVersion = "1.3.0"
 }
 
 public enum FeralNodeError: Error, LocalizedError {
