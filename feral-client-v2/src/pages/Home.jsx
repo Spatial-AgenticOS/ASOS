@@ -246,8 +246,25 @@ export default function Home() {
             <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Sessions</div>
               <div className="v2-stat-value">{sessionCount}</div>
             </Glass>
-            <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Devices</div>
-              <div className="v2-stat-value">{deviceCount}</div>
+            <Glass level={0} radius="md" padding="sm">
+              <div className="v2-stat-label">Devices</div>
+              {pairedCount === 0 ? (
+                <div className="v2-stat-value">0</div>
+              ) : onlineCount === pairedCount ? (
+                <div className="v2-stat-value">
+                  <StatusDot tone="live" pulse /> {onlineCount}
+                </div>
+              ) : (
+                // Show online / total when they differ, so the home
+                // card is consistent with the "1 paired device —
+                // currently offline" banner that already lived below.
+                // Previously the card just showed the online count
+                // (often 0) and the user saw "0" up top while the
+                // banner said "1 paired" — confusing inconsistency.
+                <div className="v2-stat-value" title={`${pairedOfflineCount} paired but offline`}>
+                  <StatusDot tone={onlineCount > 0 ? 'live' : 'idle'} /> {onlineCount}/{pairedCount}
+                </div>
+              )}
             </Glass>
             <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Heart rate</div>
               <div className="v2-stat-value">{hr > 0 ? `${hr}` : '—'}</div>
