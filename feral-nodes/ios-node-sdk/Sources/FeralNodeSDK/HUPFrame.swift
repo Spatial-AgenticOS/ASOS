@@ -1,12 +1,20 @@
 import Foundation
 
-/// Codable mirror of the HUP v1.1 wire frame. Matches
-/// `feral-nodes/HUP_SPEC.md` §5 exactly — any drift here breaks the
+/// Codable mirror of the HUP wire frame. Matches
+/// `feral-nodes/HUP_SPEC.md` §5 — any drift here breaks the
 /// handshake with the brain.
+///
+/// Decoding is deliberately tolerant:
+///   * `hup_version` is optional on inbound (some brain frames in
+///     ad-hoc routes — mesh `hup_action_request`, raw `node_ack` over
+///     `tts_chunk` — historically omit it). Outbound always sets it.
+///   * `ts` is optional on inbound for the same reason. Outbound
+///     always sets it to `Date().timeIntervalSince1970`.
+///   * `payload` defaults to an empty dictionary.
 public struct HUPFrame: Codable {
-    public let hupVersion: String
+    public let hupVersion: String?
     public let type: String
-    public let timestamp: Double
+    public let timestamp: Double?
     public let payload: [String: AnyCodable]
 
     enum CodingKeys: String, CodingKey {
@@ -21,6 +29,41 @@ public struct HUPFrame: Codable {
         self.type = type
         self.timestamp = Date().timeIntervalSince1970
         self.payload = payload
+    }
+
+    /// Memberwise initializer used by tests and by helpers that
+    /// reconstruct a frame from a known wire dump. Production code
+    /// should use the two-argument `init(type:payload:)` so the
+    /// version + timestamp default to canonical values.
+    public init(
+        hupVersion: String?,
+        type: String,
+        timestamp: Double?,
+        payload: [String: AnyCodable]
+    ) {
+        self.hupVersion = hupVersion
+        self.type = type
+        self.timestamp = timestamp
+        self.payload = payload
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.hupVersion = try c.decodeIfPresent(String.self, forKey: .hupVersion)
+        self.type = try c.decode(String.self, forKey: .type)
+        self.timestamp = try c.decodeIfPresent(Double.self, forKey: .timestamp)
+        self.payload = (try c.decodeIfPresent([String: AnyCodable].self, forKey: .payload)) ?? [:]
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        // Always emit hup_version + ts on outbound so brain Pydantic
+        // schemas validate without falling into the lenient branch.
+        let hv = self.hupVersion ?? FeralNodeSDKInfo.hupVersion
+        try c.encode(hv, forKey: .hupVersion)
+        try c.encode(self.type, forKey: .type)
+        try c.encode(self.timestamp ?? Date().timeIntervalSince1970, forKey: .timestamp)
+        try c.encode(self.payload, forKey: .payload)
     }
 }
 

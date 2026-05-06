@@ -1,27 +1,70 @@
 import Foundation
 
-/// Thin wrapper around URLSessionWebSocketTask for HUP v1.1 framing.
-/// Handles exponential-backoff reconnect + JSON encode/decode of
-/// HUPFrame. No HUP-specific semantics live here — the FeralNode
+/// Thin wrapper around URLSessionWebSocketTask for HUP v1.x framing.
+/// Handles JSON encode/decode of HUPFrame plus jittered exponential
+/// backoff reconnect (HUP_SPEC §2: initial 100 ms, factor 2, cap 30 s,
+/// full jitter). No HUP-specific semantics live here — the FeralNode
 /// class above decides what to emit and when.
 public actor HUPWebSocket {
     private let url: URL
     private let apiKey: String?
     private var task: URLSessionWebSocketTask?
     private var onMessage: ((HUPFrame) -> Void)?
+    /// Optional hook invoked when the socket has fully reconnected
+    /// after a drop. The host (FeralNode) re-issues `node_register`
+    /// in response so the brain rebinds the session.
+    private var onReconnect: (() async -> Void)?
     private var connected = false
+    /// Set once `disconnect()` is called — disables reconnect so a
+    /// graceful shutdown stays shut down.
+    private var stopped = false
     private let session: URLSession
     private var heartbeatTask: Task<Void, Never>?
     private var heartbeatIntervalMs: Int = 10000
+    private var reconnectTask: Task<Void, Never>?
 
-    public init(url: URL, apiKey: String? = nil, session: URLSession = .shared) {
+    /// Backoff parameters (per HUP_SPEC §2). Exposed `internal` for
+    /// the unit-test target so deterministic-time tests can shrink
+    /// the upper bound; default values match the spec exactly.
+    public struct BackoffPolicy: Sendable {
+        public var initialMs: Int
+        public var capMs: Int
+        public var factor: Double
+
+        public static let spec = BackoffPolicy(initialMs: 100, capMs: 30_000, factor: 2.0)
+
+        public init(initialMs: Int, capMs: Int, factor: Double) {
+            self.initialMs = initialMs
+            self.capMs = capMs
+            self.factor = factor
+        }
+    }
+    private let backoff: BackoffPolicy
+
+    public init(
+        url: URL,
+        apiKey: String? = nil,
+        session: URLSession = .shared,
+        backoff: BackoffPolicy = .spec
+    ) {
         self.url = url
         self.apiKey = apiKey
         self.session = session
+        self.backoff = backoff
     }
 
-    public func connect(onMessage: @escaping (HUPFrame) -> Void) async throws {
+    public func connect(
+        onMessage: @escaping (HUPFrame) -> Void,
+        onReconnect: (() async -> Void)? = nil
+    ) async throws {
         self.onMessage = onMessage
+        self.onReconnect = onReconnect
+        self.stopped = false
+        try await openSocket()
+        Task { [weak self] in await self?.receiveLoop() }
+    }
+
+    private func openSocket() async throws {
         var request = URLRequest(url: url)
         if let apiKey = apiKey {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -30,11 +73,13 @@ public actor HUPWebSocket {
         self.task = task
         task.resume()
         connected = true
-        Task { [weak self] in await self?.receiveLoop() }
     }
 
     public func disconnect() async {
+        stopped = true
         stopHeartbeat()
+        reconnectTask?.cancel()
+        reconnectTask = nil
         try? await sendNodeBye(reason: "shutdown")
         task?.cancel(with: .goingAway, reason: nil)
         connected = false
@@ -72,6 +117,10 @@ public actor HUPWebSocket {
         heartbeatTask = nil
     }
 
+    /// Public for tests; production code triggers reconnect via the
+    /// receive loop on socket failure.
+    public func isConnected() -> Bool { connected && !stopped }
+
     private func sendNodeBye(reason: String) async throws {
         let frame = HUPFrame(
             type: "node_bye",
@@ -84,8 +133,8 @@ public actor HUPWebSocket {
     }
 
     private func receiveLoop() async {
-        guard let task else { return }
-        while connected {
+        while !stopped {
+            guard let task else { return }
             do {
                 let msg = try await task.receive()
                 switch msg {
@@ -98,7 +147,35 @@ public actor HUPWebSocket {
                 }
             } catch {
                 connected = false
+                if stopped { return }
+                // Per HUP_SPEC §2 — jittered exponential backoff.
+                await reconnectWithBackoff()
+                if stopped { return }
+                // Continue the receive loop on the new socket.
+            }
+        }
+    }
+
+    /// Reconnect with full-jitter exponential backoff. Returns once
+    /// either (a) the socket is open again, or (b) `disconnect()` was
+    /// called and we should give up.
+    private func reconnectWithBackoff() async {
+        stopHeartbeat()
+        var delayMs = backoff.initialMs
+        while !stopped {
+            // Full jitter: random in [0, delayMs].
+            let jitterMs = Int.random(in: 0...delayMs)
+            try? await Task.sleep(nanoseconds: UInt64(jitterMs) * 1_000_000)
+            if stopped { return }
+            do {
+                try await openSocket()
+                // Notify host so it can re-send `node_register`.
+                if let cb = onReconnect {
+                    await cb()
+                }
                 return
+            } catch {
+                delayMs = min(Int(Double(delayMs) * backoff.factor), backoff.capMs)
             }
         }
     }
@@ -108,7 +185,9 @@ public actor HUPWebSocket {
             let frame = try JSONDecoder().decode(HUPFrame.self, from: data)
             onMessage?(frame)
         } catch {
-            // Malformed frames are logged by the caller via onMessage.
+            // Malformed frames are dropped silently. Hosts that need
+            // visibility into protocol errors can subscribe to the
+            // brain's `error` frames via FeralNode.inboundFrames.
         }
     }
 }
