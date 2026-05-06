@@ -1174,6 +1174,25 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
             except (ValueError, KeyError):
                 await _send_protocol_error(ws, 1002, "Malformed JSON frame")
                 continue
+            except WebSocketDisconnect:
+                # Graceful disconnect from the daemon side — clean up
+                # without raising into ASGI (which logs a noisy stack).
+                logger.info(
+                    "daemon_session: peer disconnected (device_id=%s node_id=%s)",
+                    paired_device_id, node_id,
+                )
+                return
+            except RuntimeError as exc:
+                # Starlette raises RuntimeError("WebSocket is not connected ...")
+                # when the underlying socket has dropped between accept()
+                # and the next receive — typically because the iOS client
+                # got a TLS / ATS denial or the peer closed without the
+                # 1000 close-frame. Treat as a graceful disconnect.
+                logger.info(
+                    "daemon_session: peer transport gone (device_id=%s node_id=%s) — %s",
+                    paired_device_id, node_id, exc,
+                )
+                return
             try:
                 msg, payload = parse_message(raw)
             except Exception as exc:  # noqa: BLE001 — pydantic ValidationError + others
