@@ -61,4 +61,27 @@ final class HUPWebSocketReconnectTests: XCTestCase {
         // we verify the actor was constructed without error.
         XCTAssertNotNil(socket)
     }
+
+    /// Phase-0.5 stability hardening: the SDK must accept a `nil`
+    /// session and own its own URLSession internally. The legacy
+    /// signature `session: URLSession = .shared` shipped a session
+    /// that drops long-lived WebSockets on iOS; the new default
+    /// builds a per-instance session with `waitsForConnectivity`,
+    /// 30 s request timeout, unlimited resource timeout, and
+    /// extended-background-idle mode. Hosts can still inject their
+    /// own URLSession (e.g. for tests) by passing it explicitly.
+    func testSessionInjectionIsOptional() {
+        let url = URL(string: "wss://localhost:9090/v1/node")!
+
+        // Default — session gets built lazily inside the actor.
+        let defaultSocket = HUPWebSocket(url: url, apiKey: "x")
+        XCTAssertNotNil(defaultSocket)
+
+        // Explicit injection still works for tests that want to
+        // observe URLSessionConfiguration (e.g. inspect requests).
+        let cfg = URLSessionConfiguration.ephemeral
+        let injected = URLSession(configuration: cfg)
+        let injectedSocket = HUPWebSocket(url: url, apiKey: "x", session: injected)
+        XCTAssertNotNil(injectedSocket)
+    }
 }
