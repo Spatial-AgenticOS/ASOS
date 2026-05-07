@@ -6,9 +6,14 @@ import React from 'react';
  * Props:
  *   size     — px diameter (default 32)
  *   mode     — 'idle' | 'listening' | 'thinking' | 'speaking' | 'alert' | 'disconnected'
- *   connected — boolean, shows tiny emerald status dot
+ *   connected — boolean. SHOWS the tiny emerald status dot; the
+ *               default is `false` (Phase-1 truthfulness sweep) so a
+ *               caller that forgets to pass a real signal does NOT
+ *               render an unbound green dot. Every existing call
+ *               site passes a bound expression; new callers must do
+ *               the same.
  */
-export default function TheOrb({ size = 32, mode = 'idle', connected = true }) {
+export default function TheOrb({ size = 32, mode = 'idle', connected = false }) {
   const modeClass =
     mode === 'listening'    ? 'orb-listening' :
     mode === 'thinking'     ? 'orb-thinking' :

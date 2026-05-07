@@ -20,7 +20,8 @@ fire the ``subdevice_update`` callback exactly once per ingest.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -56,14 +57,36 @@ def patched_state(tmp_path, store):
     return mock
 
 
+class _FakeWS:
+    """Minimal stand-in for the daemon WebSocket so we can capture
+    HUP error frames the helper sends back when it rejects a frame.
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+
+    async def send_json(self, payload):  # noqa: D401 — matches FastAPI WS
+        self.sent.append(payload)
+
+
+def _ingest(server_mod, ws, *, node_id: str, event_type: str, payload: dict) -> None:
+    """Run the async helper to completion. Tests stay synchronous so
+    the existing pytest setup doesn't need pytest-asyncio plumbing.
+    """
+    asyncio.run(
+        server_mod._handle_subdevice_status(ws, node_id, event_type, payload)
+    )
+
+
 def test_device_event_glasses_status_lands_as_subdevice_row(patched_state, store):
     from api import server as server_mod
 
+    ws = _FakeWS()
     with patch.object(server_mod, "state", patched_state):
-        server_mod._handle_subdevice_status(
-            "feral-iphone-abc",
-            "glasses_status",
-            {
+        _ingest(server_mod, ws,
+            node_id="feral-iphone-abc",
+            event_type="glasses_status",
+            payload={
                 "event_type": "glasses_status",
                 "status": "ready",
                 "source": "jw_health_glasses",
@@ -73,6 +96,7 @@ def test_device_event_glasses_status_lands_as_subdevice_row(patched_state, store
             },
         )
 
+    assert ws.sent == []  # no protocol error on the success branch
     rows = store.list_for_node("feral-iphone-abc")
     assert len(rows) == 1
     row = rows[0]
@@ -89,11 +113,12 @@ def test_device_event_glasses_status_lands_as_subdevice_row(patched_state, store
 def test_device_event_status_failure_payload_lands(patched_state, store):
     from api import server as server_mod
 
+    ws = _FakeWS()
     with patch.object(server_mod, "state", patched_state):
-        server_mod._handle_subdevice_status(
-            "feral-iphone-abc",
-            "glasses_status",
-            {
+        _ingest(server_mod, ws,
+            node_id="feral-iphone-abc",
+            event_type="glasses_status",
+            payload={
                 "status": "failed",
                 "source": "jw_health_glasses",
                 "reason": "bond_failure",
@@ -104,16 +129,18 @@ def test_device_event_status_failure_payload_lands(patched_state, store):
     assert len(rows) == 1
     assert rows[0]["status"] == "failed"
     assert rows[0]["attrs"]["reason"] == "bond_failure"
+    assert ws.sent == []
 
 
 def test_legacy_glasses_status_boolean_maps_to_status_string(patched_state, store):
     from api import server as server_mod
 
+    ws = _FakeWS()
     with patch.object(server_mod, "state", patched_state):
-        server_mod._handle_subdevice_status(
-            "feral-iphone-abc",
-            "glasses_status",
-            {
+        _ingest(server_mod, ws,
+            node_id="feral-iphone-abc",
+            event_type="glasses_status",
+            payload={
                 "glasses_connected": True,
                 "battery_level": 88,
                 "glasses_model": "Theora-W300",
@@ -133,11 +160,12 @@ def test_legacy_glasses_status_boolean_maps_to_status_string(patched_state, stor
 def test_legacy_glasses_status_disconnected_maps_to_disconnected(patched_state, store):
     from api import server as server_mod
 
+    ws = _FakeWS()
     with patch.object(server_mod, "state", patched_state):
-        server_mod._handle_subdevice_status(
-            "feral-iphone-abc",
-            "glasses_status",
-            {
+        _ingest(server_mod, ws,
+            node_id="feral-iphone-abc",
+            event_type="glasses_status",
+            payload={
                 "glasses_connected": False,
                 "battery_level": 12,
             },
@@ -150,59 +178,97 @@ def test_legacy_glasses_status_disconnected_maps_to_disconnected(patched_state, 
 def test_missing_status_drops_payload_without_inventing_one(patched_state, store):
     from api import server as server_mod
 
+    ws = _FakeWS()
     with patch.object(server_mod, "state", patched_state):
-        server_mod._handle_subdevice_status(
-            "feral-iphone-abc",
-            "glasses_status",
-            {"source": "jw_health_glasses", "device_name": "Theora"},
+        _ingest(server_mod, ws,
+            node_id="feral-iphone-abc",
+            event_type="glasses_status",
+            payload={"source": "jw_health_glasses", "device_name": "Theora"},
         )
 
     # Truth-in-status: no status field → no row. We do NOT invent a
     # default ``"unknown"`` status because that would round-trip to
     # the dashboard as a real binding.
     assert store.list_for_node("feral-iphone-abc") == []
+    assert ws.sent == []
 
 
 def test_missing_node_id_drops_payload(patched_state, store):
     from api import server as server_mod
 
+    ws = _FakeWS()
     with patch.object(server_mod, "state", patched_state):
-        server_mod._handle_subdevice_status(
-            "",
-            "glasses_status",
-            {"status": "ready", "source": "jw_health_glasses"},
+        _ingest(server_mod, ws,
+            node_id="",
+            event_type="glasses_status",
+            payload={"status": "ready", "source": "jw_health_glasses"},
         )
 
     assert store.list_all() == []
 
 
-def test_unknown_provenance_normalises_to_ble(patched_state, store):
+def test_unknown_provenance_rejected_with_1003(patched_state, store):
+    """Phase 1.5: unknown provenance values must be rejected with HUP
+    error code 1003 (typed validation), not silently coerced to
+    ``"ble"``. Coercing would produce a row with the wrong heartbeat
+    window and the dashboard would lie about staleness.
+    """
     from api import server as server_mod
 
+    ws = _FakeWS()
     with patch.object(server_mod, "state", patched_state):
-        server_mod._handle_subdevice_status(
-            "feral-iphone-abc",
-            "glasses_status",
-            {
+        _ingest(server_mod, ws,
+            node_id="feral-iphone-abc",
+            event_type="glasses_status",
+            payload={
                 "status": "ready",
                 "source": "jw_health_glasses",
-                "provenance": "telepathy",  # not a real provenance
+                "provenance": "telepathy",  # not in ALLOWED_PROVENANCES
             },
         )
 
-    rows = store.list_for_node("feral-iphone-abc")
-    assert len(rows) == 1
-    assert rows[0]["provenance"] == "ble"
+    # No row written.
+    assert store.list_for_node("feral-iphone-abc") == []
+
+    # One HUP error frame emitted with code 1003 + name=bad_provenance.
+    assert len(ws.sent) == 1
+    err = ws.sent[0]
+    assert err["type"] == "error"
+    assert err["payload"]["code"] == 1003
+    assert err["payload"]["name"] == "bad_provenance"
+    assert "telepathy" in err["payload"]["message"]
+
+
+def test_unknown_provenance_rejected_without_ws_does_not_raise(patched_state, store):
+    """`ws=None` simulates a code path where the helper is called from
+    something other than a daemon WebSocket (e.g. an internal
+    backfill). The helper must still drop the row but must not raise
+    when it can't send the protocol error."""
+    from api import server as server_mod
+
+    with patch.object(server_mod, "state", patched_state):
+        _ingest(server_mod, None,
+            node_id="feral-iphone-abc",
+            event_type="glasses_status",
+            payload={
+                "status": "ready",
+                "source": "jw_health_glasses",
+                "provenance": "telepathy",
+            },
+        )
+
+    assert store.list_for_node("feral-iphone-abc") == []
 
 
 def test_cloud_provenance_routed_through(patched_state, store):
     from api import server as server_mod
 
+    ws = _FakeWS()
     with patch.object(server_mod, "state", patched_state):
-        server_mod._handle_subdevice_status(
-            "feral-iphone-abc",
-            "whoop_status",
-            {
+        _ingest(server_mod, ws,
+            node_id="feral-iphone-abc",
+            event_type="whoop_status",
+            payload={
                 "status": "online",
                 "source": "whoop_cloud",
                 "provenance": "cloud",

@@ -1,5 +1,6 @@
 """Dashboard, system info, health, and activity endpoints."""
 
+import logging
 import os
 import time
 from fastapi import APIRouter
@@ -9,6 +10,7 @@ from api.state import state
 from config.loader import feral_home
 
 router = APIRouter()
+logger = logging.getLogger("feral.dashboard")
 
 
 @router.get("/api/identity/greeting")
@@ -244,15 +246,26 @@ async def _get_dashboard_data() -> dict:
     # window. Phase-1 dashboard binds Home/HubLauncher dots to
     # ``subdevices_live > 0`` so "Active" never shows for a peripheral
     # whose phone has been offline for a minute.
+    #
+    # Phase-1.5: read failures are surfaced as
+    # ``subdevices_unavailable: <error_text>`` so the dashboard
+    # renders a real "Sub-device data temporarily unavailable"
+    # warning instead of silently lying that the user has none.
     subdevices_total = 0
     subdevices_live = 0
+    subdevices_unavailable: str | None = None
     subdevice_rows: list[dict] = []
     subdevice_store = getattr(state, "node_subdevices", None)
-    if subdevice_store is not None:
+    if subdevice_store is None:
+        subdevices_unavailable = "subdevice store not initialised"
+    else:
         try:
             subdevice_rows = subdevice_store.list_all()
-        except Exception:
-            subdevice_rows = []
+        except Exception as exc:
+            logger.warning("node_subdevices.list_all failed: %s", exc)
+            subdevices_unavailable = (
+                f"{exc.__class__.__name__}: {str(exc)[:200]}"
+            )
     subdevices_total = len(subdevice_rows)
     subdevices_live = sum(1 for r in subdevice_rows if r.get("live"))
 
@@ -281,6 +294,7 @@ async def _get_dashboard_data() -> dict:
         "paired_offline_count": paired_offline,
         "subdevices_total": subdevices_total,
         "subdevices_live": subdevices_live,
+        "subdevices_unavailable": subdevices_unavailable,
         "channels": channel_types,
         "session_count": len(state.sessions), "health": latest_health,
         "memory": stats, "skills_count": len(state.skill_registry.skills),

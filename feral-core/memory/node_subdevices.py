@@ -215,9 +215,21 @@ class NodeSubdeviceStore:
 
     def forget(self, node_id: str, capability: Optional[str] = None) -> int:
         """Remove sub-device rows. ``capability=None`` removes every row
-        for the node; used when the node sends ``node_bye`` so the
-        dashboard never shows stale rows belonging to a node that has
-        been gone for an indeterminate time.
+        for the node.
+
+        **Not** called from the brain's ``node_bye`` / WebSocket
+        disconnect paths — that's a deliberate design choice: the
+        rows must survive brain restart and operator-driven reboots
+        of the iOS app so the dashboard still has *something* to
+        render between restarts. Liveness is enforced by
+        :meth:`sweep_stale` which derates each row's ``live`` flag
+        once its provenance heartbeat window expires; the persisted
+        ``status`` text is preserved across the derate so operators
+        still see the last-known state.
+
+        Use this method only for explicit operator action (``DELETE``
+        REST endpoint, future Devices-tab "Forget device" button) or
+        in tests that need to scrub the table.
 
         Returns the number of rows removed. Emits one
         ``subdevice_remove`` event per removed row.

@@ -229,30 +229,41 @@ def _describe_device(node_id: str, ws) -> dict:
 def _subdevices_for(node_id: str) -> list[dict]:
     """Return the list of sub-device records owned by ``node_id``.
 
-    Empty list when the truth store is unavailable or the node has
-    never reported a sub-device. Truth-in-status: callers should
-    consume each entry's ``live`` flag, not assume "row exists ⇒ live".
+    Empty list ONLY when the truth store has no rows for that node.
+    Returns an empty list when the store is unavailable (boot still
+    in flight); a hard read-failure is propagated up to the FastAPI
+    error handler rather than silently swallowed — surfacing the
+    failure beats showing the dashboard an empty tree as if the
+    node had no sub-devices.
+
+    Truth-in-status: callers should consume each entry's ``live``
+    flag, not assume "row exists ⇒ live".
     """
     store = getattr(state, "node_subdevices", None)
     if store is None or not node_id:
         return []
-    try:
-        return store.list_for_node(node_id)
-    except Exception:
-        return []
+    return store.list_for_node(node_id)
 
 
 @router.get("/api/devices/connected")
 async def connected_devices():
-    """List all connected HUP daemons with their real node_type.
+    """List **live HUP daemons only** with their real node_type.
 
-    No more fake ``"desktop"`` / ``"phone"`` placeholders — every entry
-    corresponds to a live WebSocket in ``state.daemons``. Empty list is
-    a valid answer and means "nothing is paired yet", not "we made one up".
+    Selection-bound: every entry corresponds to an open WebSocket in
+    ``state.daemons``. Paired-but-offline nodes are intentionally
+    NOT included here — clients that need them should call
+    ``GET /api/dashboard`` (which surfaces both via ``devices[]`` and
+    paired/offline counts) or ``GET /api/devices/paired``.
 
-    Each row also carries ``subdevices: [...]`` — every sub-device the
-    node has ever reported, with a per-row ``live`` flag computed from
-    the provenance-specific heartbeat window.
+    Each row carries ``subdevices: [...]`` — every sub-device the
+    parent node has ever reported, with a per-row ``live`` flag
+    computed from the provenance-specific heartbeat window. A row's
+    ``subdevices`` may legitimately contain rows whose ``live`` is
+    ``false`` even though the node itself is live (e.g. the iPhone
+    is connected but the Theora glasses BLE link dropped).
+
+    Empty list is a valid answer and means "no daemon WebSocket open
+    right now". It does NOT mean "nothing has ever paired".
     """
     if state.session_handoff:
         active = state.session_handoff.get_active_devices() or []

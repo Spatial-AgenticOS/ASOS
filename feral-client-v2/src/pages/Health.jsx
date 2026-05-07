@@ -132,20 +132,103 @@ function AlertsTab() {
   );
 }
 
+/**
+ * Phase-1 truthfulness sweep: explicit pipeline qualifier per
+ * vitals source. Maps the brain's capability id (what the iOS
+ * adapter / cloud integration declares on `node_register`) to the
+ * human-readable pipeline label rendered in the iOS Vitals tab so
+ * web + native stay consistent. The mapping mirrors
+ * `feral-companion-ios` `HealthStore.defaultPipelineLabel(for:)`.
+ */
+function pipelineLabelForCapability(cap) {
+  switch (cap) {
+    case 'apple_healthkit': return 'Apple Health';
+    case 'jw_health_glasses': return 'Theora glasses';
+    case 'veepoo_wristband': return 'Veepoo wristband';
+    case 'w610_glasses': return 'W610 open glasses';
+    case 'generic_ble_hr': return 'BLE heart-rate sensor';
+    case 'whoop_cloud': return 'Whoop';
+    case 'oura_cloud': return 'Oura';
+    case 'strava_cloud': return 'Strava';
+    case 'garmin_cloud': return 'Garmin';
+    case 'fitbit_cloud': return 'Fitbit';
+    default: return cap || 'unknown source';
+  }
+}
+
 function TodayTab() {
   const [today, setToday] = useState(null);
-  useEffect(() => { apiJson('/api/health-summary').then(setToday).catch(() => setToday({})); }, []);
+  const [sources, setSources] = useState([]);
+  useEffect(() => {
+    apiJson('/api/health-summary').then(setToday).catch(() => setToday({}));
+    // Pull the dashboard so we can render a real pipeline+source line
+    // alongside the metric tiles. The vital values themselves come from
+    // the aggregator above; the sources list comes from the brain's
+    // sub-device truth store on /api/dashboard so each chip is bound
+    // to the same `live` flag the rest of the dashboard uses.
+    apiJson('/api/dashboard')
+      .then((d) => {
+        const out = [];
+        for (const dev of (d?.devices || [])) {
+          for (const s of (dev?.subdevices || [])) {
+            out.push({
+              ...s,
+              node_id: s.node_id || dev.node_id,
+              pipeline: pipelineLabelForCapability(s.capability),
+              sample_source: s?.attrs?.device_name || s?.attrs?.sample_source || '',
+            });
+          }
+        }
+        setSources(out);
+      })
+      .catch(() => setSources([]));
+  }, []);
   if (!today) return <Pane title="Today"><EmptyState title="Loading…" /></Pane>;
   return (
-    <Pane title="Today's vitals">
-      <div className="v2-grid v2-grid--stats">
-        {Object.entries(today).filter(([k]) => !k.startsWith('_')).map(([k, v]) => (
-          <Glass key={k} level={1} radius="md" padding="md">
-            <div className="v2-stat-label">{k.replace(/_/g, ' ')}</div>
-            <div className="v2-stat-value">{typeof v === 'number' ? v : JSON.stringify(v).slice(0, 40)}</div>
-          </Glass>
-        ))}
-      </div>
-    </Pane>
+    <>
+      <Pane title="Today's vitals">
+        <div className="v2-grid v2-grid--stats">
+          {Object.entries(today).filter(([k]) => !k.startsWith('_')).map(([k, v]) => (
+            <Glass key={k} level={1} radius="md" padding="md">
+              <div className="v2-stat-label">{k.replace(/_/g, ' ')}</div>
+              <div className="v2-stat-value">{typeof v === 'number' ? v : JSON.stringify(v).slice(0, 40)}</div>
+            </Glass>
+          ))}
+        </div>
+      </Pane>
+      <Pane title={`Active sources${sources.length ? ` · ${sources.length}` : ''}`}>
+        {sources.length === 0 ? (
+          <EmptyState
+            title="No active sources"
+            hint="Pair a device or connect a cloud integration. The pipeline label here matches the iOS Vitals tab so you can verify which transport a number came from."
+          />
+        ) : (
+          <div className="v2-skill-card-phrases">
+            {sources.map((s, i) => (
+              <span
+                key={`${s.node_id}-${s.capability}-${i}`}
+                className={`v2-chip ${s.live ? 'v2-chip--live' : ''}`}
+                data-testid="v2-vitals-source-chip"
+                title={[
+                  s.live ? 'live' : 'stale',
+                  `provenance: ${s.provenance || 'unknown'}`,
+                  typeof s.last_seen === 'number'
+                    ? `last seen ${Math.round(Math.max(0, Date.now() / 1000 - s.last_seen))} s ago`
+                    : null,
+                ].filter(Boolean).join('\n')}
+              >
+                <StatusDot
+                  tone={s.live ? 'live' : 'off'}
+                  pulse={s.live}
+                  label={`${s.pipeline} ${s.live ? 'live' : 'stale'}`}
+                />
+                {s.pipeline}
+                {s.sample_source && <span className="v2-chip-suffix"> · {s.sample_source}</span>}
+              </span>
+            ))}
+          </div>
+        )}
+      </Pane>
+    </>
   );
 }

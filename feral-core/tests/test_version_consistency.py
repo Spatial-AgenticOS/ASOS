@@ -1,10 +1,18 @@
 """Fail CI if any hard-coded FERAL version string drifts out of sync.
 
-We load ``scripts/bump_version.py`` by path (it lives outside the
-``feral-core/`` package and is not importable via normal ``import``) and
-re-use its declarative ``VERSION_LOCATIONS`` list as the single source of
-truth. Every file that exists is expected to expose the SAME version
-string via its regex.
+We load ``scripts/sync_versions.py`` by path (it lives outside the
+``feral-core/`` package and is not importable via normal ``import``)
+and re-use its declarative ``VERSION_LOCATIONS`` list as the single
+source of truth. Every file that exists is expected to expose the
+SAME version string via its regex.
+
+Phase-1 consolidation: this test used to load
+``scripts/bump_version.py`` and walk its parallel list, which led to
+real CI failures when a literal lived in only one of the two lists
+(audit-r7 brief 8 §11). After ``phase-1/truthfulness-sweep`` the
+canonical list is ``sync_versions.VERSION_LOCATIONS``; the legacy
+``bump_version`` module is now a thin shim that delegates to
+``sync_versions`` and the test asserts a single list of truth.
 """
 from __future__ import annotations
 
@@ -15,14 +23,14 @@ from pathlib import Path
 import pytest
 
 ASOS_ROOT = Path(__file__).resolve().parents[2]
-BUMP_SCRIPT = ASOS_ROOT / "scripts" / "bump_version.py"
+SYNC_SCRIPT = ASOS_ROOT / "scripts" / "sync_versions.py"
 
 
-def _load_bump_module():
+def _load_sync_module():
     spec = importlib.util.spec_from_file_location(
-        "feral_bump_version", BUMP_SCRIPT
+        "feral_sync_versions", SYNC_SCRIPT
     )
-    assert spec and spec.loader, f"cannot load bump script at {BUMP_SCRIPT}"
+    assert spec and spec.loader, f"cannot load sync script at {SYNC_SCRIPT}"
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -30,10 +38,10 @@ def _load_bump_module():
 
 
 @pytest.fixture(scope="module")
-def bump_module():
-    if not BUMP_SCRIPT.exists():
-        pytest.skip(f"{BUMP_SCRIPT} not present in this checkout")
-    return _load_bump_module()
+def sync_module():
+    if not SYNC_SCRIPT.exists():
+        pytest.skip(f"{SYNC_SCRIPT} not present in this checkout")
+    return _load_sync_module()
 
 
 def _extract_versions(module) -> dict[str, set[str]]:
@@ -50,16 +58,16 @@ def _extract_versions(module) -> dict[str, set[str]]:
     return observed
 
 
-def test_version_locations_declared(bump_module):
-    assert bump_module.VERSION_LOCATIONS, "no version locations declared"
-    for loc in bump_module.VERSION_LOCATIONS:
+def test_version_locations_declared(sync_module):
+    assert sync_module.VERSION_LOCATIONS, "no version locations declared"
+    for loc in sync_module.VERSION_LOCATIONS:
         assert "version" in loc.pattern.groupindex, (
             f"location for {loc.path} is missing a named 'version' capture group"
         )
 
 
-def test_single_calver_across_all_files(bump_module):
-    observed = _extract_versions(bump_module)
+def test_single_calver_across_all_files(sync_module):
+    observed = _extract_versions(sync_module)
     assert observed, "no declared version files were found on disk"
 
     all_versions: set[str] = set()
@@ -72,16 +80,16 @@ def test_single_calver_across_all_files(bump_module):
         )
         raise AssertionError(
             "FERAL version strings have drifted across files. "
-            "Run `python3 scripts/bump_version.py <version>` to resync.\n"
+            "Run `python3 scripts/sync_versions.py --write` to resync.\n"
             f"Distinct versions found: {sorted(all_versions)}\n"
             f"Per-file breakdown:\n{per_file}"
         )
 
 
-def test_calver_shape(bump_module):
-    observed = _extract_versions(bump_module)
+def test_calver_shape(sync_module):
+    observed = _extract_versions(sync_module)
     versions = {v for values in observed.values() for v in values}
     for v in versions:
-        assert bump_module.CALVER_RE.match(v), (
+        assert sync_module.CALVER_RE.match(v), (
             f"version {v!r} does not look like YYYY.M.D"
         )

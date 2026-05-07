@@ -1466,7 +1466,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 logger.info(f"Glasses ({model}) {'connected' if connected else 'disconnected'} via {node_id}, battery={battery}%")
                 # Persist into the sub-device truth store so dashboards
                 # render a real binding instead of a hardcoded dot.
-                _handle_subdevice_status(node_id, "glasses_status", payload_dict)
+                await _handle_subdevice_status(ws, node_id, "glasses_status", payload_dict)
 
             elif msg.type == "voice_config":
                 payload_dict = raw.get("payload", {})
@@ -2112,7 +2112,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                     # ``whoop_status``). Routed to the truth store so
                     # the dashboard, the native iOS UI, and any future
                     # MCP consumer share one binding for "Active".
-                    _handle_subdevice_status(node_id, ev_type, de_payload)
+                    await _handle_subdevice_status(ws, node_id, ev_type, de_payload)
                 else:
                     logger.debug(
                         "Ignoring unknown device_event event_type=%r from %s",
@@ -2311,7 +2311,12 @@ def _handle_audio_frame(node_id, frame_payload: dict) -> None:
         )
 
 
-def _handle_subdevice_status(node_id, event_type: str, frame_payload: dict) -> None:
+async def _handle_subdevice_status(
+    ws,
+    node_id,
+    event_type: str,
+    frame_payload: dict,
+) -> None:
     """Ingest a sub-device status update into the truth store.
 
     A sub-device is anything an HUP node owns that is not the node
@@ -2334,8 +2339,16 @@ def _handle_subdevice_status(node_id, event_type: str, frame_payload: dict) -> N
       ``status="ready"|"disconnected"`` and the rest of the fields
       become ``attrs``.
 
-    Without a recognisable status field the helper logs and drops; we
-    do not invent a status from thin air.
+    Drop / reject behaviour (Phase 1.5 strict ingest):
+
+    * Missing ``status`` AND missing ``glasses_connected`` → log
+      and drop. We do not invent a status from thin air.
+    * Missing ``capability`` → log and drop.
+    * Unknown ``provenance`` (anything not in
+      ``{"ble", "cloud", "host", "synthetic"}``) → reject the frame
+      with HUP error code ``1003`` and log the source node + bad
+      value. Coercing to ``"ble"`` would silently produce a row
+      with the wrong heartbeat window, so we fail loud.
     """
     if state.node_subdevices is None:
         return
@@ -2376,9 +2389,31 @@ def _handle_subdevice_status(node_id, event_type: str, frame_payload: dict) -> N
         return
     capability = capability.strip()
 
-    provenance_raw = payload.get("provenance") or "ble"
-    if provenance_raw not in {"ble", "cloud", "host", "synthetic"}:
+    # Strict provenance: the sub-device store enforces a closed set
+    # so heartbeat-window math stays correct. Reject unknown values
+    # with HUP 1003 so the client knows we didn't ingest the frame.
+    allowed_provenances = {"ble", "cloud", "host", "synthetic"}
+    provenance_raw = payload.get("provenance")
+    if provenance_raw is None or provenance_raw == "":
         provenance_raw = "ble"
+    if provenance_raw not in allowed_provenances:
+        logger.warning(
+            "Subdevice status from %s/%s carried unknown provenance=%r; "
+            "rejecting (allowed=%s)",
+            node_id, capability, provenance_raw, sorted(allowed_provenances),
+        )
+        if ws is not None:
+            await _send_protocol_error(
+                ws,
+                1003,
+                (
+                    f"Unknown provenance {provenance_raw!r} on "
+                    f"{event_type} for capability {capability!r}; "
+                    f"allowed: {sorted(allowed_provenances)}"
+                ),
+                name="bad_provenance",
+            )
+        return
 
     # ``attrs`` carries everything the caller sent that wasn't part of
     # the canonical envelope. Top-level ``glasses_status`` adds
