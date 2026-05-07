@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "feral-ai"
-version = "2026.5.15"
+version = "2026.5.16"
 description = "FERAL — Open-source AI agent with computer use, GenUI, voice, hardware control, and persistent memory."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -176,6 +176,15 @@ dev = [
     # TestVerify.test_successful_verify_slides_window) to drive the
     # sliding-TTL window deterministically without sleeping.
     "freezegun>=1.4.0",
+]
+
+# Optional demo data + simulators. NEVER installed by default —
+# `pip install feral-ai` ships with zero synthetic-biometric code.
+# Install via `pip install feral-ai[demo]` (or directly:
+# `pip install feral-demo-data`) to get scripted scenarios + the
+# wristband / smart-home simulators for development.
+demo = [
+    "feral-demo-data>=0.1.0",
 ]
 
 [project.scripts]

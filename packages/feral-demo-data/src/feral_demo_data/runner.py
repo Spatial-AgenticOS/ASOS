@@ -27,7 +27,7 @@ def run_demo(scenario: str = ""):
     os.environ["FERAL_DEV_DEMO_FORCE"] = "1"
 
     if not scenario:
-        from demo.scenarios import SCENARIOS
+        from feral_demo_data.scenarios import SCENARIOS
         print()
         print("  ╔══════════════════════════════════════╗")
         print("  ║     F E R A L   D E M O              ║")

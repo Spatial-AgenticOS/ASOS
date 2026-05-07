@@ -409,6 +409,40 @@ app.include_router(channels_router)
 app.include_router(conversations_router)
 app.include_router(devices_router)
 app.include_router(access_router)
+
+# Optional demo routes — mounted only when feral-demo-data is installed
+# AND FERAL_DEV_DEMO=1. Discovery is via the `feral.plugins` entry
+# point group; if the plugin isn't installed, /api/demo/* simply
+# doesn't exist (no 404 stub, no fake data path).
+def _maybe_mount_demo_routes() -> None:
+    if os.environ.get("FERAL_DEV_DEMO", "").lower() not in ("1", "true", "yes"):
+        return
+    try:
+        from importlib.metadata import entry_points
+    except ImportError:  # py<3.10 fallback
+        from importlib_metadata import entry_points  # type: ignore
+    try:
+        eps = entry_points(group="feral.plugins")
+    except TypeError:
+        eps = entry_points().get("feral.plugins", [])  # type: ignore
+    for ep in eps:
+        if ep.name != "demo":
+            continue
+        try:
+            plugin = ep.load()()
+            router_factory = plugin.get("status_routes")
+            if callable(router_factory):
+                demo_router = router_factory()
+                if demo_router is not None:
+                    app.include_router(demo_router)
+                    logger.info("Mounted /api/demo/* routes from feral-demo-data plugin")
+        except Exception as exc:  # noqa: BLE001 — demo is best-effort
+            logger.warning("Failed to mount feral-demo-data routes: %s", exc)
+        break
+
+
+_maybe_mount_demo_routes()
+
 app.include_router(timeline_router)
 app.include_router(brain_rest_router)
 app.include_router(baseline_router)
