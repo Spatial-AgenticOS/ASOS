@@ -1,8 +1,55 @@
 # Changelog
 
-<!-- feral-version: 2026.5.14 -->
+<!-- feral-version: 2026.5.15 -->
 
 All notable changes to FERAL are documented here.
+
+## [Unreleased]
+
+## [2026.5.15] — Brain stability + iOS SDK schema correctness
+
+### Fixed
+
+- **`daemon_session` cleanup leak on disconnect.** PR #74 added inner
+  `except WebSocketDisconnect` / `except RuntimeError` handlers around
+  `receive_json()` that returned early, bypassing the existing outer
+  cleanup. Result: every graceful iOS disconnect leaked a
+  `state.daemons[node_id]` entry — and any subsequent reconnect from
+  the same `node_id` raced against a stale registration. Both inner
+  handlers now re-raise so the outer teardown
+  (`state.daemons.pop`, skill executor unregister, hardware mesh
+  notify, perception update) always runs. The brain remains graceful
+  about iOS ATS / TLS-induced transport drops without leaking state.
+  (#77)
+
+- **iOS Node SDK: `chat_request` and `voice_session_start` schema
+  correctness.** `sendChatRequest()` now sends the brain's required
+  `session_id` plus literal-typed `reply_mode` (`final`/`stream`) and
+  `channel` (`chat`/`vision_ask`). `startVoiceSession()` sends required
+  `stream_id` plus literal-typed `voice_mode` /
+  `mode` / `interrupt_policy`. Schema-correct enums
+  (`ChatReplyMode`, `ChatChannel`, `VoiceMode`, `VoiceCaptureMode`,
+  `InterruptPolicy`) added in `Info.swift` so a build never silently
+  produces a payload the brain rejects. Aligns with
+  `feral-core/models/protocol.py` `HUP_VERSION = "1.3.1"`. SDK
+  version bumped to `0.3.0`. (#77)
+
+- **WebUI v2 bundle drift** introduced in #75 (Home.jsx paired/online
+  split shipped without resyncing `feral-client-v2/dist/` and
+  `feral-core/webui_v2/`). Bundles regenerated. (#77)
+
+### iOS / phone
+
+- **PR #74 fully effective again.** WebSocket crashes from iOS ATS /
+  TLS-induced transport drops are still gracefully handled by the
+  brain; the cleanup regression introduced alongside is fixed so
+  `state.daemons` no longer accumulates stale registrations.
+
+### Internal
+
+- 5-commit red CI streak on `main` cleared. `Brain — pytest Linux
+  matrix`, `WebUI v2 — bundled asset coherence`, and all other CI
+  jobs now green on `main`.
 
 ## [2026.5.14] — `feral app publish` signature compatibility
 
