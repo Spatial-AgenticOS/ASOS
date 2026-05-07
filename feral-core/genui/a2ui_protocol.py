@@ -118,7 +118,14 @@ class A2UISurface:
 
 A2UI_VERSION = "1.0"
 
-# TODO(v2): Add signed marketplace trust verification for third-party surfaces.
+# Future work — tracked at https://github.com/FERAL-AI/FERAL-AI/issues/82.
+# This module intentionally does NOT expose any
+# ``verify_marketplace_signature`` symbol today; the contract test
+# ``test_a2ui_marketplace_trust_unimplemented_contract`` pins that
+# fact so future code can't silently behave as if signed trust were
+# already enforced. When the v2 verifier lands it must satisfy the
+# exit criteria in issue #82 (rendering badge, fail-closed install,
+# pytest coverage).
 
 
 @dataclass
