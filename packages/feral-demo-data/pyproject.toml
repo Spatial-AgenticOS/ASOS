@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feral-demo-data"
+version = "0.1.0"
+description = "Optional dev-only demo data + simulators for FERAL. Never installed by `pip install feral-ai`."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "FERAL", email = "team@feral.ai" },
+]
+keywords = ["feral", "demo", "simulator"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Hard dependency on feral-ai. The demo plugs into the brain's
+# perception / orchestrator surfaces, so the brain has to be present.
+# We do NOT pin tightly here — any compatible feral-ai works.
+dependencies = [
+  "feral-ai>=2026.5.15",
+]
+
+[project.urls]
+Homepage = "https://feral.sh"
+Repository = "https://github.com/FERAL-AI/FERAL-AI"
+
+[project.scripts]
+# Optional: a `feral-demo` console entry point that mirrors what
+# `feral demo` would do but lives outside the core CLI. The core
+# CLI also keeps a thin `feral demo` shim that delegates here when
+# this package is installed; otherwise it prints an install hint.
+feral-demo = "feral_demo_data.cli:main"
+
+[project.entry-points."feral.plugins"]
+# Plugin registration so `feral-core` can discover demo-mode hooks
+# (e.g. demo orchestrator, demo HTTP routes) without importing
+# `feral_demo_data` directly. Core uses
+# `importlib.metadata.entry_points(group="feral.plugins")` to look
+# this up; see feral-core/api/state.py demo-bootstrap helper.
+demo = "feral_demo_data:plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["feral_demo_data*"]

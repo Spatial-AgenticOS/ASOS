@@ -280,41 +280,14 @@ async def dismiss_proactive(request: Request):
     return {"ok": True}
 
 
-@router.get("/api/demo/status")
-async def demo_status():
-    """Check if running in demo mode and get simulator state."""
-    demo = getattr(state, "_demo", None)
-    if not demo:
-        return {"demo": False}
-    return {
-        "demo": True,
-        "wristband": demo.wristband.read(),
-        "smart_home": demo.smart_home.state,
-    }
-
-
-@router.post("/api/demo/scenario")
-async def run_demo_scenario(request: Request):
-    """Start a demo scenario."""
-    body = await request.json()
-    scenario_name = body.get("scenario", "")
-    if not scenario_name:
-        from demo.scenarios import SCENARIOS
-        return {"available": list(SCENARIOS.keys())}
-
-    try:
-        from demo.scenarios import ScenarioRunner
-        import asyncio
-        runner = ScenarioRunner(brain_state=state)
-        asyncio.create_task(runner.run(scenario_name))
-        return {"ok": True, "scenario": scenario_name, "status": "started"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
 # ─────────────────────────────────────────────
 # Command Ledger & Node Health endpoints
 # ─────────────────────────────────────────────
+# (Demo-mode routes /api/demo/status + /api/demo/scenario have moved
+# to the optional `feral-demo-data` package and are mounted by the
+# brain at boot only when FERAL_DEV_DEMO=1 + that package is
+# installed. See packages/feral-demo-data/src/feral_demo_data/_integration.py
+# `status_routes()`.)
 
 
 @router.get("/api/commands/recent")

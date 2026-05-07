@@ -1,10 +1,61 @@
 # Changelog
 
-<!-- feral-version: 2026.5.15 -->
+<!-- feral-version: 2026.5.16 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.16] — Demo data ripped out of feral-core
+
+### Breaking
+
+- **Demo mode + simulators moved to optional package `feral-demo-data`.**
+  `feral-core` no longer contains any synthetic-biometric, scripted-
+  scenario, or simulated-wristband code. The `demo/` package was
+  removed (5 files, 675 lines) and re-homed under
+  `packages/feral-demo-data/src/feral_demo_data/`. The new package is
+  never installed by `pip install feral-ai`. To use demo mode:
+
+  ```bash
+  pip install feral-demo-data
+  # or
+  pip install feral-ai[demo]
+  ```
+
+  Setting `FERAL_DEV_DEMO=1` (or running `feral demo` /
+  `feral start --demo`) without `feral-demo-data` installed now
+  fails loud with a clear install hint — the brain refuses to
+  silently no-op.
+
+### Internal
+
+- **Plugin discovery via `feral.plugins` entry-point group.** Brain
+  uses `importlib.metadata.entry_points(group="feral.plugins")` to
+  look up the optional `demo` plugin at boot. The plugin contract is
+  a small dict: `bootstrap(state)`, `status_routes()`,
+  `cli_handler(scenario)`. `feral-core` has zero `from demo.*`
+  imports and the published wheel for `feral-ai` carries no demo
+  files (already excluded via `[tool.setuptools.packages.find]`,
+  now also enforced by deletion).
+
+- **`/api/demo/status` + `/api/demo/scenario` routes** moved into
+  `feral_demo_data._integration.status_routes()`; mounted by
+  `feral-core/api/server.py` only when `FERAL_DEV_DEMO=1` AND the
+  plugin is installed.
+
+### Why now
+
+The user's brain logs were repeatedly firing
+`Proactive [CRITICAL] spo2_low: Low Blood Oxygen` and
+`hr_elevated` automations every few minutes with no real
+biometric source connected, because they were running an
+editable install with `FERAL_DEV_DEMO=1` set. With the demo
+code now in a separate package, future operators cannot
+accidentally ship synthetic biometrics into a production-style
+deploy from a `pip install feral-ai`. Audit
+`~/feral-private-docs/audit-r5/01-demo-rip-out-plan.md` drove
+the rip-out plan.
 
 ## [2026.5.15] — Brain stability + iOS SDK schema correctness
 

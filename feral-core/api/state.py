@@ -918,46 +918,16 @@ class BrainState:
         if os.environ.get("FERAL_DEMO"):
             logger.warning("FERAL_DEMO is deprecated and ignored. Use FERAL_DEV_DEMO=1 for dev-only demo mode.")
 
+        # Demo mode is opt-in dev-only. Synthetic biometrics + scripted
+        # scenarios live in the optional `feral-demo-data` package, never
+        # in the production wheel for `pip install feral-ai`. We discover
+        # the demo plugin via the `feral.plugins` entry point group; if
+        # the operator sets FERAL_DEV_DEMO=1 without `feral-demo-data`
+        # installed we fail loud rather than silently no-op.
         self._demo = None
         if os.environ.get("FERAL_DEV_DEMO", "").lower() in ("1", "true", "yes"):
             with boot_subsystem(self._boot_report, "DemoMode"):
-                from demo.seed import seed_demo_identity, seed_demo_memory
-                from demo.simulator import DemoOrchestrator
-                seed_demo_identity()
-                seed_demo_memory(self.memory)
-                self._demo = DemoOrchestrator()
-
-                async def _push_demo_telemetry(data):
-                    wb = data.get("wristband", {})
-                    for sid in list(self.sessions):
-                        frame = self.perception.get_frame(sid)
-                        if frame and wb:
-                            frame.heart_rate = wb.get("heart_rate_bpm", 0)
-                            frame.spo2_pct = int(wb.get("spo2_pct", 0))
-                            frame.skin_temperature_c = wb.get("skin_temp_c", 0.0)
-                            frame.activity_state = wb.get("activity", "resting")
-                        if self.somatic_engine and wb:
-                            self.somatic_engine.update_biometrics(
-                                sid,
-                                heart_rate=float(wb.get("heart_rate_bpm", 0)),
-                                spo2_pct=float(wb.get("spo2_pct", 0)),
-                                skin_temp_c=float(wb.get("skin_temp_c", 0)),
-                            )
-                    await self.broadcast_event("dashboard_update", await _get_dashboard_data_safe())
-
-                async def _get_dashboard_data_safe():
-                    try:
-                        from api.routes.dashboard import _get_dashboard_data
-                        return await _get_dashboard_data()
-                    except Exception:
-                        return {}
-
-                self._demo.on_telemetry(_push_demo_telemetry)
-                self._demo.set_refs(self.orchestrator, self.sessions)
-                import asyncio
-                self.register_background_task(
-                    asyncio.create_task(self._demo.start(), name="feral-demo-loop")
-                )
+                self._demo = self._bootstrap_demo_plugin()
 
         self._boot_report.total_elapsed_ms = (time.time() - _boot_start) * 1000
         self._boot_report.log_summary()
@@ -969,6 +939,46 @@ class BrainState:
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
             f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
         )
+
+    def _bootstrap_demo_plugin(self):
+        """Look up + invoke the `feral.plugins` -> `demo` entry point.
+
+        Returns the started demo orchestrator (opaque to core) or
+        raises with a clear install hint if `feral-demo-data` isn't
+        installed. Fail-loud is deliberate: silent no-op would leave
+        operators wondering why simulators vanished after upgrade.
+        """
+        try:
+            from importlib.metadata import entry_points
+        except ImportError:  # py<3.10 fallback (we require 3.11+)
+            from importlib_metadata import entry_points  # type: ignore
+
+        try:
+            eps = entry_points(group="feral.plugins")
+        except TypeError:
+            # Older Python: entry_points() returned a dict
+            eps = entry_points().get("feral.plugins", [])  # type: ignore
+
+        demo_ep = None
+        for ep in eps:
+            if ep.name == "demo":
+                demo_ep = ep
+                break
+
+        if demo_ep is None:
+            raise RuntimeError(
+                "FERAL_DEV_DEMO=1 set but `feral-demo-data` is not installed. "
+                "Run: pip install feral-demo-data   (or: pip install feral-ai[demo])"
+            )
+
+        plugin_factory = demo_ep.load()
+        plugin = plugin_factory()  # returns dict with bootstrap/status_routes/cli_handler
+        bootstrap = plugin.get("bootstrap")
+        if not callable(bootstrap):
+            raise RuntimeError(
+                "feral-demo-data plugin contract violation: missing bootstrap()"
+            )
+        return bootstrap(self)
 
     async def _start_channels(self):
         """Wire inbound channel messages to the orchestrator and start configured channels."""
