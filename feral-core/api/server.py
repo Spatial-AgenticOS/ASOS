@@ -1175,24 +1175,30 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 await _send_protocol_error(ws, 1002, "Malformed JSON frame")
                 continue
             except WebSocketDisconnect:
-                # Graceful disconnect from the daemon side — clean up
-                # without raising into ASGI (which logs a noisy stack).
+                # Graceful disconnect from the daemon side. Re-raise so the
+                # outer `except WebSocketDisconnect` block runs the daemon
+                # cleanup (state.daemons.pop, skill_executor.unregister_daemon,
+                # hardware_mesh.on_node_disconnected, perception updates).
+                # Returning here would leak `state.daemons[node_id]` and
+                # break test_accepts_legacy_node_api_key_and_registers.
                 logger.info(
                     "daemon_session: peer disconnected (device_id=%s node_id=%s)",
                     paired_device_id, node_id,
                 )
-                return
+                raise
             except RuntimeError as exc:
                 # Starlette raises RuntimeError("WebSocket is not connected ...")
                 # when the underlying socket has dropped between accept()
                 # and the next receive — typically because the iOS client
                 # got a TLS / ATS denial or the peer closed without the
-                # 1000 close-frame. Treat as a graceful disconnect.
+                # 1000 close-frame. Treat as a graceful disconnect AND run
+                # the same teardown by raising WebSocketDisconnect so the
+                # outer handler does the cleanup.
                 logger.info(
                     "daemon_session: peer transport gone (device_id=%s node_id=%s) — %s",
                     paired_device_id, node_id, exc,
                 )
-                return
+                raise WebSocketDisconnect(code=1006) from exc
             try:
                 msg, payload = parse_message(raw)
             except Exception as exc:  # noqa: BLE001 — pydantic ValidationError + others
