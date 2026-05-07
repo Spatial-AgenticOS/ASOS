@@ -508,23 +508,37 @@ function AutomationsTab({ skills }) {
           />
         )}
         <div className="v2-flow-list">
-          {autos.map((a) => (
-            <Glass key={a.id || a.job_id} level={0} radius="md" padding="md" className="v2-flow-card">
-              <div className="v2-flow-card-head">
-                <StatusDot tone="live" />
-                <div className="v2-flow-card-title">{a.name || a.trigger || a.id}</div>
-                <div className="v2-flow-card-status">{a.trigger_type || 'event'}</div>
-              </div>
-              <div className="v2-flow-card-meta">
-                {a.skill_id && <span>→ {a.skill_id}.{a.endpoint || 'default'}</span>}
-              </div>
-              <div className="v2-flow-card-actions">
-                <button type="button" className="v2-btn" onClick={() => remove(a.id || a.job_id)}>
-                  <X size={12} /> Delete
-                </button>
-              </div>
-            </Glass>
-          ))}
+          {autos.map((a) => {
+            // Phase-1 truthfulness: the dot must reflect whether the
+            // automation is actually armed, not "always green". The
+            // brain's `/api/automations` payload returns `enabled` —
+            // when true the row will fire on its trigger, when false
+            // it has been paused / disabled. If the field is absent
+            // (older brain or a shape variant), render a neutral dot
+            // rather than invent green.
+            const enabled = a.enabled;
+            let tone = 'neutral';
+            let label = 'status unknown';
+            if (enabled === true) { tone = 'live'; label = 'armed'; }
+            else if (enabled === false) { tone = 'off'; label = 'paused'; }
+            return (
+              <Glass key={a.id || a.job_id} level={0} radius="md" padding="md" className="v2-flow-card">
+                <div className="v2-flow-card-head">
+                  <StatusDot tone={tone} label={label} />
+                  <div className="v2-flow-card-title">{a.name || a.description || a.trigger || a.id}</div>
+                  <div className="v2-flow-card-status">{a.trigger_type || 'event'}</div>
+                </div>
+                <div className="v2-flow-card-meta">
+                  {a.skill_id && <span>→ {a.skill_id}.{a.endpoint || 'default'}</span>}
+                </div>
+                <div className="v2-flow-card-actions">
+                  <button type="button" className="v2-btn" onClick={() => remove(a.id || a.job_id)}>
+                    <X size={12} /> Delete
+                  </button>
+                </div>
+              </Glass>
+            );
+          })}
         </div>
       </Pane>
 

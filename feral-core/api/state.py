@@ -22,6 +22,7 @@ from agents.taskflow import TaskFlowRuntime
 from skills.registry import SkillRegistry
 from memory.store import MemoryStore
 from memory.ingest import MemoryIngestor
+from memory.node_subdevices import NodeSubdeviceStore
 from perception.fusion import PerceptionEngine
 from perception.audio_pipeline import AudioPipeline
 from perception.scene import SceneAnalyzer
@@ -247,6 +248,14 @@ class BrainState:
         # See feral-core/memory/consciousness.py.
         self.consciousness = None
 
+        # Node sub-device truth store. Tracks per-(node_id, capability)
+        # status for everything an HUP node owns that is not the node
+        # itself: BLE peripherals (Theora glasses), HealthKit pipelines,
+        # cloud-synced wearables, etc. Persisted to memory.db so brain
+        # restart preserves the prior view; liveness derate enforces
+        # truth on the dashboard. See feral-core/memory/node_subdevices.py.
+        self.node_subdevices: Optional[NodeSubdeviceStore] = None
+
         # Map daemon node_id → list of sessions interested in its data
         self._daemon_session_bindings: dict[str, set[str]] = {}
 
@@ -394,6 +403,49 @@ class BrainState:
                     logger.info("Consciousness: restored %d entities from %s", restored, snap)
                 except Exception as exc:
                     logger.warning("Consciousness snapshot restore skipped: %s", exc)
+
+        with boot_subsystem(self._boot_report, "NodeSubdeviceStore", optional=False):
+            # Open the sub-device store on the same SQLite file as the
+            # rest of the memory stack. Wire its on_change callback so
+            # every upsert / forget / live↔stale transition fans out as
+            # a `subdevice_update` (or `subdevice_remove`) event over
+            # every connected /v1/session WebSocket — matches the
+            # ConsciousnessStore broadcast pattern above.
+            def _on_subdevice_change(event_name: str, payload: dict) -> None:
+                try:
+                    import asyncio as _aio
+                    loop = _aio.get_running_loop()
+                except RuntimeError:
+                    return  # no loop (e.g. boot phase) — broadcast is optional
+                loop.create_task(self.broadcast_event(event_name, payload))
+
+            self.node_subdevices = NodeSubdeviceStore(
+                db_path=self.memory.db_path,
+                on_change=_on_subdevice_change,
+            )
+
+            # Liveness sweep: scan every row, emit deltas only when a
+            # row crosses the live↔stale threshold. 5 s tick is fast
+            # enough that BLE rows (30 s window) derate within ~one
+            # window past the last heartbeat. The sweep is cheap (one
+            # SELECT, per-row dict comparison against the in-memory
+            # tracker) so this is safe to run forever.
+            async def _subdevice_liveness_loop():
+                import asyncio as _aio
+                while True:
+                    await _aio.sleep(5.0)
+                    try:
+                        self.node_subdevices.sweep_stale()
+                    except Exception as exc:
+                        logger.debug("subdevice sweep failed: %s", exc)
+
+            import asyncio as _aio_subdev
+            self.register_background_task(
+                _aio_subdev.create_task(
+                    _subdevice_liveness_loop(),
+                    name="feral-subdevice-liveness",
+                )
+            )
 
         with boot_subsystem(self._boot_report, "ProviderCatalog", optional=False):
             # Single registry of LLM providers + live model lists.

@@ -238,6 +238,36 @@ async def _get_dashboard_data() -> dict:
             if getattr(ch, 'enabled', False):
                 channel_types.append({"type": ch_id, "connected": getattr(ch, '_running', False)})
 
+    # Sub-device summary — counted from the truth store, not invented.
+    # ``subdevices_total`` is every row we know about (live + stale);
+    # ``subdevices_live`` is only those still inside their heartbeat
+    # window. Phase-1 dashboard binds Home/HubLauncher dots to
+    # ``subdevices_live > 0`` so "Active" never shows for a peripheral
+    # whose phone has been offline for a minute.
+    subdevices_total = 0
+    subdevices_live = 0
+    subdevice_rows: list[dict] = []
+    subdevice_store = getattr(state, "node_subdevices", None)
+    if subdevice_store is not None:
+        try:
+            subdevice_rows = subdevice_store.list_all()
+        except Exception:
+            subdevice_rows = []
+    subdevices_total = len(subdevice_rows)
+    subdevices_live = sum(1 for r in subdevice_rows if r.get("live"))
+
+    # Attach to the matching device row when present so a single
+    # `/api/dashboard` round-trip carries everything Home/HubLauncher
+    # need to render the per-device sub-device chips.
+    if subdevice_rows:
+        sub_by_node: dict[str, list[dict]] = {}
+        for row in subdevice_rows:
+            sub_by_node.setdefault(row["node_id"], []).append(row)
+        for entry in devices_list:
+            nid = entry.get("node_id")
+            if nid and nid in sub_by_node:
+                entry["subdevices"] = sub_by_node[nid]
+
     return {
         # `devices` now includes paired-but-offline rows alongside
         # live ones (each row carries `connected: bool`). The legacy
@@ -249,6 +279,8 @@ async def _get_dashboard_data() -> dict:
         "online_count": len(state.daemons),
         "paired_count": paired_count,
         "paired_offline_count": paired_offline,
+        "subdevices_total": subdevices_total,
+        "subdevices_live": subdevices_live,
         "channels": channel_types,
         "session_count": len(state.sessions), "health": latest_health,
         "memory": stats, "skills_count": len(state.skill_registry.skills),

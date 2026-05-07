@@ -1464,6 +1464,9 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 battery = payload_dict.get("battery_level", -1)
                 model = payload_dict.get("glasses_model", "FERAL")
                 logger.info(f"Glasses ({model}) {'connected' if connected else 'disconnected'} via {node_id}, battery={battery}%")
+                # Persist into the sub-device truth store so dashboards
+                # render a real binding instead of a hardcoded dot.
+                _handle_subdevice_status(node_id, "glasses_status", payload_dict)
 
             elif msg.type == "voice_config":
                 payload_dict = raw.get("payload", {})
@@ -2103,6 +2106,13 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                     "temperature", "accelerometer", "gesture",
                 }:
                     _handle_biometric_device_event(node_id, ev_type, de_payload)
+                elif ev_type.endswith("_status"):
+                    # Sub-device status frames (e.g. ``glasses_status``,
+                    # future ``apple_health_status`` /
+                    # ``whoop_status``). Routed to the truth store so
+                    # the dashboard, the native iOS UI, and any future
+                    # MCP consumer share one binding for "Active".
+                    _handle_subdevice_status(node_id, ev_type, de_payload)
                 else:
                     logger.debug(
                         "Ignoring unknown device_event event_type=%r from %s",
@@ -2298,6 +2308,103 @@ def _handle_audio_frame(node_id, frame_payload: dict) -> None:
         logger.debug(
             "Received audio_frame from %s but state.audio has no ingest_frame hook; dropping.",
             effective_node,
+        )
+
+
+def _handle_subdevice_status(node_id, event_type: str, frame_payload: dict) -> None:
+    """Ingest a sub-device status update into the truth store.
+
+    A sub-device is anything an HUP node owns that is not the node
+    itself — Theora glasses paired through the iPhone companion, an
+    Apple Health pipeline behind the same phone, a cloud-synced Whoop
+    account, etc. Every status frame the brain receives lands here so
+    a single SQLite-backed store is the source of truth for the web
+    dashboard, the iOS UI, and any future MCP consumer.
+
+    Accepts two wire shapes, both flattened by :func:`_unwrap_hup_frame`:
+
+    * **iOS / native node** (``device_event`` envelope, ``event_type:
+      "glasses_status"``): ``data`` carries ``status`` (e.g. ``"ready"``,
+      ``"failed"``, ``"connecting"``), ``source`` (capability id, e.g.
+      ``"jw_health_glasses"``), and any extras (``device_name``,
+      ``reason``, ``rssi``, etc.) which become ``attrs``.
+    * **Top-level ``glasses_status``** (legacy / Pydantic
+      ``GlassesStatusPayload``): ``glasses_connected: bool``,
+      ``battery_level: int``, ``glasses_model: str``. Mapped to
+      ``status="ready"|"disconnected"`` and the rest of the fields
+      become ``attrs``.
+
+    Without a recognisable status field the helper logs and drops; we
+    do not invent a status from thin air.
+    """
+    if state.node_subdevices is None:
+        return
+    if not node_id:
+        return
+    payload = _unwrap_hup_frame(frame_payload)
+
+    # Source-of-truth: prefer an explicit status string from the iOS
+    # path; fall back to the legacy boolean shape if that is what
+    # arrived.
+    status_raw = payload.get("status")
+    glasses_connected = payload.get("glasses_connected")
+    if isinstance(status_raw, str) and status_raw.strip():
+        status = status_raw.strip()
+    elif isinstance(glasses_connected, bool):
+        status = "ready" if glasses_connected else "disconnected"
+    else:
+        logger.debug(
+            "Subdevice status frame from %s/%s missing status field; dropping payload=%r",
+            node_id, event_type, payload,
+        )
+        return
+
+    capability = (
+        payload.get("source")
+        or payload.get("capability")
+        # No suffix-stripping: the source-of-truth for capability id is
+        # the iOS adapter's own ``capability`` string. Falling back to
+        # the event_type unchanged gives us a stable bucket for legacy
+        # frames that did not declare ``source``.
+        or event_type
+    )
+    if not isinstance(capability, str) or not capability.strip():
+        logger.debug(
+            "Subdevice status from %s missing capability id; dropping payload=%r",
+            node_id, payload,
+        )
+        return
+    capability = capability.strip()
+
+    provenance_raw = payload.get("provenance") or "ble"
+    if provenance_raw not in {"ble", "cloud", "host", "synthetic"}:
+        provenance_raw = "ble"
+
+    # ``attrs`` carries everything the caller sent that wasn't part of
+    # the canonical envelope. Top-level ``glasses_status`` adds
+    # ``battery_level`` / ``glasses_model`` automatically.
+    reserved = {
+        "status", "source", "capability", "provenance",
+        "event_type", "node_id", "ts",
+    }
+    attrs: dict = {}
+    for key, value in payload.items():
+        if key in reserved:
+            continue
+        attrs[key] = value
+
+    try:
+        state.node_subdevices.upsert(
+            node_id=node_id,
+            capability=capability,
+            status=status,
+            attrs=attrs,
+            provenance=provenance_raw,
+        )
+    except Exception as exc:
+        logger.warning(
+            "node_subdevices.upsert failed for %s/%s: %s",
+            node_id, capability, exc,
         )
 
 

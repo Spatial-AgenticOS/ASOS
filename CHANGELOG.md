@@ -1,10 +1,138 @@
 # Changelog
 
-<!-- feral-version: 2026.5.16 -->
+<!-- feral-version: 2026.5.17 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.17] — Phase 1 truthfulness sweep + node-subdevice truth store
+
+### Added
+
+- **Brain `NodeSubdeviceStore`** (`feral-core/memory/node_subdevices.py`).
+  A SQLite-backed truth store keyed by `(node_id, capability)` that
+  the dashboard, the native iOS UI, and any future MCP consumer
+  share as the single source of truth for "is this peripheral
+  active right now?". Per-row `live` flag is computed against a
+  provenance-specific heartbeat window — **30 s** for `ble`,
+  **300 s** for `cloud`, **60 s** for `host` — so a glasses BLE
+  link that loses heartbeat for >30 s auto-derates to stale and
+  every UI surface flips off the pulsing dot in lock-step.
+
+- **Sub-device ingestion in `daemon_session`.** Frames matching
+  `device_event` with `event_type` ending in `_status` (e.g.
+  `glasses_status`) AND legacy top-level `glasses_status` frames
+  both land in the truth store via a single
+  `_handle_subdevice_status` helper. Status `ready` / `failed` /
+  `connecting` / `disconnected` strings are preserved across the
+  derate so operators can read why a stale row last reported what
+  it did.
+
+- **`GET /api/devices/{node_id}/subdevices`** — full sub-device
+  tree for one node.
+
+- **`subdevices: [...]` on every row of `GET /api/devices/connected`.**
+  Same shape as the dedicated endpoint.
+
+- **`subdevices_total` + `subdevices_live` on `/api/dashboard`.**
+  Lets the Home page render a truthful sub-device tile without an
+  extra round-trip.
+
+- **`subdevice_update` / `subdevice_remove` events on `/v1/session`.**
+  Real-time deltas every time the truth store mutates (ingest,
+  liveness derate, recovery), wrapped as `state_push` like the
+  rest of the brain's broadcast surface. The web `/devices` page
+  consumes them so the chip dot flips within a few seconds of a
+  link drop instead of waiting for the 15 s REST poll.
+
+### Changed
+
+- **Web Home "Brain" hero stat is now a real binding.** Replaces the
+  hardcoded `<StatusDot tone="live" pulse /> online` literal with a
+  three-state machine driven by the dashboard `/v1/session` socket
+  state plus the most recent `/api/dashboard` poll outcome:
+  `online` (WS open + REST ok), `reconnecting…` (one signal down),
+  `offline` (both down). The previous build claimed "online" even
+  when the brain process was stopped — the lie the audit-r6/r7
+  truthfulness sweep flagged.
+
+- **Web Flows automation rows bind the dot to `enabled`.** Armed
+  rows show live; paused rows show off; rows that don't carry an
+  `enabled` field render neutral instead of inventing green.
+
+- **Web `/devices` Live pane renders the sub-device tree per node.**
+  Each chip carries a dot tone bound to the row's `live` flag and a
+  hover tooltip surfacing capability, status, provenance,
+  last-seen age, and the heartbeat window — operators can verify
+  the binding without code-reading.
+
+- **iOS Vitals card source label adds an explicit pipeline
+  qualifier.** Reads `Apple Health · Apple Watch` (or just
+  `Apple Health` when the `HKStatisticsQuery` cumulative path
+  spans multiple devices) instead of the bare `apple_healthkit`
+  capability id. Reading carries the HK sample-source name
+  extracted from `HKQuantitySample.sourceRevision.source.name`.
+
+### Fixed
+
+- **iOS `DeviceStore` Bluetooth row "Active" no longer lies.**
+  The audit pinned the regression: `activate(_:)` flipped the row
+  to `.active` synchronously, and nothing reverse-synced when the
+  JWBle SDK reported `.failed` / `.disConnect` / when the user
+  turned Bluetooth off in iOS Settings. Single-writer rule now
+  derives every BT row's runtime status from `JWBleSession.phase`
+  + the iOS Bluetooth power state. Cold launch with restored
+  intent + BT off shows `failed("Bluetooth is off — turn it on
+  in Settings")`, never `Active`.
+
+- **iOS `BluetoothSystemMonitor`** — new `CBCentralManagerDelegate`
+  wrapper. Was missing entirely; the audit confirmed the iOS tree
+  had no `CBCentralManager` references.
+
+- **iOS `JWBleSession.bind(brainNode:)` is finally called.**
+  `BrainClient.connect` now invokes it after `node.connect()`
+  succeeds. The audit confirmed zero call sites in the iOS tree
+  before this PR — `glasses_status` device_events emitted from
+  the JWBle SDK callbacks never reached the brain. They do now.
+
+- **iOS `scenePhase: .background` tears down voice + BLE + WS.**
+  Previously the WS was closed but `JWBleSession`, `AudioCapture`,
+  and `voiceActive` kept running until the OS suspended the
+  process. The new teardown calls `BrainClient.stopVoice` →
+  `ConnectionStore.disconnect` → `JWBleSession.shared.disconnect`
+  in that order so the brain sees a clean `is_final` audio chunk
+  before the socket goes away.
+
+- **iOS `BrainClient` owns the voice lifecycle** (`startVoice` /
+  `stopVoice` + `@Published var voiceActive`). `ChatView` no
+  longer holds `@State var voiceActive` / `capture` — the OS-level
+  background hook can't reach into a SwiftUI view's state, so the
+  refactor is what makes the teardown above actually possible.
+
+### Internal
+
+- New tests:
+  - `feral-core/tests/test_node_subdevices.py` — 11 tests pinning
+    the upsert / forget / liveness-sweep contract.
+  - `feral-core/tests/test_subdevice_ingestion.py` — 8 tests
+    pinning the wire-format (`device_event` + legacy top-level
+    `glasses_status`) ingest contract, including
+    missing-status / missing-node-id / unknown-provenance drop
+    behaviour.
+  - Extended `tests/test_api_devices_connected.py` with 4 new
+    cases for the `subdevices` field + the new endpoint.
+  - `feral-client-v2/src/__tests__/pages/Home.truthfulness.test.jsx`
+    — pins the new Brain stat binding + Subdevices tile.
+  - `feral-client-v2/src/__tests__/pages/Devices.subdevices.test.jsx`
+    — pins the chip rendering + tooltip + stale derate.
+  - `Tests/FeralCompanionTests/FeralCompanionTests.swift` —
+    extended with 6 Phase-1 truthfulness cases driving
+    `_applyJWBlePhase` / `_applyBluetoothState` directly.
+
+- Audit references: `~/feral-private-docs/audit-r6/01-theora-active-ui-lie.md`,
+  `audit-r6/08-status-truthfulness-audit.md`, `audit-r7/02-ios-companion-architecture.md`,
+  `audit-r7/04-web-dashboard.md`, `audit-r7/03-hup-wire-format.md`.
 
 ## [2026.5.16] — Demo data ripped out of feral-core
 
