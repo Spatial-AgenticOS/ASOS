@@ -72,8 +72,12 @@ class DeepgramSTTProvider(STTProvider):
             language=self._language,
         )
 
+        # Legacy ``websockets.connect`` uses ``extra_headers``; the
+        # asyncio-client variant renamed it to ``additional_headers``.
+        # See voice/realtime_proxy.py for the matching fix + regression
+        # test (tests/test_voice_realtime_headers.py).
         extra_headers = {"Authorization": f"Token {self._api_key}"}
-        self._ws = await websockets.connect(url, additional_headers=extra_headers)
+        self._ws = await websockets.connect(url, extra_headers=extra_headers)
         self._recv_task = asyncio.create_task(self._receive_loop())
 
         try:
