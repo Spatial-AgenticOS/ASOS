@@ -66,19 +66,30 @@ OPENAI_EXPECTATIONS: list[tuple[str, str]] = [
     ("text-embedding-3-small", "embedding"),
     ("text-embedding-3-large", "embedding"),
     ("text-embedding-ada-002", "embedding"),
-    # audio
+    # audio (base + dated-snapshot suffixes — the dated form leaked
+    # into chat before the 2026-05-08 fix and the OpenAI catalog
+    # handed `gpt-4o-mini-transcribe-2025-12-15` out as the chat
+    # default, breaking every chat completion with HTTP 404
+    # `This is not a chat model`. Pinned here to prevent regression.)
     ("whisper-1", "audio"),
     ("gpt-4o-transcribe", "audio"),
     ("gpt-4o-mini-transcribe", "audio"),
+    ("gpt-4o-mini-transcribe-2025-03-20", "audio"),
+    ("gpt-4o-mini-transcribe-2025-12-15", "audio"),
+    ("gpt-4o-transcribe-diarize", "audio"),
+    ("gpt-4o-transcribe-diarize-2025-12-15", "audio"),
     ("gpt-4o-mini-tts", "audio"),
+    ("gpt-4o-mini-tts-2025-03-20", "audio"),
+    ("gpt-4o-mini-tts-2025-12-15", "audio"),
     ("tts-1", "audio"),
     # image
     ("dall-e-2", "image"),
     ("dall-e-3", "image"),
     ("gpt-image-2", "image"),
-    # realtime
+    # realtime (base + dated)
     ("gpt-realtime-1.5", "realtime"),
     ("gpt-4o-realtime-preview", "realtime"),
+    ("gpt-4o-realtime-preview-2024-12-17", "realtime"),
 ]
 
 

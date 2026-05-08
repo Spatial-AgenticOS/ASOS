@@ -104,18 +104,28 @@ _OPENAI_RULES: tuple[tuple[re.Pattern[str], ModelClass], ...] = (
     # Embedding family.
     (re.compile(r"^text-embedding-(3|ada)-.+$"), "embedding"),
     (re.compile(r"^text-embedding-.+$"), "embedding"),
-    # Audio in / transcription.
+    # Audio in / transcription. The ``(-\d{4}-\d{2}-\d{2})?`` tail
+    # matches OpenAI's dated snapshot suffixes (e.g.
+    # ``gpt-4o-mini-transcribe-2025-12-15``). Without it the dated
+    # form fell through to the chat catch-all ``^gpt-4o(-.+)?$``
+    # below and the catalog handed a transcription model out as the
+    # OpenAI chat default — every chat completion then 404s with
+    # ``This is not a chat model`` (operator report 2026-05-08).
+    # Pinned by tests/test_voice_realtime_headers.py-adjacent
+    # tests/test_provider_model_classes.py.
     (re.compile(r"^whisper-.+$"), "audio"),
-    (re.compile(r"^gpt-4o(-mini)?-transcribe$"), "audio"),
-    # Audio out / TTS.
-    (re.compile(r"^gpt-4o(-mini)?-tts$"), "audio"),
+    (re.compile(r"^gpt-4o(-mini)?-transcribe(-\d{4}-\d{2}-\d{2})?$"), "audio"),
+    (re.compile(r"^gpt-4o(-mini)?-transcribe-diarize(-\d{4}-\d{2}-\d{2})?$"), "audio"),
+    # Audio out / TTS — same dated-snapshot fix.
+    (re.compile(r"^gpt-4o(-mini)?-tts(-\d{4}-\d{2}-\d{2})?$"), "audio"),
     (re.compile(r"^tts-.+$"), "audio"),
     # Image generation.
     (re.compile(r"^dall-e-.+$"), "image"),
     (re.compile(r"^gpt-image-.+$"), "image"),
-    # Realtime speech-to-speech.
+    # Realtime speech-to-speech. Same dated-snapshot tail so the
+    # 2025-12-17 / etc. dated variants don't leak into chat either.
     (re.compile(r"^gpt-(4o-)?realtime.*$"), "realtime"),
-    (re.compile(r"^gpt-realtime-.+$"), "realtime"),
+    (re.compile(r"^gpt-realtime(-.+)?$"), "realtime"),
     # Completion-only legacy (chat completions rejects these with 400).
     (re.compile(r"^babbage-.+$"), "completion-only"),
     (re.compile(r"^davinci-.+$"), "completion-only"),
