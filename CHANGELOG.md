@@ -18,28 +18,28 @@ matches what shipped on PyPI.
 ### Added
 
 - **Brain `NodeSubdeviceStore`** (`feral-core/memory/node_subdevices.py`).
-  A SQLite-backed truth store keyed by `(node_id, capability)` that
-  the dashboard, the native iOS UI, and any future MCP consumer
-  share as the single source of truth for "is this peripheral
-  active right now?". Per-row `live` flag is computed against a
-  provenance-specific heartbeat window — **30 s** for `ble`,
-  **300 s** for `cloud`, **60 s** for `host` — so a glasses BLE
-  link that loses heartbeat for >30 s auto-derates to stale and
-  every UI surface flips off the pulsing dot in lock-step. Rows
-  are **not** removed on `node_bye` / WS disconnect; the persisted
-  status survives brain restart and the operator-driven iOS-app
-  reboot, with liveness enforced by the sweep instead.
+  A SQLite-backed truth store keyed by `(node_id, capability)` —
+  the single source of truth on the brain side for "is this
+  peripheral active right now?". Per-row `live` flag is computed
+  against a provenance-specific heartbeat window — **30 s** for
+  `ble`, **300 s** for `cloud`, **60 s** for `host` — so a BLE
+  peripheral row that loses heartbeat for >30 s auto-derates to
+  stale and every consumer of the truth store flips off the
+  pulsing dot in lock-step. Rows are **not** removed on `node_bye`
+  / WS disconnect; the persisted status survives brain restart so
+  the dashboard still has *something* to render between restarts,
+  with liveness enforced by the sweep instead.
 
 - **Sub-device ingestion in `daemon_session`.** Frames matching
-  `device_event` with `event_type` ending in `_status` (e.g.
-  `glasses_status`) AND legacy top-level `glasses_status` frames
-  both land in the truth store via a single
-  `_handle_subdevice_status` helper. Status `ready` / `failed` /
-  `connecting` / `disconnected` strings are preserved across the
-  derate so operators can read why a stale row last reported what
-  it did. **Strict provenance**: an unknown `provenance` value is
-  rejected with HUP error code `1003` so a typo can't silently
-  produce a row that never derates.
+  `device_event` with `event_type` ending in `_status` AND legacy
+  top-level type-bound status frames both land in the truth store
+  via a single `_handle_subdevice_status` helper. Status `ready`
+  / `failed` / `connecting` / `disconnected` strings are
+  preserved across the derate so operators can read why a stale
+  row last reported what it did. **Strict provenance**: an
+  unknown `provenance` value is rejected with HUP error code
+  `1003` so a typo can't silently produce a row that never
+  derates.
 
 - **`GET /api/devices/{node_id}/subdevices`** — full sub-device
   tree for one node.
@@ -92,10 +92,12 @@ matches what shipped on PyPI.
   they had nothing paired when they did.
 
 - **Web Vitals (`/health`) source label adds the explicit pipeline
-  qualifier.** Each metric card reads `Apple Health · <device>` (or
-  just the pipeline name when the underlying API doesn't surface
-  the per-sample source) so the user can tell whether a number
-  came through HealthKit or a direct BLE link.
+  qualifier.** A new "Active sources" panel on the Today tab
+  renders one chip per active sub-device with the pipeline label
+  mapped from the capability id (e.g. `whoop_cloud` → `Whoop`,
+  `oura_cloud` → `Oura`). Each chip is bound to the same `live`
+  flag as the rest of the dashboard so the source list never
+  claims a stale pipeline as live.
 
 ### Fixed
 
@@ -143,9 +145,10 @@ matches what shipped on PyPI.
   `audit-r6/08-status-truthfulness-audit.md`,
   `audit-r6/00-phase-1-completion.md`,
   `audit-r6/00-phase-1.5-placeholder-hunt.md`,
-  `audit-r7/02-ios-companion-architecture.md`,
+  `audit-r7/01-brain-architecture.md`,
   `audit-r7/03-hup-wire-format.md`,
-  `audit-r7/04-web-dashboard.md`.
+  `audit-r7/04-web-dashboard.md`,
+  `audit-r7/08-ci-release-pipeline.md`.
 
 ## [2026.5.16] — Demo data ripped out of feral-core
 
