@@ -185,13 +185,29 @@ async def _get_dashboard_data() -> dict:
     # devices, none of them are talking to the brain right now". The
     # previous behaviour conflated these and looked like pairing had
     # silently failed.
+    #
+    # Phase-1 validation pass (Item 6 follow-up): a hard failure of
+    # `pairing_store.list_devices` used to be swallowed into
+    # `paired_rows = []`, which lied about paired_count when the
+    # store was unreachable. We now record the failure into
+    # `paired_unavailable: <str>` on the return dict so the
+    # dashboard can render a real warning instead of silently
+    # claiming zero pairings.
     paired_count = 0
     paired_offline = 0
+    paired_unavailable: str | None = None
     pairing_store = getattr(state, "device_pairing_store", None)
+    paired_rows: list[dict] = []
     if pairing_store is not None and hasattr(pairing_store, "list_devices"):
         try:
             paired_rows = pairing_store.list_devices(include_unclaimed=False) or []
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "device_pairing_store.list_devices failed: %s", exc,
+            )
+            paired_unavailable = (
+                f"{exc.__class__.__name__}: {str(exc)[:200]}"
+            )
             paired_rows = []
         paired_count = len(paired_rows)
         for row in paired_rows:
@@ -295,6 +311,11 @@ async def _get_dashboard_data() -> dict:
         "subdevices_total": subdevices_total,
         "subdevices_live": subdevices_live,
         "subdevices_unavailable": subdevices_unavailable,
+        # Mirrors `subdevices_unavailable` for the paired-pairing
+        # store so the dashboard can render distinct warnings: the
+        # truth-store may be reachable while the pairing store is
+        # not (or vice versa). `null` on the success branch.
+        "paired_unavailable": paired_unavailable,
         "channels": channel_types,
         "session_count": len(state.sessions), "health": latest_health,
         "memory": stats, "skills_count": len(state.skill_registry.skills),
