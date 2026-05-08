@@ -412,9 +412,26 @@ class RealtimeSession:
             err = event.get("error", {})
             msg = err.get("message", str(err))
             self._response_in_progress = False
-            logger.error(f"Realtime API error: {msg}")
-            if self._on_error:
-                await self._on_error(self.session_id, msg)
+            # The "no active response" cancel race is benign and
+            # frequent: VAD turn-detection fires `response.cancel`
+            # while OpenAI's state has already advanced past
+            # response.done (our local `_response_in_progress` flag
+            # races behind the OpenAI server). Demoted to INFO so it
+            # doesn't spam the operator log; we DO NOT call `on_error`
+            # for this case because it's not actionable.
+            benign_cancel_race = (
+                "Cancellation failed" in msg
+                and "no active response" in msg
+            )
+            if benign_cancel_race:
+                logger.info(
+                    "Realtime cancel race (benign): %s session=%s",
+                    msg, self.session_id,
+                )
+            else:
+                logger.error(f"Realtime API error: {msg}")
+                if self._on_error:
+                    await self._on_error(self.session_id, msg)
 
         elif event_type == "response.created":
             self._response_in_progress = True
