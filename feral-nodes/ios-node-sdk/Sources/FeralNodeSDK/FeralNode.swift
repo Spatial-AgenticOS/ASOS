@@ -110,9 +110,14 @@ public actor FeralNode {
         ))
     }
 
-    public func disconnect() async {
+    /// Disconnect from the brain, optionally tagging the ``node_bye``
+    /// frame with a caller-supplied reason. Defaults to ``"shutdown"``
+    /// for SDK consumers that don't distinguish; companion app
+    /// callers pass ``"user_disconnect"`` so the brain log reflects
+    /// the operator action vs an unexpected SDK teardown.
+    public func disconnect(reason: String = "shutdown") async {
         for adapter in adapters { await adapter.detach() }
-        await socket?.disconnect()
+        await socket?.disconnect(reason: reason)
         connected = false
         inboundContinuation?.finish()
         inboundContinuation = nil
