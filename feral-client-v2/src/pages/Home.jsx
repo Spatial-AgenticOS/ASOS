@@ -414,8 +414,19 @@ export default function Home() {
               {pairedCount === 0 ? (
                 <div className="v2-stat-value">0</div>
               ) : onlineCount === pairedCount ? (
+                // Phase-1 truthfulness contract (operator follow-up
+                // on PR #80): bind tone + pulse to a measurable
+                // `onlineCount > 0` instead of the literal
+                // `tone="live" pulse`. The outer branches today
+                // guarantee onlineCount > 0 here, but a future
+                // refactor that loosens the invariant would re-
+                // introduce the same dot-lie pattern as the Brain
+                // hero stat fix. Same defence-in-depth.
                 <div className="v2-stat-value">
-                  <StatusDot tone="live" pulse /> {onlineCount}
+                  <StatusDot
+                    tone={onlineCount > 0 ? 'live' : 'off'}
+                    pulse={onlineCount > 0}
+                  /> {onlineCount}
                 </div>
               ) : (
                 // Show online / total when they differ, so the home
