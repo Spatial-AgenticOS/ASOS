@@ -714,15 +714,36 @@ class RealtimeProxy:
             "is_final": is_done,
         }
 
-        if rs.node_id.startswith("webclient_") and self._send_to_session:
-            from models.protocol import FeralMessage
-            msg = FeralMessage(
-                session_id=session_id, hop="brain", type="audio_response",
-                payload=payload,
+        # Defense against the post-disconnect send race (operator
+        # report 2026-05-08): when the phone closes its WS while
+        # OpenAI is still streaming `response.output_audio.delta`
+        # events, the underlying starlette WebSocket raises
+        # ``RuntimeError: Cannot call "send" once a close message has
+        # been sent`` and uvicorn complains about ``Unexpected ASGI
+        # message 'websocket.send', after sending 'websocket.close'``.
+        # Catch + tear down the OpenAI side so the OpenAI WS doesn't
+        # keep paying for tokens we can't deliver. Pinned by
+        # tests/test_voice_realtime_post_close.py.
+        try:
+            if rs.node_id.startswith("webclient_") and self._send_to_session:
+                from models.protocol import FeralMessage
+                msg = FeralMessage(
+                    session_id=session_id, hop="brain", type="audio_response",
+                    payload=payload,
+                )
+                await self._send_to_session(session_id, msg)
+            elif self._send_to_node:
+                await self._send_to_node(rs.node_id, {"type": "audio_response", "payload": payload})
+        except (RuntimeError, ConnectionError) as exc:
+            # Most likely the downstream WS is gone. Tear down the
+            # session so the OpenAI socket stops streaming and we
+            # don't log this on every subsequent chunk.
+            logger.warning(
+                "voice_audio_forward dropped: downstream WS closed for "
+                "session=%s node=%s err=%s — closing realtime session.",
+                session_id, rs.node_id, exc,
             )
-            await self._send_to_session(session_id, msg)
-        elif self._send_to_node:
-            await self._send_to_node(rs.node_id, {"type": "audio_response", "payload": payload})
+            await self.stop_session(session_id)
 
     async def _handle_transcript(self, session_id: str, text: str, is_final: bool):
         """Store transcripts in memory and forward to both client sessions and daemon nodes."""
@@ -739,22 +760,53 @@ class RealtimeProxy:
         if is_final and text:
             rs = self._sessions.get(session_id)
 
-            if self._send_to_session:
-                from models.protocol import FeralMessage, TranscriptPayload
-                msg = FeralMessage(
-                    session_id=session_id, hop="brain", type="transcript",
-                    payload=TranscriptPayload(
-                        text=text, is_partial=not is_final,
-                    ).model_dump(),
-                )
-                await self._send_to_session(session_id, msg)
+            # The ``[user] `` prefix is an INTERNAL sentinel set by the
+            # ``input_audio_transcription.completed`` handler so this
+            # callback can disambiguate user-spoken vs assistant-spoken
+            # transcripts (OpenAI's Realtime SDK funnels both into the
+            # same ``response.output_audio_transcript.*`` event family
+            # this code path forwards). The sentinel must be stripped
+            # before any wire emit, otherwise iOS / web render
+            # ``"[user] Hello"`` as visible bubble text. Pinned by
+            # tests/test_voice_transcript_role_wire.py.
+            is_user = text.startswith("[user] ")
+            clean_text = text[len("[user] "):] if is_user else text
+            wire_role = "user" if is_user else "assistant"
 
-            if rs and not rs.node_id.startswith("webclient_") and self._send_to_node:
-                role = "user" if text.startswith("[user] ") else "assistant"
-                await self._send_to_node(rs.node_id, {
-                    "type": "transcript",
-                    "payload": {"text": text, "role": role, "is_partial": False},
-                })
+            # Same post-disconnect guard as ``_handle_audio_delta`` —
+            # a transcript can land after the phone has closed its WS
+            # (response.output_audio_transcript.done arrives later than
+            # the audio deltas), and writing into a closed
+            # WebSocket raises ``RuntimeError`` from starlette.
+            try:
+                if self._send_to_session:
+                    from models.protocol import FeralMessage, TranscriptPayload
+                    msg = FeralMessage(
+                        session_id=session_id, hop="brain", type="transcript",
+                        payload=TranscriptPayload(
+                            text=clean_text,
+                            role=wire_role,
+                            is_partial=not is_final,
+                        ).model_dump(),
+                    )
+                    await self._send_to_session(session_id, msg)
+
+                if rs and not rs.node_id.startswith("webclient_") and self._send_to_node:
+                    await self._send_to_node(rs.node_id, {
+                        "type": "transcript",
+                        "payload": {
+                            "text": clean_text,
+                            "role": wire_role,
+                            "is_partial": False,
+                        },
+                    })
+            except (RuntimeError, ConnectionError) as exc:
+                logger.warning(
+                    "voice_transcript_forward dropped: downstream WS closed for "
+                    "session=%s err=%s — closing realtime session.",
+                    session_id, exc,
+                )
+                await self.stop_session(session_id)
 
     async def _handle_tool_call(
         self, session_id: str, call_id: str, name: str, arguments: str,
