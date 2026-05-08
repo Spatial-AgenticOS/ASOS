@@ -125,9 +125,17 @@ class RealtimeSession:
             headers = {
                 "Authorization": f"Bearer {self._api_key}",
             }
+            # The top-level ``websockets.connect`` is the legacy
+            # client which exposes ``extra_headers``. The new asyncio
+            # client (``websockets.asyncio.client.connect``) renamed
+            # the same kwarg to ``additional_headers`` — passing the
+            # new name to the legacy entrypoint surfaces as
+            # ``create_connection() got an unexpected keyword argument
+            # 'additional_headers'`` and the realtime session never
+            # opens. Pinned by tests/test_voice_realtime_headers.py.
             self._ws = await self._connect_with_retry(
                 url,
-                additional_headers=headers,
+                extra_headers=headers,
                 max_size=10 * 1024 * 1024,
                 ping_interval=20,
             )

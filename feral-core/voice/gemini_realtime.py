@@ -78,9 +78,12 @@ class GeminiRealtimeSession:
         try:
             import websockets
             headers = {"x-goog-api-key": self._api_key}
+            # Legacy ``websockets.connect`` uses ``extra_headers``; the
+            # asyncio-client variant renamed it to ``additional_headers``.
+            # See realtime_proxy.py for the same fix and pin.
             self._ws = await self._connect_with_retry(
                 GEMINI_WS_URL,
-                additional_headers=headers,
+                extra_headers=headers,
                 max_size=10 * 1024 * 1024,
                 ping_interval=20,
             )
