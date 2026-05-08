@@ -730,6 +730,54 @@ class DevicePairingStore:
         with self._lock:
             conn = self._conn()
             try:
+                # Pair-dedup contract (operator report 2026-05-08:
+                # "webUI is showing every pair as a separate even
+                # though it's the same thing"). When the caller
+                # supplies a non-empty `node_id`, any prior unexpired
+                # rows for the SAME node are explicitly revoked here.
+                # Rationale:
+                #   * Security: stale phone_bearer + pairing_token
+                #     credentials should not survive a re-pair —
+                #     re-pairing is the operator's signal that the
+                #     prior pairing is no longer authoritative.
+                #   * Truthfulness: list_devices() then naturally
+                #     returns one row per node_id, killing the
+                #     duplicate-Devices-tile bug at the source
+                #     instead of papering over it in the UI.
+                # The unique key is the explicit `node_id`. Rows with
+                # an empty `node_id` (legacy/v1 browser-only pairs
+                # that pre-date the field) are NOT touched, because
+                # multiple browsers can legitimately co-exist without
+                # a node identity. Tests pinned by
+                # tests/test_pair_node_id_dedup.py.
+                superseded = []
+                if node_id:
+                    cursor = conn.execute(
+                        """SELECT device_id FROM paired_devices
+                           WHERE node_id = ? AND device_id != ?""",
+                        (node_id, device_id),
+                    )
+                    superseded = [row[0] for row in cursor.fetchall()]
+                    if superseded:
+                        placeholders = ",".join("?" * len(superseded))
+                        # Remove paired_devices rows AND any minted
+                        # phone_bearer rows tied to them; otherwise
+                        # the bearer outlives the device row and the
+                        # next /v1/node connect with the stale bearer
+                        # would be authenticated against a gone row.
+                        conn.execute(
+                            f"DELETE FROM paired_devices WHERE device_id IN ({placeholders})",
+                            superseded,
+                        )
+                        # Runtime phone bearers + any other minted
+                        # device credentials (e.g. future per-skill
+                        # tokens) live in `device_credentials`. Wipe
+                        # them too so a stolen old bearer cannot
+                        # authenticate after re-pair.
+                        conn.execute(
+                            f"DELETE FROM device_credentials WHERE device_id IN ({placeholders})",
+                            superseded,
+                        )
                 conn.execute(
                     """INSERT INTO paired_devices
                        (device_id, name, paired_at, kind, node_id,
@@ -756,6 +804,15 @@ class DevicePairingStore:
             finally:
                 conn.close()
 
+        if superseded:
+            # WARNING level so an operator who re-pairs a device by
+            # accident sees that prior credentials are gone — the
+            # paired-device list is now authoritative for the node.
+            logger.warning(
+                "Pair re-issued for node %s — superseded %d prior device row(s): %s",
+                node_id, len(superseded),
+                ", ".join(superseded),
+            )
         logger.info(
             "Paired device %s (%s, kind=%s, node=%s, ttl=%ss, pin=%s)",
             device_id, name, kind, node_id or "-", ttl_seconds,
