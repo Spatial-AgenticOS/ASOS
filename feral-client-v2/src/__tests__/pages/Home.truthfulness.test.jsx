@@ -12,6 +12,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { waitFor } from '@testing-library/react';
 import { renderV2 } from '../_helpers/renderV2';
 import Home from '../../pages/Home';
+import { _getSharedSocketForTesting } from '../../hooks/useFeralSocket';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -122,5 +123,109 @@ describe('Home — Phase 1 truthfulness sweep', () => {
     // pulse` would have failed this assertion.
     expect(dot.className).toContain('v2-dot--off');
     expect(dot.className).not.toContain('is-pulse');
+  });
+
+  it('subdevices tile updates in real time on a subdevice_update WS event', async () => {
+    // Phase-1 validation pass Item 18: assert the Subdevices tile
+    // mirrors the brain's truth-store via WS deltas, not just the
+    // 15s /api/dashboard poll. We seed with 1/1 live, then push a
+    // `subdevice_update` with `live: false` and verify the tile
+    // flips off the pulsing dot WITHOUT advancing time past the
+    // poll interval. The previous polling-only build would have
+    // shown a stale "live" dot for up to ~15s after a glasses BLE
+    // drop — exactly the lie this fix was added to kill.
+    const seedSubdevice = {
+      node_id: 'feral-iphone-abc',
+      capability: 'jw_health_glasses',
+      status: 'ready',
+      provenance: 'ble',
+      attrs: { device_name: 'TheoraGlasses-1234' },
+      first_seen: 0,
+      last_seen: Date.now() / 1000,
+      live: true,
+      liveness_window_s: 30,
+    };
+    const { container } = renderV2(<Home />, {
+      fetch: dashboardFetch({
+        subdevices_total: 1,
+        subdevices_live: 1,
+        devices: [
+          {
+            node_id: 'feral-iphone-abc',
+            type: 'phone',
+            connected: true,
+            subdevices: [seedSubdevice],
+          },
+        ],
+      }),
+    });
+
+    // First tile state: live + pulse from the seed.
+    const tile = await waitFor(() => {
+      const el = container.querySelector('[data-testid="v2-home-subdevices-stat"]');
+      if (!el) throw new Error('subdevices tile not seeded from /api/dashboard');
+      return el;
+    });
+    await waitFor(() => {
+      expect(tile.textContent).toContain('1/1');
+      expect(tile.querySelector('.is-pulse')).toBeTruthy();
+    });
+
+    // Push a delta: the same row but `live: false` (e.g. brain
+    // sweep_stale derated it). Tile must flip OFF the pulsing dot
+    // synchronously — no fake timers, no poll wait.
+    //
+    // FeralSocket is a process-wide singleton (the
+    // `sharedSocket` in `hooks/useFeralSocket.js`). We grab it
+    // via the test-only `_getSharedSocketForTesting` accessor and
+    // fan the simulated `state_push` directly into the listener
+    // set — that's the same path `socket.subscribe(fn)` would
+    // hit if a real WS frame had arrived.
+    const sock = await waitFor(() => {
+      const s = _getSharedSocketForTesting();
+      if (!s || s.listeners.size === 0) {
+        throw new Error('shared socket / listener not yet wired');
+      }
+      return s;
+    });
+    const startTs = Date.now();
+    const delta = {
+      type: 'state_push',
+      event: 'subdevice_update',
+      data: { ...seedSubdevice, live: false, status: 'disconnected' },
+    };
+    sock.listeners.forEach((fn) => fn(delta));
+
+    await waitFor(() => {
+      expect(tile.textContent).toContain('0/1');
+      const dot = tile.querySelector('.v2-dot');
+      expect(dot.className).toContain('v2-dot--off');
+      expect(dot.className).not.toContain('is-pulse');
+    });
+    // Real-time bound: must update inside 1s on a CI runner. The
+    // production target is much tighter (~tens of ms) but vitest
+    // jsdom + macrotask scheduling adds slop.
+    expect(Date.now() - startTs).toBeLessThan(1000);
+  });
+
+  it('subdevices tile renders unavailable warning when brain reports subdevices_unavailable', async () => {
+    // Phase-1 validation pass Item 6: when the brain's truth store
+    // can't be read, the tile renders a real warn state instead of
+    // silently displaying empty 0/0.
+    const { container } = renderV2(<Home />, {
+      fetch: dashboardFetch({
+        subdevices_total: 0,
+        subdevices_live: 0,
+        subdevices_unavailable: 'OperationalError: database is locked',
+      }),
+    });
+    const tile = await waitFor(() => {
+      const el = container.querySelector('[data-testid="v2-home-subdevices-stat"]');
+      if (!el) throw new Error('subdevices tile missing');
+      return el;
+    });
+    expect(tile.textContent).toContain('unavailable');
+    const dot = tile.querySelector('.v2-dot');
+    expect(dot.className).toContain('v2-dot--warn');
   });
 });

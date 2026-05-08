@@ -23,6 +23,25 @@ function getShared() {
 }
 
 /**
+ * Test-only seam — returns the underlying singleton so vitest can
+ * inject a simulated WS message via `_getSharedSocketForTesting()
+ * ._dispatch({ type: 'state_push', event: ..., data: ... })`. Not
+ * referenced from production code paths; the export exists solely
+ * so the WS-driven Home / Devices subdevice update tests can fire
+ * deltas without spinning up a real WebSocket on a CI host.
+ */
+export function _getSharedSocketForTesting() {
+  return sharedSocket;
+}
+
+export function _resetSharedSocketForTesting() {
+  if (sharedSocket && sharedSocket.ws && typeof sharedSocket.ws.close === 'function') {
+    try { sharedSocket.ws.close(); } catch { /* ignore */ }
+  }
+  sharedSocket = null;
+}
+
+/**
  * Build a typed ui_event envelope and push it over the shared socket.
  *
  * @param {FeralSocket} socket
