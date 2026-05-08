@@ -1565,15 +1565,32 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         },
                         payload_for_hash=payload_dict,
                     )
+                    orch_error: str | None = None
                 except Exception as exc:
+                    orch_error = str(exc)[:500] or exc.__class__.__name__
                     _record_phone_envelope(
                         "error",
                         "chat_request",
-                        detail={"reason": "orchestrator_error", "error": str(exc)[:200]},
+                        detail={"reason": "orchestrator_error", "error": orch_error[:200]},
                         payload_for_hash=payload_dict,
                     )
                     response_text = ""
 
+                # Phase-1 validation pass (Item 2): the brain emits
+                # an explicit HUP `error` frame on the failure branch
+                # AND populates `payload.error` on the chat_response
+                # so a chat-only client (one that doesn't track the
+                # parallel `error` frame) still surfaces the real
+                # failure string. Pinned by
+                # tests/test_phone_envelopes.py round-trip + the
+                # daemon_session regression test.
+                if orch_error:
+                    await _send_protocol_error(
+                        ws,
+                        4001,
+                        f"Orchestrator failed for chat_request: {orch_error}",
+                        name="orchestrator_error",
+                    )
                 await ws.send_json({
                     "hup_version": _HUP_VERSION,
                     "type": "chat_response",
@@ -1584,6 +1601,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         "reply_mode": reply_mode,
                         "channel": channel,
                         "reply_to": reply_to,
+                        "error": orch_error,
                     },
                 })
 

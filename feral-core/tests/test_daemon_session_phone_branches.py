@@ -87,6 +87,10 @@ def test_chat_request_routes_to_orchestrator_and_responds():
             assert reply["type"] == "chat_response"
             assert reply["payload"]["session_id"] == "phone-session-1"
             assert reply["payload"]["text"] == "Chat acknowledged"
+            # Phase-1 validation pass (Item 2): success branch must
+            # carry `error: null` so a future regression that emits
+            # a non-null error on a healthy turn is caught here.
+            assert reply["payload"].get("error") is None
 
     kwargs = mock.orchestrator.handle_command.call_args.kwargs
     assert kwargs["session_id"] == "phone-session-1"
@@ -94,6 +98,64 @@ def test_chat_request_routes_to_orchestrator_and_responds():
     assert kwargs["context"]["mode"] == "phone_surface"
     assert kwargs["context"]["source"] == "phone_surface"
     assert _phone_recorded(mock, "chat_request", "allowed")
+
+
+def test_chat_request_orchestrator_failure_surfaces_error_no_silent_empty_reply():
+    """Phase-1 validation pass Item 2: the brain must NOT swallow an
+    orchestrator exception into an empty `chat_response`. Two-frame
+    contract:
+
+      1. HUP `error` frame, code 4001, name `orchestrator_error`,
+         carrying the failure text — strict-error-aware clients
+         match on this.
+      2. Legacy `chat_response` with `error: <str>` populated on
+         the payload — chat-only clients still surface the real
+         failure.
+
+    Pre-fix, the brain set `response_text = ""` and emitted a
+    `chat_response` with no error field, leaving the phone showing
+    an empty assistant bubble (audit-r7 brief 1 §8 lie).
+    """
+    mock = _mock_state_with_supervisor()
+    mock.orchestrator.handle_command = AsyncMock(
+        side_effect=RuntimeError("LLM hard fail: budget exceeded"),
+    )
+
+    with _node_client(mock) as client:
+        with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
+            _register_node(
+                ws,
+                node_id="phone-chat-broken",
+                node_type="phone",
+                capabilities=["voice"],
+            )
+            ws.send_json(
+                {
+                    "type": "chat_request",
+                    "hup_version": "1.3.0",
+                    "ts": 1734369922.123,
+                    "payload": {
+                        "session_id": "phone-session-broken",
+                        "text": "this turn will explode",
+                        "reply_mode": "final",
+                        "channel": "chat",
+                        "reply_to": None,
+                    },
+                }
+            )
+
+            error_frame = ws.receive_json()
+            assert error_frame["type"] == "error"
+            assert error_frame["payload"]["code"] == 4001
+            assert error_frame["payload"]["name"] == "orchestrator_error"
+            assert "LLM hard fail" in error_frame["payload"]["message"]
+
+            reply = ws.receive_json()
+            assert reply["type"] == "chat_response"
+            assert reply["payload"]["session_id"] == "phone-session-broken"
+            assert reply["payload"]["text"] == ""
+            assert reply["payload"].get("error")
+            assert "LLM hard fail" in reply["payload"]["error"]
 
 
 def test_voice_session_start_registers_voice_session():
