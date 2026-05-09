@@ -205,27 +205,55 @@ class ProactiveEngine:
                     self._first_interaction_today = False
 
         # --- Health Triggers ---
+        # Freshness gate (operator report 2026-05-09: web-UI showed
+        # "Heart Rate Alert: 115 BPM" while the W300 glasses were
+        # disconnected — the value was a STALE Apple HealthKit sample
+        # from hours earlier that the perception layer had cached as
+        # "current"). Alerts now require:
+        #   1. A non-zero reading (existing check).
+        #   2. The sample timestamp is within FRESH_WINDOW_S (default
+        #      120s) of "now" — older samples represent past state and
+        #      shouldn't drive a real-time notification.
+        # The source is surfaced in the body so the user knows where
+        # the reading came from. Pinned by
+        # tests/test_proactive_freshness_gate.py.
+        FRESH_WINDOW_S = 120.0
         for frame in frames:
-            if frame.heart_rate > 0:
+            hr_age = (now - getattr(frame, "heart_rate_sample_ts", 0.0)) if getattr(frame, "heart_rate_sample_ts", 0.0) > 0 else float("inf")
+            spo2_age = (now - getattr(frame, "spo2_sample_ts", 0.0)) if getattr(frame, "spo2_sample_ts", 0.0) > 0 else float("inf")
+            hr_src = getattr(frame, "heart_rate_source", "") or "unknown source"
+            spo2_src = getattr(frame, "spo2_source", "") or "unknown source"
+
+            if frame.heart_rate > 0 and hr_age <= FRESH_WINDOW_S:
                 # Elevated HR
                 if frame.heart_rate > 100 and self._can_fire("hr_elevated"):
                     messages.append(ProactiveMessage(
                         trigger_id="hr_elevated",
                         priority=Priority.IMPORTANT,
                         title="Heart Rate Alert",
-                        body=f"Your heart rate is {frame.heart_rate} bpm — that's elevated. You've been {frame.activity_state}. Want to take a short break?",
+                        body=(
+                            f"Your heart rate is {frame.heart_rate} bpm — that's elevated. "
+                            f"You've been {frame.activity_state}. "
+                            f"(Source: {hr_src}, sample {int(hr_age)}s old.) "
+                            "Want to take a short break?"
+                        ),
                         voice_text=f"Hey, I noticed your heart rate jumped to {frame.heart_rate}. Maybe a short break would help?",
                         action="Take a break",
                         action_payload={"smart_home": "set_scene", "scene": "calming"},
                     ))
 
+            if 0 < frame.spo2_pct < 94 and spo2_age <= FRESH_WINDOW_S:
                 # Low SpO2
-                if 0 < frame.spo2_pct < 94 and self._can_fire("spo2_low"):
+                if self._can_fire("spo2_low"):
                     messages.append(ProactiveMessage(
                         trigger_id="spo2_low",
                         priority=Priority.CRITICAL,
                         title="Low Blood Oxygen",
-                        body=f"Your SpO2 is {frame.spo2_pct}%. This is below normal. Please take some deep breaths and consider moving to fresh air.",
+                        body=(
+                            f"Your SpO2 is {frame.spo2_pct}%. This is below normal. "
+                            f"(Source: {spo2_src}, sample {int(spo2_age)}s old.) "
+                            "Please take some deep breaths and consider moving to fresh air."
+                        ),
                         voice_text=f"Your blood oxygen is at {frame.spo2_pct} percent, which is low. Please take some deep breaths.",
                         action="Start breathing exercise",
                         action_payload={"smart_home": "breathing_exercise", "duration_minutes": 3},

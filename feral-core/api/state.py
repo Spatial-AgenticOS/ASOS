@@ -467,6 +467,67 @@ class BrainState:
                 # llm.* keys into the LLMProvider's internal config so
                 # classify_error-triggered failover actually uses them.
                 _shared_llm.set_config(_llm_cfg)
+
+            # Self-heal contract (operator report 2026-05-09):
+            # ``settings.json`` had ``llm.model`` pinned to
+            # ``gpt-4o-mini-transcribe-2025-12-15`` (an audio-class
+            # model written there by an earlier auto-pick before the
+            # classifier knew about dated transcribe variants). Every
+            # chat completion 404'd with `This is not a chat model`
+            # and the operator had no obvious lever to fix it because
+            # the CLI has no ``feral config set`` command. Self-heal:
+            # if the resolved model classifies as audio / image /
+            # embedding / realtime / completion-only, force-pick a
+            # chat-class default from the catalog, persist the fix
+            # back to settings.json, and continue. Pinned by
+            # tests/test_llm_model_self_heal.py.
+            try:
+                from providers.model_classes import classify
+                from providers.recommended import recommended_for
+                _model = (_shared_llm.model or "").strip()
+                _provider = _shared_llm.provider
+                _cls = classify(_provider, _model) if _model else "unknown"
+                _CHAT_OK = {"chat", "reasoning", "unknown"}
+                if _model and _cls not in _CHAT_OK:
+                    healed = ""
+                    if self.provider_catalog is not None:
+                        try:
+                            healed = self.provider_catalog.default_model_for(_provider) or ""
+                        except Exception as exc:
+                            logger.warning(
+                                "self_heal_llm_model: catalog lookup failed for %s: %s",
+                                _provider, exc,
+                            )
+                    if healed and classify(_provider, healed) in {"chat", "reasoning"}:
+                        logger.warning(
+                            "self_heal_llm_model: %r is class=%r for provider=%r — "
+                            "auto-picking %r (class=chat/reasoning) and persisting "
+                            "to settings.json. The original value was likely "
+                            "written by an older auto-picker that pre-dated the "
+                            "dated-snapshot classifier fix.",
+                            _model, _cls, _provider, healed,
+                        )
+                        _shared_llm.model = healed
+                        os.environ["FERAL_LLM_MODEL"] = healed
+                        try:
+                            if self.config and hasattr(self.config, "update_settings"):
+                                self.config.update_settings("llm", "model", healed)
+                        except Exception as exc:
+                            logger.warning(
+                                "self_heal_llm_model: settings.json write failed: %s",
+                                exc,
+                            )
+                    else:
+                        logger.error(
+                            "self_heal_llm_model: %r is class=%r for provider=%r and "
+                            "no chat-class default was available from the catalog. "
+                            "Chat completions will fail until the operator picks a "
+                            "real chat/reasoning model in Settings → Providers.",
+                            _model, _cls, _provider,
+                        )
+            except Exception as exc:
+                # Self-heal must NEVER block boot; degrade gracefully.
+                logger.warning("self_heal_llm_model: skipped (%s)", exc)
         self.learner = Learner(llm=_shared_llm, memory=self.memory)
         self.scene = SceneAnalyzer(llm=_shared_llm)
         scene_cooldown = int(os.environ.get("FERAL_SCENE_COOLDOWN", "10"))

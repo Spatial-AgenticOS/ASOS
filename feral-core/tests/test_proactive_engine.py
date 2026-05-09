@@ -101,7 +101,15 @@ class TestEvaluateHealthTriggers:
     async def test_elevated_hr_triggers_alert(self, engine):
         frame = MagicMock()
         frame.heart_rate = 120
+        # Freshness contract (operator report 2026-05-09): proactive
+        # alerts now require the sample to be within 120s of "now",
+        # otherwise stale Apple HealthKit reads fire phantom alerts.
+        # Tests must mirror what live senders would set.
+        frame.heart_rate_sample_ts = time.time() - 5.0
+        frame.heart_rate_source = "apple_healthkit"
         frame.spo2_pct = 98
+        frame.spo2_sample_ts = time.time() - 5.0
+        frame.spo2_source = "apple_healthkit"
         frame.activity_state = "working"
         frame.scene_description = ""
         engine._perception._frames = {"s1": frame}
@@ -123,7 +131,11 @@ class TestEvaluateHealthTriggers:
     async def test_low_spo2_triggers_critical(self, engine):
         frame = MagicMock()
         frame.heart_rate = 70
+        frame.heart_rate_sample_ts = time.time() - 5.0
+        frame.heart_rate_source = "apple_healthkit"
         frame.spo2_pct = 90
+        frame.spo2_sample_ts = time.time() - 5.0
+        frame.spo2_source = "apple_healthkit"
         frame.activity_state = "resting"
         frame.scene_description = ""
         engine._perception._frames = {"s1": frame}
