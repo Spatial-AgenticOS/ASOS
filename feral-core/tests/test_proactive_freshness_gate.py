@@ -115,6 +115,47 @@ async def test_hr_with_no_sample_ts_does_not_fire() -> None:
 
 
 @pytest.mark.asyncio
+async def test_legacy_sender_omitting_sample_ts_does_not_fake_fresh() -> None:
+    """End-to-end pin for the 2026-05-09 round 2 regression: an old
+    iOS build that emits ``device_event`` payloads WITHOUT a
+    ``heart_rate_sample_ts`` field must NOT cause the brain to fire
+    Heart Rate Alert. The fix is in
+    ``perception/fusion.update_sensors`` — when ``*_sample_ts`` is
+    missing the frame field defaults to ``0.0`` (= "never seen"), NOT
+    ``time.time()`` (= fresh).
+
+    Without this pin, an old companion build that sends a stale
+    HealthKit reading (HR=115 from a workout 4 hours ago) would land
+    at the brain with no ``sample_ts``, fusion would stamp
+    ``time.time()`` as the freshness, and the proactive engine would
+    fire ``hr_elevated`` on a 4-hour-old reading — the exact bug the
+    operator caught at 15:49:37 in the 2026-05-09 logs.
+    """
+    from perception.fusion import PerceptionEngine
+
+    perception = PerceptionEngine()
+    perception.update_sensors("legacy-sess", {
+        "vitals": {"ppg_heart_rate": 115},
+        # explicitly NO ppg_heart_rate_sample_ts / heart_rate_sample_ts
+    })
+    frame = perception.get_frame("legacy-sess")
+    assert frame.heart_rate == 115
+    assert frame.heart_rate_sample_ts == 0.0, (
+        f"legacy payload (no sample_ts) must default to 0.0 not "
+        f"time.time(). Got {frame.heart_rate_sample_ts!r}. The fix in "
+        "perception/fusion.update_sensors regressed."
+    )
+
+    eng, captured = _engine_with_frame(frame)
+    await eng._evaluate()
+    fired = [m for m in captured if m.trigger_id == "hr_elevated"]
+    assert not fired, (
+        "Old-build sender supplying HR=115 without sample_ts MUST NOT "
+        "trigger an alert — that's the 2026-05-09 phantom-alert bug."
+    )
+
+
+@pytest.mark.asyncio
 async def test_fresh_low_spo2_does_fire_with_source() -> None:
     frame = PerceptionFrame(
         spo2_pct=88,
