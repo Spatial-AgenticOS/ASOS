@@ -790,13 +790,24 @@ class RealtimeProxy:
             clean_text = text[len("[user] "):] if is_user else text
             wire_role = "user" if is_user else "assistant"
 
+            # Routing contract (operator report 2026-05-09: every
+            # voice turn rendered TWICE in the iOS chat). The fan-out
+            # is web-OR-node, NOT both — same shape as
+            # ``_handle_audio_delta``. iPhone is a daemon node so it
+            # gets ``_send_to_node``; web clients get
+            # ``_send_to_session``. The prior code fired both branches
+            # unconditionally and the iPhone received each transcript
+            # via two parallel WS paths (session + node), then the
+            # ChatStore polling-mirror ingested both copies.
+            #
             # Same post-disconnect guard as ``_handle_audio_delta`` —
             # a transcript can land after the phone has closed its WS
             # (response.output_audio_transcript.done arrives later than
             # the audio deltas), and writing into a closed
             # WebSocket raises ``RuntimeError`` from starlette.
             try:
-                if self._send_to_session:
+                is_web_client = bool(rs and rs.node_id.startswith("webclient_"))
+                if is_web_client and self._send_to_session:
                     from models.protocol import FeralMessage, TranscriptPayload
                     msg = FeralMessage(
                         session_id=session_id, hop="brain", type="transcript",
@@ -807,8 +818,7 @@ class RealtimeProxy:
                         ).model_dump(),
                     )
                     await self._send_to_session(session_id, msg)
-
-                if rs and not rs.node_id.startswith("webclient_") and self._send_to_node:
+                elif rs and self._send_to_node:
                     await self._send_to_node(rs.node_id, {
                         "type": "transcript",
                         "payload": {
