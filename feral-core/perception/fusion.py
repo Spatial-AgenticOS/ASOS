@@ -190,17 +190,22 @@ class PerceptionEngine:
         _hr = _fv(vitals.get("ppg_heart_rate"), sensors.get("ppg_heart_rate"), sensors.get("heart_rate_bpm"))
         if _hr is not None:
             frame.heart_rate = _hr
-            # Stamp the receive time as the sample-fresh time. If the
-            # caller passes an explicit ``sample_ts`` (e.g. iOS
-            # HealthKitAdapter forwards ``HKQuantitySample.endDate``)
-            # we honor that — see ``test_proactive_freshness_gate.py``
-            # for the contract.
+            # Freshness contract (operator report 2026-05-09 round 2):
+            # senders MUST supply an explicit ``*_sample_ts``. iOS
+            # HealthKitAdapter forwards ``HKQuantitySample.endDate``;
+            # JWBleAdapterWired forwards ``Date().timeIntervalSince1970``
+            # (the W300 spot test just returned, so `Date()` IS the
+            # sample time). If a sender omits the field, we fall back
+            # to ``0.0`` (= "never seen") which makes the proactive
+            # engine treat the sample as STALE — old-build clients
+            # CANNOT smuggle a fake-fresh reading by silently leaning
+            # on a brain-side ``time.time()`` default.
             _hr_ts = _fv(
                 vitals.get("ppg_heart_rate_sample_ts"),
                 sensors.get("ppg_heart_rate_sample_ts"),
                 sensors.get("heart_rate_sample_ts"),
             )
-            frame.heart_rate_sample_ts = float(_hr_ts) if _hr_ts is not None else time.time()
+            frame.heart_rate_sample_ts = float(_hr_ts) if _hr_ts is not None else 0.0
             _hr_src = _fv(
                 vitals.get("ppg_heart_rate_source"),
                 sensors.get("source"),
@@ -215,7 +220,7 @@ class PerceptionEngine:
                 vitals.get("spo2_sample_ts"),
                 sensors.get("spo2_sample_ts"),
             )
-            frame.spo2_sample_ts = float(_spo2_ts) if _spo2_ts is not None else time.time()
+            frame.spo2_sample_ts = float(_spo2_ts) if _spo2_ts is not None else 0.0
             _spo2_src = _fv(
                 vitals.get("spo2_source"),
                 sensors.get("source"),
