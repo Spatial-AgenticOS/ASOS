@@ -55,6 +55,8 @@ async def test_handle_transcript_strips_user_sentinel_and_tags_role_on_node_path
     async def fake_send_to_node(node_id: str, frame: dict):
         captured.append((node_id, frame))
 
+    # No _send_to_session here — iPhone is a daemon node so the new
+    # routing contract sends only to _send_to_node anyway.
     proxy = RealtimeProxy(send_to_node=fake_send_to_node)
     proxy._sessions["sess-1"] = RealtimeSession(
         session_id="sess-1",
@@ -162,3 +164,75 @@ async def test_handle_transcript_post_close_drops_session_no_throw():
     await proxy._handle_transcript("sess-4", "tail", True)
 
     assert "sess-4" not in proxy._sessions
+
+
+@pytest.mark.asyncio
+async def test_handle_transcript_does_not_double_emit_for_iphone_node():
+    """Operator report 2026-05-09: every voice turn rendered TWICE
+    in the iOS chat. Root cause was that ``_handle_transcript`` fired
+    BOTH ``_send_to_session`` and ``_send_to_node`` for the same
+    iPhone session — the iPhone WS received the same transcript via
+    two parallel paths and the ChatStore polling-mirror ingested both.
+
+    The fix mirrors ``_handle_audio_delta``: web clients get
+    ``_send_to_session``, daemon nodes (iPhone, Mac, embedded) get
+    ``_send_to_node`` — never both.
+    """
+    session_calls: list = []
+    node_calls: list = []
+
+    async def fake_send_to_session(sid, msg):
+        session_calls.append((sid, msg))
+
+    async def fake_send_to_node(node_id, frame):
+        node_calls.append((node_id, frame))
+
+    proxy = RealtimeProxy(
+        send_to_session=fake_send_to_session,
+        send_to_node=fake_send_to_node,
+    )
+    proxy._sessions["sess-iphone"] = RealtimeSession(
+        session_id="sess-iphone",
+        node_id="feral-iphone-test",
+        api_key="sk-test",
+    )
+
+    await proxy._handle_transcript("sess-iphone", "Hello brain", True)
+
+    assert len(node_calls) == 1, (
+        "iPhone (daemon node) must receive exactly ONE transcript via "
+        f"_send_to_node. Got {len(node_calls)}: {node_calls}"
+    )
+    assert len(session_calls) == 0, (
+        "iPhone (daemon node) must NOT receive a transcript via "
+        f"_send_to_session — that path is for web clients only. Got "
+        f"{len(session_calls)}: {session_calls}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_transcript_routes_web_client_to_session_only():
+    """Mirror invariant: web clients use _send_to_session, never node."""
+    session_calls: list = []
+    node_calls: list = []
+
+    async def fake_send_to_session(sid, msg):
+        session_calls.append((sid, msg))
+
+    async def fake_send_to_node(node_id, frame):
+        node_calls.append((node_id, frame))
+
+    proxy = RealtimeProxy(
+        send_to_session=fake_send_to_session,
+        send_to_node=fake_send_to_node,
+    )
+    proxy._sessions["sess-web"] = RealtimeSession(
+        session_id="sess-web",
+        node_id="webclient_browser_xyz",
+        api_key="sk-test",
+    )
+
+    await proxy._handle_transcript("sess-web", "Web hello", True)
+
+    assert len(session_calls) == 1, "web client gets one session emit"
+    assert len(node_calls) == 0, "web client must NOT receive a node emit"
