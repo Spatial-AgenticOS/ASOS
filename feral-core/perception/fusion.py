@@ -52,6 +52,19 @@ class PerceptionFrame:
     spo2_pct: int = 0
     skin_temperature_c: float = 0.0
     activity_state: str = "unknown"  # resting, walking, running, stressed
+
+    # Per-metric sample times (operator report 2026-05-09: fake-looking
+    # HR=115 alert when glasses weren't connected — actual cause was
+    # Apple HealthKit returning a hours-stale resting-HR sample as
+    # "current". Proactive alerts now read these timestamps to gate on
+    # freshness AND surface the source so the user knows where it came
+    # from). Default 0.0 means "never seen". Updated by
+    # ``update_sensors`` whenever the matching metric receives a fresh
+    # value with a known timestamp.
+    heart_rate_sample_ts: float = 0.0
+    heart_rate_source: str = ""  # e.g. "apple_healthkit", "theora_w300"
+    spo2_sample_ts: float = 0.0
+    spo2_source: str = ""
     head_pose: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     ambient_light_lux: int = 0
     battery_pct: int = 100
@@ -177,9 +190,39 @@ class PerceptionEngine:
         _hr = _fv(vitals.get("ppg_heart_rate"), sensors.get("ppg_heart_rate"), sensors.get("heart_rate_bpm"))
         if _hr is not None:
             frame.heart_rate = _hr
+            # Stamp the receive time as the sample-fresh time. If the
+            # caller passes an explicit ``sample_ts`` (e.g. iOS
+            # HealthKitAdapter forwards ``HKQuantitySample.endDate``)
+            # we honor that — see ``test_proactive_freshness_gate.py``
+            # for the contract.
+            _hr_ts = _fv(
+                vitals.get("ppg_heart_rate_sample_ts"),
+                sensors.get("ppg_heart_rate_sample_ts"),
+                sensors.get("heart_rate_sample_ts"),
+            )
+            frame.heart_rate_sample_ts = float(_hr_ts) if _hr_ts is not None else time.time()
+            _hr_src = _fv(
+                vitals.get("ppg_heart_rate_source"),
+                sensors.get("source"),
+                sensors.get("heart_rate_source"),
+            )
+            if _hr_src is not None:
+                frame.heart_rate_source = str(_hr_src)
         _spo2 = _fv(vitals.get("spo2_pct"), sensors.get("spo2_pct"))
         if _spo2 is not None:
             frame.spo2_pct = _spo2
+            _spo2_ts = _fv(
+                vitals.get("spo2_sample_ts"),
+                sensors.get("spo2_sample_ts"),
+            )
+            frame.spo2_sample_ts = float(_spo2_ts) if _spo2_ts is not None else time.time()
+            _spo2_src = _fv(
+                vitals.get("spo2_source"),
+                sensors.get("source"),
+                sensors.get("spo2_source"),
+            )
+            if _spo2_src is not None:
+                frame.spo2_source = str(_spo2_src)
         _temp = vitals.get("skin_temperature_c")
         if _temp is not None:
             frame.skin_temperature_c = _temp
