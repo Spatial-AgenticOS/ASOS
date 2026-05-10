@@ -125,17 +125,15 @@ class RealtimeSession:
             headers = {
                 "Authorization": f"Bearer {self._api_key}",
             }
-            # The top-level ``websockets.connect`` is the legacy
-            # client which exposes ``extra_headers``. The new asyncio
-            # client (``websockets.asyncio.client.connect``) renamed
-            # the same kwarg to ``additional_headers`` — passing the
-            # new name to the legacy entrypoint surfaces as
-            # ``create_connection() got an unexpected keyword argument
-            # 'additional_headers'`` and the realtime session never
-            # opens. Pinned by tests/test_voice_realtime_headers.py.
+            # `_connect_with_retry` handles the cross-version
+            # `websockets` kwarg dance (14.x removed the legacy
+            # `extra_headers` entrypoint, 13.x has both). We pass the
+            # new-style `additional_headers` here; the helper translates
+            # to `extra_headers` if running against legacy. Pinned by
+            # tests/test_voice_realtime_headers.py.
             self._ws = await self._connect_with_retry(
                 url,
-                extra_headers=headers,
+                additional_headers=headers,
                 max_size=10 * 1024 * 1024,
                 ping_interval=20,
             )
@@ -148,10 +146,25 @@ class RealtimeSession:
 
     @staticmethod
     async def _connect_with_retry(url, **kwargs):
-        import websockets
+        # Cross-version websockets compatibility: 13.x ships both the
+        # legacy `websockets.connect` (kwarg: `extra_headers`) AND the
+        # newer `websockets.asyncio.client.connect` (kwarg:
+        # `additional_headers`). 14.x+ removed the legacy entrypoint.
+        # Use the asyncio client when available so the code works on
+        # both lines without runtime guesswork; fall back to legacy
+        # only if the import chain doesn't expose it. Caller passes
+        # the new-style `additional_headers` kwarg.
+        try:
+            from websockets.asyncio.client import connect as _ws_connect
+        except ImportError:
+            import websockets as _ws
+            _ws_connect = _ws.connect
+            # Old-line callers expect `extra_headers`. Translate.
+            if "additional_headers" in kwargs and "extra_headers" not in kwargs:
+                kwargs["extra_headers"] = kwargs.pop("additional_headers")
         for attempt in range(3):
             try:
-                return await websockets.connect(url, **kwargs)
+                return await _ws_connect(url, **kwargs)
             except Exception:
                 if attempt == 2:
                     raise

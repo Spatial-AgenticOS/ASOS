@@ -87,15 +87,33 @@ async def test_connect_no_beta_header():
         api_key="sk-test",
     )
 
-    with patch("websockets.connect", side_effect=_fake_connect):
+    # `realtime_proxy._connect_with_retry` prefers
+    # `websockets.asyncio.client.connect` (kwarg `additional_headers`)
+    # and falls back to legacy `websockets.connect`
+    # (kwarg `extra_headers`) only when the asyncio import fails.
+    # Patch BOTH so the test works regardless of which path the
+    # installed `websockets` exposes. Cross-version pin lives in
+    # tests/test_voice_realtime_headers.py.
+    patches = []
+    try:
+        patches.append(patch("websockets.asyncio.client.connect", side_effect=_fake_connect))
+    except (AttributeError, ImportError):
+        pass
+    patches.append(patch("websockets.connect", side_effect=_fake_connect))
+    for p in patches:
+        p.start()
+    try:
         await rs.connect()
+    finally:
+        for p in patches:
+            p.stop()
 
-    # The kwarg name is `extra_headers` because `realtime_proxy.py`
-    # uses the LEGACY `websockets.connect` entrypoint (websockets 13.x),
-    # which exposes `extra_headers` not `additional_headers`. The
-    # asyncio-client variant uses the new name, but we don't import
-    # from there. Pinned by tests/test_voice_realtime_headers.py.
-    headers = captured_kwargs.get("extra_headers", {})
+    # Either kwarg shape is acceptable — accept whichever was used.
+    headers = (
+        captured_kwargs.get("additional_headers")
+        or captured_kwargs.get("extra_headers")
+        or {}
+    )
     assert "OpenAI-Beta" not in headers, "GA must NOT send the beta header"
     assert "Authorization" in headers
     assert headers["Authorization"] == "Bearer sk-test"
@@ -121,8 +139,20 @@ async def test_connect_url_uses_ga_model():
         model="gpt-realtime",
     )
 
-    with patch("websockets.connect", side_effect=_fake_connect):
+    # Patch both connect entry points (see test_connect_no_beta_header).
+    patches = []
+    try:
+        patches.append(patch("websockets.asyncio.client.connect", side_effect=_fake_connect))
+    except (AttributeError, ImportError):
+        pass
+    patches.append(patch("websockets.connect", side_effect=_fake_connect))
+    for p in patches:
+        p.start()
+    try:
         await rs.connect()
+    finally:
+        for p in patches:
+            p.stop()
 
     assert captured_url is not None
     assert "model=gpt-realtime" in captured_url

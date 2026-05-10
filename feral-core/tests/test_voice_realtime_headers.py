@@ -27,55 +27,78 @@ import inspect
 import pytest
 
 
-def test_websockets_legacy_connect_accepts_extra_headers() -> None:
-    """The kwarg the brain passes must be on the installed entrypoint."""
-    import websockets
+def test_websockets_has_a_usable_connect_entrypoint() -> None:
+    """Brain code uses ``websockets.asyncio.client.connect`` first
+    (always has ``additional_headers``); falls back to legacy
+    ``websockets.connect`` (``extra_headers``) if the asyncio client
+    isn't available. At least one of the two MUST exist on the
+    installed websockets version, otherwise voice can't open at all.
+    Pinned by ``voice/realtime_proxy.py`` `_connect_with_retry`.
+    """
+    has_asyncio_client = False
+    try:
+        from websockets.asyncio.client import connect as _asyncio_connect  # noqa: F401
+        has_asyncio_client = True
+    except ImportError:
+        pass
 
-    sig = inspect.signature(websockets.connect)
-    params = sig.parameters
-    assert "extra_headers" in params, (
-        "websockets.connect lost extra_headers — the brain's voice path "
-        "passes that kwarg explicitly. Either upgrade the call sites to "
-        "websockets.asyncio.client.connect (additional_headers) or pin "
-        "websockets to a version that still ships the legacy client."
+    has_legacy = False
+    try:
+        import websockets
+        sig = inspect.signature(websockets.connect)
+        if "extra_headers" in sig.parameters:
+            has_legacy = True
+    except Exception:
+        pass
+
+    assert has_asyncio_client or has_legacy, (
+        "Neither websockets.asyncio.client.connect (additional_headers) "
+        "nor websockets.connect (extra_headers) is available — the brain's "
+        "voice path can't open any realtime session. Pin a usable "
+        "websockets version in feral-core/pyproject.toml."
     )
 
 
-def _grep_for_bad_kwarg(path: str) -> list[str]:
-    """Return any line in ``path`` that passes ``additional_headers=``."""
-    hits: list[str] = []
-    with open(path, "r", encoding="utf-8") as fh:
-        for lineno, line in enumerate(fh, start=1):
-            if "additional_headers=" in line and not line.lstrip().startswith("#"):
-                hits.append(f"{path}:{lineno}: {line.rstrip()}")
-    return hits
-
-
-def test_no_voice_module_passes_additional_headers() -> None:
-    """Pin the wire-level kwarg used by every voice client."""
+def test_voice_modules_use_cross_version_connect_pattern() -> None:
+    """Every voice module that opens a websocket MUST go through the
+    cross-version helper (`_connect_with_retry`) OR contain its own
+    `from websockets.asyncio.client import connect` fallback. Bare
+    `websockets.connect(url, ...)` calls without a try/except for the
+    asyncio import are forbidden — they break on websockets 14.x where
+    the legacy entrypoint was removed.
+    """
     from pathlib import Path
 
     voice_root = Path(__file__).resolve().parent.parent / "voice"
-    bad: list[str] = []
+    bare_calls: list[str] = []
     for py in voice_root.rglob("*.py"):
-        bad.extend(_grep_for_bad_kwarg(str(py)))
-    assert not bad, (
-        "Voice modules pass `additional_headers=` to websockets.connect, "
-        "which is the legacy entrypoint and rejects that kwarg. Use "
-        "`extra_headers=` until the call sites migrate to the asyncio "
-        "client. Hits:\n  " + "\n  ".join(bad)
+        text = py.read_text(encoding="utf-8")
+        # If the module contains the asyncio-client try/except, it's safe.
+        if "from websockets.asyncio.client import connect" in text:
+            continue
+        # Otherwise scan for direct `websockets.connect(` invocations.
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if line.lstrip().startswith("#"):
+                continue
+            if "websockets.connect(" in line:
+                bare_calls.append(f"{py}:{lineno}: {line.rstrip()}")
+    assert not bare_calls, (
+        "Voice modules call `websockets.connect(...)` directly without a "
+        "websockets.asyncio.client fallback. Routes break on websockets "
+        "14.x. Use the `_connect_with_retry` helper in realtime_proxy / "
+        "gemini_realtime, or copy the try/except shape into your module. "
+        "Hits:\n  " + "\n  ".join(bare_calls)
     )
 
 
 def test_realtime_proxy_connect_attempts_actually_dispatch() -> None:
-    """Smoke-test that the proxy hits the patched websockets.connect.
+    """Smoke-test that the proxy hits the patched connect entrypoint.
 
-    We don't talk to OpenAI here — we monkey-patch ``websockets.connect``
-    to capture the kwargs and raise. The point is to confirm the call
-    site survives kwarg validation, which the previous bug did not.
+    We don't talk to OpenAI — we monkey-patch the connect function the
+    proxy actually uses (asyncio client first, legacy fallback) to
+    capture kwargs and raise. The point is to confirm the call site
+    survives kwarg validation across `websockets` 13.x AND 14.x+.
     """
-    import websockets
-
     captured: dict[str, object] = {}
 
     async def fake_connect(uri, **kwargs):  # type: ignore[no-untyped-def]
@@ -83,8 +106,24 @@ def test_realtime_proxy_connect_attempts_actually_dispatch() -> None:
         captured["kwargs"] = kwargs
         raise RuntimeError("dial halted (test)")
 
-    original = websockets.connect
-    websockets.connect = fake_connect  # type: ignore[assignment]
+    # Patch BOTH possible entry points so the test works regardless of
+    # which one is installed.
+    patched = []
+    try:
+        from websockets.asyncio import client as _asyncio_client_mod
+        original = _asyncio_client_mod.connect
+        _asyncio_client_mod.connect = fake_connect  # type: ignore[assignment]
+        patched.append(("websockets.asyncio.client", _asyncio_client_mod, original))
+    except ImportError:
+        pass
+    try:
+        import websockets as _ws_mod
+        ws_original = _ws_mod.connect
+        _ws_mod.connect = fake_connect  # type: ignore[assignment]
+        patched.append(("websockets", _ws_mod, ws_original))
+    except ImportError:
+        pass
+
     try:
         from voice.realtime_proxy import RealtimeSession
 
@@ -99,15 +138,15 @@ def test_realtime_proxy_connect_attempts_actually_dispatch() -> None:
 
         asyncio.run(_run())
     finally:
-        websockets.connect = original  # type: ignore[assignment]
+        for _, mod, original in patched:
+            mod.connect = original  # type: ignore[assignment]
 
     assert captured.get("uri", "").startswith("wss://"), captured
-    assert "extra_headers" in captured["kwargs"], (
-        "OpenAIRealtimeProxy.connect must pass extra_headers to the "
-        "legacy websockets.connect entrypoint. Got: "
-        f"{sorted(captured['kwargs'].keys())}"
-    )
-    assert "additional_headers" not in captured["kwargs"], (
-        "additional_headers re-introduced — see "
-        "tests/test_voice_realtime_headers.py docstring."
+    # Either kwarg name is acceptable — the helper translates as
+    # needed. What MUST be present is the Authorization header.
+    kwargs = captured["kwargs"]
+    headers = kwargs.get("additional_headers") or kwargs.get("extra_headers") or {}
+    assert "Authorization" in headers, (
+        f"connect() invoked without an Authorization header. "
+        f"kwargs={list(kwargs)}"
     )
