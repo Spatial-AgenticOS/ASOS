@@ -957,6 +957,30 @@ def get_shared_catalog() -> ProviderCatalog:
     return _SHARED
 
 
+def set_shared_catalog(catalog: ProviderCatalog) -> None:
+    """Register the brain's boot-time catalog as the process singleton.
+
+    Operator report 2026-05-09 (audit-r8 brief #07): the brain's
+    `LLMProvider._default_model_for` calls `get_shared_catalog()`
+    which lazily creates a SECOND, empty `ProviderCatalog` if no one
+    has registered the boot-time instance. The two catalogs then
+    drift — `state.provider_catalog` gets refreshed by
+    `refresh_async`, but the singleton consulted by failover /
+    `_get_provider_config` stays bare and returns `""` for
+    `default_model_for`, falling back to whatever stale
+    `FERAL_LLM_MODEL` env / settings.json value is in scope. That's
+    how non-chat models leaked into chat completions despite all
+    self-heal layers reporting clean.
+
+    `api/state.BrainState.init` calls this immediately after
+    constructing `self.provider_catalog`, BEFORE `LLMProvider()` is
+    instantiated, so every downstream `_default_model_for` consults
+    the live catalog.
+    """
+    global _SHARED
+    _SHARED = catalog
+
+
 def reset_shared_catalog() -> None:
     """Test helper: drop the singleton so a new instance loads on next get."""
     global _SHARED

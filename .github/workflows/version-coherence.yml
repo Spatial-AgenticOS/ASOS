@@ -35,8 +35,11 @@ name: Version coherence
 on:
   push:
     branches: [main]
+  # Audit-r8 brief #02 fix: drop base-branch filter so stacked PRs
+  # (PR into a feature branch, not main) still gate on version
+  # drift. Previously version drift could land in a phase branch
+  # and surprise the merge-to-main PR.
   pull_request:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:

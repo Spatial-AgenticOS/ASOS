@@ -495,8 +495,15 @@ class ProactiveEngine:
     async def _build_morning_briefing(self) -> ProactiveMessage | None:
         """Build a personalized morning briefing from memory and health data."""
         sections = []
+        now = time.time()
 
-        # Health
+        # Health (audit-r8 brief #08 HIGH fix): the prior implementation
+        # verbalised `frame.heart_rate` / `frame.spo2_pct` straight from
+        # the first frame regardless of `*_sample_ts`, so a stale Apple
+        # HealthKit reading from hours ago could be spoken aloud as "your
+        # resting heart rate is …" — same root cause as the chat
+        # hallucination fix in 2026.5.18 but missed in `_build_morning_briefing`.
+        # Now uses the same `_FRESH_WINDOW_S` gate as `_evaluate`.
         frames = []
         if self._perception:
             for sid in list(getattr(self._perception, '_frames', {}).keys()):
@@ -506,7 +513,25 @@ class ProactiveEngine:
 
         if frames:
             f = frames[0]
-            sections.append(f"Your resting heart rate is {f.heart_rate} bpm, SpO2 {f.spo2_pct}%.")
+            hr_age = (
+                (now - getattr(f, "heart_rate_sample_ts", 0.0))
+                if getattr(f, "heart_rate_sample_ts", 0.0) > 0
+                else float("inf")
+            )
+            spo2_age = (
+                (now - getattr(f, "spo2_sample_ts", 0.0))
+                if getattr(f, "spo2_sample_ts", 0.0) > 0
+                else float("inf")
+            )
+            hr_fresh = hr_age <= _FRESH_WINDOW_S
+            spo2_fresh = (f.spo2_pct > 0) and (spo2_age <= _FRESH_WINDOW_S)
+            if hr_fresh and spo2_fresh:
+                sections.append(
+                    f"Your resting heart rate is {f.heart_rate} bpm, SpO2 {f.spo2_pct}%."
+                )
+            elif hr_fresh:
+                sections.append(f"Your resting heart rate is {f.heart_rate} bpm.")
+            # else: do NOT verbalise stale vitals — silence is honest.
 
         # Recent memory
         if self._memory:
@@ -516,8 +541,14 @@ class ProactiveEngine:
                     sections.append("Here's what happened recently:")
                     for ep in recent[:2]:
                         sections.append(f"  - {ep.get('summary', '')[:100]}")
-            except Exception:
-                pass
+            except Exception as exc:
+                # Audit-r8 brief #08 MEDIUM fix: surface the exception
+                # so an operator can debug a blank briefing instead of
+                # silently dropping the memory section.
+                logger.warning(
+                    "morning briefing: memory.episode_recent failed (%s); skipping memory section",
+                    exc,
+                )
 
         if not sections:
             return None

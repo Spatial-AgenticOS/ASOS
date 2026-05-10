@@ -6,6 +6,57 @@ All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+### Fixed (audit-r8 brief #07 — model leak root cause)
+
+- **Provider catalog singleton drift.** `BrainState.init` constructed
+  `self.provider_catalog` but never registered it as the process-wide
+  singleton consulted by `LLMProvider._default_model_for`. The fallback
+  branch in `providers/catalog.get_shared_catalog()` lazily built a
+  SECOND, empty `ProviderCatalog` whose `default_model_for(provider)`
+  returned `""`. The failover then quietly fell back to the persisted
+  / env model id — which is how the dated-transcribe id leaked into
+  chat completions despite a clean settings file, boot self-heal, and
+  classifier fix. Fix: new `set_shared_catalog(catalog)` helper called
+  from `BrainState.init` immediately after catalog construction (and
+  BEFORE `LLMProvider()` is built). Pinned by
+  `tests/test_provider_catalog_singleton.py` so a future refactor that
+  splits `init()` cannot silently regress.
+- **Removed the wire-level model-class guard** from `LLMProvider.chat`.
+  The guard was a workaround for the singleton drift above; with the
+  real root cause fixed, the per-call patching is no longer needed.
+  Boot self-heal + classifier are sufficient.
+- **Missing `await` on `switch_provider` in `/api/config/update`.**
+  `LLMProvider.switch_provider` is async; the route fired it as a
+  fire-and-forget coroutine, so persisted settings.json drifted from
+  in-memory `state.orchestrator.llm` until next boot. Awaited.
+
+### Fixed (audit-r8 brief #08 HIGH — pre-release readiness)
+
+- **Morning briefing verbalised stale vitals.** `_build_morning_briefing`
+  read `frame.heart_rate` / `frame.spo2_pct` from the first available
+  frame regardless of `*_sample_ts`, so a stale Apple HealthKit reading
+  from hours ago could be spoken aloud as the resting HR. The
+  `_evaluate` path got the `_FRESH_WINDOW_S = 120s` gate in 2026.5.18
+  but `_build_morning_briefing` was missed. Now applies the same gate;
+  partial freshness (HR fresh, SpO2 stale) speaks only the fresh
+  metric. Pinned by `tests/test_morning_briefing_freshness.py`.
+- **`is_partial` asymmetry between web and node transcript paths.**
+  `RealtimeProxy._handle_transcript` correctly used `not is_final` for
+  the web path but hardcoded `is_partial: False` for the node path, so
+  iOS rendered partial deltas as committed text. Match the web path.
+
+### Changed
+
+- **CI `pull_request:` no longer gates on `branches: [main]`.** Stacked
+  PRs (PR into a phase-N branch) used to skip the full test suite
+  because the workflow event itself was filtered out — only `lint`
+  ran (no `if:` guard). Operator caught this on PR #81 / PR #84. Both
+  `ci.yml` and `version-coherence.yml` now run on every PR regardless
+  of base branch. Push events still gate to `[main]`.
+- **`test_api_routes.py::TestConfig::test_update_config`** updated to
+  mock `state.orchestrator.llm.switch_provider` as `AsyncMock` since
+  the route now correctly awaits it.
+
 ## [2026.5.18] — Truthfulness round 2 (vitals freshness + voice/model hardening)
 
 **Scope of this entry**: brain (`feral-core`) only. Companion iOS work

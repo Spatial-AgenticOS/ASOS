@@ -452,6 +452,19 @@ class BrainState:
             # Built before LLMProvider so the runtime reads its config
             # through the catalog instead of a private tuple.
             self.provider_catalog = ProviderCatalog(cache_path=_default_catalog_cache())
+            # Audit-r8 brief #07 root-cause fix: register the boot-time
+            # catalog as the process-wide singleton BEFORE LLMProvider
+            # init. Without this, `_default_model_for` lazily creates a
+            # second empty `ProviderCatalog` (via `get_shared_catalog()`
+            # in providers/catalog.py:947), which then returns "" for
+            # `default_model_for("openai")` and the failover path
+            # silently falls back to the stale `FERAL_LLM_MODEL` /
+            # settings.json value — which is how the dated-transcribe
+            # model id kept leaking into OpenAI calls despite my
+            # boot self-heal + classifier fix. Single source of truth
+            # = single catalog.
+            from providers.catalog import set_shared_catalog
+            set_shared_catalog(self.provider_catalog)
 
         from agents.llm_provider import LLMProvider
         with boot_subsystem(self._boot_report, "LLMProvider", optional=False):

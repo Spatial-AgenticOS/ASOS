@@ -7,7 +7,7 @@ Uses FastAPI TestClient with mocked BrainState.
 """
 
 from collections import deque
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -87,6 +87,11 @@ def _make_mock_state():
     s.orchestrator = MagicMock()
     s.orchestrator._multi_agent = None
     s.orchestrator.runtime_status = {"status": "idle"}
+    # `LLMProvider.switch_provider` is async (audit-r8 brief #07
+    # caught the missing `await` in `/api/config/update`); mock it
+    # as such so the route can `await` cleanly in tests.
+    s.orchestrator.llm = MagicMock()
+    s.orchestrator.llm.switch_provider = AsyncMock()
 
     # identity_workspace
     s.identity_workspace = MagicMock()
