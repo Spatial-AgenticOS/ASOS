@@ -549,44 +549,15 @@ class LLMProvider:
         if self.provider == "anthropic":
             return await self._chat_anthropic(messages, tools, temperature, max_tokens)
 
-        # Runtime model-class guard (operator report 2026-05-09 round 4):
-        # The brain kept 404'ing on `gpt-4o-mini-transcribe-2025-12-15`
-        # even though settings.json had `gpt-5.5-pro`, the boot self-heal
-        # ran clean, and `default_model_for("openai")` correctly returned
-        # `gpt-5.5-pro`. We can't always trace where the bad model id
-        # leaks in (catalog cache races, switch_provider mutations, in-
-        # memory state drift). So validate AT THE WIRE: if the model
-        # we're about to send classifies as audio / image / embedding /
-        # realtime / completion-only, swap it for a chat-class default
-        # right before the request. Otherwise the brain has no way to
-        # self-heal once the bad value gets in.
-        try:
-            from providers.model_classes import classify
-            from providers.catalog import get_shared_catalog
-            cls = classify(self.provider, self.model)
-            if cls not in {"chat", "reasoning", "unknown"}:
-                catalog = get_shared_catalog()
-                healed = catalog.default_model_for(self.provider) or ""
-                if healed and classify(self.provider, healed) in {"chat", "reasoning"}:
-                    logger.warning(
-                        "llm.chat runtime model guard: provider=%s model=%r "
-                        "classifies as %s (not chat-completable). Swapping to "
-                        "%r for this call. Source: settings.json, env, or "
-                        "catalog cache may be stale; check ~/.feral/settings.json.",
-                        self.provider, self.model, cls, healed,
-                    )
-                    self.model = healed
-                else:
-                    logger.error(
-                        "llm.chat runtime model guard: provider=%s model=%r "
-                        "is %s and no chat-class default available. The next "
-                        "request will 404 — operator must fix in Settings → "
-                        "Providers.",
-                        self.provider, self.model, cls,
-                    )
-        except Exception as exc:
-            # Guard must never block the request itself.
-            logger.debug("llm.chat runtime model guard skipped: %s", exc)
+        # NOTE: a previous "runtime model-class guard" lived here as a
+        # belt-and-suspenders defense against the dated-transcribe-id
+        # leak. Removed in 2026-05-09 audit-r8 round-2 once the actual
+        # root cause was fixed at boot: `api/state.BrainState.init` now
+        # calls `providers.catalog.set_shared_catalog(self.provider_catalog)`
+        # so every `_default_model_for(...)` consults the live catalog
+        # instead of a lazily-created empty singleton. The boot
+        # self-heal + classifier are sufficient once the catalog
+        # singleton is correctly wired — no per-call patching needed.
 
         body: dict = {
             "model": self.model,

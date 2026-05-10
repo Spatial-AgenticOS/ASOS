@@ -100,7 +100,16 @@ async def update_config(body: dict):
         new_model = llm_config.get("model", "")
         new_base = llm_config.get("base_url", "")
         new_key = os.environ.get(f"{new_provider.upper()}_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
-        state.orchestrator.llm.switch_provider(new_provider, model=new_model, base_url=new_base, api_key=new_key)
+        # Audit-r8 brief #07: `switch_provider` is async — the prior
+        # call site fired-and-forgot the coroutine, leaving persisted
+        # settings.json drifted from in-memory `LLMProvider` state.
+        # That drift was one of the paths the dated-transcribe model
+        # id leaked into chat completions despite a clean settings
+        # write. Await the swap so the in-memory provider always
+        # matches what we just persisted.
+        await state.orchestrator.llm.switch_provider(
+            new_provider, model=new_model, base_url=new_base, api_key=new_key,
+        )
 
     elif section == "features":
         enabled = str(value).lower() in ("true", "1", "yes", "on")

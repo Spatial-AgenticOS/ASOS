@@ -7,8 +7,15 @@ on:
       - 'docs/**'
       - '**/*.md'
       - '**/*.mdx'
+  # Audit-r8 brief #02 fix: previously gated to `branches: [main]`,
+  # which only matched PRs whose BASE was `main`. Stacked PRs
+  # (e.g. `phase-2/x` → `phase-1/integration` → `main`) never hit
+  # `brain-tests-pr` because the workflow event itself was filtered
+  # out — lint ran (no `if:` guard) but the actual test suite did
+  # not. Operator caught this on PR #81 and PR #84 (closed before
+  # retarget). Drop the base-branch filter so every PR runs the
+  # full suite regardless of where it lands.
   pull_request:
-    branches: [main]
     paths-ignore:
       - 'docs/**'
       - '**/*.md'

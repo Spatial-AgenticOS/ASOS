@@ -832,12 +832,18 @@ class RealtimeProxy:
                     )
                     await self._send_to_session(session_id, msg)
                 elif rs and self._send_to_node:
+                    # Audit-r8 brief #08 HIGH fix: node path was
+                    # hardcoding `is_partial: False`, contradicting the
+                    # web path which used `not is_final`. Asymmetry
+                    # meant iOS clients always rendered the final
+                    # variant even on partial deltas; partial text was
+                    # treated as committed. Match the web path.
                     await self._send_to_node(rs.node_id, {
                         "type": "transcript",
                         "payload": {
                             "text": clean_text,
                             "role": wire_role,
-                            "is_partial": False,
+                            "is_partial": not is_final,
                         },
                     })
             except (RuntimeError, ConnectionError) as exc:
