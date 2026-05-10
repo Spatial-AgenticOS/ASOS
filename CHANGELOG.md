@@ -1,10 +1,93 @@
 # Changelog
 
-<!-- feral-version: 2026.5.17 -->
+<!-- feral-version: 2026.5.18 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.18] — Truthfulness round 2 (vitals freshness + voice/model hardening)
+
+**Scope of this entry**: brain (`feral-core`) only. Companion iOS work
+for the same operator-reported regressions ships from the private
+`FERAL-AI/feral-companion-ios` repository on its own cadence and is
+documented in that repo's release notes.
+
+### Fixed
+
+- **Phantom HR/SpO2 in LLM context** — `PerceptionFrame.to_system_context`
+  used to inject `Sensors: HR=115bpm | SpO2=93%` into every prompt
+  unconditionally. The model treated stale Apple HealthKit reads
+  (recorded hours ago) as live and fabricated assessments like
+  *"Heart Rate: 115 bpm — Elevated"* when the user asked. Now:
+  fresh readings appear plain; stale ones carry a
+  `(stale, Xs ago — do NOT report as current)` suffix; readings with
+  no `*_sample_ts` are suppressed entirely. Same gate on the
+  "USER ALERT: Heart rate critically high" adaptive hint.
+- **Phantom proactive alerts** (HR / SpO2 / `baseline_hr`) — all three
+  triggers now consult the same `_FRESH_WINDOW_S = 120s` gate. Stale
+  HealthKit samples no longer fire `Heart Rate Alert: 115 bpm`,
+  `Low Blood Oxygen`, or `Heart Rate Anomaly: hr_resting is X.X
+  below baseline`.
+- **Per-metric sample timestamps** in `PerceptionFrame`
+  (`heart_rate_sample_ts`, `spo2_sample_ts`) + source labels
+  (`heart_rate_source`, `spo2_source`). Defensive default `0.0`
+  treats missing freshness data as STALE — old-build senders that
+  don't plumb the field cannot smuggle a fake-fresh reading.
+- **Brain self-heal at boot** — when `~/.feral/settings.json`'s
+  `llm.model` classifies as audio / image / embedding / realtime /
+  completion-only, swap to a chat-class catalog default and persist
+  the corrected value. Operator no longer gets stuck with a non-chat
+  model pinned (no `feral config set` CLI lever exists).
+- **Brain runtime model guard** — same validation runs at the wire
+  inside `LLMProvider.chat`, immediately before sending the request.
+  Belt-and-suspenders defense against catalog-cache races,
+  switch_provider mutations, and any other path that could leak a
+  non-chat model id past the boot self-heal.
+- **Voice transcript double-emit** — `RealtimeProxy._handle_transcript`
+  used to fan out to BOTH `_send_to_session` AND `_send_to_node` for
+  the same iPhone session, causing every voice turn to render twice
+  in the iOS chat. Now routes web-OR-node, mirroring the audio_delta
+  path.
+- **Voice transcript role on the wire** — `TranscriptPayload` now
+  carries an explicit `role` field; the brain populates it
+  (`user` for VAD-detected user speech, `assistant` for OpenAI
+  realtime audio-out transcripts) so iOS can render alternating
+  bubble colors instead of styling everything as `.user`.
+- **`websockets.connect()` `extra_headers`** — three voice modules
+  passed `additional_headers=` (the asyncio-client kwarg) to the
+  legacy `websockets.connect` entrypoint, surfacing as
+  `create_connection() got an unexpected keyword argument
+  'additional_headers'` and silently breaking every realtime session.
+- **Cancel-race log spam** — OpenAI's `Cancellation failed: no active
+  response found` benign race demoted to INFO.
+- **Post-disconnect WS sends** — `_handle_audio_delta` and
+  `_handle_transcript` swallow the closed-WS `RuntimeError` from
+  starlette and tear down the realtime session so OpenAI stops
+  streaming tokens nobody can deliver.
+- **Pair-dedup by `node_id`** — `pair_device` now supersedes prior
+  `paired_devices` rows for the same `node_id` (and any minted
+  `device_credentials`). Re-pairing the same iPhone collapses to one
+  row in the dashboard instead of accumulating ghost duplicates, and
+  the stale phone_bearer is no longer authoritative.
+
+### Added
+
+- `_CONTEXT_FRESH_S` / `_FRESH_WINDOW_S` module-level constants in
+  `perception/fusion.py` and `agents/proactive_engine.py` so the
+  threshold has one source of truth.
+
+### Tests
+
+- `tests/test_perception_context_freshness.py` (8 cases)
+- `tests/test_proactive_freshness_gate.py` (7 cases)
+- `tests/test_voice_transcript_role_wire.py` (8 cases)
+- `tests/test_voice_realtime_headers.py` (3 cases)
+- `tests/test_pair_node_id_dedup.py` (5 cases)
+- `tests/test_llm_model_self_heal.py` (3 cases)
+- `tests/test_catalog_default_model_chat_only.py` (2 cases)
+
+196 tests green across the touched suites. CI: pending.
 
 ## [2026.5.17] — Phase 1 truthfulness sweep + node-subdevice truth store
 
