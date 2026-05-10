@@ -32,7 +32,7 @@ jobs:
       FERAL_SOAK_DURATION_MIN: ${{ github.event.inputs.duration-min || '60' }}
       FERAL_SOAK_RECONNECT_SEC: "90"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v5
         with:
@@ -74,7 +74,7 @@ jobs:
       FERAL_SOAK_SLACK_CHANNEL: ${{ secrets.FERAL_SOAK_SLACK_CHANNEL }}
       FERAL_SOAK_DISCORD_WEBHOOK: ${{ secrets.FERAL_SOAK_DISCORD_WEBHOOK }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v5
         with:
