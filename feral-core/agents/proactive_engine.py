@@ -34,6 +34,18 @@ from typing import Any, Callable, Awaitable, Optional
 logger = logging.getLogger("feral.proactive")
 
 
+# Module-level constant — single source of truth for "is this
+# perception-frame sample fresh enough to drive a real-time alert?"
+# Operator report 2026-05-09 (rounds 1-3): without this gate, stale
+# Apple HealthKit samples (HR=115 from a workout 4h earlier) fired
+# `hr_elevated`, `spo2_low`, AND `baseline_hr` as if they were
+# real-time. Two minutes is enough for genuine W300 / HealthKit polls
+# but short enough to drop a HealthKit "last recorded" reading from
+# hours ago. Promoted to module level so all health-trigger sections
+# of `_evaluate` consult the same window.
+_FRESH_WINDOW_S = 120.0
+
+
 class Priority(Enum):
     CRITICAL = 4    # health emergency, urgent calendar
     IMPORTANT = 3   # meeting in 10 min, stress detected
@@ -205,27 +217,58 @@ class ProactiveEngine:
                     self._first_interaction_today = False
 
         # --- Health Triggers ---
+        # Freshness gate (operator report 2026-05-09: web-UI showed
+        # "Heart Rate Alert: 115 BPM" while the W300 glasses were
+        # disconnected — the value was a STALE Apple HealthKit sample
+        # from hours earlier that the perception layer had cached as
+        # "current"). Alerts now require:
+        #   1. A non-zero reading (existing check).
+        #   2. The sample timestamp is within FRESH_WINDOW_S (default
+        #      120s) of "now" — older samples represent past state and
+        #      shouldn't drive a real-time notification.
+        # The source is surfaced in the body so the user knows where
+        # the reading came from. Pinned by
+        # tests/test_proactive_freshness_gate.py. The same constant is
+        # also consulted by the Baseline Anomaly section below
+        # (`baseline_hr`) — operator report round 3 caught that
+        # trigger firing on stale data without a freshness gate.
+        FRESH_WINDOW_S = _FRESH_WINDOW_S
         for frame in frames:
-            if frame.heart_rate > 0:
+            hr_age = (now - getattr(frame, "heart_rate_sample_ts", 0.0)) if getattr(frame, "heart_rate_sample_ts", 0.0) > 0 else float("inf")
+            spo2_age = (now - getattr(frame, "spo2_sample_ts", 0.0)) if getattr(frame, "spo2_sample_ts", 0.0) > 0 else float("inf")
+            hr_src = getattr(frame, "heart_rate_source", "") or "unknown source"
+            spo2_src = getattr(frame, "spo2_source", "") or "unknown source"
+
+            if frame.heart_rate > 0 and hr_age <= FRESH_WINDOW_S:
                 # Elevated HR
                 if frame.heart_rate > 100 and self._can_fire("hr_elevated"):
                     messages.append(ProactiveMessage(
                         trigger_id="hr_elevated",
                         priority=Priority.IMPORTANT,
                         title="Heart Rate Alert",
-                        body=f"Your heart rate is {frame.heart_rate} bpm — that's elevated. You've been {frame.activity_state}. Want to take a short break?",
+                        body=(
+                            f"Your heart rate is {frame.heart_rate} bpm — that's elevated. "
+                            f"You've been {frame.activity_state}. "
+                            f"(Source: {hr_src}, sample {int(hr_age)}s old.) "
+                            "Want to take a short break?"
+                        ),
                         voice_text=f"Hey, I noticed your heart rate jumped to {frame.heart_rate}. Maybe a short break would help?",
                         action="Take a break",
                         action_payload={"smart_home": "set_scene", "scene": "calming"},
                     ))
 
+            if 0 < frame.spo2_pct < 94 and spo2_age <= FRESH_WINDOW_S:
                 # Low SpO2
-                if 0 < frame.spo2_pct < 94 and self._can_fire("spo2_low"):
+                if self._can_fire("spo2_low"):
                     messages.append(ProactiveMessage(
                         trigger_id="spo2_low",
                         priority=Priority.CRITICAL,
                         title="Low Blood Oxygen",
-                        body=f"Your SpO2 is {frame.spo2_pct}%. This is below normal. Please take some deep breaths and consider moving to fresh air.",
+                        body=(
+                            f"Your SpO2 is {frame.spo2_pct}%. This is below normal. "
+                            f"(Source: {spo2_src}, sample {int(spo2_age)}s old.) "
+                            "Please take some deep breaths and consider moving to fresh air."
+                        ),
                         voice_text=f"Your blood oxygen is at {frame.spo2_pct} percent, which is low. Please take some deep breaths.",
                         action="Start breathing exercise",
                         action_payload={"smart_home": "breathing_exercise", "duration_minutes": 3},
@@ -328,7 +371,21 @@ class ProactiveEngine:
         if self._baseline:
             try:
                 for frame in frames:
-                    if frame.heart_rate > 0:
+                    # Freshness gate (operator report 2026-05-09 round 3):
+                    # `baseline_hr` was firing "Heart Rate Anomaly:
+                    # hr_resting is 54.0 below baseline 110.6" while
+                    # the W300 was disconnected — same root cause as
+                    # `hr_elevated`: the trigger read `frame.heart_rate`
+                    # without checking when the sample was taken. Gate
+                    # on the same FRESH_WINDOW_S as elsewhere in
+                    # _evaluate; reuse the same `now` (declared at top
+                    # of method).
+                    hr_age_baseline = (
+                        (now - getattr(frame, "heart_rate_sample_ts", 0.0))
+                        if getattr(frame, "heart_rate_sample_ts", 0.0) > 0
+                        else float("inf")
+                    )
+                    if frame.heart_rate > 0 and hr_age_baseline <= FRESH_WINDOW_S:
                         alert = self._baseline.check_anomaly(
                             "hr_resting", frame.heart_rate
                         )

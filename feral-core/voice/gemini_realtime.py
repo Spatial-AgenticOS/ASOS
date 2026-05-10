@@ -76,8 +76,10 @@ class GeminiRealtimeSession:
             return
 
         try:
-            import websockets
             headers = {"x-goog-api-key": self._api_key}
+            # Cross-version-safe; helper translates to `extra_headers`
+            # if running on legacy `websockets.connect`. See
+            # realtime_proxy.py `_connect_with_retry` for the contract.
             self._ws = await self._connect_with_retry(
                 GEMINI_WS_URL,
                 additional_headers=headers,
@@ -95,10 +97,17 @@ class GeminiRealtimeSession:
 
     @staticmethod
     async def _connect_with_retry(url, **kwargs):
-        import websockets
+        # Same cross-version dance as realtime_proxy._connect_with_retry.
+        try:
+            from websockets.asyncio.client import connect as _ws_connect
+        except ImportError:
+            import websockets as _ws
+            _ws_connect = _ws.connect
+            if "additional_headers" in kwargs and "extra_headers" not in kwargs:
+                kwargs["extra_headers"] = kwargs.pop("additional_headers")
         for attempt in range(3):
             try:
-                return await websockets.connect(url, **kwargs)
+                return await _ws_connect(url, **kwargs)
             except Exception:
                 if attempt == 2:
                     raise

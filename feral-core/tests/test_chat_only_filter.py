@@ -84,11 +84,25 @@ async def test_list_models_chat_class_drops_non_chat(openai_fixture: dict) -> No
     for forbidden in ("babbage-002", "davinci-002",
                       "whisper-1", "gpt-4o-transcribe",
                       "gpt-4o-mini-transcribe", "gpt-4o-mini-tts",
+                      # Dated-snapshot suffixes (operator report
+                      # 2026-05-08): the catalog handed
+                      # `gpt-4o-mini-transcribe-2025-12-15` out as the
+                      # OpenAI chat default and every chat completion
+                      # 404'd with `This is not a chat model`. The
+                      # classifier regex is now anchored to also catch
+                      # the dated tail — pinned here.
+                      "gpt-4o-mini-transcribe-2025-03-20",
+                      "gpt-4o-mini-transcribe-2025-12-15",
+                      "gpt-4o-transcribe-diarize",
+                      "gpt-4o-transcribe-diarize-2025-12-15",
+                      "gpt-4o-mini-tts-2025-03-20",
+                      "gpt-4o-mini-tts-2025-12-15",
                       "tts-1", "tts-1-hd",
                       "dall-e-2", "dall-e-3", "gpt-image-2",
                       "text-embedding-3-small", "text-embedding-3-large",
                       "text-embedding-ada-002",
                       "gpt-realtime-1.5", "gpt-4o-realtime-preview",
+                      "gpt-4o-realtime-preview-2024-12-17",
                       "gpt-3.5-turbo-instruct"):
         assert forbidden not in chat_only, (
             f"{forbidden} is non-chat and should NOT reach the chat "

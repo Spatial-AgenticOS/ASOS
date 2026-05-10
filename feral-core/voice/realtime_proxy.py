@@ -125,6 +125,12 @@ class RealtimeSession:
             headers = {
                 "Authorization": f"Bearer {self._api_key}",
             }
+            # `_connect_with_retry` handles the cross-version
+            # `websockets` kwarg dance (14.x removed the legacy
+            # `extra_headers` entrypoint, 13.x has both). We pass the
+            # new-style `additional_headers` here; the helper translates
+            # to `extra_headers` if running against legacy. Pinned by
+            # tests/test_voice_realtime_headers.py.
             self._ws = await self._connect_with_retry(
                 url,
                 additional_headers=headers,
@@ -140,10 +146,25 @@ class RealtimeSession:
 
     @staticmethod
     async def _connect_with_retry(url, **kwargs):
-        import websockets
+        # Cross-version websockets compatibility: 13.x ships both the
+        # legacy `websockets.connect` (kwarg: `extra_headers`) AND the
+        # newer `websockets.asyncio.client.connect` (kwarg:
+        # `additional_headers`). 14.x+ removed the legacy entrypoint.
+        # Use the asyncio client when available so the code works on
+        # both lines without runtime guesswork; fall back to legacy
+        # only if the import chain doesn't expose it. Caller passes
+        # the new-style `additional_headers` kwarg.
+        try:
+            from websockets.asyncio.client import connect as _ws_connect
+        except ImportError:
+            import websockets as _ws
+            _ws_connect = _ws.connect
+            # Old-line callers expect `extra_headers`. Translate.
+            if "additional_headers" in kwargs and "extra_headers" not in kwargs:
+                kwargs["extra_headers"] = kwargs.pop("additional_headers")
         for attempt in range(3):
             try:
-                return await websockets.connect(url, **kwargs)
+                return await _ws_connect(url, **kwargs)
             except Exception:
                 if attempt == 2:
                     raise
@@ -404,9 +425,26 @@ class RealtimeSession:
             err = event.get("error", {})
             msg = err.get("message", str(err))
             self._response_in_progress = False
-            logger.error(f"Realtime API error: {msg}")
-            if self._on_error:
-                await self._on_error(self.session_id, msg)
+            # The "no active response" cancel race is benign and
+            # frequent: VAD turn-detection fires `response.cancel`
+            # while OpenAI's state has already advanced past
+            # response.done (our local `_response_in_progress` flag
+            # races behind the OpenAI server). Demoted to INFO so it
+            # doesn't spam the operator log; we DO NOT call `on_error`
+            # for this case because it's not actionable.
+            benign_cancel_race = (
+                "Cancellation failed" in msg
+                and "no active response" in msg
+            )
+            if benign_cancel_race:
+                logger.info(
+                    "Realtime cancel race (benign): %s session=%s",
+                    msg, self.session_id,
+                )
+            else:
+                logger.error(f"Realtime API error: {msg}")
+                if self._on_error:
+                    await self._on_error(self.session_id, msg)
 
         elif event_type == "response.created":
             self._response_in_progress = True
@@ -706,15 +744,36 @@ class RealtimeProxy:
             "is_final": is_done,
         }
 
-        if rs.node_id.startswith("webclient_") and self._send_to_session:
-            from models.protocol import FeralMessage
-            msg = FeralMessage(
-                session_id=session_id, hop="brain", type="audio_response",
-                payload=payload,
+        # Defense against the post-disconnect send race (operator
+        # report 2026-05-08): when the phone closes its WS while
+        # OpenAI is still streaming `response.output_audio.delta`
+        # events, the underlying starlette WebSocket raises
+        # ``RuntimeError: Cannot call "send" once a close message has
+        # been sent`` and uvicorn complains about ``Unexpected ASGI
+        # message 'websocket.send', after sending 'websocket.close'``.
+        # Catch + tear down the OpenAI side so the OpenAI WS doesn't
+        # keep paying for tokens we can't deliver. Pinned by
+        # tests/test_voice_realtime_post_close.py.
+        try:
+            if rs.node_id.startswith("webclient_") and self._send_to_session:
+                from models.protocol import FeralMessage
+                msg = FeralMessage(
+                    session_id=session_id, hop="brain", type="audio_response",
+                    payload=payload,
+                )
+                await self._send_to_session(session_id, msg)
+            elif self._send_to_node:
+                await self._send_to_node(rs.node_id, {"type": "audio_response", "payload": payload})
+        except (RuntimeError, ConnectionError) as exc:
+            # Most likely the downstream WS is gone. Tear down the
+            # session so the OpenAI socket stops streaming and we
+            # don't log this on every subsequent chunk.
+            logger.warning(
+                "voice_audio_forward dropped: downstream WS closed for "
+                "session=%s node=%s err=%s — closing realtime session.",
+                session_id, rs.node_id, exc,
             )
-            await self._send_to_session(session_id, msg)
-        elif self._send_to_node:
-            await self._send_to_node(rs.node_id, {"type": "audio_response", "payload": payload})
+            await self.stop_session(session_id)
 
     async def _handle_transcript(self, session_id: str, text: str, is_final: bool):
         """Store transcripts in memory and forward to both client sessions and daemon nodes."""
@@ -731,22 +790,63 @@ class RealtimeProxy:
         if is_final and text:
             rs = self._sessions.get(session_id)
 
-            if self._send_to_session:
-                from models.protocol import FeralMessage, TranscriptPayload
-                msg = FeralMessage(
-                    session_id=session_id, hop="brain", type="transcript",
-                    payload=TranscriptPayload(
-                        text=text, is_partial=not is_final,
-                    ).model_dump(),
-                )
-                await self._send_to_session(session_id, msg)
+            # The ``[user] `` prefix is an INTERNAL sentinel set by the
+            # ``input_audio_transcription.completed`` handler so this
+            # callback can disambiguate user-spoken vs assistant-spoken
+            # transcripts (OpenAI's Realtime SDK funnels both into the
+            # same ``response.output_audio_transcript.*`` event family
+            # this code path forwards). The sentinel must be stripped
+            # before any wire emit, otherwise iOS / web render
+            # ``"[user] Hello"`` as visible bubble text. Pinned by
+            # tests/test_voice_transcript_role_wire.py.
+            is_user = text.startswith("[user] ")
+            clean_text = text[len("[user] "):] if is_user else text
+            wire_role = "user" if is_user else "assistant"
 
-            if rs and not rs.node_id.startswith("webclient_") and self._send_to_node:
-                role = "user" if text.startswith("[user] ") else "assistant"
-                await self._send_to_node(rs.node_id, {
-                    "type": "transcript",
-                    "payload": {"text": text, "role": role, "is_partial": False},
-                })
+            # Routing contract (operator report 2026-05-09: every
+            # voice turn rendered TWICE in the iOS chat). The fan-out
+            # is web-OR-node, NOT both — same shape as
+            # ``_handle_audio_delta``. iPhone is a daemon node so it
+            # gets ``_send_to_node``; web clients get
+            # ``_send_to_session``. The prior code fired both branches
+            # unconditionally and the iPhone received each transcript
+            # via two parallel WS paths (session + node), then the
+            # ChatStore polling-mirror ingested both copies.
+            #
+            # Same post-disconnect guard as ``_handle_audio_delta`` —
+            # a transcript can land after the phone has closed its WS
+            # (response.output_audio_transcript.done arrives later than
+            # the audio deltas), and writing into a closed
+            # WebSocket raises ``RuntimeError`` from starlette.
+            try:
+                is_web_client = bool(rs and rs.node_id.startswith("webclient_"))
+                if is_web_client and self._send_to_session:
+                    from models.protocol import FeralMessage, TranscriptPayload
+                    msg = FeralMessage(
+                        session_id=session_id, hop="brain", type="transcript",
+                        payload=TranscriptPayload(
+                            text=clean_text,
+                            role=wire_role,
+                            is_partial=not is_final,
+                        ).model_dump(),
+                    )
+                    await self._send_to_session(session_id, msg)
+                elif rs and self._send_to_node:
+                    await self._send_to_node(rs.node_id, {
+                        "type": "transcript",
+                        "payload": {
+                            "text": clean_text,
+                            "role": wire_role,
+                            "is_partial": False,
+                        },
+                    })
+            except (RuntimeError, ConnectionError) as exc:
+                logger.warning(
+                    "voice_transcript_forward dropped: downstream WS closed for "
+                    "session=%s err=%s — closing realtime session.",
+                    session_id, exc,
+                )
+                await self.stop_session(session_id)
 
     async def _handle_tool_call(
         self, session_id: str, call_id: str, name: str, arguments: str,

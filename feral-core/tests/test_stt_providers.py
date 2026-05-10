@@ -68,16 +68,39 @@ class TestDeepgramProvider:
         mock_ws.__aiter__ = AsyncMock(return_value=iter([]))
         mock_ws.close = AsyncMock()
 
-        mock_websockets = MagicMock()
-        mock_websockets.connect = AsyncMock(return_value=mock_ws)
+        # The provider tries `websockets.asyncio.client.connect` first
+        # (websockets 14.x+ path) and falls back to `websockets.connect`
+        # (legacy 13.x). Patch BOTH so the test passes regardless of
+        # the installed websockets line. Cross-version contract pinned
+        # by tests/test_voice_realtime_headers.py.
+        captured_calls: list = []
 
-        with patch.dict("sys.modules", {"websockets": mock_websockets}):
+        async def _capture(url, **kwargs):
+            captured_calls.append((url, kwargs))
+            return mock_ws
+
+        patches = []
+        try:
+            patches.append(patch("websockets.asyncio.client.connect", side_effect=_capture))
+        except (AttributeError, ImportError):
+            pass
+        patches.append(patch("websockets.connect", side_effect=_capture))
+        for p in patches:
+            p.start()
+        try:
             stream = provider.open_stream()
             task = asyncio.create_task(stream.__anext__())
             await asyncio.sleep(0.05)
 
-            call_args = mock_websockets.connect.call_args
-            assert "Token dg-test-key" in str(call_args)
+            assert captured_calls, "deepgram provider never invoked websockets connect"
+            url, kwargs = captured_calls[-1]
+            headers = kwargs.get("additional_headers") or kwargs.get("extra_headers") or {}
+            assert "Token dg-test-key" in str(headers), (
+                f"Authorization header missing or malformed. Got headers={headers}"
+            )
+        finally:
+            for p in patches:
+                p.stop()
 
             provider._closed = True
             await provider._transcript_queue.put(None)

@@ -219,10 +219,23 @@ class BackchannelRequestPayload(BaseModel):
 # ─────────────────────────────────────────────
 
 class TranscriptPayload(BaseModel):
-    """Speech-to-text result."""
+    """Speech-to-text result.
+
+    The ``role`` field disambiguates user-spoken text from
+    assistant-spoken text (OpenAI Realtime + Gemini Live both fan
+    speaker and listener transcripts through the same event family).
+    Wire consumers must respect it — iOS used to hardcode every
+    transcript as ``user`` which surfaced as "all chat bubbles look
+    identical" (operator report 2026-05-08, fixed in companion-ios
+    PR #1 commit-batch + brain realtime_proxy.py companion fix).
+    Defaults to ``"assistant"`` because in practice the brain emits
+    role-tagged frames everywhere; an unset role on the wire is
+    almost always an assistant transcript.
+    """
     text: str
     is_partial: bool = False
     confidence: float = 1.0
+    role: Optional[str] = "assistant"
 
 
 class SDUIPayload(BaseModel):

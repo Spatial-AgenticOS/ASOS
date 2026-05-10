@@ -838,7 +838,15 @@ async def test_realtime_proxy_relay_text_when_connected(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_handle_transcript_forwards_to_session_and_node(monkeypatch):
+async def test_handle_transcript_forwards_web_or_node_not_both(monkeypatch):
+    """Routing contract (operator report 2026-05-09 — chat bubbles
+    rendered each voice turn TWICE because the prior implementation
+    fired both `_send_to_session` AND `_send_to_node` for the same
+    iPhone session). The contract is now web-OR-node, mirroring
+    `_handle_audio_delta`. This test pins both halves: a daemon node
+    gets ONE node emit and ZERO session emits; the web client case
+    is covered by `test_voice_transcript_role_wire.py`.
+    """
     monkeypatch.setenv("OPENAI_API_KEY", "k")
     send_sess = AsyncMock()
     send_node = AsyncMock()
@@ -849,12 +857,14 @@ async def test_handle_transcript_forwards_to_session_and_node(monkeypatch):
         send_to_session=send_sess,
         send_to_node=send_node,
     )
+    # phone-1 is a daemon node (NOT a webclient_) — must route via
+    # send_to_node only.
     p._sessions["sess-x"] = MagicMock(node_id="phone-1")
 
     await p._handle_transcript("sess-x", "final text", True)
     mem.working_push.assert_called()
-    send_sess.assert_awaited()
-    send_node.assert_awaited()
+    send_sess.assert_not_awaited()  # daemon node MUST NOT touch the session path
+    send_node.assert_awaited_once()
 
 
 @pytest.mark.asyncio
