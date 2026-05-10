@@ -90,7 +90,12 @@ async def test_connect_no_beta_header():
     with patch("websockets.connect", side_effect=_fake_connect):
         await rs.connect()
 
-    headers = captured_kwargs.get("additional_headers", {})
+    # The kwarg name is `extra_headers` because `realtime_proxy.py`
+    # uses the LEGACY `websockets.connect` entrypoint (websockets 13.x),
+    # which exposes `extra_headers` not `additional_headers`. The
+    # asyncio-client variant uses the new name, but we don't import
+    # from there. Pinned by tests/test_voice_realtime_headers.py.
+    headers = captured_kwargs.get("extra_headers", {})
     assert "OpenAI-Beta" not in headers, "GA must NOT send the beta header"
     assert "Authorization" in headers
     assert headers["Authorization"] == "Bearer sk-test"
