@@ -196,6 +196,31 @@ VERSION_LOCATIONS: tuple[VersionLocation, ...] = (
         replacement="version={version}",
         description="Runtime: line example in build_runtime_line docstring",
     ),
+    # ---- v1 web client fallback strings (not in W7 ownership but
+    # ----  carry a bare CalVer literal that drifts on every bump).
+    # ----  Folded in here to retire the legacy
+    # ----  ``scripts/bump_version.py`` mirror list — the CI gate
+    # ----  ``test_single_calver_across_all_files`` walks this list,
+    # ----  not bump_version's, after the consolidation in
+    # ----  phase-1/truthfulness-sweep.
+    VersionLocation(
+        path="feral-client/src/components/AppShell.jsx",
+        pattern=_p(rf"'{VERSION_PATTERN}'"),
+        replacement="'{version}'",
+        description="v1 client AppShell version fallback literals",
+    ),
+    VersionLocation(
+        path="feral-client/src/pages/Dashboard.jsx",
+        pattern=_p(rf"'{VERSION_PATTERN}'"),
+        replacement="'{version}'",
+        description="v1 client Dashboard version fallback literal",
+    ),
+    VersionLocation(
+        path="feral-client/src/pages/SetupWizard.jsx",
+        pattern=_p(rf"FERAL v{VERSION_PATTERN}"),
+        replacement="FERAL v{version}",
+        description="v1 client setup wizard footer version label",
+    ),
     # ---- Top-level pyproject (not present in every checkout, optional).
     VersionLocation(
         path="pyproject.toml",

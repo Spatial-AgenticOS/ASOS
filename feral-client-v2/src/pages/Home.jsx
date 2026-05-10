@@ -15,6 +15,8 @@ import ForYouToday from '../components/ForYouToday';
 import { apiJson, apiFetch } from '../lib/api';
 import { useSomatic } from '../hooks/useSomatic';
 import { useBrainEvents, EVENT_TYPES } from '../hooks/useBrainEvents';
+import { useConnectionStatus } from '../hooks/useConnectionStatus';
+import { useFeralSocket } from '../hooks/useFeralSocket';
 
 /**
  * Home — unified Ambient + Dashboard surface. Replaces the separate
@@ -91,6 +93,35 @@ export default function Home() {
 
   const [jobs, setJobs] = useState([]);
   const [jobCounts, setJobCounts] = useState({});
+  // Phase-1 truthfulness: track the outcome of the most recent
+  // /api/dashboard poll so the hero "Brain" stat can render real
+  // state instead of the prior hardcoded `live + pulse` literal.
+  // `dashboardError` is `null` on the success branch and a string on
+  // the failure branch; `lastDashboardAt` lets future surfaces show
+  // "as of N seconds ago" if the operator wants finer-grained truth.
+  const [dashboardError, setDashboardError] = useState(null);
+  const [lastDashboardAt, setLastDashboardAt] = useState(null);
+  // /health probe outcome — third independent signal for the Brain
+  // hero stat. `null` until the first poll completes; string on
+  // failure; "ok" on success.
+  const [healthError, setHealthError] = useState(null);
+  const [healthOk, setHealthOk] = useState(false);
+
+  const wsConn = useConnectionStatus();
+  const socket = useFeralSocket();
+  // Live sub-device summary mirror of dashboard.subdevices_total /
+  // subdevices_live. Updated in real time by `subdevice_update` /
+  // `subdevice_remove` WS events so the Subdevices tile flips off
+  // its pulsing dot within ~1s of a glasses BLE drop instead of
+  // waiting for the 15s /api/dashboard poll. Initial seed comes
+  // from the /api/dashboard response and is then maintained by the
+  // WS events. Keeping a separate state from `dashboard` avoids
+  // racing the polled snapshot back over a fresher delta.
+  const [subdevices, setSubdevices] = useState({
+    total: 0,
+    live: 0,
+    rows: new Map(),
+  });
 
   const refresh = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -103,9 +134,45 @@ export default function Home() {
       apiJson('/api/ambient/next_event'),
       apiJson('/api/ambient/wind_down'),
       apiJson('/api/ambient/snapshot'),
+      // /health is a separate, cheap probe. We poll it alongside the
+      // composite /api/dashboard so the Brain hero stat has THREE
+      // independent signals: WS open, /api/dashboard ok, and /health
+      // ok. /health responds even when the heavier /api/dashboard
+      // composite path is wedged on a sub-system, so it's the
+      // strongest "brain process alive" indicator we have.
+      apiJson('/health'),
     ]);
-    const [d, s, l, j, c, b, n, w, snap] = results;
-    if (d.status === 'fulfilled') setDashboard(d.value);
+    const [d, s, l, j, c, b, n, w, snap, healthRes] = results;
+    if (d.status === 'fulfilled') {
+      setDashboard(d.value);
+      setDashboardError(null);
+      setLastDashboardAt(Date.now());
+      // Seed / re-seed the sub-device map from the dashboard
+      // payload. Subsequent WS deltas mutate this map in place so
+      // the tile updates without waiting for the 15s poll. We use
+      // a Map keyed by `${node_id}:${capability}` so updates and
+      // removes are O(1) without index drift.
+      const seedRows = new Map();
+      let seedLive = 0;
+      for (const dev of (d.value?.devices || [])) {
+        for (const s of (dev?.subdevices || [])) {
+          const key = `${s.node_id || dev.node_id}:${s.capability}`;
+          seedRows.set(key, { ...s, node_id: s.node_id || dev.node_id });
+          if (s.live) seedLive += 1;
+        }
+      }
+      setSubdevices({
+        total: d.value?.subdevices_total ?? seedRows.size,
+        live: d.value?.subdevices_live ?? seedLive,
+        rows: seedRows,
+      });
+    } else {
+      // Truth-in-status: the previous `dashboard` value stays available
+      // so transient failures don't blank the page, but we record the
+      // failure so the hero brain stat can render "offline" instead of
+      // continuing to claim "online" against a stale payload.
+      setDashboardError(d.reason?.message || 'dashboard fetch failed');
+    }
     if (s.status === 'fulfilled') setSkills(s.value?.skills || (Array.isArray(s.value) ? s.value : []));
     if (l.status === 'fulfilled') setLlm(l.value);
     if (j.status === 'fulfilled') {
@@ -124,6 +191,16 @@ export default function Home() {
       setSnapshot(snap.value);
       if (snap.value?.suggested_mode) setMode(snap.value.suggested_mode);
     }
+    if (healthRes.status === 'fulfilled') {
+      // /health returns `{ "status": "ok", ... }`; anything else is
+      // an unhealthy response and we treat the brain as not-fully-up.
+      const ok = (healthRes.value?.status === 'ok');
+      setHealthOk(ok);
+      setHealthError(ok ? null : `unhealthy: ${JSON.stringify(healthRes.value).slice(0, 80)}`);
+    } else {
+      setHealthOk(false);
+      setHealthError(healthRes.reason?.message || 'health probe failed');
+    }
   }, []);
 
   useEffect(() => {
@@ -132,6 +209,35 @@ export default function Home() {
     const r = setInterval(refresh, 15000);
     return () => { clearInterval(t); clearInterval(r); };
   }, [refresh]);
+
+  // Real-time sub-device deltas. Without this, the Subdevices tile
+  // only refreshes on the 15s poll and a glasses BLE drop looks
+  // alive for up to a quarter-minute — that's a status lie a
+  // careful demo viewer can spot.
+  useEffect(() => {
+    const unsub = socket.subscribe((msg) => {
+      if (!msg || msg.type !== 'state_push') return;
+      const evt = msg.event;
+      const data = msg.data;
+      if (!data || typeof data !== 'object') return;
+      if (evt !== 'subdevice_update' && evt !== 'subdevice_remove') return;
+      setSubdevices((prev) => {
+        const rows = new Map(prev.rows);
+        const key = `${data.node_id}:${data.capability}`;
+        if (evt === 'subdevice_update') {
+          rows.set(key, data);
+        } else {
+          rows.delete(key);
+        }
+        let live = 0;
+        for (const r of rows.values()) {
+          if (r.live) live += 1;
+        }
+        return { total: rows.size, live, rows };
+      });
+    });
+    return unsub;
+  }, [socket]);
 
   useEffect(() => {
     const onPinChange = () => setPinned(readPinned());
@@ -176,7 +282,61 @@ export default function Home() {
   const hr = Math.round(dashboard?.health?.heart_rate || somatic.heartRate || 0);
   const cog = Math.round(((dashboard?.health?.cognitive_load ?? somatic.cognitiveLoad) || 0) * 100);
   const sessionCount = dashboard?.session_count ?? 0;
+  // Read from the live mirror first (real-time WS deltas) and fall
+  // back to the polled dashboard payload only if the WS hasn't
+  // delivered a frame yet. Once the first delta lands the mirror is
+  // canonical — the polled snapshot would otherwise race over a
+  // fresher value.
+  const subdevicesLive = subdevices.rows.size > 0
+    ? subdevices.live
+    : (dashboard?.subdevices_live ?? 0);
+  const subdevicesTotal = subdevices.rows.size > 0
+    ? subdevices.total
+    : (dashboard?.subdevices_total ?? 0);
+  const subdevicesUnavailable = dashboard?.subdevices_unavailable ?? null;
   const alert = proactive?.[0]?.msg?.data || proactive?.[0]?.msg?.payload;
+
+  // Phase-1 brain liveness: the hero stat is a real binding now, not
+  // a hardcoded `live + pulse` literal. Three states map to three
+  // user-visible strings, and every dot tone ties to a measurable
+  // signal: the WS state, the /health probe, and the
+  // /api/dashboard composite. The Brain stat reads `online` only
+  // when ALL three agree.
+  //
+  //   * `online`        — WS open + /health ok + /api/dashboard ok.
+  //   * `reconnecting`  — at least one signal is down but at least
+  //                       one is still up (transient hiccup, brain
+  //                       restart, Tailscale flap).
+  //   * `offline`       — WS closed AND /health failed AND
+  //                       /api/dashboard failed. Brain is
+  //                       unreachable; user needs to act.
+  //
+  // The previous hardcoded card claimed "online" even when the brain
+  // process was stopped on a fresh shell, which is the exact lie
+  // the truthfulness audit flagged.
+  const wsState = wsConn.state;
+  const wsOpen = wsState === 'open';
+  const dashboardOk = dashboard != null && dashboardError == null;
+  // /health is the strongest "brain process alive" probe — it
+  // responds even when the heavier composite path is wedged.
+  const httpOk = healthOk && healthError == null;
+  let brainTone = 'off';
+  let brainLabel = 'offline';
+  let brainPulse = false;
+  if (wsOpen && httpOk && dashboardOk) {
+    brainTone = 'live';
+    brainLabel = 'online';
+    brainPulse = true;
+  } else if (!wsOpen && !httpOk && !dashboardOk) {
+    brainTone = 'off';
+    brainLabel = 'offline';
+  } else {
+    // At least one signal is healthy but not all three — surface
+    // the partial-degrade state instead of pretending everything
+    // is fine. UI text matches the original Phase-1 spec.
+    brainTone = 'warn';
+    brainLabel = 'reconnecting…';
+  }
 
   const skillsById = new Map(skills.map((s) => [s.skill_id || s.id, s]));
   const pinnedSkills = pinned
@@ -237,8 +397,11 @@ export default function Home() {
           </div>
 
           <div className="v2-home-stats">
-            <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Brain</div>
-              <div className="v2-stat-value"><StatusDot tone="live" pulse /> online</div>
+            <Glass level={0} radius="md" padding="sm">
+              <div className="v2-stat-label">Brain</div>
+              <div className="v2-stat-value" data-testid="v2-home-brain-stat">
+                <StatusDot tone={brainTone} pulse={brainPulse} label={`Brain ${brainLabel}`} /> {brainLabel}
+              </div>
             </Glass>
             <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Skills</div>
               <div className="v2-stat-value">{skillCount}</div>
@@ -251,8 +414,19 @@ export default function Home() {
               {pairedCount === 0 ? (
                 <div className="v2-stat-value">0</div>
               ) : onlineCount === pairedCount ? (
+                // Phase-1 truthfulness contract (operator follow-up
+                // on PR #80): bind tone + pulse to a measurable
+                // `onlineCount > 0` instead of the literal
+                // `tone="live" pulse`. The outer branches today
+                // guarantee onlineCount > 0 here, but a future
+                // refactor that loosens the invariant would re-
+                // introduce the same dot-lie pattern as the Brain
+                // hero stat fix. Same defence-in-depth.
                 <div className="v2-stat-value">
-                  <StatusDot tone="live" pulse /> {onlineCount}
+                  <StatusDot
+                    tone={onlineCount > 0 ? 'live' : 'off'}
+                    pulse={onlineCount > 0}
+                  /> {onlineCount}
                 </div>
               ) : (
                 // Show online / total when they differ, so the home
@@ -262,10 +436,45 @@ export default function Home() {
                 // (often 0) and the user saw "0" up top while the
                 // banner said "1 paired" — confusing inconsistency.
                 <div className="v2-stat-value" title={`${pairedOfflineCount} paired but offline`}>
-                  <StatusDot tone={onlineCount > 0 ? 'live' : 'idle'} /> {onlineCount}/{pairedCount}
+                  <StatusDot tone={onlineCount > 0 ? 'live' : 'neutral'} /> {onlineCount}/{pairedCount}
                 </div>
               )}
             </Glass>
+            {(subdevicesTotal > 0 || subdevicesUnavailable) && (
+              // Sub-device tile renders when the brain has ever seen
+              // one OR when the truth store can't be read (so the
+              // user gets a real warning instead of an empty tile).
+              // The dot tone is bound to the live count straight
+              // from the brain's truth store; we never invent a
+              // pulsing dot when zero subdevices are inside their
+              // heartbeat window.
+              <Glass level={0} radius="md" padding="sm">
+                <div className="v2-stat-label">Subdevices</div>
+                <div
+                  className="v2-stat-value"
+                  data-testid="v2-home-subdevices-stat"
+                  title={
+                    subdevicesUnavailable
+                      ? `Sub-device data temporarily unavailable: ${subdevicesUnavailable}`
+                      : `${subdevicesLive} live · ${subdevicesTotal - subdevicesLive} stale`
+                  }
+                >
+                  {subdevicesUnavailable ? (
+                    <>
+                      <StatusDot tone="warn" label="Sub-device data unavailable" /> unavailable
+                    </>
+                  ) : (
+                    <>
+                      <StatusDot
+                        tone={subdevicesLive > 0 ? 'live' : 'off'}
+                        pulse={subdevicesLive > 0}
+                        label={`${subdevicesLive} of ${subdevicesTotal} sub-devices live`}
+                      /> {subdevicesLive}/{subdevicesTotal}
+                    </>
+                  )}
+                </div>
+              </Glass>
+            )}
             <Glass level={0} radius="md" padding="sm"><div className="v2-stat-label">Heart rate</div>
               <div className="v2-stat-value">{hr > 0 ? `${hr}` : '—'}</div>
             </Glass>

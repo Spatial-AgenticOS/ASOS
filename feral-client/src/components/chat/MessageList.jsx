@@ -132,7 +132,7 @@ export default function MessageList({
       {isStreaming && streamingText && (
         <div className="flex justify-start">
           <div className="flex gap-2 max-w-[80%]">
-            <div className="flex-shrink-0 mt-1"><TheOrb size={14} mode="speaking" connected /></div>
+            <div className="flex-shrink-0 mt-1"><TheOrb size={14} mode="speaking" connected={isConnected} /></div>
             <div className="bg-feral-assistant border border-feral-border rounded-2xl rounded-bl-sm px-3.5 py-2">
               <div className="markdown-body text-[13px] leading-snug text-feral-text">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
@@ -147,7 +147,7 @@ export default function MessageList({
       {isThinking && !isStreaming && (
         <div className="flex justify-start">
           <div className="flex gap-2">
-            <div className="flex-shrink-0 mt-1"><TheOrb size={14} mode="thinking" connected /></div>
+            <div className="flex-shrink-0 mt-1"><TheOrb size={14} mode="thinking" connected={isConnected} /></div>
             <div className="flex items-center gap-1.5 px-3.5 py-2.5 bg-feral-assistant border border-feral-border rounded-2xl rounded-bl-sm">
               <span className="thinking-dot" style={{ animationDelay: '0ms' }} />
               <span className="thinking-dot" style={{ animationDelay: '200ms' }} />

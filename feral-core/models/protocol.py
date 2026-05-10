@@ -90,12 +90,22 @@ class ChatRequestPayload(BaseModel):
 
 
 class ChatResponsePayload(BaseModel):
-    """Brain response envelope for phone chat requests."""
+    """Brain response envelope for phone chat requests.
+
+    ``error`` carries the orchestrator failure text on the failure
+    branch and is ``None`` on success. Phase-1.5 truthfulness sweep
+    added it so a chat-only client (one that doesn't track the
+    parallel HUP ``error`` frame) can still surface a real failure
+    string instead of rendering an empty assistant bubble. The
+    daemon_session ``chat_request`` branch sets it to ``None`` on
+    success, the orchestrator's exception text on failure.
+    """
     session_id: str
     text: str
     reply_mode: Literal["stream", "final"] = "final"
     channel: Literal["chat", "vision_ask"] = "chat"
     reply_to: Optional[str] = None
+    error: Optional[str] = None
 
 
 class VoiceSessionStartPayload(BaseModel):

@@ -159,3 +159,85 @@ def test_parse_phone_envelopes_missing_required_fields_raise(msg_type, payload_m
                 "payload": payload_missing_required,
             }
         )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# ChatResponsePayload.error — Phase 1.5 truth-in-status field
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_chat_response_payload_error_field_round_trips_when_set():
+    """The new ``error`` field on ``ChatResponsePayload`` must survive
+    ``parse_message`` so a chat-only client (one that doesn't track
+    the parallel HUP ``error`` frame) can still surface a real failure
+    string. Previously a brain orchestrator exception silently produced
+    ``text=""``; the audit-r7 brief 1 §8 flagged that as a real lie.
+    """
+    msg, parsed = parse_message(
+        {
+            "type": "chat_response",
+            "hup_version": "1.3.0",
+            "ts": 1734369922.123,
+            "payload": {
+                "session_id": "phone-session-1",
+                "text": "",
+                "reply_mode": "final",
+                "channel": "chat",
+                "reply_to": None,
+                "error": "Orchestrator failed: LLM hard fail: budget exceeded",
+            },
+        }
+    )
+    assert msg.type == "chat_response"
+    assert isinstance(parsed, ChatResponsePayload)
+    assert parsed.error == "Orchestrator failed: LLM hard fail: budget exceeded"
+    assert parsed.text == ""
+
+
+def test_chat_response_payload_error_defaults_to_none_on_success():
+    """Success branch: clients that omit the error field must read it
+    back as ``None`` so a healthy turn doesn't carry a false truthy
+    error to the UI.
+    """
+    msg, parsed = parse_message(
+        {
+            "type": "chat_response",
+            "hup_version": "1.3.0",
+            "ts": 1734369922.123,
+            "payload": {
+                "session_id": "phone-session-1",
+                "text": "Done.",
+                "reply_mode": "final",
+                "channel": "chat",
+                "reply_to": None,
+            },
+        }
+    )
+    assert msg.type == "chat_response"
+    assert isinstance(parsed, ChatResponsePayload)
+    assert parsed.error is None
+    assert parsed.text == "Done."
+
+
+def test_chat_response_payload_error_explicit_null_round_trips():
+    """A client that explicitly emits ``error: null`` must round-trip
+    cleanly to ``None`` — pinning the wire-format contract that future
+    schema validators won't reject the explicit-null shape.
+    """
+    msg, parsed = parse_message(
+        {
+            "type": "chat_response",
+            "hup_version": "1.3.0",
+            "ts": 1734369922.123,
+            "payload": {
+                "session_id": "phone-session-1",
+                "text": "ack",
+                "reply_mode": "final",
+                "channel": "chat",
+                "reply_to": None,
+                "error": None,
+            },
+        }
+    )
+    assert isinstance(parsed, ChatResponsePayload)
+    assert parsed.error is None

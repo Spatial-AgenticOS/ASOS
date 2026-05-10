@@ -1,5 +1,6 @@
 """Dashboard, system info, health, and activity endpoints."""
 
+import logging
 import os
 import time
 from fastapi import APIRouter
@@ -9,6 +10,7 @@ from api.state import state
 from config.loader import feral_home
 
 router = APIRouter()
+logger = logging.getLogger("feral.dashboard")
 
 
 @router.get("/api/identity/greeting")
@@ -183,13 +185,29 @@ async def _get_dashboard_data() -> dict:
     # devices, none of them are talking to the brain right now". The
     # previous behaviour conflated these and looked like pairing had
     # silently failed.
+    #
+    # Phase-1 validation pass (Item 6 follow-up): a hard failure of
+    # `pairing_store.list_devices` used to be swallowed into
+    # `paired_rows = []`, which lied about paired_count when the
+    # store was unreachable. We now record the failure into
+    # `paired_unavailable: <str>` on the return dict so the
+    # dashboard can render a real warning instead of silently
+    # claiming zero pairings.
     paired_count = 0
     paired_offline = 0
+    paired_unavailable: str | None = None
     pairing_store = getattr(state, "device_pairing_store", None)
+    paired_rows: list[dict] = []
     if pairing_store is not None and hasattr(pairing_store, "list_devices"):
         try:
             paired_rows = pairing_store.list_devices(include_unclaimed=False) or []
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "device_pairing_store.list_devices failed: %s", exc,
+            )
+            paired_unavailable = (
+                f"{exc.__class__.__name__}: {str(exc)[:200]}"
+            )
             paired_rows = []
         paired_count = len(paired_rows)
         for row in paired_rows:
@@ -238,6 +256,47 @@ async def _get_dashboard_data() -> dict:
             if getattr(ch, 'enabled', False):
                 channel_types.append({"type": ch_id, "connected": getattr(ch, '_running', False)})
 
+    # Sub-device summary — counted from the truth store, not invented.
+    # ``subdevices_total`` is every row we know about (live + stale);
+    # ``subdevices_live`` is only those still inside their heartbeat
+    # window. Phase-1 dashboard binds Home/HubLauncher dots to
+    # ``subdevices_live > 0`` so "Active" never shows for a peripheral
+    # whose phone has been offline for a minute.
+    #
+    # Phase-1.5: read failures are surfaced as
+    # ``subdevices_unavailable: <error_text>`` so the dashboard
+    # renders a real "Sub-device data temporarily unavailable"
+    # warning instead of silently lying that the user has none.
+    subdevices_total = 0
+    subdevices_live = 0
+    subdevices_unavailable: str | None = None
+    subdevice_rows: list[dict] = []
+    subdevice_store = getattr(state, "node_subdevices", None)
+    if subdevice_store is None:
+        subdevices_unavailable = "subdevice store not initialised"
+    else:
+        try:
+            subdevice_rows = subdevice_store.list_all()
+        except Exception as exc:
+            logger.warning("node_subdevices.list_all failed: %s", exc)
+            subdevices_unavailable = (
+                f"{exc.__class__.__name__}: {str(exc)[:200]}"
+            )
+    subdevices_total = len(subdevice_rows)
+    subdevices_live = sum(1 for r in subdevice_rows if r.get("live"))
+
+    # Attach to the matching device row when present so a single
+    # `/api/dashboard` round-trip carries everything Home/HubLauncher
+    # need to render the per-device sub-device chips.
+    if subdevice_rows:
+        sub_by_node: dict[str, list[dict]] = {}
+        for row in subdevice_rows:
+            sub_by_node.setdefault(row["node_id"], []).append(row)
+        for entry in devices_list:
+            nid = entry.get("node_id")
+            if nid and nid in sub_by_node:
+                entry["subdevices"] = sub_by_node[nid]
+
     return {
         # `devices` now includes paired-but-offline rows alongside
         # live ones (each row carries `connected: bool`). The legacy
@@ -249,6 +308,14 @@ async def _get_dashboard_data() -> dict:
         "online_count": len(state.daemons),
         "paired_count": paired_count,
         "paired_offline_count": paired_offline,
+        "subdevices_total": subdevices_total,
+        "subdevices_live": subdevices_live,
+        "subdevices_unavailable": subdevices_unavailable,
+        # Mirrors `subdevices_unavailable` for the paired-pairing
+        # store so the dashboard can render distinct warnings: the
+        # truth-store may be reachable while the pairing store is
+        # not (or vice versa). `null` on the success branch.
+        "paired_unavailable": paired_unavailable,
         "channels": channel_types,
         "session_count": len(state.sessions), "health": latest_health,
         "memory": stats, "skills_count": len(state.skill_registry.skills),

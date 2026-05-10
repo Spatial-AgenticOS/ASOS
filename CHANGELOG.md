@@ -1,10 +1,154 @@
 # Changelog
 
-<!-- feral-version: 2026.5.16 -->
+<!-- feral-version: 2026.5.17 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.17] — Phase 1 truthfulness sweep + node-subdevice truth store
+
+**Scope of this entry**: brain (`feral-core`) + web (`feral-client-v2`)
+only. Companion iOS work for the same Phase-1 sweep ships from the
+private `FERAL-AI/feral-companion-ios` repository on its own cadence
+and is documented in that repo's release notes — the brain CHANGELOG
+intentionally does not list iOS deliverables here so this section
+matches what shipped on PyPI.
+
+### Added
+
+- **Brain `NodeSubdeviceStore`** (`feral-core/memory/node_subdevices.py`).
+  A SQLite-backed truth store keyed by `(node_id, capability)` —
+  the single source of truth on the brain side for "is this
+  peripheral active right now?". Per-row `live` flag is computed
+  against a provenance-specific heartbeat window — **30 s** for
+  `ble`, **300 s** for `cloud`, **60 s** for `host` — so a BLE
+  peripheral row that loses heartbeat for >30 s auto-derates to
+  stale and every consumer of the truth store flips off the
+  pulsing dot in lock-step. Rows are **not** removed on `node_bye`
+  / WS disconnect; the persisted status survives brain restart so
+  the dashboard still has *something* to render between restarts,
+  with liveness enforced by the sweep instead.
+
+- **Sub-device ingestion in `daemon_session`.** Frames matching
+  `device_event` with `event_type` ending in `_status` AND legacy
+  top-level type-bound status frames both land in the truth store
+  via a single `_handle_subdevice_status` helper. Status `ready`
+  / `failed` / `connecting` / `disconnected` strings are
+  preserved across the derate so operators can read why a stale
+  row last reported what it did. **Strict provenance**: an
+  unknown `provenance` value is rejected with HUP error code
+  `1003` so a typo can't silently produce a row that never
+  derates.
+
+- **`GET /api/devices/{node_id}/subdevices`** — full sub-device
+  tree for one node.
+
+- **`subdevices: [...]` on every row of `GET /api/devices/connected`.**
+  The route lists live daemon WebSockets only; sub-device rows ride
+  along for each. Use `/api/dashboard` for paired-but-offline nodes.
+
+- **`subdevices_total` + `subdevices_live` + `subdevices_unavailable`
+  on `/api/dashboard`.** Lets the Home page render a truthful
+  sub-device tile without an extra round-trip. The
+  `subdevices_unavailable` field carries an error string when the
+  truth store can't be read so the UI surfaces a real warning
+  instead of silently displaying empty lists.
+
+- **`subdevice_update` / `subdevice_remove` events on `/v1/session`.**
+  Real-time deltas every time the truth store mutates (ingest,
+  liveness derate, recovery), wrapped as `state_push` like the
+  rest of the brain's broadcast surface. The web `/devices` page
+  AND the Home Subdevices tile both consume them so the dot flips
+  within a few seconds of a link drop instead of waiting for the
+  15 s REST poll. (Naming choice — `subdevice_*` rather than the
+  generic `dashboard_update` from the original Phase-1 spec — has
+  operator sign-off; see PR #80 description.)
+
+### Changed
+
+- **Web Home "Brain" hero stat is now a real binding.** Replaces the
+  hardcoded `<StatusDot tone="live" pulse /> online` literal with a
+  three-state machine driven by the `/v1/session` socket state plus
+  the most recent `/health` + `/api/dashboard` poll outcome:
+  `online` (WS open + both REST endpoints ok), `reconnecting…` (one
+  signal down), `offline` (both down). The previous build claimed
+  "online" even when the brain process was stopped — the lie the
+  audit-r6/r7 truthfulness sweep flagged.
+
+- **Web Flows automation rows bind the dot to `enabled`.** Armed
+  rows show live; paused rows show off; rows that don't carry an
+  `enabled` field render neutral instead of inventing green.
+
+- **Web `/devices` Live pane renders the sub-device tree per node.**
+  Each chip carries a dot tone bound to the row's `live` flag and a
+  hover tooltip surfacing capability, status, provenance,
+  last-seen age, and the heartbeat window — operators can verify
+  the binding without code-reading.
+
+- **Web `HubLauncher` "Pair a device" CTA binds to `paired_count`,
+  not the legacy `device_count`.** The CTA used to re-appear every
+  time all paired phones happened to be offline, telling the user
+  they had nothing paired when they did.
+
+- **Web Vitals (`/health`) source label adds the explicit pipeline
+  qualifier.** A new "Active sources" panel on the Today tab
+  renders one chip per active sub-device with the pipeline label
+  mapped from the capability id (e.g. `whoop_cloud` → `Whoop`,
+  `oura_cloud` → `Oura`). Each chip is bound to the same `live`
+  flag as the rest of the dashboard so the source list never
+  claims a stale pipeline as live.
+
+### Fixed
+
+- **`chat_request` orchestrator failures no longer return silently
+  empty replies** (Phase 1.5). The brain now emits an explicit HUP
+  `error` frame (code `4001`, name `orchestrator_error`) plus a
+  `chat_response` with a new `error: <str | null>` field on its
+  payload. `ChatResponsePayload` carries the new field so any
+  client — strict-error-aware or chat-only — surfaces the real
+  failure instead of an empty assistant bubble.
+
+- **Version coherence** consolidates onto one canonical list:
+  `scripts/sync_versions.py::VERSION_LOCATIONS`. The legacy
+  `scripts/bump_version.py` is now a thin shim that delegates to
+  it; `tests/test_version_consistency.py` walks the canonical
+  list. The shim retains the legacy CLI surface
+  (`python3 scripts/bump_version.py 2026.5.17`) so external runbooks
+  keep working. Audit-r7 brief 8 §11 had flagged the parallel
+  lists as the root cause for the v1-client-fallback CI failure.
+
+### Internal
+
+- New tests:
+  - `feral-core/tests/test_node_subdevices.py` — 11 tests pinning
+    the upsert / forget / liveness-sweep contract.
+  - `feral-core/tests/test_subdevice_ingestion.py` — 8 tests
+    pinning the wire-format (`device_event` + legacy top-level
+    `glasses_status`) ingest contract, including
+    missing-status / missing-node-id / unknown-provenance reject
+    behaviour.
+  - Extended `tests/test_api_devices_connected.py` with 4 new
+    cases for the `subdevices` field + the new endpoint.
+  - Extended `tests/test_daemon_session_phone_branches.py` with
+    a regression test pinning the no-silent-empty-reply contract.
+  - Extended `tests/test_protocol_chat_response_error_field.py`
+    pinning the new `error: Optional[str]` round-trip on
+    `ChatResponsePayload`.
+  - `feral-client-v2/src/__tests__/pages/Home.truthfulness.test.jsx`
+    — pins the new Brain stat binding + Subdevices tile + WS
+    real-time delta on the tile.
+  - `feral-client-v2/src/__tests__/pages/Devices.subdevices.test.jsx`
+    — pins the chip rendering + tooltip + stale derate.
+
+- Audit references: `~/feral-private-docs/audit-r6/01-theora-active-ui-lie.md`,
+  `audit-r6/08-status-truthfulness-audit.md`,
+  `audit-r6/00-phase-1-completion.md`,
+  `audit-r6/00-phase-1.5-placeholder-hunt.md`,
+  `audit-r7/01-brain-architecture.md`,
+  `audit-r7/03-hup-wire-format.md`,
+  `audit-r7/04-web-dashboard.md`,
+  `audit-r7/08-ci-release-pipeline.md`.
 
 ## [2026.5.16] — Demo data ripped out of feral-core
 

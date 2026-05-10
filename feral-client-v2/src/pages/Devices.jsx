@@ -8,6 +8,7 @@ import EmptyState from '../ui/EmptyState';
 import PairDeviceModal from '../components/PairDeviceModal';
 import PerceptionShare from '../components/PerceptionShare';
 import { apiJson, apiFetch } from '../lib/api';
+import { useFeralSocket } from '../hooks/useFeralSocket';
 
 // Labels we refuse to render verbatim — they are placeholders from
 // before commit 5 renamed the pair-QR default. Replaced by a
@@ -25,6 +26,32 @@ function labelFor(row) {
   if (kind) return kind;
   if (shortId) return shortId;
   return 'unnamed pairing';
+}
+
+/**
+ * Build the hover tooltip for a sub-device chip on the Live pane.
+ * Renders the canonical truth fields the brain's NodeSubdeviceStore
+ * exposes — capability, status, provenance, last-seen age, and the
+ * heartbeat window that drives the live↔stale derate. Truthful even
+ * when the row is stale: the user can read why the dot is grey.
+ */
+function subdeviceTooltip(s) {
+  if (!s) return '';
+  const parts = [];
+  parts.push(`${s.capability || 'subdevice'} · ${s.status || 'unknown'}`);
+  if (s.provenance) parts.push(`provenance: ${s.provenance}`);
+  if (typeof s.last_seen === 'number') {
+    const ageS = Math.max(0, (Date.now() / 1000) - s.last_seen);
+    parts.push(`last seen ${ageS < 60 ? `${Math.round(ageS)} s` : `${Math.round(ageS / 60)} min`} ago`);
+  }
+  if (typeof s.liveness_window_s === 'number') {
+    parts.push(`heartbeat window ${Math.round(s.liveness_window_s)} s`);
+  }
+  if (s.attrs && typeof s.attrs === 'object') {
+    if (s.attrs.device_name) parts.push(`device: ${s.attrs.device_name}`);
+    if (s.attrs.battery_level != null) parts.push(`battery: ${s.attrs.battery_level}%`);
+  }
+  return parts.join('\n');
 }
 
 /**
@@ -59,6 +86,8 @@ export default function Devices() {
   //     the next refresh poll won't return it anyway).
   const [pendingPairIds, setPendingPairIds] = useState(() => new Set());
 
+  const socket = useFeralSocket();
+
   const refresh = useCallback(async () => {
     try {
       const [c, p, m] = await Promise.allSettled([
@@ -76,6 +105,39 @@ export default function Devices() {
       setLoading(false);
     }
   }, []);
+
+  // Phase-1 real-time sub-device deltas. The brain emits
+  // `subdevice_update` and `subdevice_remove` over /v1/session every
+  // time the truth store mutates (ingest, liveness derate, recovery).
+  // Without this hook the only way the dashboard would notice was
+  // the 15 s `refresh` interval — long enough for a glasses
+  // disconnect to look "Active" for up to a quarter-minute.
+  useEffect(() => {
+    const unsub = socket.subscribe((msg) => {
+      if (!msg || msg.type !== 'state_push') return;
+      const evt = msg.event;
+      const data = msg.data;
+      if (!data || typeof data !== 'object') return;
+      if (evt === 'subdevice_update') {
+        setConnected((prev) => prev.map((d) => {
+          if (d.node_id !== data.node_id) return d;
+          const others = (d.subdevices || []).filter(
+            (s) => s.capability !== data.capability,
+          );
+          return { ...d, subdevices: [data, ...others] };
+        }));
+      } else if (evt === 'subdevice_remove') {
+        setConnected((prev) => prev.map((d) => {
+          if (d.node_id !== data.node_id) return d;
+          const remaining = (d.subdevices || []).filter(
+            (s) => s.capability !== data.capability,
+          );
+          return { ...d, subdevices: remaining };
+        }));
+      }
+    });
+    return unsub;
+  }, [socket]);
 
   useEffect(() => {
     refresh();
@@ -213,6 +275,33 @@ export default function Devices() {
                     <span className="v2-chip v2-chip--muted" title="This daemon hasn't declared a haptic capability. For Theora wristbands the production path is the iOS FeralNode bridge which drives Veepoo SDK haptic directly.">
                       Haptic: unwired
                     </span>
+                  </div>
+                )}
+                {/* Phase-1: render the brain's truth-store sub-device
+                    tree directly under each connected node. Each chip
+                    binds to the per-row `live` flag so a row whose
+                    last heartbeat is past its provenance window
+                    auto-derates to `off`. */}
+                {Array.isArray(d.subdevices) && d.subdevices.length > 0 && (
+                  <div className="v2-device-caps" style={{ marginTop: 6 }}>
+                    {d.subdevices.map((s, si) => (
+                      <span
+                        key={si}
+                        className="v2-chip"
+                        title={subdeviceTooltip(s)}
+                        data-testid="v2-device-subdevice-chip"
+                      >
+                        <StatusDot
+                          tone={s.live ? 'live' : 'off'}
+                          pulse={s.live}
+                          label={`${s.capability} ${s.live ? 'live' : 'stale'}`}
+                        />
+                        {s.capability}
+                        {s.status && s.status !== 'ready' && (
+                          <span className="v2-chip-suffix"> · {s.status}</span>
+                        )}
+                      </span>
+                    ))}
                   </div>
                 )}
               </Glass>

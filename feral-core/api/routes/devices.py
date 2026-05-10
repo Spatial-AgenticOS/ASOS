@@ -222,30 +222,65 @@ def _describe_device(node_id: str, ws) -> dict:
         "manufacturer": getattr(ws, "_feral_manufacturer", "") or "",
         "model": getattr(ws, "_feral_model", "") or "",
         "status": "connected",
+        "subdevices": _subdevices_for(node_id),
     }
+
+
+def _subdevices_for(node_id: str) -> list[dict]:
+    """Return the list of sub-device records owned by ``node_id``.
+
+    Empty list ONLY when the truth store has no rows for that node.
+    Returns an empty list when the store is unavailable (boot still
+    in flight); a hard read-failure is propagated up to the FastAPI
+    error handler rather than silently swallowed — surfacing the
+    failure beats showing the dashboard an empty tree as if the
+    node had no sub-devices.
+
+    Truth-in-status: callers should consume each entry's ``live``
+    flag, not assume "row exists ⇒ live".
+    """
+    store = getattr(state, "node_subdevices", None)
+    if store is None or not node_id:
+        return []
+    return store.list_for_node(node_id)
 
 
 @router.get("/api/devices/connected")
 async def connected_devices():
-    """List all connected HUP daemons with their real node_type.
+    """List **live HUP daemons only** with their real node_type.
 
-    No more fake ``"desktop"`` / ``"phone"`` placeholders — every entry
-    corresponds to a live WebSocket in ``state.daemons``. Empty list is
-    a valid answer and means "nothing is paired yet", not "we made one up".
+    Selection-bound: every entry corresponds to an open WebSocket in
+    ``state.daemons``. Paired-but-offline nodes are intentionally
+    NOT included here — clients that need them should call
+    ``GET /api/dashboard`` (which surfaces both via ``devices[]`` and
+    paired/offline counts) or ``GET /api/devices/paired``.
+
+    Each row carries ``subdevices: [...]`` — every sub-device the
+    parent node has ever reported, with a per-row ``live`` flag
+    computed from the provenance-specific heartbeat window. A row's
+    ``subdevices`` may legitimately contain rows whose ``live`` is
+    ``false`` even though the node itself is live (e.g. the iPhone
+    is connected but the Theora glasses BLE link dropped).
+
+    Empty list is a valid answer and means "no daemon WebSocket open
+    right now". It does NOT mean "nothing has ever paired".
     """
     if state.session_handoff:
         active = state.session_handoff.get_active_devices() or []
         # Trust the session_handoff view when it exists but sanity-check
-        # the 'type' field isn't a hardcoded "phone" default.
+        # the 'type' field isn't a hardcoded "phone" default and attach
+        # the sub-device tree from our truth store.
         cleaned = []
         for d in active:
             if isinstance(d, dict):
                 # If the upstream handoff code returned an opaque type we
                 # prefer, keep it; otherwise fall back to our inference.
+                nid = d.get("node_id", "")
                 if not d.get("type") or d.get("type") == "phone":
-                    ws = state.daemons.get(d.get("node_id", ""))
+                    ws = state.daemons.get(nid)
                     if ws is not None:
-                        d = {**d, "type": _infer_node_type(d.get("node_id", ""), ws)}
+                        d = {**d, "type": _infer_node_type(nid, ws)}
+                d = {**d, "subdevices": _subdevices_for(nid)}
             cleaned.append(d)
         return {"devices": cleaned}
 
@@ -254,6 +289,29 @@ async def connected_devices():
             _describe_device(nid, ws) for nid, ws in state.daemons.items()
         ]
     }
+
+
+@router.get("/api/devices/{node_id}/subdevices")
+async def list_node_subdevices(node_id: str):
+    """Return the sub-device tree for a single node.
+
+    Used by detail views that don't want the full
+    ``/api/devices/connected`` payload. Returns ``{"subdevices": []}``
+    when the node has never reported any. Each row exposes:
+
+    * ``capability``, ``status`` — the canonical capability id and the
+      domain status the iOS adapter reported (``"ready"`` / ``"failed"``
+      / ``"connecting"`` / etc.).
+    * ``live`` — *true only* when ``now - last_seen`` is inside the
+      provenance heartbeat window. Surfaces consume this for the dot.
+    * ``provenance`` — ``"ble"`` / ``"cloud"`` / ``"host"`` /
+      ``"synthetic"``. Determines the heartbeat window.
+    * ``first_seen`` / ``last_seen`` / ``liveness_window_s`` — operator
+      tooling can render "last seen 12 s ago".
+    * ``attrs`` — adapter-specific extras: ``device_name``, ``rssi``,
+      ``battery_level``, ``reason`` for failures, etc.
+    """
+    return {"subdevices": _subdevices_for(node_id)}
 
 
 @router.post("/api/devices/handoff")

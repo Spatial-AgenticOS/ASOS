@@ -1,296 +1,125 @@
 #!/usr/bin/env python3
-"""FERAL version-bump automation.
+"""DEPRECATED — thin shim that delegates to ``scripts/sync_versions.py``.
 
-One place to change every hard-coded version string in the monorepo. CI
-also imports ``VERSION_LOCATIONS`` from this module to detect drift
-(see ``feral-core/tests/test_version_consistency.py``).
+Historical role: this file used to carry its own
+``VERSION_LOCATIONS`` list parallel to ``scripts/sync_versions.py``.
+The two lists drifted out of sync (audit-r7 brief 8 §11), causing real
+CI failures: a literal lived in only one of the two and the
+``test_single_calver_across_all_files`` gate flagged the other.
 
-Usage:
-    python scripts/bump_version.py 2026.4.9           # rewrite in place
-    python scripts/bump_version.py 2026.4.9 --check   # dry run
+In ``phase-1/truthfulness-sweep`` we consolidated the canonical list
+in ``scripts/sync_versions.py``; this file now exists only so the
+external CLI surface (``python3 scripts/bump_version.py 2026.5.17``)
+remains stable for any docs / runbooks that still cite it.
 
-Every entry in ``VERSION_LOCATIONS`` is a 3-tuple:
+New code MUST use ``scripts/sync_versions.py`` directly:
 
-    (path_relative_to_ASOS, compiled_regex, replacement_template)
+    # bump:
+    # 1. Edit feral-core/pyproject.toml's [project] version literal.
+    # 2. Run:
+    python3 scripts/sync_versions.py --write
 
-The regex MUST expose a named capture group called ``version`` that
-captures exactly the version string (e.g. ``2026.4.16``). The
-replacement template uses ``{version}`` for the new value.
+    # check:
+    python3 scripts/sync_versions.py --check
 
-Missing declared files emit a WARNING and the script continues — this is
-intentional so that partial checkouts (e.g. stripped publish tarballs)
-don't blow up CI.
+This shim:
+
+* Accepts the legacy positional ``<version>`` and ``--check`` flag.
+* Edits ``feral-core/pyproject.toml`` to the requested version (the
+  upstream of ``sync_versions``' source-of-truth resolution chain).
+* Then forwards to ``sync_versions.py`` so every other location is
+  rewritten or checked off the same list.
 """
 from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 ASOS_ROOT = Path(__file__).resolve().parent.parent
-
 CALVER_RE = re.compile(r"^\d{4}\.\d{1,2}\.\d{1,2}$")
-
 VERSION_PATTERN = r"(?P<version>\d{4}\.\d{1,2}\.\d{1,2})"
 
-
-@dataclass(frozen=True)
-class VersionLocation:
-    """A single file × regex × replacement tuple."""
-
-    path: str
-    pattern: re.Pattern
-    replacement: str
-    description: str = ""
+PYPROJECT = ASOS_ROOT / "feral-core" / "pyproject.toml"
+SYNC_SCRIPT = ASOS_ROOT / "scripts" / "sync_versions.py"
 
 
-def _p(raw: str, flags: int = 0) -> re.Pattern:
-    return re.compile(raw, flags)
+def _set_pyproject_version(new_version: str, *, check: bool) -> bool:
+    """Rewrite (or just probe) the [project] version in feral-core/pyproject.toml.
 
-
-VERSION_LOCATIONS: tuple[VersionLocation, ...] = (
-    VersionLocation(
-        path="pyproject.toml",
-        pattern=_p(rf'(?m)^version = "{VERSION_PATTERN}"'),
-        replacement='version = "{version}"',
-        description="[project] version in top-level pyproject.toml",
-    ),
-    VersionLocation(
-        path="feral-core/pyproject.toml",
-        pattern=_p(rf'(?m)^version = "{VERSION_PATTERN}"'),
-        replacement='version = "{version}"',
-        description="[project] version in feral-core pyproject.toml",
-    ),
-    VersionLocation(
-        path="feral-core/version.py",
-        pattern=_p(rf'__version__ = "{VERSION_PATTERN}"'),
-        replacement='__version__ = "{version}"',
-        description="__version__ constant in feral-core/version.py",
-    ),
-    VersionLocation(
-        path="feral-core/services/mdns.py",
-        pattern=_p(rf'"version":\s*"{VERSION_PATTERN}"'),
-        replacement='"version": "{version}"',
-        description='mDNS ServiceInfo properties["version"]',
-    ),
-    VersionLocation(
-        path="feral-core/agents/self_model.py",
-        pattern=_p(rf"version={VERSION_PATTERN}"),
-        replacement="version={version}",
-        description="Runtime: line example in build_runtime_line docstring",
-    ),
-    VersionLocation(
-        path="README.md",
-        pattern=_p(rf"badge/version-{VERSION_PATTERN}-"),
-        replacement="badge/version-{version}-",
-        description="shields.io version badge URL",
-    ),
-    VersionLocation(
-        path="CHANGELOG.md",
-        pattern=_p(rf"<!--\s*feral-version:\s*{VERSION_PATTERN}\s*-->"),
-        replacement="<!-- feral-version: {version} -->",
-        description=(
-            "Non-destructive current-version marker at the top of the "
-            "changelog. Do NOT point this at historical ## [x.y.z] "
-            "section headers."
-        ),
-    ),
-    VersionLocation(
-        path="feral-client/src/components/AppShell.jsx",
-        pattern=_p(rf"'{VERSION_PATTERN}'"),
-        replacement="'{version}'",
-        description="AppShell version fallback literals",
-    ),
-    VersionLocation(
-        path="feral-client/src/pages/Dashboard.jsx",
-        pattern=_p(rf"'{VERSION_PATTERN}'"),
-        replacement="'{version}'",
-        description="Dashboard version fallback literal",
-    ),
-    VersionLocation(
-        path="feral-client/src/pages/SetupWizard.jsx",
-        pattern=_p(rf"FERAL v{VERSION_PATTERN}"),
-        replacement="FERAL v{version}",
-        description="Setup wizard footer version",
-    ),
-    VersionLocation(
-        path="feral-extension/manifest.json",
-        pattern=_p(rf'"version":\s*"{VERSION_PATTERN}"'),
-        replacement='"version": "{version}"',
-        description="Chrome extension manifest version",
-    ),
-    VersionLocation(
-        path="feral-extension/popup.html",
-        pattern=_p(rf"v{VERSION_PATTERN}"),
-        replacement="v{version}",
-        description="Popup footer version label",
-    ),
-    VersionLocation(
-        path="feral-ha-addon/config.json",
-        pattern=_p(rf'"version":\s*"{VERSION_PATTERN}"'),
-        replacement='"version": "{version}"',
-        description="HA add-on config.json version",
-    ),
-    VersionLocation(
-        path="feral-ha-addon/config.yaml",
-        pattern=_p(rf'(?m)^version:\s*"{VERSION_PATTERN}"'),
-        replacement='version: "{version}"',
-        description="HA add-on config.yaml version",
-    ),
-    VersionLocation(
-        path="feral-ha-addon/Dockerfile",
-        pattern=_p(rf"ARG FERAL_VERSION={VERSION_PATTERN}"),
-        replacement="ARG FERAL_VERSION={version}",
-        description="HA add-on Dockerfile FERAL_VERSION build arg",
-    ),
-    VersionLocation(
-        path="feral-ha-addon/UPGRADE.md",
-        pattern=_p(rf"ARG FERAL_VERSION={VERSION_PATTERN}"),
-        replacement="ARG FERAL_VERSION={version}",
-        description="UPGRADE.md FERAL_VERSION example (pin code-block)",
-    ),
-    VersionLocation(
-        path=".github/workflows/ha-addon.yml",
-        pattern=_p(rf'(?m)^(?P<indent>\s*)default:\s*"{VERSION_PATTERN}"'),
-        replacement='{indent}default: "{version}"',
-        description="HA Add-on workflow_dispatch feral_version input default",
-    ),
-    VersionLocation(
-        path=".github/workflows/ha-addon.yml",
-        pattern=_p(rf'(?m)^(?P<indent>\s*)FERAL_VERSION:\s*"{VERSION_PATTERN}"'),
-        replacement='{indent}FERAL_VERSION: "{version}"',
-        description="HA Add-on workflow env default feral-ai PyPI version",
-    ),
-    VersionLocation(
-        path="desktop/package.json",
-        pattern=_p(rf'(?m)^\s*"version":\s*"{VERSION_PATTERN}"'),
-        replacement='"version": "{version}"',
-        description="FERAL desktop npm package version",
-    ),
-    VersionLocation(
-        path="desktop/src-tauri/tauri.conf.json",
-        pattern=_p(rf'(?m)^\s*"version":\s*"{VERSION_PATTERN}"'),
-        replacement='"version": "{version}"',
-        description="FERAL desktop Tauri app version",
-    ),
-    # The Android app under feral-nodes/android-bridge/sample/ tracks its
-    # own version (currently "1.0.0"); it does NOT mirror the brain
-    # CalVer because mobile binaries are released independently. The
-    # entry that was here previously (pointing at the deleted
-    # feral-nodes/android-app/) was removed in 2026.5.8 along with that
-    # tree. If we ever align the mobile + brain CalVer, add the entry
-    # back here.
-)
-
-
-class BumpReport:
-    __slots__ = ("files_changed", "occurrences", "missing", "not_found")
-
-    def __init__(self) -> None:
-        self.files_changed: set[str] = set()
-        self.occurrences: int = 0
-        self.missing: list[str] = []
-        self.not_found: list[str] = []
-
-
-def _apply(
-    text: str, loc: VersionLocation, new_version: str
-) -> tuple[str, list[tuple[str, str]]]:
-    """Return (new_text, [(old, new), ...]) for each replacement made."""
-    replacements: list[tuple[str, str]] = []
-
-    def _sub(match: re.Match) -> str:
-        old_full = match.group(0)
-        old_version = match.group("version")
-        if old_version == new_version:
-            return old_full
-        # Preserve any named groups (e.g. ``indent``) in the replacement
-        # template so bumping does not silently reformat a file.
-        fmt_args = {"version": new_version, **(match.groupdict() or {})}
-        fmt_args.pop("version", None)
-        fmt_args["version"] = new_version
-        replacement_rendered = loc.replacement.format(**fmt_args)
-        replacements.append((old_full, replacement_rendered))
-        return replacement_rendered
-
-    new_text = loc.pattern.sub(_sub, text)
-    return new_text, replacements
-
-
-def bump(new_version: str, *, check: bool = False) -> BumpReport:
-    if not CALVER_RE.match(new_version):
+    Returns True if the file would change / did change. The shim
+    keeps writing to this file directly because ``sync_versions.py``
+    treats it as the upstream of its source-of-truth resolution
+    chain — bumping it is what makes the propagate step downstream do
+    work.
+    """
+    text = PYPROJECT.read_text(encoding="utf-8")
+    pat = re.compile(rf'(?m)^version = "{VERSION_PATTERN}"')
+    m = pat.search(text)
+    if m is None:
         raise SystemExit(
-            f"✗ invalid calver '{new_version}' — expected YYYY.M.D or YYYY.MM.DD"
+            f"could not locate [project] version literal in {PYPROJECT}"
         )
-
-    report = BumpReport()
-    for loc in VERSION_LOCATIONS:
-        abs_path = ASOS_ROOT / loc.path
-        if not abs_path.exists():
-            report.missing.append(loc.path)
-            print(f"  ⚠ WARNING: declared file not found: {loc.path}")
-            continue
-
-        original = abs_path.read_text(encoding="utf-8")
-        new_text, replacements = _apply(original, loc, new_version)
-
-        if not replacements:
-            if not loc.pattern.search(original):
-                report.not_found.append(loc.path)
-                print(
-                    f"  ⚠ WARNING: pattern did not match anything in {loc.path}"
-                    f" ({loc.description})"
-                )
-            continue
-
-        report.files_changed.add(loc.path)
-        report.occurrences += len(replacements)
-        mode = "DRY-RUN" if check else "EDIT"
-        print(f"  [{mode}] {loc.path}")
-        for old_full, new_full in replacements:
-            print(f"      - {old_full}")
-            print(f"      + {new_full}")
-
-        if not check:
-            abs_path.write_text(new_text, encoding="utf-8")
-
-    verb = "would bump" if check else "bumped"
-    print(
-        f"\n✓ {verb} {report.occurrences} occurrence(s) "
-        f"across {len(report.files_changed)} file(s) to {new_version}"
-    )
-    if report.missing:
-        print(f"  ({len(report.missing)} declared file(s) missing; see warnings above)")
-    if report.not_found:
-        print(
-            f"  ({len(report.not_found)} file(s) had no pattern match; "
-            "see warnings above)"
-        )
-    return report
+    if m.group("version") == new_version:
+        return False
+    if check:
+        return True
+    new_text = pat.sub(f'version = "{new_version}"', text, count=1)
+    PYPROJECT.write_text(new_text, encoding="utf-8")
+    return True
 
 
-def main(argv: Iterable[str] | None = None) -> int:
+def _run_sync(*, check: bool) -> int:
+    """Forward to scripts/sync_versions.py with --check or --write."""
+    cmd = [sys.executable, str(SYNC_SCRIPT)]
+    cmd.append("--check" if check else "--write")
+    cmd.append("--no-metadata")
+    return subprocess.call(cmd)
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="bump_version",
-        description="Bump FERAL version strings across the monorepo.",
+        description=(
+            "DEPRECATED shim. Delegates to scripts/sync_versions.py. "
+            "Bumps feral-core/pyproject.toml and then propagates."
+        ),
     )
     parser.add_argument(
         "version",
-        help="New calver version, e.g. 2026.4.9",
+        help="New calver version, e.g. 2026.5.17",
     )
     parser.add_argument(
         "--check",
         action="store_true",
         help="Dry run: print what would change without writing files.",
     )
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    args = parser.parse_args(argv)
 
-    bump(args.version, check=args.check)
-    return 0
+    if not CALVER_RE.match(args.version):
+        raise SystemExit(
+            f"version {args.version!r} does not look like YYYY.M.D"
+        )
+
+    print(
+        "scripts/bump_version.py is a deprecated shim — "
+        "future invocations should use scripts/sync_versions.py "
+        "directly. Forwarding…",
+        file=sys.stderr,
+    )
+
+    changed = _set_pyproject_version(args.version, check=args.check)
+    if args.check:
+        verb = "would set" if changed else "already at"
+        print(f"feral-core/pyproject.toml: {verb} version {args.version}")
+    else:
+        verb = "set" if changed else "already at"
+        print(f"feral-core/pyproject.toml: {verb} version {args.version}")
+
+    return _run_sync(check=args.check)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
