@@ -205,6 +205,14 @@ include = [
     "mcp*", "memory*", "models*", "observability*", "perception*",
     "providers*", "security*", "services*", "skills*", "voice*",
     "webui*", "webui_v2*",
+    # audit-r9 brief #08: `workflows` is a sibling top-level package
+    # (data-only, holds first-party workflow-pack JSONs). Was omitted
+    # from the include list, so it never made it into the wheel and
+    # `default_workflow_packs_dir()` resolved to a non-existent path
+    # at runtime. The brain logged "Workflow-pack directory not found
+    # (skipping)" and the 10 curated packs were silently absent from
+    # `/api/workflow-packs`.
+    "workflows*",
 ]
 # `tests*` was previously included here, which shipped the entire
 # pytest suite inside the wheel. That bloated the install and risked
@@ -215,6 +223,15 @@ exclude = ["tests*"]
 [tool.setuptools.package-data]
 "skills.manifests" = ["*.json"]
 "config" = ["*.yaml", "*.yml"]
+# audit-r9 brief #08: ship the first-party persona + workflow-pack
+# JSON manifests in the wheel. Without these entries, `pip install
+# feral-ai` produced an installation where `default_personas_dir()`
+# and `default_workflow_packs_dir()` pointed to non-existent paths
+# (the loaders politely skipped, hiding the missing data behind an
+# INFO log). The dev tree had the JSONs all along — they just never
+# made it into the published wheel.
+"agents.personas" = ["*.json", "*.md"]
+"workflows" = ["*.json", "*.md"]
 "webui" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json"]
 "webui.assets" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json", "*.map"]
 # v2 ambient-OS bundle — the wheel MUST carry these or pip-installed

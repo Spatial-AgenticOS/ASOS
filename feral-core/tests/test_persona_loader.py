@@ -92,3 +92,34 @@ def test_loader_skips_malformed_manifests(tmp_path: Path):
 def test_loader_returns_empty_dict_when_directory_missing(tmp_path: Path):
     assert load_personas(tmp_path / "does_not_exist") == {}
     assert load_workflow_packs(tmp_path / "does_not_exist") == {}
+
+
+def test_personas_dir_env_var_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Audit-r9 brief #08: `$FERAL_PERSONAS_DIR` overrides the default
+    search so operators with custom installs can point to a live JSON
+    directory without rebuilding the wheel."""
+    custom = tmp_path / "custom-personas"
+    custom.mkdir()
+    monkeypatch.setenv("FERAL_PERSONAS_DIR", str(custom))
+    assert default_personas_dir() == custom
+
+
+def test_workflows_dir_env_var_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    custom = tmp_path / "custom-workflows"
+    custom.mkdir()
+    monkeypatch.setenv("FERAL_WORKFLOWS_DIR", str(custom))
+    assert default_workflow_packs_dir() == custom
+
+
+def test_env_var_override_falls_back_when_path_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A bad env-var value must not break boot — the loader falls back
+    to the install/repo defaults rather than returning a non-existent
+    path that the caller has to special-case."""
+    monkeypatch.setenv("FERAL_PERSONAS_DIR", str(tmp_path / "does-not-exist"))
+    result = default_personas_dir()
+    assert result.is_dir(), (
+        "Expected fallback to dev-tree personas/ when env-var path missing; "
+        f"got {result}"
+    )

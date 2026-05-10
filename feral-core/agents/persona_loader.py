@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -135,11 +136,74 @@ def load_workflow_packs(directory: Path | str) -> dict[str, WorkflowPackManifest
     return result
 
 
+def _resolve_data_dir(*, env_var: str, install_relative: Path, repo_relative: str) -> Path:
+    """Locate a data directory across the three install topologies the
+    brain runs in:
+
+    1. **Env-var override** (``env_var``). Highest priority. Operators
+       on custom installs (e.g. running from a dev checkout but
+       pip-installed elsewhere) set this to point to the live JSONs.
+    2. **Install-relative path** (``install_relative``) — the wheel /
+       editable layout where the JSONs ship as `package-data` next to
+       the loader module.
+    3. **Repo-relative fallback** (``<repo_root>/<repo_relative>``)
+       — when running directly from source without `pip install`
+       (e.g. `python -m api.server` from `feral-core/`). Walks up from
+       this file until a directory matching `repo_relative` exists.
+
+    Returns the first existing path; if none exist, returns the
+    install-relative candidate so the "directory not found (skipping)"
+    log identifies the wheel layout explicitly.
+    """
+    override = os.environ.get(env_var)
+    if override:
+        candidate = Path(override).expanduser()
+        if candidate.is_dir():
+            return candidate
+        logger.warning(
+            "%s=%s does not exist; falling back to default search.",
+            env_var, override,
+        )
+
+    if install_relative.is_dir():
+        return install_relative
+
+    here = Path(__file__).resolve()
+    for ancestor in here.parents:
+        candidate = ancestor / repo_relative
+        if candidate.is_dir():
+            return candidate
+
+    return install_relative
+
+
 def default_personas_dir() -> Path:
-    """Canonical first-party personas directory."""
-    return Path(__file__).resolve().parent / "personas"
+    """Canonical first-party personas directory.
+
+    Search order (audit-r9 brief #08):
+      1. ``$FERAL_PERSONAS_DIR`` env-var override.
+      2. ``<persona_loader>.parent/personas`` — wheel / editable install.
+      3. ``<repo_root>/agents/personas`` — direct-from-source fallback.
+    """
+    here = Path(__file__).resolve()
+    return _resolve_data_dir(
+        env_var="FERAL_PERSONAS_DIR",
+        install_relative=here.parent / "personas",
+        repo_relative="agents/personas",
+    )
 
 
 def default_workflow_packs_dir() -> Path:
-    """Canonical first-party workflow packs directory."""
-    return Path(__file__).resolve().parents[1] / "workflows"
+    """Canonical first-party workflow packs directory.
+
+    Search order (audit-r9 brief #08):
+      1. ``$FERAL_WORKFLOWS_DIR`` env-var override.
+      2. ``<persona_loader>.parents[1]/workflows`` — wheel / editable install.
+      3. ``<repo_root>/workflows`` — direct-from-source fallback.
+    """
+    here = Path(__file__).resolve()
+    return _resolve_data_dir(
+        env_var="FERAL_WORKFLOWS_DIR",
+        install_relative=here.parents[1] / "workflows",
+        repo_relative="workflows",
+    )
