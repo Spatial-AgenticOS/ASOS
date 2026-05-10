@@ -34,6 +34,18 @@ from typing import Any, Callable, Awaitable, Optional
 logger = logging.getLogger("feral.proactive")
 
 
+# Module-level constant — single source of truth for "is this
+# perception-frame sample fresh enough to drive a real-time alert?"
+# Operator report 2026-05-09 (rounds 1-3): without this gate, stale
+# Apple HealthKit samples (HR=115 from a workout 4h earlier) fired
+# `hr_elevated`, `spo2_low`, AND `baseline_hr` as if they were
+# real-time. Two minutes is enough for genuine W300 / HealthKit polls
+# but short enough to drop a HealthKit "last recorded" reading from
+# hours ago. Promoted to module level so all health-trigger sections
+# of `_evaluate` consult the same window.
+_FRESH_WINDOW_S = 120.0
+
+
 class Priority(Enum):
     CRITICAL = 4    # health emergency, urgent calendar
     IMPORTANT = 3   # meeting in 10 min, stress detected
@@ -216,8 +228,11 @@ class ProactiveEngine:
         #      shouldn't drive a real-time notification.
         # The source is surfaced in the body so the user knows where
         # the reading came from. Pinned by
-        # tests/test_proactive_freshness_gate.py.
-        FRESH_WINDOW_S = 120.0
+        # tests/test_proactive_freshness_gate.py. The same constant is
+        # also consulted by the Baseline Anomaly section below
+        # (`baseline_hr`) — operator report round 3 caught that
+        # trigger firing on stale data without a freshness gate.
+        FRESH_WINDOW_S = _FRESH_WINDOW_S
         for frame in frames:
             hr_age = (now - getattr(frame, "heart_rate_sample_ts", 0.0)) if getattr(frame, "heart_rate_sample_ts", 0.0) > 0 else float("inf")
             spo2_age = (now - getattr(frame, "spo2_sample_ts", 0.0)) if getattr(frame, "spo2_sample_ts", 0.0) > 0 else float("inf")
@@ -356,7 +371,21 @@ class ProactiveEngine:
         if self._baseline:
             try:
                 for frame in frames:
-                    if frame.heart_rate > 0:
+                    # Freshness gate (operator report 2026-05-09 round 3):
+                    # `baseline_hr` was firing "Heart Rate Anomaly:
+                    # hr_resting is 54.0 below baseline 110.6" while
+                    # the W300 was disconnected — same root cause as
+                    # `hr_elevated`: the trigger read `frame.heart_rate`
+                    # without checking when the sample was taken. Gate
+                    # on the same FRESH_WINDOW_S as elsewhere in
+                    # _evaluate; reuse the same `now` (declared at top
+                    # of method).
+                    hr_age_baseline = (
+                        (now - getattr(frame, "heart_rate_sample_ts", 0.0))
+                        if getattr(frame, "heart_rate_sample_ts", 0.0) > 0
+                        else float("inf")
+                    )
+                    if frame.heart_rate > 0 and hr_age_baseline <= FRESH_WINDOW_S:
                         alert = self._baseline.check_anomaly(
                             "hr_resting", frame.heart_rate
                         )

@@ -16,9 +16,16 @@ class TestPerceptionFrame:
         assert ctx == "No sensor data available."
 
     def test_system_context_with_sensors(self):
+        # Freshness contract (operator report 2026-05-09 round 3): HR
+        # / SpO2 are now suppressed from LLM context unless the frame
+        # carries a fresh `*_sample_ts`. Tests that exercise the
+        # "with sensors" path must mirror what live senders set.
+        import time as _t
         frame = PerceptionFrame(
             heart_rate=85,
+            heart_rate_sample_ts=_t.time() - 5.0,
             spo2_pct=98,
+            spo2_sample_ts=_t.time() - 5.0,
             activity_state="walking",
             ambient_light_lux=500,
             battery_pct=75,
@@ -31,12 +38,23 @@ class TestPerceptionFrame:
         assert "Battery=75%" in ctx
 
     def test_system_context_high_hr_alert(self):
-        frame = PerceptionFrame(heart_rate=155)
+        # Adaptive hint must gate on freshness — see
+        # tests/test_perception_context_freshness.py for the matched
+        # stale case that MUST suppress this hint.
+        import time as _t
+        frame = PerceptionFrame(
+            heart_rate=155,
+            heart_rate_sample_ts=_t.time() - 5.0,
+        )
         ctx = frame.to_system_context()
         assert "critically high" in ctx.lower()
 
     def test_system_context_elevated_hr(self):
-        frame = PerceptionFrame(heart_rate=110)
+        import time as _t
+        frame = PerceptionFrame(
+            heart_rate=110,
+            heart_rate_sample_ts=_t.time() - 5.0,
+        )
         ctx = frame.to_system_context()
         assert "elevated" in ctx.lower()
 

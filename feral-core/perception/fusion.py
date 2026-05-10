@@ -28,6 +28,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger("feral.perception")
 
 
+# Same window proactive engine uses; documented in
+# `PerceptionFrame.to_system_context` docstring. Vital readings older
+# than this drop out of the LLM context (or get tagged `(stale, …)`)
+# so the model never quotes a stale Apple HealthKit value as live.
+_CONTEXT_FRESH_S = 120.0
+
+
 @dataclass
 class PerceptionFrame:
     """
@@ -80,15 +87,52 @@ class PerceptionFrame:
         """
         Serialize into a compact LLM-injectable context block.
         Only includes non-empty fields to minimize token usage.
+
+        Freshness contract (operator report 2026-05-09 round 3): when
+        the user asked "What's my heart rate?" the assistant generated
+        a markdown table claiming "HR: 115 bpm — Elevated, SpO2: 93% —
+        Normal". The numbers were real Apple HealthKit reads from
+        hours earlier; the LLM treated them as current because this
+        method injected ``Sensors: HR=115bpm | SpO2=93%`` into every
+        prompt without saying when the sample was taken. Now:
+
+          * Vitals readings within ``_CONTEXT_FRESH_S`` (default 120s
+            of the frame's `*_sample_ts`) appear plain.
+          * Older readings appear with `(stale, Xs ago)` suffix so the
+            model knows not to quote them as live.
+          * Readings with `*_sample_ts == 0.0` (sender never plumbed
+            freshness) are SUPPRESSED entirely — same defensive
+            default as the proactive freshness gate.
+
+        Pinned by ``tests/test_perception_context_freshness.py``.
         """
         sections = []
+        now = time.time()
 
-        # Sensor block
         sensor_parts = []
+        # Heart rate — gate on freshness to prevent the LLM from
+        # treating a stale Apple HealthKit reading as real-time.
         if self.heart_rate:
-            sensor_parts.append(f"HR={self.heart_rate}bpm")
+            hr_ts = float(getattr(self, "heart_rate_sample_ts", 0.0) or 0.0)
+            if hr_ts > 0:
+                hr_age = now - hr_ts
+                if hr_age <= _CONTEXT_FRESH_S:
+                    sensor_parts.append(f"HR={self.heart_rate}bpm")
+                else:
+                    sensor_parts.append(
+                        f"HR={self.heart_rate}bpm (stale, {int(hr_age)}s ago — do NOT report as current)"
+                    )
+            # else: sample_ts unset → suppress to avoid hallucination.
         if self.spo2_pct:
-            sensor_parts.append(f"SpO2={self.spo2_pct}%")
+            spo2_ts = float(getattr(self, "spo2_sample_ts", 0.0) or 0.0)
+            if spo2_ts > 0:
+                spo2_age = now - spo2_ts
+                if spo2_age <= _CONTEXT_FRESH_S:
+                    sensor_parts.append(f"SpO2={self.spo2_pct}%")
+                else:
+                    sensor_parts.append(
+                        f"SpO2={self.spo2_pct}% (stale, {int(spo2_age)}s ago — do NOT report as current)"
+                    )
         if self.skin_temperature_c:
             sensor_parts.append(f"Temp={self.skin_temperature_c}°C")
         if self.activity_state and self.activity_state != "unknown":
@@ -100,10 +144,16 @@ class PerceptionFrame:
         if sensor_parts:
             sections.append("Sensors: " + " | ".join(sensor_parts))
 
-        # Adaptive behavior hints
-        if self.heart_rate > 140:
+        # Adaptive behavior hints — only fire on FRESH HR; otherwise
+        # they encourage the model to assume an elevated state that
+        # may be hours old.
+        hr_fresh = self.heart_rate and (
+            float(getattr(self, "heart_rate_sample_ts", 0.0) or 0.0) > 0
+            and (now - float(self.heart_rate_sample_ts)) <= _CONTEXT_FRESH_S
+        )
+        if hr_fresh and self.heart_rate > 140:
             sections.append("USER ALERT: Heart rate critically high. Be extremely concise.")
-        elif self.heart_rate > 100:
+        elif hr_fresh and self.heart_rate > 100:
             sections.append("User's heart rate is elevated. Keep responses brief.")
 
         # Head pose
