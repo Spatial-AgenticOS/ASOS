@@ -1,10 +1,14 @@
 # Changelog
 
-<!-- feral-version: 2026.5.18 -->
+<!-- feral-version: 2026.5.19 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.19] — Audit-r9 round (vitals truth, mDNS, calendar in prompt, shared session)
+
+**Scope of this entry**: brain (`feral-core`). Companion iOS work for the same audit (W300 → local HealthStore + iOS shared session) ships from `FERAL-AI/feral-companion-ios` PRs #3 + #4 on its own cadence.
 
 ### Fixed (audit-r9 — phone + web share one chat thread + working memory)
 
