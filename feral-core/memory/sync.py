@@ -308,6 +308,9 @@ class SyncEngine:
         self._running = False
         self._zeroconf = None
         self._service_info = None
+        # Audit-r9: track the browser handle so `stop_discovery` can
+        # cancel it on shutdown (Async path needs `async_cancel`).
+        self._service_browser = None
 
         # Per-peer asyncio locks so a chaos-killed handshake retry can't
         # interleave with a fresh outbound sync against the same peer.
@@ -506,16 +509,36 @@ class SyncEngine:
                 logger.warning("Invalid static peer entry: %s (expected host:port)", entry)
 
     async def start_discovery(self):
-        """Start mDNS service advertisement and peer discovery, with static peer fallback."""
+        """Start mDNS service advertisement and peer discovery, with static peer fallback.
+
+        Audit-r9 brief #08 fix: previously this method ran sync
+        ``zeroconf.Zeroconf()`` + ``register_service()`` +
+        ``ServiceBrowser(...)`` + ``zc.get_service_info(...)`` directly
+        on the asyncio loop. Even on a clean LAN those calls block long
+        enough for python-zeroconf to raise ``EventLoopBlocked``, which
+        then surfaced as ``mDNS discovery skipped: EventLoopBlocked()``
+        on every brain boot. Mirror the pattern in ``services/mdns.py``
+        (``advertise_brain_async``): prefer ``zeroconf.asyncio.AsyncZeroconf``
+        when available so the coroutine yields during I/O; fall back to
+        ``loop.run_in_executor`` for the sync API so the loop still
+        stays responsive on older zeroconf installs.
+        """
         mdns_ok = False
         try:
-            from zeroconf import Zeroconf, ServiceBrowser, ServiceInfo
             import socket
+            from zeroconf import ServiceInfo
 
-            self._zeroconf = Zeroconf()
+            try:
+                from zeroconf.asyncio import (
+                    AsyncZeroconf,
+                    AsyncServiceBrowser,
+                    AsyncServiceInfo,
+                )
+                have_async = True
+            except ImportError:
+                have_async = False
 
             ip = self._get_lan_ip()
-
             self._service_info = ServiceInfo(
                 SERVICE_TYPE,
                 f"feral-{self.node_id}.{SERVICE_TYPE}",
@@ -527,26 +550,25 @@ class SyncEngine:
                 },
             )
 
-            self._zeroconf.register_service(self._service_info)
-            logger.info(f"mDNS service registered: {self.node_id} at {ip}:{SYNC_PORT}")
+            engine = self
 
             class PeerListener:
-                def __init__(self, engine: SyncEngine):
-                    self.engine = engine
+                def __init__(self):
+                    pass
 
+                # Sync-API listener: used when AsyncServiceBrowser is
+                # unavailable. Critically, `zc.get_service_info(...)`
+                # is a blocking call; we offload it to a thread via
+                # asyncio.run_coroutine_threadsafe so the listener
+                # callback (which runs on a zeroconf-internal thread)
+                # never blocks the asyncio loop.
                 def add_service(self, zc, type_, name):
-                    info = zc.get_service_info(type_, name)
-                    if info and info.properties:
-                        peer_id = info.properties.get(b"node_id", b"").decode()
-                        if peer_id and peer_id != self.engine.node_id:
-                            peer_addr = socket.inet_ntoa(info.addresses[0]) if info.addresses else ""
-                            self.engine._peers[peer_id] = {
-                                "address": peer_addr,
-                                "port": info.port,
-                                "discovered_at": time.time(),
-                                "source": "mdns",
-                            }
-                            logger.info(f"Discovered peer: {peer_id} at {peer_addr}:{info.port}")
+                    try:
+                        info = zc.get_service_info(type_, name)
+                    except Exception as exc:
+                        logger.warning("mDNS get_service_info failed for %s: %s", name, exc)
+                        return
+                    self._record(info)
 
                 def remove_service(self, zc, type_, name):
                     pass
@@ -554,7 +576,89 @@ class SyncEngine:
                 def update_service(self, zc, type_, name):
                     pass
 
-            ServiceBrowser(self._zeroconf, SERVICE_TYPE, PeerListener(self))
+                def _record(self, info):
+                    if info and info.properties:
+                        peer_id = info.properties.get(b"node_id", b"").decode()
+                        if peer_id and peer_id != engine.node_id:
+                            peer_addr = (
+                                socket.inet_ntoa(info.addresses[0])
+                                if info.addresses else ""
+                            )
+                            engine._peers[peer_id] = {
+                                "address": peer_addr,
+                                "port": info.port,
+                                "discovered_at": time.time(),
+                                "source": "mdns",
+                            }
+                            logger.info(
+                                "Discovered peer: %s at %s:%d",
+                                peer_id, peer_addr, info.port,
+                            )
+
+            class AsyncPeerListener(PeerListener):
+                # Async-API listener: zeroconf calls back via
+                # `add_service` on an asyncio task. We resolve the
+                # service info via the async API so the loop stays
+                # responsive even on slow networks.
+                def add_service(self, zc, type_, name):
+                    asyncio.create_task(self._async_resolve(zc, type_, name))
+
+                async def _async_resolve(self, zc, type_, name):
+                    # `zc` here is the inner sync `Zeroconf` instance
+                    # that `AsyncServiceBrowser` passes to handler
+                    # callbacks. `AsyncServiceInfo.async_request` takes
+                    # that Zeroconf directly.
+                    try:
+                        info = AsyncServiceInfo(type_, name)
+                        ok = await info.async_request(zc, 3000)
+                        if ok:
+                            self._record(info)
+                    except Exception as exc:
+                        logger.warning(
+                            "mDNS async resolve failed for %s: %s", name, exc,
+                        )
+
+            if have_async:
+                self._zeroconf = AsyncZeroconf()
+                async_info = AsyncServiceInfo(
+                    self._service_info.type,
+                    self._service_info.name,
+                    addresses=list(self._service_info.addresses),
+                    port=self._service_info.port,
+                    properties=self._service_info.properties,
+                )
+                await self._zeroconf.async_register_service(async_info)
+                logger.info(
+                    "mDNS service registered (async): %s at %s:%d",
+                    self.node_id, ip, SYNC_PORT,
+                )
+                self._service_browser = AsyncServiceBrowser(
+                    self._zeroconf.zeroconf,
+                    SERVICE_TYPE,
+                    handlers=AsyncPeerListener(),
+                )
+            else:
+                # Sync zeroconf via executor — the registration call
+                # itself blocks for ~100-500ms while it sends gratuitous
+                # announcements, so off-load it.
+                from zeroconf import Zeroconf, ServiceBrowser
+
+                loop = asyncio.get_running_loop()
+
+                def _sync_register():
+                    zc = Zeroconf()
+                    zc.register_service(self._service_info)
+                    return zc
+
+                self._zeroconf = await loop.run_in_executor(None, _sync_register)
+                logger.info(
+                    "mDNS service registered: %s at %s:%d",
+                    self.node_id, ip, SYNC_PORT,
+                )
+                self._service_browser = ServiceBrowser(
+                    self._zeroconf, SERVICE_TYPE, PeerListener(),
+                )
+
             mdns_ok = True
             self._running = True
 
@@ -600,22 +704,45 @@ class SyncEngine:
     async def stop_discovery(self):
         """Tear down mDNS registration without blocking the event loop.
 
-        A7 — Pre-fix, ``unregister_service`` / ``close`` ran inline on
-        the loop thread during FastAPI shutdown and triggered
-        ``zeroconf.EventLoopBlocked``. We now prefer ``AsyncZeroconf``
-        when the underlying handle exposes it (the instance we open on
-        ``start_discovery`` is still the sync ``Zeroconf`` class, so we
-        offload to a worker thread via ``asyncio.to_thread`` — same
-        non-blocking strategy used by ``services/mdns.py``).
+        Audit-r9: now `start_discovery` may have produced either a sync
+        ``Zeroconf`` (older installs) or an ``AsyncZeroconf``. Detect
+        which one and use the appropriate close path; both run via
+        ``asyncio.to_thread`` / native await so the FastAPI shutdown
+        coroutine never blocks the loop.
         """
         self._running = False
         zc = self._zeroconf
         info = self._service_info
+        browser = self._service_browser
         self._zeroconf = None
         self._service_info = None
+        self._service_browser = None
         if zc is None:
             return
 
+        # Async path — `AsyncZeroconf` exposes `async_unregister_all_services`
+        # and `async_close`. Browser cleanup is async too.
+        if hasattr(zc, "async_close"):
+            try:
+                if browser is not None and hasattr(browser, "async_cancel"):
+                    try:
+                        await asyncio.wait_for(browser.async_cancel(), timeout=2.0)
+                    except Exception as exc:
+                        logger.debug("SyncEngine.stop_discovery browser cancel: %s", exc)
+                try:
+                    await asyncio.wait_for(
+                        zc.async_unregister_all_services(), timeout=2.0,
+                    )
+                except Exception as exc:
+                    logger.debug("SyncEngine.stop_discovery unregister: %s", exc)
+                await asyncio.wait_for(zc.async_close(), timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning("SyncEngine.stop_discovery: AsyncZeroconf close timed out")
+            except Exception as exc:
+                logger.debug("SyncEngine.stop_discovery: %s", exc)
+            return
+
+        # Sync path — offload to worker thread.
         def _sync_close():
             try:
                 if info is not None:

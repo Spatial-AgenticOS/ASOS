@@ -6,6 +6,24 @@ All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+### Fixed (audit-r9 H1 — mDNS `EventLoopBlocked` on every brain boot)
+
+- **`SyncEngine.start_discovery` no longer blocks the asyncio loop.**
+  Previously this method ran sync `zeroconf.Zeroconf()` +
+  `register_service()` + `ServiceBrowser(...)` directly on the loop.
+  Even on a clean LAN those calls blocked long enough for
+  `python-zeroconf` to raise `EventLoopBlocked`, surfacing as
+  `mDNS discovery skipped: EventLoopBlocked()` on every boot. Mirrors
+  the pattern in `services/mdns.py` (`advertise_brain_async`): prefers
+  `zeroconf.asyncio.AsyncZeroconf` + `AsyncServiceBrowser` when
+  available; falls back to `loop.run_in_executor` for the sync API on
+  older zeroconf installs. `stop_discovery` now also handles both
+  paths via `async_close` / `async_unregister_all_services` for the
+  async handle. Pinned by 2 new tests in
+  `tests/test_sync_engine_start_discovery_no_block.py` that monkeypatch
+  zeroconf with a 400 ms blocking stub and assert the heartbeat watcher
+  never sees a >500 ms loop gap.
+
 ### Fixed (audit-r9 brief #08 — boot-time skip warnings)
 
 - **First-party persona + workflow-pack JSONs missing from the wheel.**
