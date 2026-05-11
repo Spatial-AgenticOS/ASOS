@@ -832,7 +832,18 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
         await ws.close(code=4001, reason="Unauthorized")
         return
 
-    session_id = str(uuid4())
+    # Audit-r9 fix — operator: "the chat and memory should be the same
+    # for my phone chat and the webui for feral brain". The web socket
+    # used to mint a fresh `uuid4()` per connection, which split
+    # `Orchestrator.conversation_history[session_id]` per WebSocket
+    # AND per surface (phone path uses `chat_request` with its own id
+    # at line 1486). Default to the per-install `primary_session_id`
+    # so a single-user brain shares one conversation thread + working
+    # memory across web tabs AND iOS chat. Multi-thread / "new chat"
+    # is now an explicit client opt-in (pass `?session_id=...` on the
+    # WebSocket query string).
+    requested_sid = ws.query_params.get("session_id", "").strip() if hasattr(ws, "query_params") else ""
+    session_id = requested_sid or getattr(state, "primary_session_id", "") or str(uuid4())
     state.sessions[session_id] = ws
     logger.info(f"Client connected: {session_id}")
 
@@ -1483,7 +1494,26 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 channel = payload_dict.get("channel", "chat")
                 reply_mode = payload_dict.get("reply_mode", "final")
                 reply_to = payload_dict.get("reply_to")
-                target_sid = payload_dict.get("session_id", "") or f"phone-{node_id or paired_device_id or 'session'}"
+                # Audit-r9 fix — share conversation thread with web by
+                # default. Resolution order:
+                #   1. Explicit `session_id` from the phone payload
+                #      (e.g. iOS "new chat" button picks its own id).
+                #   2. `state.primary_session_id` — the per-install
+                #      shared id used by `/v1/session` too, so phone +
+                #      web see the same `conversation_history` +
+                #      working memory.
+                #   3. Legacy `phone-{node_id}` — only as a final
+                #      fallback if the brain hasn't successfully
+                #      minted a primary id (filesystem error). Without
+                #      this, the operator's "iOS chat has no idea
+                #      about web events" bug was caused by the phone
+                #      thread being completely partitioned from web's
+                #      thread.
+                target_sid = (
+                    payload_dict.get("session_id", "").strip()
+                    or getattr(state, "primary_session_id", "")
+                    or f"phone-{node_id or paired_device_id or 'session'}"
+                )
 
                 if not text or not state.orchestrator:
                     _record_phone_envelope(

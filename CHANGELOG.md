@@ -6,6 +6,45 @@ All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+### Fixed (audit-r9 — phone + web share one chat thread + working memory)
+
+- **`state.primary_session_id` — per-install shared chat session.**
+  Operator report 2026-05-10:
+  > "the chat and memory should be the same for my phone chat and the
+  >  webui for feral brain on the local brain right?"
+
+  Yes. Until this fix, web `/v1/session` minted `uuid4()` per
+  WebSocket connection (`api/server.py:835`) and phone `chat_request`
+  defaulted to `phone-{node_id}` (`api/server.py:1486`). So
+  `Orchestrator.conversation_history[session_id]` and the
+  working-memory deque were partitioned per-surface AND per-browser-tab.
+  Even reloading the web tab created a fresh thread.
+
+  Now `BrainState` mints + persists `primary_session_id` at
+  `<feral_data_home>/primary_session_id` on first boot. Both web and
+  phone default to it when the client doesn't pass an explicit
+  `session_id`. Multi-thread / "new chat" is now an explicit
+  client opt-in (web: `?session_id=...` query param; iOS: set
+  `BrainClient.chatSessionId` before the next send).
+
+  Companion iOS (PR in `feral-companion-ios`): `BrainClient.chatSessionId`
+  now defaults to **empty string** so the brain resolver picks
+  `primary_session_id`. Existing `chat_response` handler at
+  `BrainClient.swift:388-390` adopts the brain's echoed id so all
+  subsequent turns thread on the same shared session.
+
+  New `GET /api/sessions/primary` endpoint exposes the id so any
+  client can branch off it intentionally.
+
+  Env override `FERAL_PRIMARY_SESSION_ID` for tests / integration
+  runs that want a deterministic id. Filesystem failure falls back
+  to a process-lifetime ephemeral id rather than crashing boot.
+
+  Pinned by 5 new tests in `tests/test_primary_session_id.py`:
+  persistence across reboot, env override short-circuits file,
+  filesystem-failure fallback, phone resolver picks primary, web
+  resolver picks primary.
+
 ### Fixed (audit-r9 brief #08 — boot-time skip warnings)
 
 - **First-party persona + workflow-pack JSONs missing from the wheel.**
