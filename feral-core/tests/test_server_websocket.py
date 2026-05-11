@@ -41,6 +41,12 @@ def _make_ws_mock_state() -> MagicMock:
     s.sessions = {}
     s.daemons = {}
     s.devices = {}
+    # Audit-r9: web `/v1/session` now resolves session_id from
+    # `state.primary_session_id` (or query param). MagicMock would
+    # return a MagicMock object, which fails Pydantic string
+    # validation in the FeralMessage schema. Use an explicit empty
+    # string so the legacy `str(uuid4())` fallback fires in tests.
+    s.primary_session_id = ""
 
     s.init = AsyncMock(return_value=None)
     s.cron_service = None
