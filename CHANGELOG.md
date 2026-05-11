@@ -6,6 +6,28 @@ All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+### Fixed (audit-r9 brief #08 — boot-time skip warnings)
+
+- **First-party persona + workflow-pack JSONs missing from the wheel.**
+  `agents/personas/*.json` (10 personas) and `workflows/*.json` (10
+  packs) lived in the dev tree but never made it into `pip install
+  feral-ai` — the operator's brain logged
+  `Persona directory not found: <site-packages>/agents/personas (skipping)`
+  and `Workflow-pack directory not found ... (skipping)` on every boot.
+  Fix: (1) add `__init__.py` to both directories so setuptools
+  recognises them as packages, (2) add `agents.personas` and
+  `workflows` to `[tool.setuptools.package-data]` so the JSONs ship,
+  (3) add `workflows*` to `[tool.setuptools.packages.find].include`
+  so the package is built at all.
+- **`default_personas_dir()` / `default_workflow_packs_dir()` now do
+  layered resolution.** Search order: (1) `$FERAL_PERSONAS_DIR` /
+  `$FERAL_WORKFLOWS_DIR` env-var override, (2) install-relative path
+  (wheel / editable install layout), (3) repo-relative fallback by
+  walking up from the loader file. So operators on a custom install
+  can point to a live JSON dir without rebuilding, and direct
+  `python -m api.server` runs from `feral-core/` without `pip install`
+  also work. Pinned by 3 new tests in `tests/test_persona_loader.py`.
+
 ### Fixed (audit-r8 brief #07 — model leak root cause)
 
 - **Provider catalog singleton drift.** `BrainState.init` constructed
