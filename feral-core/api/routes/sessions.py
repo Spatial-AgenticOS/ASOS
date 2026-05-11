@@ -31,6 +31,32 @@ logger = logging.getLogger("feral.api.sessions")
 router = APIRouter(tags=["sessions"])
 
 
+@router.get("/api/sessions/primary")
+async def get_primary_session():
+    """Return the per-install shared chat session id.
+
+    Audit-r9 fix — operator: "the chat and memory should be the same
+    for my phone chat and the webui for feral brain on the local brain".
+
+    Both `/v1/session` (web WebSocket) and HUP `chat_request` (phone
+    nodes) now default to `state.primary_session_id`. Clients that
+    want a "new chat" thread can fetch this id, branch off it (e.g.
+    by appending `:tabA`), and pass the new id explicitly. Web does
+    so via the `?session_id=` WebSocket query param; iOS does so via
+    `BrainClient.chatSessionId`.
+
+    Returns:
+        {"session_id": str}
+    """
+    sid = getattr(state, "primary_session_id", "")
+    if not sid:
+        raise HTTPException(
+            status_code=503,
+            detail="primary_session_id not initialised — brain not booted yet",
+        )
+    return {"session_id": sid}
+
+
 def _require_supervisor():
     sup = getattr(state, "supervisor", None)
     if sup is None:

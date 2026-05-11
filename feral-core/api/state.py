@@ -156,6 +156,27 @@ class BrainState:
                 os.environ[env_key] = env_value
         self.sessions: dict[str, WebSocket] = {}
         self.daemons: dict[str, WebSocket] = {}
+        # Audit-r9 fix — operator report 2026-05-10:
+        # > "the chat and memory should be the same for my phone chat
+        # >  and the webui for feral brain on the local brain right?"
+        #
+        # Yes: one brain = one memory across surfaces. Until now the
+        # web socket minted `session_id = str(uuid4())` per WebSocket
+        # connection (`api/server.py:835`), and phone `chat_request`
+        # used `phone-{node_id}` (`api/server.py:1486`). So
+        # `Orchestrator.conversation_history[session_id]` and the
+        # working-memory deque keyed by `session_id` were partitioned
+        # — phone NEVER saw web's chat turns and vice versa. Even
+        # multiple browser tabs got separate threads.
+        #
+        # `primary_session_id` is a stable per-install id minted on
+        # first boot and persisted under `<feral_data_home>/primary_session_id`.
+        # `/v1/session` and `chat_request` both default to it when the
+        # client doesn't pass an explicit `session_id`, so by default
+        # all surfaces share one conversation thread + working memory.
+        # An explicit `session_id` from the client (e.g. a "new chat"
+        # button, a multi-thread feature later) still wins.
+        self.primary_session_id: str = self._load_or_mint_primary_session_id()
         self.devices: dict[str, dict] = {}
         self.skill_registry = SkillRegistry()
         self.memory = MemoryStore()
@@ -1075,6 +1096,45 @@ class BrainState:
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
             f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
         )
+
+    def _load_or_mint_primary_session_id(self) -> str:
+        """Read or mint the per-install shared chat session id.
+
+        Stored as a single line at `<feral_data_home>/primary_session_id`.
+        Operators on a custom layout can override via env var
+        `FERAL_PRIMARY_SESSION_ID` (useful for tests + integration
+        runs that want a deterministic id). The file is created on
+        first boot and persists across restarts so the LLM keeps
+        the same `conversation_history[session_id]` thread for both
+        web and phone clients.
+        """
+        from uuid import uuid4
+
+        env_override = os.environ.get("FERAL_PRIMARY_SESSION_ID", "").strip()
+        if env_override:
+            return env_override
+
+        try:
+            data_home = feral_data_home()
+            data_home.mkdir(parents=True, exist_ok=True)
+            path = data_home / "primary_session_id"
+            if path.is_file():
+                existing = path.read_text().strip()
+                if existing:
+                    return existing
+            new_id = f"primary-{uuid4().hex[:16]}"
+            path.write_text(new_id + "\n")
+            return new_id
+        except Exception as exc:
+            # Filesystem failure must NOT block boot. Fall back to a
+            # process-lifetime id; operator will see the same brain
+            # behavior except the session resets across restarts.
+            logger.warning(
+                "primary_session_id persistence failed (%s); "
+                "using process-lifetime id (chat will reset on restart).",
+                exc,
+            )
+            return f"primary-ephemeral-{uuid4().hex[:16]}"
 
     def _bootstrap_demo_plugin(self):
         """Look up + invoke the `feral.plugins` -> `demo` entry point.
