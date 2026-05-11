@@ -127,16 +127,30 @@ async def get_briefing():
 
 @router.get("/next_event")
 async def get_next_event():
-    """Return the next calendar event from the integrated calendar service."""
+    """Return the next calendar event from the integrated calendar service.
+
+    Audit-r9 fix: previously this route looked up `calendar_lookup` /
+    `google_calendar` only, but the registered skill ID (per
+    `api/state.py:633`) is `calendar_google`. So the route always fell
+    through to the "Connect Google Calendar" hint even with a working
+    integration. Try `calendar_google` first now and fall back to the
+    legacy aliases. Also try `state.calendar` directly as a final
+    fallback so the route works the moment the integration boots,
+    even before skill registration runs.
+    """
     try:
+        cal_skill = None
         if state.skill_registry:
-            cal_skill = state.skill_registry.skills.get(
-                "calendar_lookup"
-            ) or state.skill_registry.skills.get("google_calendar")
-            if cal_skill and hasattr(cal_skill, "execute"):
-                result = await cal_skill.execute("next_event", {}, {})
-                if result.get("success") and result.get("data"):
-                    return result["data"]
+            for skill_id in ("calendar_google", "calendar_lookup", "google_calendar"):
+                cal_skill = state.skill_registry.skills.get(skill_id)
+                if cal_skill is not None:
+                    break
+        if cal_skill is None:
+            cal_skill = state.calendar
+        if cal_skill is not None and hasattr(cal_skill, "execute"):
+            result = await cal_skill.execute("next_event", {}, {})
+            if isinstance(result, dict) and result.get("success") and result.get("data"):
+                return result["data"]
     except Exception as e:
         logger.debug("next_event lookup failed: %s", e)
 

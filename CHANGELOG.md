@@ -45,6 +45,59 @@ All notable changes to FERAL are documented here.
   filesystem-failure fallback, phone resolver picks primary, web
   resolver picks primary.
 
+### Fixed (audit-r9 — iOS chat now knows about web-created calendar events)
+
+- **`IdentityLoader` now injects `## Today's Events` into the system
+  prompt.** Operator report 2026-05-10: "I created an event on the
+  FERAL webUI locally and then I asked the chat on the iOS app but
+  it has no idea." Audit-r9 root cause (3 subagents): (1) web mints
+  `uuid4()` per WS while phone uses `phone-{node_id}`, so
+  `conversation_history` and working memory are partitioned by
+  `session_id`; (2) the system prompt never preloaded calendar
+  data — the LLM only learned about events when the routing layer
+  happened to add `calendar_google` to active skills AND the model
+  decided to call a lookup tool. Now the prompt always carries the
+  next ~5 calendar items + first ~5 reminders. New
+  `Orchestrator.set_calendar(state.calendar)` wires
+  `CalendarIntegration` into `IdentityLoader.calendar`. Tolerates
+  both the live `{"success": True, "data": {"events": [...]}}` shape
+  and legacy `{"events": [...]}`. Async-caller path falls back to a
+  cached next-event when running inside an asyncio task. Pinned by
+  6 new tests in `tests/test_chat_prompt_includes_calendar.py`.
+
+- **`/api/timeline` "events" filter no longer silently empty.**
+  `routes/timeline.py:62` was reading `events.get("events", [])` from
+  the integration's response, but the integration returns the events
+  inside `data.events`. So even with a working calendar the timeline
+  UI showed nothing under the "events" filter. Fixed with the same
+  defensive shape read used elsewhere; calendar errors now surface
+  as a single `event_error` row instead of silently dropping.
+
+- **`/api/ambient/next_event` now finds the registered calendar
+  skill.** The route looked up `calendar_lookup` / `google_calendar`
+  but `state.py:633` registers the skill as `calendar_google`. So
+  the route always fell through to the "Connect Google Calendar"
+  hint even with a working integration. Try `calendar_google` first,
+  then the legacy aliases, then `state.calendar` directly.
+
+### Fixed (audit-r9 H1 — mDNS `EventLoopBlocked` on every brain boot)
+
+- **`SyncEngine.start_discovery` no longer blocks the asyncio loop.**
+  Previously this method ran sync `zeroconf.Zeroconf()` +
+  `register_service()` + `ServiceBrowser(...)` directly on the loop.
+  Even on a clean LAN those calls blocked long enough for
+  `python-zeroconf` to raise `EventLoopBlocked`, surfacing as
+  `mDNS discovery skipped: EventLoopBlocked()` on every boot. Mirrors
+  the pattern in `services/mdns.py` (`advertise_brain_async`): prefers
+  `zeroconf.asyncio.AsyncZeroconf` + `AsyncServiceBrowser` when
+  available; falls back to `loop.run_in_executor` for the sync API on
+  older zeroconf installs. `stop_discovery` now also handles both
+  paths via `async_close` / `async_unregister_all_services` for the
+  async handle. Pinned by 2 new tests in
+  `tests/test_sync_engine_start_discovery_no_block.py` that monkeypatch
+  zeroconf with a 400 ms blocking stub and assert the heartbeat watcher
+  never sees a >500 ms loop gap.
+
 ### Fixed (audit-r9 brief #08 — boot-time skip warnings)
 
 - **First-party persona + workflow-pack JSONs missing from the wheel.**
