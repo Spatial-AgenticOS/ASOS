@@ -58,17 +58,38 @@ async def get_timeline(
 
     if type in ("all", "events") and state.calendar:
         try:
-            events = await state.calendar.execute("list_events", {"days_ahead": days})
-            for ev in events.get("events", []):
+            raw = await state.calendar.execute("list_events", {"days_ahead": days})
+            # Audit-r9: `CalendarIntegration.list_events` returns
+            # `{"success": True, "data": {"events": [...]}}`. The
+            # original `events.get("events", [])` was reading the
+            # outer dict's `events` key (which doesn't exist) and
+            # silently returning [], so the timeline UI's "events"
+            # filter was always empty even with a valid calendar.
+            data = raw.get("data") if isinstance(raw, dict) else None
+            events_list = (
+                data.get("events", []) if isinstance(data, dict)
+                else (raw.get("events", []) if isinstance(raw, dict) else [])
+            )
+            for ev in events_list:
                 entries.append({
                     "type": "event",
                     "timestamp": ev.get("start_epoch", time.time()),
-                    "title": ev.get("summary", "Event"),
+                    "title": ev.get("summary") or ev.get("title", "Event"),
                     "content": ev.get("description", ""),
                     "metadata": ev,
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            # Surface the failure into the entries list so the UI can
+            # show "Calendar unavailable" instead of silently empty.
+            # `type` is shadowed by the route's filter parameter, so
+            # explicit `__class__.__name__` for the exception class.
+            entries.append({
+                "type": "event_error",
+                "timestamp": time.time(),
+                "title": "Calendar unavailable",
+                "content": f"{exc.__class__.__name__}: {exc}",
+                "metadata": {},
+            })
 
     entries.sort(key=lambda e: e.get("timestamp", 0))
     return {"entries": entries, "count": len(entries), "days": days}
