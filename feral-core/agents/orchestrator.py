@@ -254,6 +254,30 @@ class Orchestrator:
         self._somatic_engine = somatic_engine
         self.identity_loader.somatic_engine = somatic_engine
 
+    def set_calendar(self, calendar):
+        """Wire the CalendarIntegration so the system prompt includes
+        upcoming events/reminders.
+
+        Operator report 2026-05-10: "I created an event on the FERAL
+        webUI locally and then I asked the chat on the iOS app but it
+        has no idea." Audit-r9 root cause (subagent #cd995a59): the
+        system prompt does NOT auto-inject calendar / reminders. The
+        LLM only knows about events when a calendar tool fires, AND
+        the tool only fires when `_route_prompt(query)` happens to
+        route the query into the `calendar_google` skill — fragile
+        keyword matching. The result: phone chat asks "do I have
+        anything today?" and the LLM answers from working memory
+        only (which is partitioned by `session_id`, so it never
+        contains events created on the web tab).
+
+        Fix: wire `state.calendar` into IdentityLoader so the prompt
+        always carries a "## Today's Events" block with the next ~5
+        upcoming items, regardless of which `session_id` is asking.
+        Same approach the proactive engine already uses
+        (`agents/proactive_engine.py:953-961`).
+        """
+        self.identity_loader.calendar = calendar
+
     def set_tool_genesis(self, tool_genesis):
         """Wire the ToolGenesisEngine so the orchestrator records tool-call patterns."""
         self._tool_genesis = tool_genesis

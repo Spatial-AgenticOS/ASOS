@@ -903,6 +903,16 @@ class BrainState:
             if self.orchestrator:
                 self.orchestrator.set_somatic_engine(self.somatic_engine)
 
+        # Audit-r9 fix: wire the CalendarIntegration into the
+        # orchestrator's IdentityLoader so the system prompt carries a
+        # "## Today's Events" block on every turn. Without this, the
+        # iOS chat had no way to know about events the operator
+        # created on the web tab (subagent #cd995a59 confirmed root
+        # cause: prompt assembly didn't preload calendar). See
+        # `Orchestrator.set_calendar` for the long-form rationale.
+        if self.orchestrator and self.calendar:
+            self.orchestrator.set_calendar(self.calendar)
+
         with boot_subsystem(self._boot_report, "ToolGenesisEngine"):
             from agents.tool_genesis import ToolGenesisEngine
             _genesis_db = str(feral_data_home() / "tool_genesis.db")

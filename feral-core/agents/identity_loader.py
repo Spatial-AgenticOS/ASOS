@@ -53,8 +53,21 @@ def clear_memory_snapshots() -> None:
 class IdentityLoader:
     """Loads agent identity files and builds the LLM system prompt."""
 
-    def __init__(self, memory: "MemoryStore | None" = None, somatic_engine: "SomaticEngine | None" = None):
+    def __init__(
+        self,
+        memory: "MemoryStore | None" = None,
+        somatic_engine: "SomaticEngine | None" = None,
+        calendar=None,
+    ):
         self.memory = memory
+        # Audit-r9 fix: optional calendar handle (wired via
+        # `Orchestrator.set_calendar`) so the system prompt can carry
+        # an authoritative "## Today's Events" block. Without this, the
+        # LLM only sees calendar data when the routing layer happens
+        # to add `calendar_google` to the active skills set — which is
+        # how iOS chat ended up "having no idea" about events the
+        # operator created on the web tab.
+        self.calendar = calendar
         self.somatic_engine: SomaticEngine | None = somatic_engine
 
     def load_identity(self) -> str:
@@ -256,6 +269,25 @@ class IdentityLoader:
         if perception_context and perception_context != "No sensor data available.":
             prompt += f"\n## Live Perception\n{perception_context}\n"
 
+        # Audit-r9 fix — Today's Events / Reminders preload.
+        #
+        # Without this block, the LLM had no automatic awareness of
+        # calendar items or reminders. It only learned about them when
+        # the routing layer happened to add `calendar_google` /
+        # `feral_reminders` to the active skill set AND the model
+        # decided to call a lookup tool. That made cross-surface
+        # awareness fragile: an event created in the web chat (which
+        # mints a fresh `uuid4()` session) was completely invisible
+        # to the iOS chat (which uses `phone-{node_id}`) because
+        # neither working memory nor the system prompt carried it.
+        #
+        # We now read the next ~5 upcoming items synchronously at
+        # prompt-build time. Best-effort — every failure path is
+        # swallowed so a calendar OAuth glitch can never block chat.
+        events_section = self._build_events_section()
+        if events_section:
+            prompt += f"\n{events_section}\n"
+
         # Memory Context — a specialist-scoped memory_filter narrows the
         # surfaced episodes + recent actions so cross-domain leakage
         # (journaling thoughts bleeding into a coding turn, etc.) stops.
@@ -402,6 +434,110 @@ class IdentityLoader:
                 logger.debug("Sync memory builder failed: %s", exc)
 
         return ""
+
+    def _build_events_section(self) -> str:
+        """Render `## Today's Events` + `## Reminders` blocks.
+
+        Pulls from:
+        * `self.calendar` — wired by `Orchestrator.set_calendar` via
+          `BrainState.calendar`. Same `CalendarIntegration` instance
+          the proactive engine uses.
+        * `~/.feral/data/reminders.json` — first-party FERAL reminders
+          skill store. Read directly so we don't have to round-trip
+          through the skill registry on every prompt build.
+
+        Returns "" when there's no data to show. Never raises — a
+        calendar / file glitch must not block chat.
+        """
+        sections: list[str] = []
+
+        # Calendar (Google Calendar via CalendarIntegration).
+        if self.calendar is not None:
+            try:
+                exec_ = getattr(self.calendar, "execute", None)
+                if callable(exec_):
+                    raw = None
+                    # `CalendarIntegration.execute` is a coroutine in
+                    # the live brain; tolerate both sync stubs (tests)
+                    # and async callers via `asyncio.get_event_loop`
+                    # detection. From the prompt-build context we are
+                    # synchronous, so we run the coroutine to
+                    # completion ONLY if there is no current loop;
+                    # otherwise we fall back to the cached "next event"
+                    # if the integration exposes one.
+                    import asyncio as _aio
+                    import inspect as _inspect
+                    result = exec_("list_events", {"days_ahead": 1})
+                    if _inspect.iscoroutine(result):
+                        try:
+                            _aio.get_running_loop()
+                            # We are inside an async caller — the
+                            # synchronous prompt builder cannot await
+                            # here. Drop the coroutine and prefer the
+                            # cached next-event below.
+                            result.close()
+                            cached = getattr(self.calendar, "_cached_next_event", None)
+                            if isinstance(cached, dict):
+                                raw = {"data": {"events": [cached]}}
+                        except RuntimeError:
+                            raw = _aio.run(result)
+                    else:
+                        raw = result
+
+                    events: list[dict] = []
+                    if isinstance(raw, dict):
+                        # CalendarIntegration returns
+                        # `{"success": True, "data": {"events": [...]}}`.
+                        # Tolerate older shapes (`{"events": [...]}`)
+                        # too — same defensive read the timeline route
+                        # should be doing.
+                        data = raw.get("data") or {}
+                        events = data.get("events") if isinstance(data, dict) else None
+                        if not events:
+                            events = raw.get("events") or []
+                    if events:
+                        sections.append("## Today's Events")
+                        for ev in list(events)[:5]:
+                            title = ev.get("title") or ev.get("summary") or "(untitled)"
+                            start = ev.get("start") or ev.get("when") or ""
+                            location = ev.get("location") or ""
+                            line = f"- {title}"
+                            if start:
+                                line += f" — {start}"
+                            if location:
+                                line += f" @ {location}"
+                            sections.append(line)
+            except Exception as exc:
+                logger.debug("identity_loader calendar block skipped: %s", exc)
+
+        # FERAL Reminders (first-party reminders.json).
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            try:
+                from config.loader import feral_home as _feral_home
+                home = _feral_home()
+            except Exception:
+                home = _Path.home() / ".feral"
+            reminders_path = home / "data" / "reminders.json"
+            if reminders_path.is_file():
+                raw = _json.loads(reminders_path.read_text())
+                items = raw if isinstance(raw, list) else raw.get("reminders", [])
+                if items:
+                    sections.append("\n## Reminders")
+                    for r in list(items)[:5]:
+                        if not isinstance(r, dict):
+                            continue
+                        title = r.get("title") or r.get("text") or "(reminder)"
+                        when = r.get("when") or r.get("due") or ""
+                        line = f"- {title}"
+                        if when:
+                            line += f" — {when}"
+                        sections.append(line)
+        except Exception as exc:
+            logger.debug("identity_loader reminders block skipped: %s", exc)
+
+        return "\n".join(sections)
 
     def _messaging_channels_section(self) -> str:
         """Inject the live list of configured messaging channels and how to address them.
