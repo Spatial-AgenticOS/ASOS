@@ -1,0 +1,76 @@
+{
+    "skill_id": "google_contacts",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Google Contacts",
+        "primary_color": "#4285F4",
+        "secondary_color": "#EA4335",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Search, list, and fetch contacts from the user's Google account. All endpoints are read-only — writes are intentionally out of scope until the user explicitly asks for contact creation; we don't auto-mutate the address book.",
+    "trigger_phrases": [
+        "find contact",
+        "search contacts",
+        "look up phone for",
+        "look up email for",
+        "list my contacts",
+        "who is"
+    ],
+    "categories": ["people", "communication"],
+    "auth": {
+        "type": "oauth2",
+        "provider": "google",
+        "scopes": ["https://www.googleapis.com/auth/contacts.readonly"]
+    },
+    "endpoints": [
+        {
+            "id": "search_contacts",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Search the user's contacts by name, email, or phone substring.",
+            "params": [
+                {"name": "query", "type": "string", "required": true, "description": "Substring to match"},
+                {"name": "max_results", "type": "integer", "required": false, "description": "Max results (default 10)"}
+            ],
+            "returns_description": "{contacts: [{resource_name, name, emails, phones, organizations}]}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "grid_cards"
+        },
+        {
+            "id": "get_contact",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Fetch a single contact by its People API resource_name.",
+            "params": [
+                {"name": "resource_name", "type": "string", "required": true, "description": "People API resource name (e.g. people/c1234567890)"}
+            ],
+            "returns_description": "{resource_name, name, emails, phones, addresses, organizations, photos}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "list_contacts",
+            "method": "PYTHON",
+            "url": "",
+            "description": "List the user's contacts page-by-page.",
+            "params": [
+                {"name": "page_size", "type": "integer", "required": false, "description": "Page size (default 20, max 200)"},
+                {"name": "page_token", "type": "string", "required": false, "description": "Pagination token"}
+            ],
+            "returns_description": "{contacts: [...], next_page_token}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": [],
+    "requires_daemon": false,
+    "max_calls_per_hour": 600
+}

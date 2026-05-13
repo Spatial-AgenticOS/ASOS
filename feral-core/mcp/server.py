@@ -40,10 +40,24 @@ class FeralMCPServer:
         device_registry: Optional["DeviceRegistry"] = None,
         memory: Optional["MemoryStore"] = None,
         perception: Optional["PerceptionEngine"] = None,
+        skill_registry: Optional[Any] = None,
+        skill_executor: Optional[Any] = None,
     ):
         self._devices = device_registry
         self._memory = memory
         self._perception = perception
+        # PR 11: optional FERAL skill projection. When both ``skill_registry``
+        # and ``skill_executor`` are wired, ``handle_tools_list`` exports a
+        # *safe subset* of FERAL skills as ``feral_skill_<skill>__<endpoint>``
+        # MCP tools — gated by the ``mcp`` surface deny list AND the
+        # manifest-aware safety resolver (only AUTO endpoints are exposed
+        # by default; CONFIRM/DENY require explicit operator opt-in).
+        # The projection is OFF by default and must be explicitly turned
+        # on via ``enable_skill_projection`` so booting the brain doesn't
+        # silently expose skills to whichever MCP client connects first.
+        self._skill_registry = skill_registry
+        self._skill_executor = skill_executor
+        self._skill_projection_enabled = False
         self._server_info = {
             "name": "feral",
             "version": "0.7.0",
@@ -170,7 +184,122 @@ class FeralMCPServer:
                         "inputSchema": self._capability_to_schema(cap),
                     })
 
+        # PR 11: project the safe subset of FERAL skills.
+        for projected in self._projected_skill_tools():
+            tools.append(projected)
+
         return {"tools": tools}
+
+    # ─────────────────────────────────────────
+    # PR 11: FERAL skill projection
+    # ─────────────────────────────────────────
+
+    _SKILL_TOOL_PREFIX = "feral_skill_"
+
+    def configure_skill_projection(
+        self,
+        *,
+        skill_registry: Optional[Any] = None,
+        skill_executor: Optional[Any] = None,
+        enabled: bool = True,
+    ) -> dict:
+        """Wire (or rewire) the skill projection at runtime.
+
+        Returns a snapshot ``{enabled, ready, projected_count}`` so the
+        operator can verify the wiring took effect — no silent
+        no-ops."""
+        if skill_registry is not None:
+            self._skill_registry = skill_registry
+        if skill_executor is not None:
+            self._skill_executor = skill_executor
+        self._skill_projection_enabled = bool(enabled)
+        return self.projection_status()
+
+    def projection_status(self) -> dict:
+        """Reflect the current projection state honestly."""
+        ready = bool(
+            self._skill_projection_enabled
+            and self._skill_registry is not None
+            and self._skill_executor is not None
+        )
+        projected_count = len(self._projected_skill_tools()) if ready else 0
+        return {
+            "enabled": self._skill_projection_enabled,
+            "ready": ready,
+            "projected_count": projected_count,
+            "registry_wired": self._skill_registry is not None,
+            "executor_wired": self._skill_executor is not None,
+        }
+
+    def _projected_skill_tools(self) -> list[dict]:
+        """Project FERAL skill endpoints as MCP tools when policy permits.
+
+        Eligibility rules:
+        * ``skill_registry`` AND ``skill_executor`` must be wired.
+        * The tool must pass the ``mcp`` surface deny list
+          (``security.dangerous_tools.is_tool_allowed(name, 'mcp')``).
+        * The manifest-aware resolver must verdict ``AUTO``. Skills with
+          declared ``confirm`` / ``deny`` tiers (or that hit the danger
+          map) are intentionally excluded: an external MCP client has
+          no operator-present approval channel, so CONFIRM cannot be
+          satisfied across that boundary.
+
+        Returns a list of MCP tool definitions; never raises.
+        """
+        if not self._skill_projection_enabled:
+            return []
+        if not self._skill_registry or not self._skill_executor:
+            return []
+
+        try:
+            from security.dangerous_tools import is_tool_allowed
+            from security.safety_resolver import LEVEL_AUTO, resolve_policy
+        except Exception:
+            logger.exception("MCP projection skipped: safety module import failed")
+            return []
+
+        out: list[dict] = []
+        skills = getattr(self._skill_registry, "skills", {}) or {}
+        for skill_id, skill in skills.items():
+            for endpoint in getattr(skill, "endpoints", []) or []:
+                feral_tool_id = f"{skill_id}__{endpoint.id}"
+                if not is_tool_allowed(feral_tool_id, "mcp"):
+                    continue
+                try:
+                    decision = resolve_policy(
+                        feral_tool_id, args={}, surface="mcp",
+                        registry=self._skill_registry,
+                    )
+                except Exception:
+                    continue
+                if decision.level != LEVEL_AUTO:
+                    continue
+                out.append({
+                    "name": f"{self._SKILL_TOOL_PREFIX}{feral_tool_id}",
+                    "description": getattr(endpoint, "description", "") or f"FERAL skill {feral_tool_id}",
+                    "inputSchema": self._endpoint_to_schema(endpoint),
+                })
+        return out
+
+    @staticmethod
+    def _endpoint_to_schema(endpoint) -> dict:
+        """Best-effort conversion of a SkillEndpoint's params to JSON Schema."""
+        props: dict[str, dict] = {}
+        required: list[str] = []
+        type_map = {
+            "string": "string", "number": "number", "integer": "integer",
+            "boolean": "boolean", "array": "array", "object": "object",
+        }
+        for p in getattr(endpoint, "params", []) or []:
+            prop_type = type_map.get(getattr(p, "type", "string"), "string")
+            entry: dict = {"type": prop_type, "description": getattr(p, "description", "") or ""}
+            enum_vals = getattr(p, "enum", None)
+            if enum_vals:
+                entry["enum"] = list(enum_vals)
+            props[p.name] = entry
+            if getattr(p, "required", False):
+                required.append(p.name)
+        return {"type": "object", "properties": props, "required": required}
 
     # ─────────────────────────────────────────
     # MCP Protocol: tools/call
@@ -192,6 +321,12 @@ class FeralMCPServer:
                 return self._call_perception_snapshot()
             elif name == "feral_find_devices_by_capability":
                 return self._call_find_by_capability(arguments)
+            elif name.startswith(self._SKILL_TOOL_PREFIX):
+                # PR 11: dispatch a projected FERAL skill. Re-check policy
+                # at call time so a manifest update that bumps a tool to
+                # CONFIRM/DENY takes effect immediately for in-flight MCP
+                # sessions that already cached tools/list output.
+                return await self._call_projected_skill(name, arguments)
             elif name.startswith("feral_"):
                 return await self._call_dynamic_capability(name, arguments)
             else:
@@ -199,6 +334,59 @@ class FeralMCPServer:
         except Exception as e:
             logger.error(f"MCP tool call error: {e}")
             return {"content": [{"type": "text", "text": f"Error: {str(e)}"}], "isError": True}
+
+    async def _call_projected_skill(self, mcp_name: str, arguments: dict) -> dict:
+        """Execute a projected FERAL skill on behalf of an MCP client.
+
+        Re-runs the surface deny check + safety resolver at call time
+        so a runtime policy update reaches in-flight MCP sessions even
+        if they cached the older ``tools/list`` response. Anything not
+        AUTO is refused with an ``isError`` payload — the MCP boundary
+        has no operator-present approval channel."""
+        if not self._skill_projection_enabled:
+            return {"content": [{"type": "text", "text": "FERAL skill projection is disabled on this MCP server. Enable it from Settings → MCP or via FERAL_MCP_PROJECT_SKILLS=1."}], "isError": True}
+        if not self._skill_registry or not self._skill_executor:
+            return {"content": [{"type": "text", "text": "FERAL skill projection is enabled but the registry/executor isn't wired yet — brain still booting."}], "isError": True}
+
+        feral_tool_id = mcp_name[len(self._SKILL_TOOL_PREFIX):]
+        try:
+            from security.dangerous_tools import is_tool_allowed
+            from security.safety_resolver import LEVEL_AUTO, resolve_policy
+        except Exception:
+            return {"content": [{"type": "text", "text": "Safety policy module unavailable; refusing projected skill call."}], "isError": True}
+
+        if not is_tool_allowed(feral_tool_id, "mcp"):
+            return {"content": [{"type": "text", "text": f"Tool {feral_tool_id} is denied on the MCP surface."}], "isError": True}
+
+        decision = resolve_policy(
+            feral_tool_id, args=arguments or {}, surface="mcp",
+            registry=self._skill_registry,
+        )
+        if decision.level != LEVEL_AUTO:
+            return {"content": [{"type": "text", "text": (
+                f"Tool {feral_tool_id} requires {decision.level} on MCP; "
+                "external clients cannot satisfy that gate. Use the chat surface."
+            )}], "isError": True}
+
+        skill_id, _, endpoint_id = feral_tool_id.partition("__")
+        skill = self._skill_registry.skills.get(skill_id) if skill_id else None
+        endpoint = None
+        if skill is not None:
+            endpoint = next((e for e in skill.endpoints if e.id == endpoint_id), None)
+        if skill is None or endpoint is None:
+            return {"content": [{"type": "text", "text": f"Unknown FERAL skill endpoint: {feral_tool_id}"}], "isError": True}
+
+        try:
+            result = await self._skill_executor.execute(
+                feral_tool_id, dict(arguments or {}), skill, endpoint,
+            )
+        except Exception as exc:
+            logger.exception("MCP projected skill execution failed")
+            return {"content": [{"type": "text", "text": f"FERAL skill {feral_tool_id} failed: {exc}"}], "isError": True}
+
+        if isinstance(result, dict) and result.get("success") is False:
+            return {"content": [{"type": "text", "text": json.dumps(result, default=str)}], "isError": True}
+        return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}
 
     # ─────────────────────────────────────────
     # MCP Protocol: resources/list

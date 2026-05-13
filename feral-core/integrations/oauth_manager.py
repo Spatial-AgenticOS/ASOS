@@ -86,6 +86,77 @@ BUILTIN_PROVIDERS = {
         "name": "Home Assistant",
         "auth_type": "token",
     },
+    # ──────────────────────────────────────────────────────────────────
+    # PR 11: Google + Microsoft built-ins.
+    #
+    # ``integrations/google_drive.py``, ``google_contacts.py``,
+    # ``email.py`` (Gmail), ``calendar.py``, and ``microsoft365.py``
+    # all call ``OAuthManager.get_token("google")`` or
+    # ``get_token("microsoft")``. Until now those provider ids were
+    # absent from ``BUILTIN_PROVIDERS``, so unless the operator
+    # hand-rolled ``~/.feral/oauth_providers.json`` the integrations
+    # silently had no token. The truthfulness mission says: fail
+    # honestly with a real OAuth URL instead of returning a token that
+    # was never going to exist.
+    #
+    # Scopes are the *intersection* of what the integrations actually
+    # call (People API contact reads, Drive metadata + files, Gmail
+    # read+modify, Calendar read+write, Graph user/files/mail). PKCE
+    # is enabled where the provider supports it for installed-app
+    # security.
+    "google": {
+        "id": "google",
+        "name": "Google",
+        "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "client_id": "",
+        "scopes": [
+            # Identity for the connected account.
+            "openid",
+            "email",
+            "profile",
+            # Gmail: read + send + modify labels (matches
+            # integrations/email.py call sites).
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.modify",
+            # Drive: read + write metadata + file content for
+            # integrations/google_drive.py.
+            "https://www.googleapis.com/auth/drive",
+            # Contacts (People API): read directory + connections.
+            "https://www.googleapis.com/auth/contacts.readonly",
+            # Calendar: read + write events.
+            "https://www.googleapis.com/auth/calendar",
+        ],
+        "pkce": True,
+        "auth_type": "oauth2",
+    },
+    "microsoft": {
+        "id": "microsoft",
+        "name": "Microsoft",
+        # The "common" tenant accepts both personal and work accounts;
+        # operators with single-tenant apps can override via
+        # ~/.feral/oauth_providers.json.
+        "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        "client_id": "",
+        "scopes": [
+            # Graph identity / refresh.
+            "openid",
+            "email",
+            "profile",
+            "offline_access",
+            # Calendar/Mail/Files surfaces used by microsoft365.py.
+            "User.Read",
+            "Mail.Read",
+            "Mail.Send",
+            "Calendars.ReadWrite",
+            "Files.ReadWrite",
+            "Contacts.Read",
+        ],
+        "pkce": True,
+        "auth_type": "oauth2",
+    },
 }
 
 
@@ -128,6 +199,22 @@ class OAuthManager:
         if env_notion_id and "notion" in self._providers:
             self._providers["notion"].client_id = env_notion_id
             self._providers["notion"].client_secret = os.getenv("NOTION_CLIENT_SECRET", "")
+
+        # PR11: Google + Microsoft client credentials come from env so
+        # operators can wire real OAuth without hand-editing
+        # ~/.feral/oauth_providers.json. Names match the docs.
+        env_google_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+        if env_google_id and "google" in self._providers:
+            self._providers["google"].client_id = env_google_id
+            self._providers["google"].client_secret = os.getenv(
+                "GOOGLE_OAUTH_CLIENT_SECRET", ""
+            )
+        env_ms_id = os.getenv("MICROSOFT_OAUTH_CLIENT_ID", "")
+        if env_ms_id and "microsoft" in self._providers:
+            self._providers["microsoft"].client_id = env_ms_id
+            self._providers["microsoft"].client_secret = os.getenv(
+                "MICROSOFT_OAUTH_CLIENT_SECRET", ""
+            )
 
     def _load_tokens(self):
         """Load saved tokens from BlindVault or fallback JSON."""

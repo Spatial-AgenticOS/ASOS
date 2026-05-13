@@ -1,0 +1,124 @@
+{
+    "skill_id": "microsoft365",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Microsoft 365",
+        "primary_color": "#0078D4",
+        "secondary_color": "#50E6FF",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Outlook mail + calendar and OneDrive files through Microsoft Graph. Read endpoints are safe; sending mail or creating events is confirm-tier and requires explicit operator approval.",
+    "trigger_phrases": [
+        "check outlook",
+        "any new outlook mail",
+        "outlook calendar",
+        "schedule meeting",
+        "list outlook files",
+        "search onedrive"
+    ],
+    "categories": ["communication", "productivity", "files"],
+    "auth": {
+        "type": "oauth2",
+        "provider": "microsoft",
+        "scopes": ["openid", "offline_access", "User.Read", "Mail.Read", "Mail.Send", "Calendars.ReadWrite", "Files.ReadWrite"]
+    },
+    "endpoints": [
+        {
+            "id": "list_mail",
+            "method": "PYTHON",
+            "url": "",
+            "description": "List recent Outlook messages, optionally scoped to a folder (inbox by default).",
+            "params": [
+                {"name": "max_results", "type": "integer", "required": false, "description": "Max messages (default 20)"},
+                {"name": "folder", "type": "string", "required": false, "description": "Mail folder id or well-known name (default 'inbox')"}
+            ],
+            "returns_description": "{messages: [{id, from, subject, preview, received_at}]}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        },
+        {
+            "id": "send_mail",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Send an Outlook email. Confirm-tier — outbound mail is irreversible and visible on the recipient side.",
+            "params": [
+                {"name": "to", "type": "string", "required": true, "description": "Recipient address"},
+                {"name": "subject", "type": "string", "required": true},
+                {"name": "body", "type": "string", "required": true, "description": "Plain-text body"}
+            ],
+            "returns_description": "{message_id}",
+            "safety_tier": "confirm",
+            "requires_user_approval": true,
+            "ui_hint": "confirmation"
+        },
+        {
+            "id": "list_events",
+            "method": "PYTHON",
+            "url": "",
+            "description": "List upcoming Outlook calendar events within the next N days.",
+            "params": [
+                {"name": "days_ahead", "type": "integer", "required": false, "description": "Days into the future (default 7)"},
+                {"name": "max_results", "type": "integer", "required": false, "description": "Max events (default 25)"}
+            ],
+            "returns_description": "{events: [{id, subject, start, end, location, attendees}]}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        },
+        {
+            "id": "create_event",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Create a calendar event. Confirm-tier — meeting invites notify other people.",
+            "params": [
+                {"name": "subject", "type": "string", "required": true},
+                {"name": "start", "type": "string", "required": true, "description": "ISO-8601 start time"},
+                {"name": "end", "type": "string", "required": true, "description": "ISO-8601 end time"},
+                {"name": "attendees", "type": "array", "required": false, "items": {"type": "string"}, "description": "Attendee email list"},
+                {"name": "body", "type": "string", "required": false, "description": "Description / agenda"},
+                {"name": "location", "type": "string", "required": false}
+            ],
+            "returns_description": "{event_id, web_link}",
+            "safety_tier": "confirm",
+            "requires_user_approval": true,
+            "ui_hint": "confirmation"
+        },
+        {
+            "id": "list_files",
+            "method": "PYTHON",
+            "url": "",
+            "description": "List OneDrive files, optionally scoped to a folder path.",
+            "params": [
+                {"name": "folder_path", "type": "string", "required": false, "description": "Folder path relative to root"},
+                {"name": "max_results", "type": "integer", "required": false, "description": "Max results (default 25)"}
+            ],
+            "returns_description": "{files: [{id, name, size, mime_type, web_url, modified_at}]}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        },
+        {
+            "id": "search_files",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Search OneDrive files by name/content.",
+            "params": [
+                {"name": "query", "type": "string", "required": true},
+                {"name": "max_results", "type": "integer", "required": false, "description": "Max results (default 25)"}
+            ],
+            "returns_description": "{files: [...]}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": [],
+    "requires_daemon": false,
+    "max_calls_per_hour": 600
+}

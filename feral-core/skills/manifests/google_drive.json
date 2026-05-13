@@ -1,0 +1,108 @@
+{
+    "skill_id": "google_drive",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Google Drive",
+        "primary_color": "#1FA463",
+        "secondary_color": "#FFCD46",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "List, search, download, upload, and organize files in the user's Google Drive. Read endpoints are safe; uploads and folder creation are confirm-tier.",
+    "trigger_phrases": [
+        "open drive",
+        "list my files",
+        "search drive",
+        "download from drive",
+        "upload to drive",
+        "create folder in drive",
+        "my google drive"
+    ],
+    "categories": ["files", "productivity"],
+    "auth": {
+        "type": "oauth2",
+        "provider": "google",
+        "scopes": ["https://www.googleapis.com/auth/drive"]
+    },
+    "endpoints": [
+        {
+            "id": "list_files",
+            "method": "PYTHON",
+            "url": "",
+            "description": "List recent files, optionally scoped to a folder. Returns id, name, mimeType, size, modifiedTime, webViewLink.",
+            "params": [
+                {"name": "page_size", "type": "integer", "required": false, "description": "Page size (1-100; default 20)"},
+                {"name": "folder_id", "type": "string", "required": false, "description": "Restrict to a specific folder"},
+                {"name": "page_token", "type": "string", "required": false, "description": "Pagination token from a previous call"}
+            ],
+            "returns_description": "{files: [...], next_page_token}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        },
+        {
+            "id": "search_files",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Search the user's Drive for files whose name matches a substring.",
+            "params": [
+                {"name": "query", "type": "string", "required": true, "description": "Substring to match in file name"},
+                {"name": "max_results", "type": "integer", "required": false, "description": "Max results (default 20, max 100)"}
+            ],
+            "returns_description": "{files: [...]}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        },
+        {
+            "id": "download_file",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Download a Drive file's binary content. Returns base64-encoded bytes and a content-type so the agent can route to the right viewer/parser. Read-only against the user's Drive but produces local bytes — operator approval is required only when invoked from remote surfaces.",
+            "params": [
+                {"name": "file_id", "type": "string", "required": true, "description": "Drive file id"}
+            ],
+            "returns_description": "{file_id, name, mime_type, size_bytes, content_b64}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "upload_file",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Upload a local file (or in-memory bytes) into the user's Drive. Always requires explicit operator confirmation — writes leave a permanent footprint in the account.",
+            "params": [
+                {"name": "name", "type": "string", "required": true, "description": "Destination file name"},
+                {"name": "content_b64", "type": "string", "required": true, "description": "Base64-encoded bytes"},
+                {"name": "mime_type", "type": "string", "required": false, "description": "MIME type (default application/octet-stream)"},
+                {"name": "parent_id", "type": "string", "required": false, "description": "Parent folder id"}
+            ],
+            "returns_description": "{file_id, name, web_view_link}",
+            "safety_tier": "confirm",
+            "requires_user_approval": true,
+            "ui_hint": "confirmation"
+        },
+        {
+            "id": "create_folder",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Create a new folder in Drive. Confirm-tier because it mutates the user's account.",
+            "params": [
+                {"name": "name", "type": "string", "required": true, "description": "Folder name"},
+                {"name": "parent_id", "type": "string", "required": false, "description": "Parent folder id"}
+            ],
+            "returns_description": "{folder_id, name, web_view_link}",
+            "safety_tier": "confirm",
+            "requires_user_approval": true,
+            "ui_hint": "confirmation"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": [],
+    "requires_daemon": false,
+    "max_calls_per_hour": 600
+}
