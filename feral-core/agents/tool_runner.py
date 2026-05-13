@@ -17,6 +17,14 @@ from uuid import uuid4
 
 from security.exec_approvals import ApprovalManager
 from security.dangerous_tools import is_tool_allowed
+from security.safety_resolver import (
+    LEVEL_AUTO,
+    LEVEL_CONFIRM,
+    LEVEL_DENY,
+    PolicyDecision,
+    is_read_only,
+    resolve_policy,
+)
 
 if TYPE_CHECKING:
     from agents.orchestrator import Orchestrator
@@ -25,6 +33,25 @@ logger = logging.getLogger("feral.orchestrator.tool_runner")
 
 VALID_AUTONOMY_MODES = ("strict", "hybrid", "loose")
 READ_ONLY_PATTERNS = ("search", "get", "list", "query", "read", "current", "status", "forecast")
+_COMPUTER_USE_PERMISSION_TOOLS = {
+    "computer_use__read_file",
+    "computer_use__write_file",
+    "computer_use__edit_file",
+    "computer_use__grep_search",
+    "computer_use__glob_search",
+    "computer_use__index_folder",
+    # `coding_tools` exposes the same filesystem surface as `computer_use`
+    # (PR2 made the manifests mirror each other). The permission card flow
+    # must mirror too so a `coding_tools__write_file` denial behaves
+    # identically to the `computer_use__write_file` one — same Allow/Deny
+    # surface, same workspace_grants path.
+    "coding_tools__read_file",
+    "coding_tools__write_file",
+    "coding_tools__edit_file",
+    "coding_tools__grep_search",
+    "coding_tools__glob_search",
+    "coding_tools__index_folder",
+}
 
 
 # ─────────────────────────────────────────────
@@ -32,9 +59,11 @@ READ_ONLY_PATTERNS = ("search", "get", "list", "query", "read", "current", "stat
 # ─────────────────────────────────────────────
 
 class SafetyLevel:
-    AUTO = "auto"          # Execute immediately
-    CONFIRM = "confirm"    # Ask user confirmation via SDUI
-    DENY = "deny"          # Block outright
+    # String values are intentionally identical to ``security.safety_resolver``
+    # constants so the SDUI / REST surfaces don't need to translate.
+    AUTO = LEVEL_AUTO          # Execute immediately
+    CONFIRM = LEVEL_CONFIRM    # Ask user confirmation via SDUI
+    DENY = LEVEL_DENY          # Block outright
 
 
 class ToolRunner:
@@ -69,68 +98,80 @@ class ToolRunner:
     # Safety: Graduated Permission System
     # ─────────────────────────────────────────────
 
+    def _skill_registry(self):
+        """Best-effort lookup of the orchestrator's skill registry for the
+        manifest-aware resolver. Returns ``None`` if the orchestrator is
+        not wired (rare; mostly happens in unit tests using mocks)."""
+        return getattr(self._orch, "skills", None)
+
     def classify_safety(self, tool_name: str, args: dict) -> str:
+        """Manifest-aware safety classification.
+
+        Prefer ``SkillEndpoint.safety_tier`` / ``read_only_hint`` /
+        ``requires_user_approval`` over the legacy substring heuristic;
+        consult ``TOOL_DANGER_MAP`` for centrally-policed tools;
+        fall back to the substring heuristic only when nothing more
+        authoritative is available so existing unannotated third-party
+        manifests do not silently change behaviour. See
+        ``security/safety_resolver.py`` for the full lookup order.
         """
-        Graduated safety classification:
-          AUTO    — safe, execute immediately (reads, searches, notes)
-          CONFIRM — potentially impactful, ask user (send message, order, schedule)
-          DENY    — dangerous, block outright (format disk, delete all, unsafe robot speeds)
-        """
-        name_lower = tool_name.lower()
+        decision = resolve_policy(
+            tool_name, args or {}, surface="websocket",
+            registry=self._skill_registry(),
+        )
+        return decision.level
 
-        deny_actions = ["format", "erase_all", "factory_reset", "self_destruct"]
-        if any(d in name_lower for d in deny_actions):
-            return SafetyLevel.DENY
-        if ("robot_move" in name_lower or "actuator" in name_lower) and args.get("speed", 0) > 80:
-            return SafetyLevel.DENY
-
-        confirm_patterns = [
-            "send", "post", "create", "delete", "update", "move", "grip",
-            "play", "pause", "skip", "volume", "lock", "message", "order",
-            "schedule", "daemon", "execute", "robot", "actuator", "motor",
-        ]
-        if any(p in name_lower for p in confirm_patterns):
-            return SafetyLevel.CONFIRM
-
-        auto_patterns = [
-            "search", "query", "get", "list", "current", "now_playing",
-            "forecast", "status", "read", "notes_memory", "web_search",
-        ]
-        if any(p in name_lower for p in auto_patterns):
-            return SafetyLevel.AUTO
-
-        # Default: require confirmation for unknown tools
-        return SafetyLevel.CONFIRM
+    def policy_for(
+        self,
+        tool_name: str,
+        args: Optional[dict] = None,
+        *,
+        surface: str = "websocket",
+    ) -> PolicyDecision:
+        """Expose the full :class:`PolicyDecision` so REST / SDUI can
+        render an explainable approval card (level + which source
+        produced the verdict). Internal callers should use this rather
+        than re-running the resolver."""
+        return resolve_policy(
+            tool_name, args or {}, surface=surface,
+            registry=self._skill_registry(),
+        )
 
     def enforce_safety(self, tool_name: str, args: dict, session_id: str = "", surface: str = "websocket") -> Optional[dict]:
         """
         Returns a denial dict if the action should be blocked, a pending-approval
         dict if the user must confirm, or None if the action is allowed.
         """
-        if not is_tool_allowed(tool_name, surface):
+        decision = self.policy_for(tool_name, args, surface=surface)
+
+        if decision.level == SafetyLevel.DENY:
+            # Distinguish surface-deny from policy-deny so the UI can
+            # render different remediation hints (surface deny = "use a
+            # different surface"; policy deny = "this action is not
+            # permitted at all").
+            note = (
+                decision.deny_reason
+                or f"Action '{tool_name}' is classified as dangerous and has been blocked."
+            )
+            error = (
+                "Surface Policy: Tool Blocked"
+                if decision.sources.get("surface_deny")
+                else "Safety Protocol: Action Blocked"
+            )
             return {
                 "status": "PermissionOutcome::Deny",
-                "error": "Surface Policy: Tool Blocked",
-                "note": f"Tool '{tool_name}' is denied on surface '{surface}'.",
+                "error": error,
+                "note": note,
                 "safety_level": "deny",
+                "policy_sources": dict(decision.sources),
             }
 
-        level = self.classify_safety(tool_name, args)
-
-        if level == SafetyLevel.DENY:
-            return {
-                "status": "PermissionOutcome::Deny",
-                "error": "Safety Protocol: Action Blocked",
-                "note": f"Action '{tool_name}' with args {args} is classified as dangerous and has been blocked.",
-                "safety_level": "deny",
-            }
-
-        name_lower = tool_name.lower()
-        is_read_only = any(p in name_lower for p in READ_ONLY_PATTERNS)
+        level = decision.level
+        read_only_flag = is_read_only(tool_name, registry=self._skill_registry())
 
         needs_approval = False
         if self._autonomy_mode == "strict":
-            needs_approval = not is_read_only
+            needs_approval = not read_only_flag
         elif self._autonomy_mode == "hybrid":
             needs_approval = level == SafetyLevel.CONFIRM
         # loose: nothing needs approval
@@ -164,6 +205,10 @@ class ToolRunner:
             "session_id": session_id,
             "safety_level": level,
             "created_at": time.time(),
+            # Explainability for the SDUI approval card. Renderers can
+            # show "Why are we asking?" using sources without re-running
+            # the resolver and without leaking internal types.
+            "policy_sources": dict(decision.sources),
         }
         self._pending_approvals[request_id] = pending
         logger.info(f"Approval required ({self._autonomy_mode}): {tool_name} → request_id={request_id}")
@@ -533,6 +578,8 @@ class ToolRunner:
             tool_name=tool_name, args=args, skill=skill, endpoint=endpoint,
         )
 
+        result = await self._attach_permission_remediation(session_id, tool_name, result)
+
         if not result.get("success"):
             logger.warning(f"PostToolUse: Action failed — {result.get('error')}")
 
@@ -542,6 +589,51 @@ class ToolRunner:
             result["_anti_loop_streak"] = streak
 
         return result
+
+    async def _attach_permission_remediation(
+        self,
+        session_id: str,
+        tool_name: str,
+        result: dict,
+    ) -> dict:
+        """Send a folder-grant request for trusted computer_use policy denials."""
+        if tool_name not in _COMPUTER_USE_PERMISSION_TOOLS or not isinstance(result, dict):
+            return result
+        data = result.get("data")
+        if not isinstance(data, dict) or data.get("permission_needed") is not True:
+            return result
+        path = str(data.get("path") or "").strip()
+        if not path:
+            return result
+        operation = str(data.get("operation") or "read").strip() or "read"
+        sender = getattr(self._orch, "send_permission_request", None)
+        if not callable(sender):
+            return result
+
+        next_result = dict(result)
+        try:
+            await sender(
+                session_id,
+                path,
+                operation,
+                reason=(
+                    f"FERAL needs {operation} access to {path} to complete "
+                    "the requested file operation."
+                ),
+            )
+            next_result["_permission_request_sent"] = True
+            next_result["remediation"] = (
+                "Permission request sent to the operator; wait for the grant "
+                "before retrying this file operation."
+            )
+        except Exception as exc:
+            logger.warning("Failed to send permission request for %s: %s", path, exc)
+            next_result["_permission_request_sent"] = False
+            next_result["remediation"] = (
+                f"Permission is required for {path}, but the grant request "
+                f"could not be shown: {exc}"
+            )
+        return next_result
 
     # ─────────────────────────────────────────────
     # Tool Execution (direct / UI-event variant)

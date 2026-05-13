@@ -23,6 +23,7 @@ def _make_runner(autonomy_mode: str = "hybrid") -> ToolRunner:
     orch.llm = MagicMock()
     orch._mcp_client = None
     orch._send_text = AsyncMock()
+    orch.send_permission_request = AsyncMock()
     orch._max_iterations = 8
     runner = ToolRunner(orch, autonomy_mode=autonomy_mode)
     runner._approval_mgr = ApprovalManager(db_path=":memory:")
@@ -541,6 +542,42 @@ class TestExecuteToolCallForLLM:
         )
         assert result["success"] is True
         self.orch.executor.execute.assert_called_once()
+
+    async def test_computer_use_permission_denial_sends_grant_request(self):
+        skill = MagicMock()
+        ep = MagicMock()
+        ep.id = "write_file"
+        skill.endpoints = [ep]
+        self.orch.skills.skills = {"computer_use": skill}
+        self.orch.executor.execute = AsyncMock(return_value={
+            "success": False,
+            "status_code": 403,
+            "data": {
+                "permission_needed": True,
+                "path": "/Users/example/Desktop/game.html",
+                "operation": "write",
+            },
+            "error": "Permission denied",
+        })
+
+        result = await self.runner.execute_tool_call_for_llm(
+            "s1",
+            {
+                "name": "computer_use__write_file",
+                "args": {
+                    "path": "/Users/example/Desktop/game.html",
+                    "content": "<html></html>",
+                },
+            },
+            [],
+        )
+
+        assert result["_permission_request_sent"] is True
+        assert "wait for the grant" in result["remediation"]
+        self.orch.send_permission_request.assert_awaited_once()
+        args = self.orch.send_permission_request.await_args.args
+        assert args[:3] == ("s1", "/Users/example/Desktop/game.html", "write")
+        assert "computer_use__write_file" not in self.orch.send_permission_request.await_args.kwargs["reason"]
 
     async def test_skill_not_found_returns_error(self):
         self.orch.skills.skills = {}

@@ -46,6 +46,7 @@ from security.dangerous_tools import resolve_surface_from_context
 from agents.context_manager import ContextManager
 from agents.refusal_handler import RefusalHandler
 from agents.identity_loader import IdentityLoader
+from agents.tool_display import friendly_tool_label
 from agents.direct_execution import (
     direct_execute as helper_direct_execute,
     extract_args_from_text as helper_extract_args_from_text,
@@ -769,6 +770,11 @@ class Orchestrator:
                     skill_id=skill_id,
                     endpoint_id=endpoint_id,
                     args_preview=preview,
+                    display_name=friendly_tool_label(
+                        name,
+                        skill_id=skill_id,
+                        endpoint_id=endpoint_id,
+                    ),
                 ).model_dump(),
             ))
         except Exception:
