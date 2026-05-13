@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import json
 import os
+import platform
 import shutil
 import signal
 import sys
@@ -953,22 +954,99 @@ def cmd_doctor():
     finally:
         sock.close()
 
-    # ── 8. Playwright / chromium ──
+    # ── 8. Browser runtime (Chrome + CDP + Playwright) ──
+    #
+    # The actual runtime path is `BrowserController.connect_over_cdp` to
+    # whatever Chrome the user is running on `FERAL_CDP_PORT` (default
+    # 9222). The previous probe only verified `pw.chromium.launch`,
+    # which is the bundled-headless path FERAL does NOT use. That gave
+    # operators a false green light. The new probe is layered:
+    #
+    #   8a. Real CDP endpoint (running Chrome / Chromium / Brave on
+    #       the configured port). This is the production signal.
+    #   8b. Playwright Python library importable. Required to drive
+    #       the connected Chrome via DOM/locator calls. CDP-only mode
+    #       still works without it but loses selector healing.
+    #   8c. A Chrome / Chromium / Brave binary on disk. Required for
+    #       the auto-launch fallback when CDP is cold.
+    #
+    # The summary line tells the operator exactly which step they are
+    # missing and how to fix it — no more "Playwright OK" while the
+    # actual browser surface is dead.
+
+    cdp_host = os.getenv("FERAL_CDP_HOST", "localhost")
+    cdp_port = int(os.getenv("FERAL_CDP_PORT", "9222"))
+
+    cdp_alive = False
     try:
-        from playwright.sync_api import sync_playwright
-        pw = sync_playwright().start()
-        try:
-            browser = pw.chromium.launch(headless=True)
-            browser.close()
-            _pass("Playwright (chromium)", "installed and launchable")
-        except Exception:
-            _fail("Playwright (chromium)", "package found but chromium not installed",
-                  "Run: playwright install chromium")
-        finally:
-            pw.stop()
+        import urllib.request as _urlreq
+        with _urlreq.urlopen(
+            f"http://{cdp_host}:{cdp_port}/json/version",
+            timeout=2,
+        ) as resp:
+            if resp.status == 200:
+                cdp_alive = True
+    except Exception:
+        cdp_alive = False
+    if cdp_alive:
+        _pass(
+            "Chrome (CDP endpoint)",
+            f"reachable on http://{cdp_host}:{cdp_port}",
+        )
+    else:
+        _warn(
+            "Chrome (CDP endpoint)",
+            f"not reachable on http://{cdp_host}:{cdp_port}",
+            (
+                f"Start Chrome with: --remote-debugging-port={cdp_port} "
+                "--user-data-dir=~/.feral/chrome-profile  (FERAL also "
+                "auto-launches if Chrome/Chromium/Brave is installed)"
+            ),
+        )
+
+    try:
+        import importlib
+        importlib.import_module("playwright.async_api")
+        _pass(
+            "Playwright (driver lib)",
+            "importable — DOM/locator actions enabled (used over CDP, "
+            "not bundled chromium)",
+        )
     except ImportError:
-        _warn("Playwright (chromium)", "not installed — browser automation unavailable",
-              "pip install playwright && playwright install chromium")
+        _warn(
+            "Playwright (driver lib)",
+            "not installed — CDP-only mode (no selector healing)",
+            "pip install 'feral-ai[browser]'  (or: pip install playwright)",
+        )
+
+    chrome_candidates: list[str] = []
+    if platform.system() == "Darwin":
+        chrome_candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        ]
+    elif platform.system() == "Linux":
+        for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+            p = shutil.which(name)
+            if p:
+                chrome_candidates.append(p)
+    else:
+        for name in ("chrome.exe", "chromium.exe"):
+            p = shutil.which(name)
+            if p:
+                chrome_candidates.append(p)
+
+    chrome_bin = next((c for c in chrome_candidates if os.path.isfile(c)), None)
+    if chrome_bin:
+        _pass("Chrome binary", f"found at {chrome_bin}")
+    else:
+        _warn(
+            "Chrome binary",
+            "no Chrome / Chromium / Brave on disk — auto-launch will fail",
+            "Install Google Chrome, Chromium, or Brave so FERAL can "
+            "boot a CDP-enabled browser when one isn't already running",
+        )
 
     # ── 9. Node.js ──
     node_bin = shutil.which("node")
@@ -1007,7 +1085,32 @@ def cmd_doctor():
     except Exception as exc:
         _warn("Local Audio", f"detection failed: {exc}")
 
-    # ── 11. Key dependencies ──
+    # ── 11. macOS GUI permissions (Screen Recording + Accessibility) ──
+    # Only meaningful on Darwin: gui_computer_use / agentic_computer_use
+    # cannot synthesize input (Accessibility) or capture pixels beyond
+    # the menu bar wallpaper (Screen Recording) without explicit grants.
+    # We surface the *real* TCC state via Apple's APIs rather than
+    # claiming readiness based on package presence alone.
+    if platform.system() == "Darwin":
+        console.print()
+        console.print("[bold]macOS GUI Permissions[/bold]")
+        try:
+            from security.macos_permissions import all_gui_permission_statuses
+            for probe in all_gui_permission_statuses():
+                label = f"{probe.permission.replace('_', ' ').title()} (TCC)"
+                if probe.status == "granted":
+                    _pass(label, f"{probe.api}: granted")
+                elif probe.status == "denied":
+                    _fail(label, f"{probe.api}: denied", probe.setup_step)
+                elif probe.status == "unknown":
+                    detail = probe.error or "PyObjC not available"
+                    _warn(label, detail, probe.setup_step)
+                else:
+                    _warn(label, "not_applicable")
+        except Exception as exc:
+            _warn("macOS GUI Permissions", f"probe failed: {exc}")
+
+    # ── 12. Key dependencies ──
     console.print()
     console.print("[bold]Dependencies[/bold]")
     dep_pkgs = [
@@ -1026,6 +1129,87 @@ def cmd_doctor():
                 _fail(label, "not installed", f"pip install {pkg}")
             else:
                 _warn(label, "not installed")
+
+    # ── PR 12: focused doctors for agent runtimes ──
+    console.print()
+    console.print("[bold]Agent runtimes (PR 12)[/bold]")
+
+    # local-agent: workspace grants present?
+    try:
+        grants_path = home / "workspace_grants.json"
+        if grants_path.exists():
+            import json as _json
+            grants_data = _json.loads(grants_path.read_text() or "{}")
+            grant_count = len(grants_data.get("grants", grants_data)) if isinstance(grants_data, dict) else 0
+            _pass(
+                "Local-agent grants",
+                f"{grant_count} workspace grant(s) registered" if grant_count else "no grants yet",
+            )
+        else:
+            _warn(
+                "Local-agent grants",
+                "no workspace_grants.json — write_file will prompt on first use",
+                "Run: feral grant <name> <path> to pre-authorize a directory",
+            )
+    except Exception as exc:
+        _warn("Local-agent grants", f"could not read grants: {exc}")
+
+    # coding-agent: CodingRunStore initialisable
+    try:
+        from agents.coding_run import CodingRunStore
+        coding_db = home / "coding_runs.db"
+        store = CodingRunStore(db_path=coding_db)
+        _pass("Coding-agent store", f"SQLite ready at {coding_db}")
+        del store
+    except Exception as exc:
+        _warn(
+            "Coding-agent store",
+            f"could not initialise: {exc}",
+            "Ensure $FERAL_HOME is writable; rerun `feral setup` to fix.",
+        )
+
+    # voice doctor: realtime provider key set?
+    have_voice_key = any(
+        os.environ.get(k) or creds_data.get(k)
+        for k in ("OPENAI_API_KEY", "GOOGLE_API_KEY")
+    )
+    if have_voice_key:
+        providers = []
+        if os.environ.get("OPENAI_API_KEY") or creds_data.get("OPENAI_API_KEY"):
+            providers.append("OpenAI Realtime")
+        if os.environ.get("GOOGLE_API_KEY") or creds_data.get("GOOGLE_API_KEY"):
+            providers.append("Google Gemini Realtime")
+        _pass("Voice runtime", "key set: " + ", ".join(providers))
+    else:
+        _warn(
+            "Voice runtime",
+            "no realtime provider key configured",
+            "Set OPENAI_API_KEY or GOOGLE_API_KEY to enable in-composer voice.",
+        )
+
+    # computer-use: provider-neutral driver importable
+    try:
+        from agents.computer_use_driver import normalize_action  # noqa: F401
+        _pass("Computer-use driver", "ComputerUseDriver normalisation ready")
+    except Exception as exc:
+        _fail(
+            "Computer-use driver",
+            f"import failed: {exc}",
+            "Reinstall feral-ai; the driver lives in feral-core/agents/computer_use_driver.py",
+        )
+
+    # upload store: PR 10
+    try:
+        from memory.uploads import UploadStore
+        uploads_root = home / "uploads"
+        _ = UploadStore(root=uploads_root)
+        _pass("Upload store", f"local-first chat uploads at {uploads_root}")
+    except Exception as exc:
+        _warn(
+            "Upload store",
+            f"could not initialise: {exc}",
+            "Ensure $FERAL_HOME is writable.",
+        )
 
     # ── Summary ──
     console.print()
@@ -1452,6 +1636,28 @@ def main():
         help="Disable Tailscale Funnel + revert to localhost mode",
     )
 
+    # feral grant — workspace folder grants (Desktop, Documents, project dirs)
+    # so computer_use file tools can read/write outside the default sandbox.
+    grant_p = sub.add_parser(
+        "grant",
+        help="Grant or revoke filesystem folder access for computer_use file tools",
+    )
+    grant_sub = grant_p.add_subparsers(dest="action")
+    grant_add = grant_sub.add_parser(
+        "add",
+        help="Grant a folder (default mode: readwrite)",
+    )
+    grant_add.add_argument("path", help="Absolute folder path (e.g. ~/Desktop)")
+    grant_add.add_argument(
+        "--mode",
+        choices=("read", "readwrite"),
+        default="readwrite",
+        help="Access mode (default readwrite)",
+    )
+    grant_sub.add_parser("list", help="List active workspace grants")
+    grant_revoke = grant_sub.add_parser("revoke", help="Revoke a previously granted folder")
+    grant_revoke.add_argument("path", help="Absolute folder path to revoke")
+
     # feral bridge install — wraps scripts/install-phone-bridge.sh
     bridge_p = sub.add_parser("bridge", help="Install the FERAL phone-bridge daemon on this host")
     bridge_sub = bridge_p.add_subparsers(dest="action")
@@ -1552,6 +1758,9 @@ def main():
     elif args.subcommand == "twin":
         from cli.twin_commands import cmd_twin
         cmd_twin(args)
+    elif args.subcommand == "grant":
+        from cli.grant_commands import cmd_grant
+        sys.exit(cmd_grant(args))
     elif args.subcommand == "key":
         from cli.key_commands import dispatch_key_subcommand
         sys.exit(dispatch_key_subcommand(args))
