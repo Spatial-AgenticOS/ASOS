@@ -1,0 +1,134 @@
+{
+    "skill_id": "email",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Gmail / Email",
+        "primary_color": "#EA4335",
+        "secondary_color": "#FBBC05",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Read, search, draft, and send email. Backed by Gmail when the user is signed in via Google OAuth; falls back to IMAP/SMTP when the user has configured a generic mail provider. Read endpoints are safe; sending is a confirm-tier action.",
+    "trigger_phrases": [
+        "check email",
+        "any new mail",
+        "read my inbox",
+        "search email",
+        "send email",
+        "draft email",
+        "summarize my inbox",
+        "unread emails"
+    ],
+    "categories": ["communication", "productivity"],
+    "auth": {
+        "type": "oauth2",
+        "provider": "google",
+        "scopes": [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.modify"
+        ]
+    },
+    "endpoints": [
+        {
+            "id": "list_inbox",
+            "method": "PYTHON",
+            "url": "",
+            "description": "List the most recent emails in the inbox. Read-only.",
+            "params": [
+                {"name": "max_results", "type": "integer", "required": false, "description": "Number of messages to fetch (default 20, max 100)"}
+            ],
+            "returns_description": "{messages: [{id, from, subject, snippet, date}], source: 'gmail' | 'imap'}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        },
+        {
+            "id": "read_email",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Fetch the full body and metadata of one email by its message id.",
+            "params": [
+                {"name": "message_id", "type": "string", "required": true, "description": "Provider message id from list_inbox / search"}
+            ],
+            "returns_description": "{id, from, to, subject, body, html, date, headers}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "search",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Search the user's mailbox with a Gmail-style query.",
+            "params": [
+                {"name": "query", "type": "string", "required": true, "description": "Search query (Gmail syntax: from:, to:, subject:, after:, has:attachment, etc.)"},
+                {"name": "max_results", "type": "integer", "required": false, "description": "Max results (default 10, max 100)"}
+            ],
+            "returns_description": "{messages: [...], query, source}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        },
+        {
+            "id": "send_email",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Send an email from the user's account. Always requires explicit operator confirmation — outbound mail is an irreversible action.",
+            "params": [
+                {"name": "to", "type": "string", "required": true, "description": "Recipient address (single)"},
+                {"name": "subject", "type": "string", "required": true, "description": "Subject line"},
+                {"name": "body", "type": "string", "required": true, "description": "Plain-text body"}
+            ],
+            "returns_description": "{message_id, source}",
+            "safety_tier": "confirm",
+            "requires_user_approval": true,
+            "ui_hint": "confirmation"
+        },
+        {
+            "id": "draft_email",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Create a draft email without sending it. Drafts are stored on the provider and visible in the user's drafts folder.",
+            "params": [
+                {"name": "to", "type": "string", "required": true},
+                {"name": "subject", "type": "string", "required": true},
+                {"name": "body", "type": "string", "required": true}
+            ],
+            "returns_description": "{draft_id, source}",
+            "safety_tier": "safe",
+            "ui_hint": null
+        },
+        {
+            "id": "get_unread_count",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Return the number of unread messages in the inbox.",
+            "params": [],
+            "returns_description": "{count, source}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "stat"
+        },
+        {
+            "id": "summarize_inbox",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Summarize the most recent unread/incoming emails using the configured LLM. Read-only.",
+            "params": [
+                {"name": "max_emails", "type": "integer", "required": false, "description": "Max emails to include in the summary (default 10)"}
+            ],
+            "returns_description": "{summary, message_count, source}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "detail_card"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": [],
+    "requires_daemon": false,
+    "max_calls_per_hour": 240
+}

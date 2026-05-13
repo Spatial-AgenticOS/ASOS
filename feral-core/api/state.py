@@ -235,6 +235,9 @@ class BrainState:
         self.scheduler = None
         self.docker_sandbox = None
         self.taskflows: Optional[TaskFlowRuntime] = None
+        # PR 10: canonical upload store. Initialised lazily on first
+        # use so unit-test fixtures don't have to spin up the brain.
+        self.uploads = None
         self.session_handoff: Optional[SessionHandoffManager] = None
         self.baseline_engine: Optional[BaselineEngine] = None
         # AboutMe store — structured self-model of the user (see agents/about_me.py).
@@ -665,9 +668,32 @@ class BrainState:
         if self.microsoft365:
             register_instance("microsoft365", self.microsoft365)
 
+        # PR 11 gap-fill — once the skill registry is populated, hook
+        # it into the MCP server so a (manifest-AUTO, mcp-surface-safe)
+        # subset of FERAL skills can be exposed to external MCP clients
+        # like Claude Desktop / Cursor. Projection is OFF unless the
+        # operator explicitly enables it via env var or the dedicated
+        # POST /api/mcp/projection route (added by api.routes.mcp).
+        try:
+            if self.mcp_server is not None and self.skill_registry is not None:
+                self.mcp_server.configure_skill_projection(
+                    skill_registry=self.skill_registry,
+                    skill_executor=self.skill_executor,
+                    enabled=bool(os.getenv("FERAL_MCP_PROJECT_SKILLS")),
+                )
+        except Exception as exc:  # pragma: no cover - defensive boot wiring
+            logger.warning("MCP projection wiring failed: %s", exc)
+
         with boot_subsystem(self._boot_report, "TaskFlowRuntime"):
             self.taskflows = TaskFlowRuntime(memory_store=self.memory)
             await self.taskflows.start()
+
+        with boot_subsystem(self._boot_report, "UploadStore"):
+            # PR 10: canonical chat-attachment store. Lives entirely on
+            # local disk under $FERAL_HOME/uploads and never auto-syncs
+            # anywhere — local-first contract.
+            from memory.uploads import UploadStore
+            self.uploads = UploadStore()
 
         with boot_subsystem(self._boot_report, "ApprovalManager"):
             from security.exec_approvals import ApprovalManager
@@ -731,6 +757,9 @@ class BrainState:
                 send_to_node=self._send_dict_to_node,
                 send_to_session=self.send_to_session,
                 identity_workspace=self.identity_workspace,
+                # PR9: hand the orchestrator so voice tool calls emit
+                # the same tool_start/tool_result trace as chat.
+                orchestrator=self.orchestrator,
             )
 
         with boot_subsystem(self._boot_report, "VoiceRouter"):
@@ -753,6 +782,8 @@ class BrainState:
                 perception=self.perception,
                 send_to_node=self._send_dict_to_node,
                 send_to_session=self.send_to_session,
+                # PR9: voice tools share the same trace pipeline as chat.
+                orchestrator=self.orchestrator,
             )
             if self.voice_router:
                 self.voice_router.set_gemini_proxy(self.gemini_proxy)
@@ -1421,8 +1452,42 @@ class BrainState:
 
             register_instance(manifest.skill_id, _BrowserSkillBridge(self))
             logger.info(f"Browser skill registered: {manifest.skill_id} ({len(endpoints)} endpoints)")
+
+            # Hand the shared controller to WebActionsSkill so we don't
+            # boot a second Chrome / Playwright pair for higher-level
+            # web flows. The skill exposes set_browser() exactly for
+            # this purpose; without injection it lazily makes its own
+            # BrowserController() on first call.
+            try:
+                from skills.impl import get_implementation
+                web_actions = get_implementation("web_actions")
+                if web_actions is not None and hasattr(web_actions, "set_browser"):
+                    web_actions.set_browser(self.browser)
+                    logger.info("WebActionsSkill bound to shared BrowserController")
+            except Exception as e:
+                logger.debug("WebActionsSkill browser injection skipped: %s", e)
         except Exception as e:
             logger.warning(f"Browser skill registration failed: {e}")
+
+    # Manifest endpoint id → controller method name. Manifest history
+    # outpaced the controller (save_session vs save_cookies, etc.); this
+    # alias map is the single source of truth that keeps both honest
+    # without renaming public agent-visible endpoints again.
+    _BROWSER_ENDPOINT_ALIASES = {
+        "save_session": "save_cookies",
+        "restore_session": "restore_cookies",
+        "network_monitor_start": "enable_network_monitor",
+        "network_log": "get_network_log",
+        # PR 7 gap-fill — tracing / HAR / download endpoints exposed
+        # to the agent via stable ids. Aliases map to the controller
+        # method names so we can rename internal methods later without
+        # breaking the agent surface.
+        "trace_start": "start_tracing",
+        "trace_stop": "stop_tracing",
+        "har_start": "start_har",
+        "har_stop": "stop_har",
+        "download_next": "wait_for_download",
+    }
 
     async def _execute_browser_action(self, endpoint_id: str, args: dict) -> dict:
         """Execute a browser action when called by the agent."""
@@ -1432,11 +1497,18 @@ class BrainState:
             ok = await self.browser.initialize()
             if not ok:
                 return {"error": "Cannot connect to Chrome. Start it with --remote-debugging-port=9222"}
-        method = getattr(self.browser, endpoint_id, None)
+        method_name = self._BROWSER_ENDPOINT_ALIASES.get(endpoint_id, endpoint_id)
+        method = getattr(self.browser, method_name, None)
         if not method:
             return {"error": f"Unknown browser action: {endpoint_id}"}
         if endpoint_id == "navigate":
-            return await method(args.get("url", ""))
+            # Forward `wait_until` so the agent can choose between
+            # `domcontentloaded` (default), `load`, `networkidle`, or
+            # `commit`. Previously dropped on the floor.
+            return await method(
+                args.get("url", ""),
+                wait_until=args.get("wait_until", "domcontentloaded"),
+            )
         elif endpoint_id == "screenshot":
             return await method(args.get("full_page", False))
         elif endpoint_id == "snapshot":
@@ -1461,6 +1533,19 @@ class BrainState:
                 args.get("landscape", False),
             )
         elif endpoint_id == "get_page_info":
+            return await method()
+        elif endpoint_id == "wait_for_selector":
+            return await method(
+                args.get("ref_or_selector", ""),
+                timeout_ms=int(args.get("timeout_ms", 5000)),
+                poll_ms=int(args.get("poll_ms", 100)),
+                state=args.get("state", "visible"),
+            )
+        elif endpoint_id == "save_session" or endpoint_id == "restore_session":
+            return await method(args.get("profile", "default"))
+        elif endpoint_id == "network_log":
+            return await method(args.get("filter_type", ""))
+        elif endpoint_id == "network_monitor_start":
             return await method()
         return await method(**args) if args else await method()
 

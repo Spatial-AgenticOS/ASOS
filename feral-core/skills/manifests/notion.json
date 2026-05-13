@@ -1,0 +1,120 @@
+{
+    "skill_id": "notion",
+    "version": "1.0.0",
+    "author": "feral-core",
+    "brand": {
+        "name": "Notion",
+        "primary_color": "#000000",
+        "secondary_color": "#FFFFFF",
+        "logo_url": "",
+        "icon_set": "sf_symbols"
+    },
+    "description": "Read and create Notion pages and database entries. Search and read endpoints are safe; creates and updates require explicit operator approval because they mutate the user's workspace.",
+    "trigger_phrases": [
+        "search notion",
+        "find in notion",
+        "read notion page",
+        "add to notion",
+        "create notion page",
+        "log in notion",
+        "notion database"
+    ],
+    "categories": ["productivity", "notes"],
+    "auth": {
+        "type": "oauth2",
+        "provider": "notion",
+        "scopes": []
+    },
+    "endpoints": [
+        {
+            "id": "search_pages",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Search the user's Notion workspace for pages and databases matching a query string.",
+            "params": [
+                {"name": "query", "type": "string", "required": false, "description": "Substring to match (empty = recent items)"}
+            ],
+            "returns_description": "{results: [{id, type, title, url, last_edited_time}]}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        },
+        {
+            "id": "read_page",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Read a Notion page's blocks as plain text + structured metadata.",
+            "params": [
+                {"name": "page_id", "type": "string", "required": true, "description": "Notion page id"}
+            ],
+            "returns_description": "{id, title, blocks: [{type, text}], url}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "detail_card"
+        },
+        {
+            "id": "create_page",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Create a new Notion page under a parent page or database. Confirm-tier because it adds content to the user's workspace.",
+            "params": [
+                {"name": "parent_id", "type": "string", "required": true, "description": "Parent page id or database id"},
+                {"name": "title", "type": "string", "required": true, "description": "Page title"},
+                {"name": "content", "type": "string", "required": false, "description": "Initial body content (plain text or markdown)"}
+            ],
+            "returns_description": "{page_id, url}",
+            "safety_tier": "confirm",
+            "requires_user_approval": true,
+            "ui_hint": "confirmation"
+        },
+        {
+            "id": "update_page",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Update an existing page's properties. Confirm-tier — mutates Notion content.",
+            "params": [
+                {"name": "page_id", "type": "string", "required": true},
+                {"name": "properties", "type": "object", "required": true, "description": "Notion properties dict"}
+            ],
+            "returns_description": "{page_id, last_edited_time}",
+            "safety_tier": "confirm",
+            "requires_user_approval": true,
+            "ui_hint": "confirmation"
+        },
+        {
+            "id": "query_database",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Query a Notion database with optional filter + sort.",
+            "params": [
+                {"name": "database_id", "type": "string", "required": true},
+                {"name": "filter", "type": "object", "required": false, "description": "Notion filter object"},
+                {"name": "sorts", "type": "array", "required": false, "items": {"type": "object"}, "description": "Notion sort list"}
+            ],
+            "returns_description": "{results: [...]}",
+            "safety_tier": "safe",
+            "read_only_hint": true,
+            "ui_hint": "feed"
+        },
+        {
+            "id": "create_database_entry",
+            "method": "PYTHON",
+            "url": "",
+            "description": "Insert a row into a Notion database. Confirm-tier — adds persistent content.",
+            "params": [
+                {"name": "database_id", "type": "string", "required": true},
+                {"name": "properties", "type": "object", "required": true, "description": "Property values keyed by column name"}
+            ],
+            "returns_description": "{page_id, url}",
+            "safety_tier": "confirm",
+            "requires_user_approval": true,
+            "ui_hint": "confirmation"
+        }
+    ],
+    "flows": [],
+    "crons": [],
+    "triggers": [],
+    "permissions": [],
+    "requires_daemon": false,
+    "max_calls_per_hour": 600
+}
