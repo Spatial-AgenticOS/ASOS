@@ -181,6 +181,13 @@ class BrowserController:
         self._network_log: list[dict] = []
         self._network_monitoring = False
         self._max_network_log = 500
+        # PR 7 gap-fill: tracing / HAR / download bookkeeping
+        self._tracing_active = False
+        self._tracing_name: str = ""
+        self._har_active = False
+        self._har_context = None
+        self._har_prev_page = None
+        self._har_path: Optional[Path] = None
 
     @property
     def connected(self) -> bool:
@@ -211,6 +218,11 @@ class BrowserController:
         try:
             from playwright.async_api import async_playwright
             pw = await async_playwright().start()
+            # Store the driver so close() can stop() it cleanly. The
+            # previous code only kept a local `pw`, leaking the
+            # `Playwright` async driver subprocess for the entire FERAL
+            # process lifetime.
+            self._playwright = pw
             self._browser = await pw.chromium.connect_over_cdp(
                 f"http://{CDP_HOST}:{CDP_PORT}",
             )
@@ -223,6 +235,14 @@ class BrowserController:
                 self._page = await ctx.new_page()
             logger.info("Playwright connected via CDP")
         except Exception as e:
+            # Roll back any partial driver start so we don't leak it on
+            # the CDP-only path either.
+            if self._playwright is not None:
+                try:
+                    await self._playwright.stop()
+                except Exception:
+                    pass
+                self._playwright = None
             logger.info(f"Playwright not available (CDP-only mode): {e}")
 
         try:
@@ -520,7 +540,18 @@ class BrowserController:
             return {"success": False, "error": str(e)}
 
     async def _resolve_aria_selectors(self):
-        """Resolve ARIA refs to CSS selectors via DOM.describeNode."""
+        """Resolve ARIA refs to CSS selectors via DOM.describeNode.
+
+        Selector strategy is dual-mode aware:
+        * Always emit a *plain* CSS form (id / data-testid / tag.class)
+          when the DOM offers one — these work in both Playwright and
+          CDP `document.querySelector` paths.
+        * Only when nothing else is available do we fall back to
+          ``tag:has-text(...)``. That is a Playwright pseudo-selector
+          (not real CSS), so we also stash the ARIA name in
+          ``text_match`` so the CDP-only path can find the element via
+          a JS text scan instead of choking on the unknown pseudo.
+        """
         for ref_id, info in list(self._aria_refs.items()):
             backend_id = info.get("backend_id")
             if not backend_id or info.get("selector"):
@@ -543,6 +574,11 @@ class BrowserController:
                 elif tag and info.get("name"):
                     safe_name = info["name"].replace('"', '\\"')[:50]
                     info["selector"] = f'{tag}:has-text("{safe_name}")'
+                    info["text_match"] = {"tag": tag, "text": info["name"][:120]}
+                # Always carry the backend id so a CDP-only caller can
+                # resolve the element directly without parsing the
+                # selector string.
+                info["backend_id"] = backend_id
             except Exception:
                 pass
 
@@ -726,12 +762,173 @@ class BrowserController:
             return {"url": "", "title": ""}
 
     async def close(self):
+        # PR 7 gap-fill: if a tracing session is still active when the
+        # controller is torn down, flush it to a final trace file rather
+        # than dropping the operator's recording on the floor.
+        if getattr(self, "_tracing_active", False):
+            try:
+                await self.stop_tracing()
+            except Exception:
+                pass
         await self._cdp.disconnect()
         if self._browser:
             try:
                 await self._browser.close()
             except Exception:
                 pass
+            self._browser = None
+        # Stop the Playwright driver subprocess. Skipping this leaves a
+        # dangling node process per BrowserController instance, which is
+        # what the leak tests caught.
+        if self._playwright is not None:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                pass
+            self._playwright = None
+        self._page = None
+
+    # ── PR 7 gap-fill: Tracing / HAR / Downloads ────────────────────
+
+    @property
+    def _artifacts_root(self) -> Path:
+        root = Path.home() / ".feral" / "browser" / "artifacts"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    async def start_tracing(
+        self,
+        *,
+        screenshots: bool = True,
+        snapshots: bool = True,
+        sources: bool = False,
+        name: str = "",
+    ) -> dict:
+        """Start a Playwright tracing session for the active context.
+
+        Returns ``{success, path, message}``. When Playwright is not
+        available (CDP-only mode), the call truthfully reports that
+        tracing requires the Playwright driver — no fake-success.
+        """
+        if not self._page:
+            return {"success": False, "error": "Playwright not connected — tracing requires the Playwright driver. Install with `pip install playwright` and run `playwright install chromium`."}
+        ctx = self._page.context
+        try:
+            tracing = ctx.tracing
+        except Exception:
+            return {"success": False, "error": "Playwright tracing API not available on this browser context."}
+        try:
+            await tracing.start(screenshots=screenshots, snapshots=snapshots, sources=sources)
+        except Exception as e:
+            return {"success": False, "error": f"tracing.start failed: {e}"}
+        self._tracing_active = True
+        self._tracing_name = name or f"trace_{int(time.time())}"
+        return {
+            "success": True,
+            "message": "Tracing started. Call stop_tracing to flush the zip.",
+            "name": self._tracing_name,
+        }
+
+    async def stop_tracing(self, *, name: str = "") -> dict:
+        """Stop tracing and write the artifact to ~/.feral/browser/artifacts/<name>.zip."""
+        if not getattr(self, "_tracing_active", False) or not self._page:
+            return {"success": False, "error": "No active tracing session."}
+        ctx = self._page.context
+        try:
+            tracing = ctx.tracing
+        except Exception:
+            return {"success": False, "error": "Playwright tracing API not available."}
+        out_name = name or getattr(self, "_tracing_name", f"trace_{int(time.time())}")
+        out_path = self._artifacts_root / f"{out_name}.zip"
+        try:
+            await tracing.stop(path=str(out_path))
+        except Exception as e:
+            return {"success": False, "error": f"tracing.stop failed: {e}"}
+        self._tracing_active = False
+        return {
+            "success": True,
+            "path": str(out_path),
+            "size_bytes": out_path.stat().st_size if out_path.exists() else 0,
+            "viewer": "Open with: `playwright show-trace " + str(out_path) + "`",
+        }
+
+    async def start_har(self, *, name: str = "") -> dict:
+        """Start HAR network recording on a fresh context.
+
+        HAR must be configured at context creation time, so this method
+        spins up a NEW Playwright context on the same browser and uses
+        it for subsequent calls until ``stop_har`` flushes the file.
+        The previous context is preserved and restored on stop so the
+        agent's running page state isn't lost.
+        """
+        if not self._browser:
+            return {"success": False, "error": "Playwright browser not connected — HAR requires the Playwright driver."}
+        out_name = name or f"har_{int(time.time())}"
+        out_path = self._artifacts_root / f"{out_name}.har"
+        try:
+            har_context = await self._browser.new_context(
+                record_har_path=str(out_path),
+                record_har_content="embed",
+            )
+            har_page = await har_context.new_page()
+        except Exception as e:
+            return {"success": False, "error": f"new_context with HAR failed: {e}"}
+        self._har_active = True
+        self._har_prev_page = self._page
+        self._har_context = har_context
+        self._har_path = out_path
+        self._page = har_page
+        return {"success": True, "path": str(out_path), "name": out_name}
+
+    async def stop_har(self) -> dict:
+        if not getattr(self, "_har_active", False):
+            return {"success": False, "error": "No active HAR session."}
+        ctx = getattr(self, "_har_context", None)
+        out_path = getattr(self, "_har_path", None)
+        prev_page = getattr(self, "_har_prev_page", None)
+        try:
+            if ctx is not None:
+                await ctx.close()
+        except Exception as e:
+            return {"success": False, "error": f"har context close failed: {e}"}
+        self._har_active = False
+        self._har_context = None
+        self._page = prev_page
+        return {
+            "success": True,
+            "path": str(out_path) if out_path else "",
+            "size_bytes": out_path.stat().st_size if out_path and out_path.exists() else 0,
+        }
+
+    async def wait_for_download(self, *, save_as: str = "", timeout_ms: int = 30000) -> dict:
+        """Wait for a download to start, save it under artifacts/, and
+        return the local path + suggested filename.
+
+        Pre-condition: an action that triggers a download (click on a
+        download link, etc.) is performed *immediately after* this call
+        — Playwright registers the listener before the click via
+        ``expect_download`` semantics emulated here through ``page.wait_for_event``.
+        """
+        if not self._page:
+            return {"success": False, "error": "Playwright page not connected — downloads require the Playwright driver."}
+        try:
+            download = await self._page.wait_for_event("download", timeout=timeout_ms)
+        except Exception as e:
+            return {"success": False, "error": f"no download event within {timeout_ms}ms: {e}"}
+        suggested = download.suggested_filename or f"download_{int(time.time())}"
+        out_name = save_as or suggested
+        out_path = self._artifacts_root / out_name
+        try:
+            await download.save_as(str(out_path))
+        except Exception as e:
+            return {"success": False, "error": f"download save_as failed: {e}"}
+        return {
+            "success": True,
+            "path": str(out_path),
+            "suggested_filename": suggested,
+            "size_bytes": out_path.stat().st_size if out_path.exists() else 0,
+            "url": download.url,
+        }
 
     # ── Cookie / Session Persistence ─────────────────────────────────
 
@@ -901,22 +1098,139 @@ class BrowserController:
         })
 
     async def _cdp_get_element_center(self, selector: str) -> tuple[float, float]:
-        safe_selector = json.dumps(selector)
-        result = await self._cdp.send_command("Runtime.evaluate", {
-            "expression": (
+        # `:has-text("X")` is a Playwright pseudo, not real CSS. When
+        # we are running CDP-only, splitting into tag + text and using
+        # a small JS text scan finds the element instead of crashing
+        # `document.querySelector`.
+        tag, text = self._parse_has_text(selector)
+        if tag is not None:
+            expression = (
+                "(function() {"
+                f"const tag = {json.dumps(tag)};"
+                f"const text = {json.dumps(text)};"
+                "const els = Array.from(document.querySelectorAll(tag));"
+                "const el = els.find(e => (e.innerText || e.textContent || '').includes(text));"
+                "if (!el) return null;"
+                "const rect = el.getBoundingClientRect();"
+                "return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };"
+                "})()"
+            )
+        else:
+            safe_selector = json.dumps(selector)
+            expression = (
                 "(function() {"
                 f"const el = document.querySelector({safe_selector});"
                 "if (!el) return null;"
                 "const rect = el.getBoundingClientRect();"
                 "return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };"
                 "})()"
-            ),
+            )
+        result = await self._cdp.send_command("Runtime.evaluate", {
+            "expression": expression,
             "returnByValue": True,
         })
         coords = result.get("result", {}).get("value")
         if not coords:
             raise Exception(f"Element not found: {selector}")
         return float(coords["x"]), float(coords["y"])
+
+    @staticmethod
+    def _parse_has_text(selector: str) -> tuple[Optional[str], str]:
+        """If selector looks like ``tag:has-text("X")``, return (tag, X);
+        otherwise return (None, "") so the caller falls through to
+        plain ``querySelector``.
+        """
+        if not selector or ":has-text(" not in selector:
+            return None, ""
+        try:
+            head, _, rest = selector.partition(":has-text(")
+            text, _, _ = rest.rpartition(")")
+            text = text.strip()
+            if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+                text = text[1:-1]
+            tag = head.strip() or "*"
+            return tag, text
+        except Exception:
+            return None, ""
+
+    # ── Wait / Retry primitives ──────────────────────────────────────
+    #
+    # The brain's planner needs to express "before clicking, make sure
+    # this thing exists / is visible". Flat sleeps cause flaky
+    # automation. These primitives poll until a real condition is
+    # met (or the budget runs out) and report exactly which condition
+    # was satisfied (or which timeout was exceeded), so the agent can
+    # repair instead of guessing.
+
+    async def wait_for_selector(
+        self,
+        ref_or_selector: str,
+        timeout_ms: int = 5000,
+        poll_ms: int = 100,
+        state: str = "visible",
+    ) -> dict:
+        """Wait until an element matching the selector/ARIA ref exists
+        (and optionally is visible). Falls back to a CDP polling loop
+        when Playwright is unavailable. Always returns a structured
+        dict — never silently waits the full budget on missing DOM.
+        """
+        target = self._resolve_selector(ref_or_selector)
+        deadline = max(50, int(timeout_ms))
+        poll = max(20, int(poll_ms))
+        if self._page:
+            try:
+                await self._page.wait_for_selector(
+                    target,
+                    timeout=deadline,
+                    state=state if state in ("attached", "detached", "visible", "hidden") else "visible",
+                )
+                return {"success": True, "selector": target, "via": "playwright"}
+            except Exception as e:
+                return {"success": False, "selector": target, "error": str(e), "via": "playwright"}
+
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+        last_error = ""
+        while (loop.time() - start) * 1000.0 < deadline:
+            try:
+                tag, text = self._parse_has_text(target)
+                if tag is not None:
+                    expression = (
+                        "(function() {"
+                        f"const tag = {json.dumps(tag)};"
+                        f"const text = {json.dumps(text)};"
+                        "const els = Array.from(document.querySelectorAll(tag));"
+                        "const el = els.find(e => (e.innerText || e.textContent || '').includes(text));"
+                        "if (!el) return false;"
+                        "const r = el.getBoundingClientRect();"
+                        "return r.width > 0 && r.height > 0;"
+                        "})()"
+                    )
+                else:
+                    safe_selector = json.dumps(target)
+                    expression = (
+                        "(function() {"
+                        f"const el = document.querySelector({safe_selector});"
+                        "if (!el) return false;"
+                        "const r = el.getBoundingClientRect();"
+                        "return r.width > 0 && r.height > 0;"
+                        "})()"
+                    )
+                result = await self._cdp.send_command("Runtime.evaluate", {
+                    "expression": expression,
+                    "returnByValue": True,
+                })
+                if bool(result.get("result", {}).get("value")):
+                    return {"success": True, "selector": target, "via": "cdp"}
+            except Exception as e:
+                last_error = str(e)
+            await asyncio.sleep(poll / 1000.0)
+        return {
+            "success": False,
+            "selector": target,
+            "via": "cdp",
+            "error": last_error or f"Selector {target!r} not visible within {deadline}ms",
+        }
 
 
 def get_browser_skill_manifest() -> dict:
@@ -954,6 +1268,12 @@ def get_browser_skill_manifest() -> dict:
             {"id": "scroll", "description": "Scroll the page", "params": [
                 {"name": "direction", "type": "string", "required": False, "description": "up/down/left/right"},
                 {"name": "amount", "type": "integer", "required": False},
+            ]},
+            {"id": "wait_for_selector", "description": "Wait until a selector or ARIA ref is visible (or until the timeout expires). Returns success/failure with a real reason — never silently waits.", "params": [
+                {"name": "ref_or_selector", "type": "string", "required": True, "description": "ARIA ref (axN) or CSS selector"},
+                {"name": "timeout_ms", "type": "integer", "required": False, "description": "Max wait in ms (default 5000)"},
+                {"name": "poll_ms", "type": "integer", "required": False, "description": "Poll interval in ms (default 100, CDP-only path)"},
+                {"name": "state", "type": "string", "required": False, "description": "visible|attached|detached|hidden (default visible, Playwright path)"},
             ]},
             {"id": "get_console_logs", "description": "Read captured browser console logs", "params": [
                 {"name": "limit", "type": "integer", "required": False, "description": "Max log entries to return"},
