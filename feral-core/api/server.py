@@ -1575,6 +1575,21 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 if state.memory:
                     state.memory.working_push(target_sid, {"role": "user", "text": text})
 
+                # Phase 1 (audit-r10 overhaul plan) — `device_target`
+                # tells the brain WHERE the requested action should run.
+                # When the iOS client sends "brain" (e.g. "open my Mac
+                # browser"), `resolve_surface_from_context` swaps the
+                # legacy `phone_surface → http_api` hard-deny for the
+                # `brain_host` surface, unblocking the operator's
+                # "do X on my Mac" complaint. When "phone" or "glasses"
+                # the brain dispatches to `phone_actuator` so the LLM
+                # is steered toward `phone.*` skills (Phase 4).
+                device_target_raw = payload_dict.get("device_target")
+                device_target = (
+                    device_target_raw.strip().lower()
+                    if isinstance(device_target_raw, str)
+                    else None
+                ) or None
                 context = {
                     "source": "phone_surface",
                     "mode": "phone_surface",
@@ -1583,6 +1598,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                     "source_node": node_id or "",
                     "paired_device_id": paired_device_id or "",
                 }
+                if device_target:
+                    context["device_target"] = device_target
                 if reply_to:
                     context["reply_to"] = reply_to
 

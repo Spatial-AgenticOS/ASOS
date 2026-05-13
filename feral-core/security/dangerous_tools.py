@@ -149,6 +149,61 @@ SURFACE_DENY_LISTS: dict[str, set[str]] = {
         "coding_tools__edit_file",
         "agentic_computer_use__execute_task",
     },
+    # Phase 1 (audit-r10 overhaul) — `brain_host` is the operator's own
+    # Mac that hosts the FERAL brain. iOS chat that targets the brain
+    # explicitly (`device_target == "brain"`) gets the same trust
+    # envelope as the operator at the local CLI: full desktop control,
+    # full shell, full agentic loop. Only the truly destructive
+    # primitives stay denied; everything else honors the per-tool
+    # CONFIRM tier via the autonomy mode, not surface deny.
+    "brain_host": {
+        "system.run",
+        "docker.exec",
+        "shell.exec",
+        "process.spawn",
+        "fs.delete",
+        "fs.remove",
+        "filesystem.delete",
+        "file.delete",
+    },
+    # Phase 1 — `phone_actuator` is the surface when the brain wants the
+    # PHONE to execute (CallKit / MusicKit / Intents / Location etc.,
+    # landing in Phase 4 as `phone.*` skills). Mac-only tools have no
+    # meaning here: the LLM should never try `desktop_control__*` /
+    # `computer_use__*` / `agentic_computer_use__*` when `device_target
+    # == "phone"`. Hard-deny those so the LLM is forced toward the
+    # correct `phone.*` action vocabulary.
+    "phone_actuator": {
+        "system.run",
+        "docker.exec",
+        "shell.exec",
+        "process.spawn",
+        "fs.delete",
+        "fs.remove",
+        "filesystem.delete",
+        "file.delete",
+        # Mac-host tools — meaningless on the phone surface.
+        "desktop_control__shell_command",
+        "desktop_control__shell",
+        "desktop_control__open_app",
+        "desktop_control__screenshot",
+        "desktop_control__system_info",
+        "desktop_control__set_volume",
+        "computer_use__bash",
+        "computer_use__write_file",
+        "computer_use__edit_file",
+        "computer_use__read_file",
+        "code_interpreter__execute",
+        "coding_tools__bash",
+        "coding_tools__write_file",
+        "coding_tools__edit_file",
+        "agentic_computer_use__execute_task",
+        "gui_computer_use__screenshot",
+        "gui_computer_use__mouse_click",
+        "gui_computer_use__type_text",
+        "desktop_automation__click_screen",
+        "desktop_automation__type_text",
+    },
 }
 
 # Frozen snapshots for introspection / tests (optional).
@@ -160,6 +215,12 @@ SURFACE_DENY_LISTS_FROZEN: dict[str, FrozenSet[str]] = {
 # Map ``handle_command`` context["source"] values to the matching execution
 # surface. Anything unknown / missing is conservatively treated as websocket
 # (interactive operator channel) which preserves the prior default behaviour.
+#
+# Phase 1 note (audit-r10 overhaul): `phone_surface` historically mapped to
+# `http_api` unconditionally — that hard-deny was the root cause of the
+# operator's "iOS chat says no access to my Mac" complaint. The mapping
+# below is now the DEFAULT only when `device_target` is missing/auto;
+# `resolve_surface_from_context` consults `device_target` first.
 _SOURCE_TO_SURFACE: dict[str, str] = {
     "webhook": "http_api",
     "phone_surface": "http_api",
@@ -180,6 +241,23 @@ _SOURCE_TO_SURFACE: dict[str, str] = {
     "cli": "local_cli",
     "local_cli": "local_cli",
     "operator_cli": "local_cli",
+}
+
+
+# Phase 1 — device_target → surface mapping. When the iOS chat (or any
+# client) tells the brain WHERE the requested action should run, that
+# overrides the source→surface fallback. Result:
+#   - `device_target == "brain"`  →  `brain_host` (Mac tools allowed)
+#   - `device_target == "phone"`  →  `phone_actuator` (iOS skills only)
+#   - `device_target == "glasses"` → `phone_actuator` (glasses are
+#                                    bridged through the phone, so
+#                                    same security envelope as phone)
+#   - `device_target == "auto"` / None → fall through to source→surface
+#                                    (today's behavior, conservative)
+_DEVICE_TARGET_TO_SURFACE: dict[str, str] = {
+    "brain": "brain_host",
+    "phone": "phone_actuator",
+    "glasses": "phone_actuator",
 }
 
 
@@ -281,16 +359,35 @@ def resolve_surface_from_context(
 ) -> str:
     """Map a ``handle_command`` context dict to an execution surface.
 
-    Looks up ``context["source"]`` (lowercased) in the source→surface table
-    and falls back to ``context["surface"]`` if the caller already supplied
-    one explicitly. Returns ``default`` (websocket — the historical default)
-    when neither key is present or recognised.
+    Resolution order (Phase 1 — audit-r10 overhaul):
+      1. ``context["surface"]`` — explicit override if the caller already
+         knows the surface.
+      2. ``context["device_target"]`` — Phase 1 wire field
+         (`brain`/`phone`/`glasses`). When present and non-``auto``,
+         dispatches to the matching surface so the orchestrator can
+         enforce per-device deny lists. This is what unlocks the
+         operator's "do X on my Mac" path from iOS chat:
+         ``device_target == "brain"`` → ``brain_host`` (Mac tools
+         allowed) instead of the legacy ``phone_surface → http_api``
+         hard-deny.
+      3. ``context["source"]`` (lowercased) in the source→surface
+         table — historical fallback.
+      4. ``default`` (websocket) when nothing matches.
     """
     if not context:
         return default
     surface = context.get("surface") if isinstance(context, Mapping) else None
     if isinstance(surface, str) and surface:
         return surface
+    device_target = (
+        context.get("device_target") if isinstance(context, Mapping) else None
+    )
+    if isinstance(device_target, str) and device_target:
+        normalised = device_target.strip().lower()
+        if normalised and normalised != "auto":
+            mapped = _DEVICE_TARGET_TO_SURFACE.get(normalised)
+            if mapped:
+                return mapped
     source = context.get("source") if isinstance(context, Mapping) else None
     if isinstance(source, str) and source:
         mapped = _SOURCE_TO_SURFACE.get(source.strip().lower())
