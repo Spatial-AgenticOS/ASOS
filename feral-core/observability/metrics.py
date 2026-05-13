@@ -235,6 +235,35 @@ WS_ACTIVE_SESSIONS = Gauge(
     registry=REGISTRY,
 )
 
+# PR 12 — Automation truthfulness metrics. Emitted by ToolRunner /
+# BrowserController / GUIComputerUseSkill / CodingRunner so the
+# operator can answer "is the agent silently failing?" from the
+# Grafana dashboard without scraping logs.
+AUTOMATION_BLOCKED_TOTAL = Counter(
+    "feral_automation_blocked_total",
+    "Tool calls blocked before execution by the safety resolver, labelled by tool and reason.",
+    labelnames=("tool", "reason"),
+    registry=REGISTRY,
+)
+AUTOMATION_FAILURE_TOTAL = Counter(
+    "feral_automation_failure_total",
+    "Automation actions that started but failed (browser, GUI, coding loop, voice tool), labelled by subsystem and reason.",
+    labelnames=("subsystem", "reason"),
+    registry=REGISTRY,
+)
+AUTOMATION_PERMISSION_DENIED_TOTAL = Counter(
+    "feral_automation_permission_denied_total",
+    "Local OS-level permission denials (macOS TCC, sandbox grant, OAuth scope missing).",
+    labelnames=("permission",),
+    registry=REGISTRY,
+)
+AUTOMATION_REPAIR_LOOP_TOTAL = Counter(
+    "feral_automation_repair_loop_total",
+    "CodingRun / GoalChecker repair iterations triggered, labelled by outcome (repaired, gave_up, max_iters).",
+    labelnames=("outcome",),
+    registry=REGISTRY,
+)
+
 
 # Map of metric name → metric object so emit() can dispatch by string.
 # Tests/test_metrics_registry.py walks this map to enforce parity with
@@ -252,6 +281,10 @@ _METRICS: dict[str, Counter | Gauge | Histogram] = {
     "feral_sandbox_kills_total": SANDBOX_KILLS_TOTAL,
     "feral_vault_decrypt_errors_total": VAULT_DECRYPT_ERRORS_TOTAL,
     "feral_ws_active_sessions": WS_ACTIVE_SESSIONS,
+    "feral_automation_blocked_total": AUTOMATION_BLOCKED_TOTAL,
+    "feral_automation_failure_total": AUTOMATION_FAILURE_TOTAL,
+    "feral_automation_permission_denied_total": AUTOMATION_PERMISSION_DENIED_TOTAL,
+    "feral_automation_repair_loop_total": AUTOMATION_REPAIR_LOOP_TOTAL,
 }
 
 
