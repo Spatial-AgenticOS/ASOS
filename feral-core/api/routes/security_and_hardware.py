@@ -165,6 +165,59 @@ async def update_policy(body: dict):
 
 
 # ─────────────────────────────────────────────
+# Workspace Folder Grants
+# ─────────────────────────────────────────────
+#
+# Computer-use file tools refuse paths outside the policy's read/write
+# lists. Operators grant explicit folders here (Desktop, Documents,
+# project dirs) without globally widening the home directory.
+# Persisted by ``SandboxPolicy.grant_folder`` to ``workspace_grants.json``.
+
+
+def _grants_policy() -> SandboxPolicy:
+    """Return the policy that owns folder grants. Falls back to a
+    freshly-loaded one if the brain hasn't booted yet (CLI-style use)."""
+    if state.policy is not None:
+        return state.policy
+    return SandboxPolicy.load_default()
+
+
+@router.get("/api/security/grants")
+async def list_workspace_grants():
+    """List every folder grant currently honoured by the policy."""
+    grants = _grants_policy().list_grants()
+    return {"grants": grants}
+
+
+@router.post("/api/security/grants")
+async def grant_workspace_folder(body: dict):
+    """Grant read/readwrite access to a folder.
+
+    Body: ``{"path": "/Users/me/Desktop", "mode": "readwrite"}``.
+    Mode defaults to ``read``; ``readwrite`` (or legacy ``write``) is
+    required for ``computer_use__write_file`` / ``edit_file`` to succeed
+    inside the folder.
+    """
+    path = (body or {}).get("path") or ""
+    raw_mode = (body or {}).get("mode") or "read"
+    mode = raw_mode.lower().strip()
+    if mode not in ("read", "readwrite", "write"):
+        return {"ok": False, "error": f"invalid mode: {raw_mode}"}
+    if not path:
+        return {"ok": False, "error": "path is required"}
+    return _grants_policy().grant_folder(path, mode=mode)
+
+
+@router.delete("/api/security/grants")
+async def revoke_workspace_folder(path: str):
+    """Revoke access to a previously granted folder by absolute path."""
+    if not path:
+        return {"ok": False, "error": "path is required"}
+    removed = _grants_policy().revoke_folder(path)
+    return {"ok": removed, "path": path}
+
+
+# ─────────────────────────────────────────────
 # Hardware Mesh API
 # ─────────────────────────────────────────────
 

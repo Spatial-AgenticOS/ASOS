@@ -53,7 +53,7 @@ describe('Chat — A1 rendering fixes', () => {
     expect(rendered).not.toContain('<|eom|>');
   });
 
-  it('tool_start renders a chip and tool_result clears it', async () => {
+  it('tool events render friendly expandable traces', async () => {
     const { container } = renderV2(<Chat />);
     // Put the UI into the thinking state the way a real submit would:
     // the chip row only renders under `thinking && !streamingText`.
@@ -65,17 +65,34 @@ describe('Chat — A1 rendering fixes', () => {
     });
 
     await act(async () => {
-      emit({ type: 'tool_start', payload: { tool: 'web_search__run', call_id: 'c1' } });
+      emit({
+        type: 'tool_start',
+        payload: { tool: 'web_search__run', call_id: 'c1', args_preview: '{"q":"hi"}' },
+      });
     });
     const texts = Array.from(container.querySelectorAll('.v2-chat-body'))
       .map((n) => n.textContent).join(' | ');
-    expect(texts).toContain('using web_search__run');
+    expect(texts).toContain('using Search web');
+    expect(texts).not.toContain('web_search__run');
 
     await act(async () => {
-      emit({ type: 'tool_result', payload: { tool: 'web_search__run', call_id: 'c1', success: true } });
+      emit({ type: 'tool_result', payload: { tool: 'web_search__run', call_id: 'c1', success: true, latency_ms: 17 } });
+      emit({ type: 'text_response', payload: { text: 'Done.' } });
     });
     const after = Array.from(container.querySelectorAll('.v2-chat-body'))
       .map((n) => n.textContent).join(' | ');
-    expect(after).not.toContain('using web_search__run');
+    expect(after).toContain('used 1 tool');
+    expect(after).not.toContain('web_search__run');
+
+    const toggle = container.querySelector('.v2-chat-trace-toggle');
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    const expanded = Array.from(container.querySelectorAll('.v2-chat-body'))
+      .map((n) => n.textContent).join(' | ');
+    expect(expanded).toContain('Search web');
+    expect(expanded).toContain('17ms');
+    expect(expanded).toContain('"q":"hi"');
+    expect(expanded).not.toContain('web_search__run');
   });
 });

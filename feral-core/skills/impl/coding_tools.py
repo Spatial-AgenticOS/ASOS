@@ -58,15 +58,33 @@ class CodingToolsSkill(BaseSkill):
     def __init__(self):
         super().__init__(skill_id="coding_tools")
         self._sandbox_bash_enabled = os.getenv("FERAL_SANDBOX_BASH", "false").lower() in ("true", "1", "yes")
-        self._docker_sandbox = None
         self._policy: SandboxPolicy | None = None
-        if self._sandbox_bash_enabled:
-            try:
-                from security.docker_sandbox import get_sandbox
 
-                self._docker_sandbox = get_sandbox()
-            except Exception:
-                self._docker_sandbox = None
+    def _resolve_docker_sandbox(self):
+        """Look up Docker per-call so a daemon that comes up after FERAL
+        boot is still reachable. Mirrors ComputerUseSkill so the two
+        bash-bearing skills behave identically.
+        """
+        try:
+            from security.docker_sandbox import get_sandbox
+        except Exception:
+            return None
+        try:
+            sandbox = get_sandbox()
+        except Exception:
+            return None
+        if sandbox is None:
+            return None
+        try:
+            available_attr = getattr(sandbox, "available", None)
+            available = (
+                bool(available_attr())
+                if callable(available_attr)
+                else bool(available_attr)
+            )
+        except Exception:
+            available = False
+        return sandbox if available else None
 
     def _get_policy(self) -> SandboxPolicy:
         if self._policy is None:
@@ -131,13 +149,18 @@ class CodingToolsSkill(BaseSkill):
 
         timeout = min(int(args.get("timeout", BASH_TIMEOUT)), 120)
 
-        if self._sandbox_bash_enabled and self._docker_sandbox:
-            original_timeout = getattr(self._docker_sandbox, "_timeout", BASH_TIMEOUT)
+        sandbox_required = bool(args.get("_feral_require_sandbox"))
+        docker_sandbox = self._resolve_docker_sandbox() if (
+            sandbox_required or self._sandbox_bash_enabled
+        ) else None
+
+        if docker_sandbox is not None:
+            original_timeout = getattr(docker_sandbox, "_timeout", BASH_TIMEOUT)
             try:
-                self._docker_sandbox._timeout = timeout
-                result = await self._docker_sandbox.execute_shell(command)
+                docker_sandbox._timeout = timeout
+                result = await docker_sandbox.execute_shell(command)
             finally:
-                self._docker_sandbox._timeout = original_timeout
+                docker_sandbox._timeout = original_timeout
 
             stdout = (result.get("stdout") or "")[:MAX_OUTPUT]
             stderr = (result.get("stderr") or "")[:MAX_OUTPUT]
@@ -157,8 +180,29 @@ class CodingToolsSkill(BaseSkill):
                 "error": stderr if not success else None,
             }
 
+        if sandbox_required:
+            return {
+                "success": False,
+                "status_code": 503,
+                "data": {
+                    "sandbox": "unavailable",
+                    "permission_needed": False,
+                    "setup_step": (
+                        "Start Docker Desktop (or set up an alternative "
+                        "sandbox) so coding_tools__bash can run safely. "
+                        "FERAL refuses to run shell commands on the host "
+                        "when the manifest declares requires_sandbox=true."
+                    ),
+                },
+                "error": (
+                    "coding_tools__bash requires the Docker sandbox but it "
+                    "is not available. Refusing to fall back to host "
+                    "execution."
+                ),
+            }
+
         sandbox_note = None
-        if self._sandbox_bash_enabled and not self._docker_sandbox:
+        if self._sandbox_bash_enabled and docker_sandbox is None:
             sandbox_note = "FERAL_SANDBOX_BASH is enabled but Docker sandbox is unavailable; executed on host."
 
         proc = await asyncio.create_subprocess_shell(

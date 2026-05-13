@@ -34,7 +34,8 @@
                 {"name": "timeout", "type": "integer", "required": false, "description": "Timeout in seconds (default 30)"}
             ],
             "returns_description": "stdout, stderr, and exit code",
-            "ui_hint": "detail_card"
+            "ui_hint": "detail_card",
+            "requires_sandbox": true
         },
         {
             "id": "read_file",

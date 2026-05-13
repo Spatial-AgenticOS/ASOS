@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+from agents.identity_loader import IdentityLoader
+
+
+class _Frame:
+    connected_nodes = []
+
+    def to_system_context(self) -> str:
+        return "No sensor data available."
+
+
+def _loader() -> IdentityLoader:
+    loader = IdentityLoader(memory=None, somatic_engine=None, calendar=None)
+    return loader
+
+
+def test_system_prompt_uses_canonical_computer_use_file_path() -> None:
+    prompt = _loader().build_system_prompt(
+        _Frame(),
+        [],
+        session_id="sess-test",
+        identity_text="",
+        full_catalog=[],
+    )
+
+    assert "computer_use__write_file" in prompt
+    assert "computer_use__bash" in prompt
+    assert "permission_needed" in prompt
+    assert "desktop_control__shell_command" not in prompt
+    assert "python3 -c" not in prompt

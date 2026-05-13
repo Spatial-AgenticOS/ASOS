@@ -115,8 +115,10 @@ def test_calendar_failure_does_not_break_prompt_build():
 
     loader = IdentityLoader(memory=None, calendar=_BoomCal())
     prompt = _build_prompt(loader)
-    # Prompt still built; just no calendar section.
-    assert "ABSOLUTE RULE" in prompt  # opening fixed block
+    # Prompt still built; just no calendar section. PR2 canonical-execution
+    # work replaced the old "ABSOLUTE RULE" header with the
+    # "## Execution Truthfulness" guidance block — assert against that.
+    assert "## Execution Truthfulness" in prompt  # opening fixed block
     assert "## Today's Events" not in prompt
 
 

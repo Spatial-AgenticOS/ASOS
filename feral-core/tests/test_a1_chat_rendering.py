@@ -100,6 +100,7 @@ class TestToolEventEmission:
         assert payload["endpoint_id"] == "run"
         assert payload["call_id"] == "c1"
         assert "hi" in payload["args_preview"]
+        assert payload["display_name"] == "Search web"
 
     @pytest.mark.asyncio
     async def test_emit_tool_result_sends_success_flag(
