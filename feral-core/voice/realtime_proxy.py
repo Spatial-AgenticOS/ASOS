@@ -31,6 +31,8 @@ from uuid import uuid4
 
 import httpx
 
+from agents.tool_display import tool_feedback_text
+
 logger = logging.getLogger("feral.voice.openai")
 
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
@@ -502,6 +504,7 @@ class RealtimeProxy:
         send_to_node: Callable[[str, dict], Awaitable[None]] | None = None,
         send_to_session: Callable[[str, Any], Awaitable[None]] | None = None,
         identity_workspace=None,
+        orchestrator=None,
         voice: str = "marin",
     ):
         self._sessions: dict[str, RealtimeSession] = {}
@@ -512,6 +515,14 @@ class RealtimeProxy:
         self._perception = perception
         self._send_to_node = send_to_node
         self._send_to_session = send_to_session
+        # PR9: voice tool executions used to surface only as a free-form
+        # transcript line, never as the same `tool_start`/`tool_result`
+        # envelopes the chat path emits. The chat client buffers those
+        # envelopes into the expandable ToolTrace component; without
+        # them, voice-driven tools were invisible in the chat record.
+        # Holding the orchestrator lets the proxy re-use the *same*
+        # emit helpers so voice and chat now produce identical traces.
+        self._orchestrator = orchestrator
         self._api_key = os.getenv("OPENAI_API_KEY", "")
         self._voice = voice
 
@@ -687,19 +698,7 @@ class RealtimeProxy:
     @staticmethod
     def _tool_feedback_text(tool_name: str) -> str:
         """Generate natural spoken feedback while a tool is executing."""
-        parts = tool_name.split("__", 1)
-        if len(parts) != 2:
-            return "Working on that now."
-        skill_id, endpoint_id = parts
-        if skill_id == "web_search":
-            return "Searching the web now."
-        if skill_id == "weather_current":
-            return "Checking the weather."
-        if skill_id == "browser":
-            return f"Using the browser to {endpoint_id.replace('_', ' ')}."
-        if skill_id == "computer_use" and endpoint_id == "bash":
-            return "Running a command on your computer."
-        return f"Running {endpoint_id.replace('_', ' ')}."
+        return tool_feedback_text(tool_name)
 
     async def _send_tool_feedback(self, session_id: str, text: str):
         """Send transcript-style progress feedback to active voice clients."""
@@ -786,6 +785,24 @@ class RealtimeProxy:
                 self._memory.working_push(session_id, {
                     "role": "assistant", "text": text[:300], "source": "voice_realtime",
                 })
+            # PR 9 gap-fill — also persist into the durable conversations
+            # store under a voice-scoped thread so the conversation list
+            # surfaces voice sessions next to chat threads. We key the
+            # thread on the realtime session id (not the WS session) so a
+            # reconnect of the same realtime session keeps appending to
+            # the same thread.
+            try:
+                conv_id = f"voice:{session_id}"
+                role = "user" if text.startswith("[user] ") else "assistant"
+                clean = text[len("[user] "):] if text.startswith("[user] ") else text
+                if hasattr(self._memory, "conversation_append"):
+                    self._memory.conversation_append(
+                        conv_id, role, clean,
+                        source="voice_realtime_openai",
+                        title=f"Voice session {session_id[:8]}",
+                    )
+            except Exception as exc:
+                logger.debug("voice transcript persistence skipped: %s", exc)
 
         if is_final and text:
             rs = self._sessions.get(session_id)
@@ -881,7 +898,32 @@ class RealtimeProxy:
 
         logger.info(f"Realtime tool execution: {name} -> {args}")
         await self._send_tool_feedback(session_id, self._tool_feedback_text(name))
+
+        # PR9: emit the same tool_start/tool_result envelopes the chat
+        # path emits so the v2 ToolTrace component renders voice tools
+        # identically to text tools (chip + expandable detail). We synth
+        # a tool_call shape matching the chat ladder; the call_id ties
+        # tool_start <-> tool_result for the client buffer.
+        tool_call = {"name": name, "id": call_id, "args": args}
+        t0 = time.time()
+        if self._orchestrator is not None:
+            try:
+                await self._orchestrator._emit_tool_start(session_id, tool_call)
+            except Exception:
+                # Never let trace emission abort a voice tool call. The
+                # legacy transcript path above stays as the fallback.
+                logger.exception("voice tool_start emit failed")
+
         result = await self._skill_executor.execute(name, args, skill, endpoint)
+
+        if self._orchestrator is not None:
+            latency_ms = (time.time() - t0) * 1000.0
+            try:
+                await self._orchestrator._emit_tool_result(
+                    session_id, tool_call, result, latency_ms,
+                )
+            except Exception:
+                logger.exception("voice tool_result emit failed")
 
         if self._memory:
             self._memory.working_push(session_id, {

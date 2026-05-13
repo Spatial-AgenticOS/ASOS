@@ -486,6 +486,38 @@ class MemoryStore:
             conn.close()
         return {"id": conversation_id, "title": title, "message_count": len(messages), "updated_at": now}
 
+    def conversation_append(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        *,
+        source: str = "",
+        title: str = "",
+    ) -> dict:
+        """Append a single message to an existing conversation or
+        create-and-append if the conversation doesn't exist.
+
+        PR 9 gap-fill: voice realtime proxies call this on every final
+        transcript so the conversation list shows voice sessions next
+        to chat threads — not just live-only events that disappear on
+        reconnect. The ``source`` field carries the channel id
+        (``voice_realtime_openai``, ``voice_realtime_gemini``) so the
+        UI can render a small badge on voice threads.
+        """
+        existing = self.conversation_get(conversation_id) or {}
+        messages = list(existing.get("messages", []) or [])
+        messages.append({
+            "id": f"m_{int(time.time() * 1000)}_{len(messages)}",
+            "role": role,
+            "content": content,
+            "source": source,
+            "ts": time.time(),
+        })
+        return self.conversation_save(
+            conversation_id, messages, title=title or existing.get("title", ""),
+        )
+
     def conversation_list(self, limit: int = 50) -> list[dict]:
         """List recent conversations (metadata only)."""
         conn = self._conn()
