@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { History, Save, GitBranch, Plus, Trash2, ChevronRight, X } from 'lucide-react';
+import { History, Save, GitBranch, Plus, Trash2, ChevronRight, X, Mic, MicOff, Paperclip, FileText } from 'lucide-react';
 import Pane from '../ui/Pane';
 import Glass from '../ui/Glass';
 import Orb from '../ui/Orb';
@@ -8,7 +8,9 @@ import SduiRenderer, { applySduiPatches } from '../ui/SduiRenderer';
 import { useFeralSocket, sendUiEvent } from '../hooks/useFeralSocket';
 import { useConnectionStatus } from '../hooks/useConnectionStatus';
 import { apiJson, apiFetch } from '../lib/api';
+import { friendlyToolLabel } from '../lib/toolDisplay';
 import { useChatThread } from '../shell/Shell';
+import { useVoice } from '../shell/VoiceContext';
 
 function newId() {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -52,11 +54,24 @@ export default function Chat() {
   const [thinking, setThinking] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [toolChip, setToolChip] = useState(null);
+  const [expandedTraces, setExpandedTraces] = useState({});
   const [paneOpen, setPaneOpen] = useState(null); // 'threads' | 'snapshots' | null
   const [pausedThoughts, setPausedThoughts] = useState([]);
+  // PR 9 (gap-fill) — in-composer voice mic state. Sourced from the
+  // shared VoiceContext so toggling the menubar mic and the chat mic
+  // stay in sync.
+  const voice = useVoice();
+  // PR 10 (gap-fill) — pending attachments (uploaded but not yet sent).
+  // Each item is the AttachmentRef shape from POST /api/uploads.
+  const [pendingAttachments, setPendingAttachments] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
 
   const bottomRef = useRef(null);
   const streamBufferRef = useRef('');
+  const pendingTraceRef = useRef([]);
   const greetingSeenRef = useRef(false);
   const chatReady = thread?.ready ?? true;
 
@@ -115,10 +130,24 @@ export default function Chat() {
   };
 
   useEffect(() => {
+    const traceKey = (payload) => payload?.call_id || payload?.tool || payload?.name || `tool-${Date.now()}`;
+
+    const flushTrace = () => {
+      const trace = pendingTraceRef.current;
+      pendingTraceRef.current = [];
+      return trace.length > 0 ? trace : undefined;
+    };
+
     const commit = (text) => {
       const clean = text.trim();
       if (!clean) return;
-      setMessages((prev) => [...prev, { id: newId(), role: 'assistant', text: clean }]);
+      const id = newId();
+      setMessages((prev) => [...prev, {
+        id,
+        role: 'assistant',
+        text: clean,
+        tools: flushTrace(),
+      }]);
     };
 
     const unsub = socket.subscribe((msg) => {
@@ -160,9 +189,45 @@ export default function Chat() {
         }
       } else if (type === 'tool_start' || type === 'tool_call' || type === 'skill_start') {
         const p = msg.payload || {};
-        const name = p.name || p.tool || p.skill_id || 'tool';
-        setToolChip(String(name));
+        const key = traceKey(p);
+        const label = friendlyToolLabel(p);
+        pendingTraceRef.current = [
+          ...pendingTraceRef.current.filter((t) => t.key !== key),
+          {
+            key,
+            label,
+            args_preview: p.args_preview || '',
+            success: null,
+            error: '',
+            latency_ms: 0,
+          },
+        ];
+        setToolChip(label);
       } else if (type === 'tool_result' || type === 'skill_result') {
+        const p = msg.payload || {};
+        const key = traceKey(p);
+        const label = friendlyToolLabel(p);
+        const idx = pendingTraceRef.current.findIndex((t) => t.key === key);
+        const next = [...pendingTraceRef.current];
+        const result = {
+          key,
+          label,
+          args_preview: '',
+          success: p.success !== false,
+          error: p.error || '',
+          latency_ms: Number(p.latency_ms || 0),
+        };
+        if (idx >= 0) {
+          next[idx] = {
+            ...next[idx],
+            success: result.success,
+            error: result.error,
+            latency_ms: result.latency_ms,
+          };
+        } else {
+          next.push(result);
+        }
+        pendingTraceRef.current = next;
         setToolChip(null);
       } else if (type === 'transcript') {
         const p = msg.payload || {};
@@ -200,6 +265,32 @@ export default function Chat() {
             ? { ...m, sdui: applySduiPatches(m.sdui, p.patches || []) }
             : m
         )));
+      } else if (type === 'permission_request') {
+        // Brain refused a computer_use file/shell call because the path
+        // is outside the sandbox. Render an inline approval card so the
+        // operator can grant the folder without leaving the chat.
+        const p = msg.payload || {};
+        if (!p.request_id) return;
+        setMessages((prev) => {
+          // Replace any existing card for this request_id (re-emits are
+          // possible if the brain retries after a transient failure).
+          const filtered = prev.filter(
+            (m) => !(m.type === 'permission_request' && m.requestId === p.request_id),
+          );
+          return [
+            ...filtered,
+            {
+              id: newId(),
+              role: 'assistant',
+              type: 'permission_request',
+              requestId: p.request_id,
+              path: p.path || '',
+              operation: p.operation || 'access',
+              reason: p.reason || '',
+            },
+          ];
+        });
+        setThinking(false);
       }
     });
     return unsub;
@@ -221,13 +312,123 @@ export default function Chat() {
         // best effort; keep chatting even if thread ensure call fails
       }
     }
-    setMessages((prev) => [...prev, { id: newId(), role: 'user', text }]);
+    const attachmentsToSend = pendingAttachments;
+    setMessages((prev) => [
+      ...prev,
+      { id: newId(), role: 'user', text, attachments: attachmentsToSend },
+    ]);
     setInput('');
+    setPendingAttachments([]);
     setThinking(true);
     streamBufferRef.current = '';
+    pendingTraceRef.current = [];
     setStreamingText('');
-    socket.send({ hop: 'client', type: 'text_command', payload: { text, context: {} } });
+    // PR 10: ship the AttachmentRef list verbatim. The brain
+    // (api/server.py text_command handler) forwards `payload.attachments`
+    // into the orchestrator context so the model can ground on them.
+    socket.send({
+      hop: 'client',
+      type: 'text_command',
+      payload: {
+        text,
+        context: {},
+        ...(attachmentsToSend.length > 0 ? { attachments: attachmentsToSend } : {}),
+      },
+    });
   };
+
+  // ── PR 10: upload helpers ─────────────────────────────────────
+  const uploadFiles = useCallback(async (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+    setUploading(true);
+    setUploadError('');
+    const accepted = [];
+    for (const file of fileList) {
+      try {
+        const fd = new FormData();
+        fd.append('file', file, file.name);
+        const resp = await apiFetch('/api/uploads', { method: 'POST', body: fd });
+        if (!resp.ok) {
+          const errBody = await resp.json().catch(() => ({}));
+          throw new Error(errBody.detail || `upload failed (${resp.status})`);
+        }
+        const rec = await resp.json();
+        accepted.push({
+          upload_id: rec.upload_id,
+          filename: rec.filename,
+          content_type: rec.content_type,
+          size_bytes: rec.size_bytes,
+          sha256: rec.sha256,
+        });
+      } catch (err) {
+        setUploadError(String(err.message || err));
+      }
+    }
+    if (accepted.length > 0) {
+      setPendingAttachments((prev) => [...prev, ...accepted]);
+    }
+    setUploading(false);
+  }, []);
+
+  const onFilePick = useCallback((e) => {
+    const fl = e?.target?.files;
+    if (fl && fl.length > 0) uploadFiles(Array.from(fl));
+    if (e?.target) e.target.value = '';
+  }, [uploadFiles]);
+
+  const onPaste = useCallback((e) => {
+    const items = e?.clipboardData?.items || [];
+    const files = [];
+    for (const it of items) {
+      if (it.kind === 'file') {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      uploadFiles(files);
+    }
+  }, [uploadFiles]);
+
+  const onDrop = useCallback((e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (files.length > 0) uploadFiles(files);
+  }, [uploadFiles]);
+
+  const removeAttachment = useCallback((uploadId) => {
+    setPendingAttachments((prev) => prev.filter((a) => a.upload_id !== uploadId));
+  }, []);
+
+  // ── PR 9: voice toggle ────────────────────────────────────────
+  const onMicClick = useCallback(() => {
+    if (!voice || !voice.toggle) return;
+    voice.toggle();
+  }, [voice]);
+
+  const toggleTrace = (messageId) => {
+    setExpandedTraces((prev) => ({ ...prev, [messageId]: !prev[messageId] }));
+  };
+
+  const respondToPermission = useCallback((requestId, granted) => {
+    if (!requestId) return;
+    sendUiEvent(socket, {
+      screen_id: 'chat',
+      action_id: `${granted ? 'perm_grant_' : 'perm_deny_'}${requestId}`,
+      event: 'tap',
+    });
+    // Replace the live card with a settled receipt so the user sees
+    // the decision was registered. The brain emits its own follow-up
+    // text, but the receipt is shown immediately so the UI never
+    // looks unresponsive between click and reply.
+    setMessages((prev) => prev.map((m) => (
+      m.type === 'permission_request' && m.requestId === requestId
+        ? { ...m, type: 'permission_request_settled', granted }
+        : m
+    )));
+  }, [socket, setMessages]);
 
   return (
     <div className="v2-chat v2-chat--paned" data-testid="v2-marker">
@@ -285,8 +486,30 @@ export default function Chat() {
                       value,
                     })}
                   />
+                ) : m.type === 'permission_request' ? (
+                  <PermissionCard
+                    path={m.path}
+                    operation={m.operation}
+                    reason={m.reason}
+                    onAllow={() => respondToPermission(m.requestId, true)}
+                    onDeny={() => respondToPermission(m.requestId, false)}
+                  />
+                ) : m.type === 'permission_request_settled' ? (
+                  <div className="v2-chat-perm v2-chat-perm--settled">
+                    {m.granted ? `Granted access to ${m.path || 'requested folder'}.`
+                      : `Denied access to ${m.path || 'requested folder'}.`}
+                  </div>
                 ) : (
-                  m.text
+                  <>
+                    {m.text}
+                    {m.tools?.length > 0 && (
+                      <ToolTrace
+                        tools={m.tools}
+                        expanded={!!expandedTraces[m.id]}
+                        onToggle={() => toggleTrace(m.id)}
+                      />
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -312,15 +535,79 @@ export default function Chat() {
         </div>
       </Pane>
 
-      <Glass as="form" level={2} radius="pill" padding="sm" className="v2-chat-composer" onSubmit={submit}>
+      {pendingAttachments.length > 0 && (
+        <div className="v2-chat-attachment-chips" role="list" aria-label="Pending attachments">
+          {pendingAttachments.map((att) => (
+            <span key={att.upload_id} className="v2-chat-attachment-chip" role="listitem">
+              <FileText size={14} aria-hidden="true" />
+              <span className="v2-chat-attachment-chip__name" title={att.filename}>
+                {att.filename}
+              </span>
+              <button
+                type="button"
+                className="v2-chat-attachment-chip__remove"
+                onClick={() => removeAttachment(att.upload_id)}
+                aria-label={`Remove ${att.filename}`}
+              >
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+          {uploading && <span className="v2-chat-attachment-chip v2-chat-attachment-chip--loading">uploading…</span>}
+        </div>
+      )}
+      {uploadError && (
+        <div className="v2-chat-upload-error" role="alert">{uploadError}</div>
+      )}
+
+      <Glass
+        as="form"
+        level={2}
+        radius="pill"
+        padding="sm"
+        className={`v2-chat-composer${dragOver ? ' v2-chat-composer--dragover' : ''}`}
+        onSubmit={submit}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+      >
+        <button
+          type="button"
+          className="v2-chat-attach"
+          onClick={() => fileInputRef.current && fileInputRef.current.click()}
+          aria-label="Attach file"
+          disabled={state !== 'open' || !chatReady || uploading}
+        >
+          <Paperclip size={18} aria-hidden="true" />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={onFilePick}
+          style={{ display: 'none' }}
+          aria-hidden="true"
+        />
         <input
           className="v2-chat-input"
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onPaste={onPaste}
           placeholder={!chatReady ? 'Loading conversation…' : state === 'open' ? 'Ask FERAL…' : 'Reconnecting…'}
           disabled={state !== 'open' || !chatReady}
         />
+        <button
+          type="button"
+          className={`v2-chat-mic${voice?.active ? ' v2-chat-mic--active' : ''}`}
+          onClick={onMicClick}
+          aria-label={voice?.active ? 'Stop voice mode' : 'Start voice mode'}
+          aria-pressed={!!voice?.active}
+          disabled={state !== 'open' || !chatReady}
+          title={voice?.active ? `Voice active (${voice.provider || 'realtime'})` : 'Hold a conversation by voice'}
+        >
+          {voice?.active ? <MicOff size={18} aria-hidden="true" /> : <Mic size={18} aria-hidden="true" />}
+        </button>
         <button type="submit" className="v2-chat-send" disabled={!input.trim() || state !== 'open' || !chatReady} aria-label="Send">Send</button>
       </Glass>
 
@@ -361,6 +648,64 @@ export default function Chat() {
         />
       )}
       {paneOpen === 'snapshots' && <SnapshotsPane onClose={() => setPaneOpen(null)} messages={messages} onRestore={(msgs) => { setMessages(msgs); setPaneOpen(null); }} />}
+    </div>
+  );
+}
+
+function PermissionCard({ path, operation, reason, onAllow, onDeny }) {
+  const verb = operation === 'write' ? 'write to' : operation === 'read' ? 'read from' : 'access';
+  return (
+    <Glass level={1} radius="md" padding="sm" className="v2-chat-perm">
+      <div className="v2-chat-perm-head">
+        <strong>FERAL needs permission to {verb}:</strong>
+        <code className="v2-chat-perm-path">{path || '(unknown path)'}</code>
+      </div>
+      {reason && <div className="v2-chat-perm-reason">{reason}</div>}
+      <div className="v2-chat-perm-actions">
+        <button type="button" className="v2-btn v2-btn--primary" onClick={onAllow}>
+          Allow
+        </button>
+        <button type="button" className="v2-btn" onClick={onDeny}>
+          Deny
+        </button>
+      </div>
+      <div className="v2-chat-perm-hint v2-p v2-p--muted">
+        Allowing grants persistent {operation === 'write' ? 'read+write' : 'read'} access
+        until you revoke it (Settings → Workspace grants, or
+        <code style={{ marginLeft: 4 }}>feral grant revoke {path || '<path>'}</code>).
+      </div>
+    </Glass>
+  );
+}
+
+function ToolTrace({ tools, expanded, onToggle }) {
+  const failures = tools.filter((t) => t.success === false).length;
+  return (
+    <div className="v2-chat-trace">
+      <button
+        type="button"
+        className="v2-chat-trace-toggle"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <ChevronRight size={13} className={expanded ? 'is-open' : ''} />
+        <span>{failures ? `used ${tools.length} tools, ${failures} failed` : `used ${tools.length} ${tools.length === 1 ? 'tool' : 'tools'}`}</span>
+      </button>
+      {expanded && (
+        <div className="v2-chat-trace-list">
+          {tools.map((tool) => (
+            <div key={tool.key} className="v2-chat-trace-row">
+              <span className={`v2-chat-trace-dot${tool.success === false ? ' is-error' : ''}`} />
+              <span className="v2-chat-trace-label">{tool.label}</span>
+              {tool.latency_ms > 0 && (
+                <span className="v2-chat-trace-meta">{Math.round(tool.latency_ms)}ms</span>
+              )}
+              {tool.error && <span className="v2-chat-trace-error">{tool.error}</span>}
+              {tool.args_preview && <code className="v2-chat-trace-args">{tool.args_preview}</code>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

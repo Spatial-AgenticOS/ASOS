@@ -65,6 +65,20 @@ class SkillEndpoint(BaseModel):
     # If True, this endpoint must run in an execution sandbox and must not
     # silently fall back to host in-process execution.
     requires_sandbox: bool = False
+    # Manifest-level safety metadata. When present these supersede the
+    # name-substring heuristics in tool_runner.classify_safety so the
+    # policy decision is grounded in the skill author's declared intent
+    # instead of "does the endpoint name contain 'delete'".
+    #
+    # * safety_tier: "safe" -> AUTO, "confirm" -> CONFIRM, "deny" -> DENY.
+    # * read_only_hint: marks an endpoint as side-effect-free; strict-mode
+    #   autonomy treats read-only endpoints as AUTO without an approval
+    #   prompt.
+    # * requires_user_approval: hard override that forces CONFIRM even
+    #   when the substring heuristic would have auto-approved.
+    safety_tier: Optional[Literal["safe", "confirm", "deny"]] = None
+    read_only_hint: bool = False
+    requires_user_approval: bool = False
 
 
 class FlowStep(BaseModel):

@@ -285,6 +285,7 @@ class ToolStartPayload(BaseModel):
     skill_id: str = ""
     endpoint_id: str = ""
     args_preview: str = ""
+    display_name: str = ""
 
 
 class ToolResultPayload(BaseModel):

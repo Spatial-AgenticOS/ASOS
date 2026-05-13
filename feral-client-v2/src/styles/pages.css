@@ -192,6 +192,96 @@
 .v2-chat-role { display: flex; align-items: center; justify-content: center; }
 .v2-chat-body { font-size: var(--v2-size-md); line-height: 1.55; color: var(--v2-text-primary); padding: 2px 0; white-space: pre-wrap; }
 .v2-chat-body--thinking { color: var(--v2-text-tertiary); font-style: italic; }
+.v2-chat-trace {
+  margin-top: 10px;
+  white-space: normal;
+}
+.v2-chat-trace-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-pill);
+  background: var(--v2-surface);
+  color: var(--v2-text-tertiary);
+  font: inherit;
+  font-size: var(--v2-size-xs);
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.v2-chat-trace-toggle svg { transition: transform 120ms ease; }
+.v2-chat-trace-toggle svg.is-open { transform: rotate(90deg); }
+.v2-chat-trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-md);
+  background: var(--v2-surface);
+}
+.v2-chat-trace-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: var(--v2-size-xs);
+  color: var(--v2-text-secondary);
+}
+.v2-chat-trace-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--v2-accent);
+}
+.v2-chat-trace-dot.is-error { background: var(--v2-state-error); }
+.v2-chat-trace-label { color: var(--v2-text-primary); font-weight: 600; }
+.v2-chat-trace-meta { color: var(--v2-text-tertiary); }
+.v2-chat-trace-error { color: var(--v2-state-error); }
+.v2-chat-trace-args {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--v2-text-tertiary);
+}
+.v2-chat-perm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.v2-chat-perm-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.v2-chat-perm-path {
+  font-family: var(--v2-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  color: var(--v2-text-secondary);
+  word-break: break-all;
+}
+.v2-chat-perm-reason {
+  font-size: 12px;
+  color: var(--v2-text-secondary);
+}
+.v2-chat-perm-actions {
+  display: flex;
+  gap: 8px;
+}
+.v2-chat-perm-hint {
+  font-size: 11px;
+}
+.v2-chat-perm-hint code {
+  font-family: var(--v2-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.v2-chat-perm--settled {
+  font-size: 12px;
+  color: var(--v2-text-secondary);
+  margin-top: 6px;
+}
 .v2-chat-cursor {
   display: inline-block;
   width: 2px;
