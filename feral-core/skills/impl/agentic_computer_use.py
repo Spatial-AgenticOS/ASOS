@@ -25,12 +25,17 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
+from agents.computer_use_driver import (
+    GUI_ENDPOINT_FOR,
+    NormalizedAction,
+    gui_args_for,
+    normalize_action,
+)
 from skills.base import BaseSkill
 from skills.impl import register_skill
 from skills.impl.gui_computer_use import (
     capture_screenshot_bytes,
     detect_dpi_scale,
-    scale_coordinates,
 )
 
 logger = logging.getLogger("feral.agentic_cu")
@@ -320,103 +325,117 @@ class AgenticComputerUseSkill(BaseSkill):
             return None
 
     async def _execute_action(self, action: dict) -> str:
-        """Execute a single action on the computer."""
-        action_type = action.get("action", "")
+        """Execute a single action on the computer.
+
+        The previous implementation duplicated pyautogui calls and DPI
+        scaling here, parallel to ``GUIComputerUseSkill``. With the
+        provider-neutral driver in place, every non-shell action is
+        normalized once and dispatched through the **single** primitive
+        path (`gui_computer_use.execute(...)`), so DPI is applied
+        exactly once and the rate limiter / Darwin fallbacks live in
+        one module.
+        """
+        normalized = normalize_action(action)
+        if normalized is None:
+            action_type = action.get("action") or action.get("type") or "?"
+            return f"Unknown action: {action_type}"
+
         try:
-            if action_type == "click":
-                return await self._do_click(int(action["x"]), int(action["y"]))
-            elif action_type == "double_click":
-                return await self._do_click(int(action["x"]), int(action["y"]), clicks=2)
-            elif action_type == "right_click":
-                return await self._do_click(int(action["x"]), int(action["y"]), button="right")
-            elif action_type == "type":
-                return await self._do_type(action.get("text", ""))
-            elif action_type == "key":
-                return await self._do_key(action.get("keys", ""))
-            elif action_type == "scroll":
-                return await self._do_scroll(action.get("direction", "down"), int(action.get("amount", 3)))
-            elif action_type == "shell":
-                return await self._do_shell(action.get("command", ""))
-            else:
-                return f"Unknown action: {action_type}"
+            if normalized.action == "shell":
+                return await self._do_shell(normalized.command)
+
+            if normalized.action == "wait":
+                ms = max(0, int(normalized.duration_ms))
+                await asyncio.sleep(ms / 1000.0)
+                return f"Waited {ms}ms"
+
+            if normalized.action == "drag":
+                return await self._do_drag(normalized.path)
+
+            return await self._dispatch_via_gui(normalized)
         except Exception as e:
             return f"Action failed: {e}"
 
-    async def _do_click(self, x: int, y: int, clicks: int = 1, button: str = "left") -> str:
-        sx, sy = scale_coordinates(x, y, self.dpi_scale)
-        try:
-            import pyautogui
-            await asyncio.to_thread(pyautogui.click, sx, sy, clicks=clicks, button=button)
-            return f"Clicked ({sx}, {sy}) [raw=({x},{y}), scale={self.dpi_scale}]"
-        except ImportError:
-            if platform.system() == "Darwin":
-                script = f'tell application "System Events" to click at {{{sx}, {sy}}}'
-                proc = await asyncio.create_subprocess_exec(
-                    "osascript", "-e", script,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                )
-                await proc.wait()
-                return f"Clicked ({sx}, {sy}) via AppleScript"
-            return f"pyautogui not available and no fallback for {platform.system()}"
+    async def _dispatch_via_gui(self, action: NormalizedAction) -> str:
+        """Route a normalized action to ``GUIComputerUseSkill`` so DPI,
+        rate limiting, and pyautogui/AppleScript fallbacks live in a
+        single module. Returns the human-readable message the legacy
+        ladder produced so step logs / tests stay stable.
+        """
+        endpoint_id = GUI_ENDPOINT_FOR.get(action.action)
+        if endpoint_id is None:
+            return f"Unknown action: {action.action}"
+        gui_args = gui_args_for(action)
 
-    async def _do_type(self, text: str) -> str:
-        try:
-            import pyautogui
-            if text.isascii():
-                await asyncio.to_thread(pyautogui.write, text, interval=0.02)
-            else:
-                try:
-                    import pyperclip
-                    pyperclip.copy(text)
-                    modifier = "command" if platform.system() == "Darwin" else "ctrl"
-                    await asyncio.to_thread(pyautogui.hotkey, modifier, "v")
-                except ImportError:
-                    await asyncio.to_thread(pyautogui.write, text, interval=0.02)
-            return f"Typed: {text[:50]}"
-        except ImportError:
-            if platform.system() == "Darwin":
-                escaped = text.replace('"', '\\"')
-                script = f'tell application "System Events" to keystroke "{escaped}"'
-                proc = await asyncio.create_subprocess_exec(
-                    "osascript", "-e", script,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                )
-                await proc.wait()
-                return f"Typed via AppleScript: {text[:50]}"
-            return f"pyautogui not available and no fallback for {platform.system()}"
+        from skills.impl import get_implementation
 
-    async def _do_key(self, keys: str) -> str:
-        try:
-            import pyautogui
-            parts = [k.strip() for k in keys.split("+")]
-            mapped = []
-            for p in parts:
-                low = p.lower()
-                if low in ("cmd", "command", "meta", "super"):
-                    mapped.append("command" if platform.system() == "Darwin" else "ctrl")
-                elif low in ("ctrl", "control"):
-                    mapped.append("ctrl")
-                elif low in ("alt", "option"):
-                    mapped.append("alt")
-                elif low in ("shift",):
-                    mapped.append("shift")
-                else:
-                    mapped.append(low)
-            await asyncio.to_thread(pyautogui.hotkey, *mapped)
-            return f"Key combo: {keys}"
-        except ImportError:
-            return f"pyautogui not available for key combo: {keys}"
+        gui = get_implementation("gui_computer_use")
+        if gui is None:
+            return (
+                "gui_computer_use skill is not registered; "
+                "agentic_computer_use cannot execute physical actions"
+            )
 
-    async def _do_scroll(self, direction: str, amount: int) -> str:
+        result = await gui.execute(endpoint_id, gui_args, vault={})
+        if isinstance(result, dict):
+            if not result.get("success"):
+                err = result.get("error") or result.get("reason") or "action failed"
+                return f"{action.action} failed: {err}"
+            data = result.get("data") or {}
+            if isinstance(data, dict):
+                msg = data.get("message")
+                if msg:
+                    return str(msg)
+        return f"{action.action} executed"
+
+    async def _do_drag(self, path: list) -> str:
+        """Best-effort drag along ``path`` via pyautogui. We keep this
+        local because gui_computer_use does not yet expose a ``drag``
+        endpoint — adding one is a follow-up. Until then, drag on a
+        host without pyautogui is honestly reported as unavailable."""
+        if not path:
+            return "drag failed: empty path"
         try:
             import pyautogui
-            scroll_amount = amount if direction == "up" else -amount
-            await asyncio.to_thread(pyautogui.scroll, scroll_amount)
-            return f"Scrolled {direction} by {amount}"
         except ImportError:
-            return "pyautogui not available for scroll"
+            return "drag failed: pyautogui not available"
+        from skills.impl.gui_computer_use import scale_coordinates
+        scale = self.dpi_scale
+        scaled = [scale_coordinates(int(x), int(y), scale) for (x, y) in path]
+        sx, sy = scaled[0]
+        await asyncio.to_thread(pyautogui.moveTo, sx, sy)
+        await asyncio.to_thread(pyautogui.mouseDown)
+        try:
+            for ex, ey in scaled[1:]:
+                await asyncio.to_thread(pyautogui.moveTo, ex, ey, duration=0.1)
+        finally:
+            await asyncio.to_thread(pyautogui.mouseUp)
+        return f"Dragged through {len(scaled)} points"
+
+    # Anything beyond this allowlist must NOT execute through the GUI
+    # vision loop. Real shell work goes through `computer_use__bash` so
+    # the canonical sandbox/policy boundary applies.
+    _SHELL_ACTION_ALLOWLIST = ("open", "osascript", "screencapture")
+
+    @classmethod
+    def _shell_command_allowed(cls, command: str) -> bool:
+        head = command.strip().split(None, 1)
+        if not head:
+            return False
+        program = Path(head[0]).name.lower()
+        return program in cls._SHELL_ACTION_ALLOWLIST
 
     async def _do_shell(self, command: str) -> str:
+        if not self._shell_command_allowed(command):
+            # Refusing here is the canonical-execution promise: the VLM
+            # loop can launch UIs (`open -a`, `osascript`) but cannot
+            # become a generic host shell. Free-form commands belong on
+            # `computer_use__bash` where sandbox + danger gating apply.
+            return (
+                "blocked: agentic_computer_use shell only permits "
+                f"{', '.join(self._SHELL_ACTION_ALLOWLIST)}; route other "
+                "commands through computer_use__bash"
+            )
         proc = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
