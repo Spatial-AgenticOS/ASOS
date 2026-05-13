@@ -64,6 +64,17 @@ TOOL_DANGER_MAP: dict[str, DangerLevel] = {
     "desktop_control__shell": DangerLevel.CRITICAL,
     "computer_use__bash": DangerLevel.CRITICAL,
     "code_interpreter__execute": DangerLevel.CRITICAL,
+    # `coding_tools` is the renamed-but-still-registered duplicate of
+    # `computer_use`; it exposes the same shell + write surface and must
+    # carry the same danger classification so http_api callers don't
+    # bypass the deny list by selecting the alias.
+    "coding_tools__bash": DangerLevel.CRITICAL,
+    "coding_tools__write_file": DangerLevel.WARN,
+    "coding_tools__edit_file": DangerLevel.WARN,
+    # The VLM-driven autonomous loop emits `shell` actions in addition to
+    # mouse/keyboard. Treat the whole task entry point as CRITICAL so the
+    # http_api gateway refuses to drive it from an untrusted surface.
+    "agentic_computer_use__execute_task": DangerLevel.CRITICAL,
     # WARN — sensitive automation / network / generation
     "browser.navigate": DangerLevel.WARN,
     "browser.click": DangerLevel.WARN,
@@ -95,11 +106,49 @@ SURFACE_DENY_LISTS: dict[str, set[str]] = {
         "desktop_control__shell",
         "computer_use__bash",
         "code_interpreter__execute",
+        # `coding_tools` mirrors `computer_use` — explicit deny so the alias
+        # cannot bypass http_api enforcement after the canonical-execution
+        # consolidation.
+        "coding_tools__bash",
+        "coding_tools__write_file",
+        "coding_tools__edit_file",
+        # VLM-driven autonomous loop entry point — refuses on http_api so
+        # remote surfaces can't kick off a desktop-vision agent without
+        # operator presence.
+        "agentic_computer_use__execute_task",
     },
     "websocket": {
         "docker.exec",
     },
     "local_cli": set(),
+    # PR 11: MCP is a *remote-callable* surface. External MCP clients
+    # (Claude Desktop, Cursor, …) can pull FERAL's skill list and invoke
+    # any tool we publish. Without surface gating, projecting all skills
+    # would smuggle CRITICAL shell tools out of the operator's machine.
+    # MCP inherits http_api's strict deny list as a floor; additional
+    # MCP-only restrictions can be added here without disturbing
+    # http_api callers.
+    "mcp": {
+        "system.run",
+        "docker.exec",
+        "browser.evaluate",
+        "shell.exec",
+        "process.spawn",
+        "fs.delete",
+        "fs.remove",
+        "filesystem.delete",
+        "file.delete",
+        "desktop_control__shell_command",
+        "desktop_control__shell",
+        "computer_use__bash",
+        "computer_use__write_file",
+        "computer_use__edit_file",
+        "code_interpreter__execute",
+        "coding_tools__bash",
+        "coding_tools__write_file",
+        "coding_tools__edit_file",
+        "agentic_computer_use__execute_task",
+    },
 }
 
 # Frozen snapshots for introspection / tests (optional).
