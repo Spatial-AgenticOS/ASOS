@@ -4,7 +4,7 @@ import importlib
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from api.state import state
 from config.loader import feral_home
@@ -473,17 +473,90 @@ async def wiki_ingest_text(body: dict):
 
 
 @router.post("/api/wiki/ingest/pdf")
-async def wiki_ingest_pdf(body: dict):
+async def wiki_ingest_pdf(
+    file: UploadFile | None = File(default=None),
+    upload_id: str | None = Form(default=None),
+    path: str | None = Form(default=None),
+    compile_after: bool = Form(default=True),
+    body: dict | None = None,
+):
+    """Ingest a PDF into the memory wiki.
+
+    PR 10 fixes the multipart-vs-JSON mismatch that left the web wiki
+    upload silently broken. Three input shapes are now accepted, in
+    order of preference:
+
+    1. ``multipart/form-data`` with a ``file`` part (the web composer's
+       paperclip ships this).
+    2. ``multipart/form-data`` with an ``upload_id`` referencing a
+       previously stored upload from ``/api/uploads`` — keeps the
+       composer's drag/drop + send-later flow honest.
+    3. ``application/json`` ``{"path": "..."}`` (back-compat for local
+       CLI / scripted ingestion).
+
+    Returns the underlying :class:`memory.ingest.MemoryIngestor`
+    result on success. Mismatched inputs surface 400/404 truthfully —
+    never a silent 200."""
     if not state.memory:
-        return {"error": "Memory store not initialized"}
+        raise HTTPException(status_code=503, detail="Memory store not initialized")
+
+    chosen_path: str | None = None
+
+    if file is not None and file.filename:
+        # multipart upload — stream bytes into the upload store so we
+        # have a stable on-disk path and dedup by sha256.
+        store = getattr(state, "uploads", None)
+        if store is None:
+            raise HTTPException(status_code=503, detail="Upload store not initialised")
+        try:
+            data = await file.read()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"failed to read upload: {exc}") from exc
+        if not data:
+            raise HTTPException(status_code=400, detail="empty file")
+        record = store.store(
+            data=data,
+            filename=file.filename,
+            content_type=file.content_type or "application/pdf",
+        )
+        chosen_path = record.path
+
+    elif upload_id:
+        store = getattr(state, "uploads", None)
+        if store is None:
+            raise HTTPException(status_code=503, detail="Upload store not initialised")
+        record = store.get(upload_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"unknown upload_id: {upload_id}")
+        chosen_path = record.path
+
+    elif path:
+        chosen_path = path
+
+    else:
+        # Last resort: JSON body (legacy)
+        body = body or {}
+        legacy_path = (body or {}).get("path", "")
+        if legacy_path:
+            chosen_path = legacy_path
+
+    if not chosen_path:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Provide a `file` multipart part, an `upload_id` form field, "
+                "or a JSON `path` — none were supplied."
+            ),
+        )
+
     ingestor = MemoryIngestor(state.memory)
     try:
         return ingestor.ingest_pdf(
-            path=(body or {}).get("path", ""),
-            compile_after=bool((body or {}).get("compile_after", True)),
+            path=chosen_path,
+            compile_after=bool(compile_after),
         )
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/api/wiki/ingest/repo")

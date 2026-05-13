@@ -24,6 +24,12 @@ classifiers = [
 ]
 dependencies = [
     "fastapi>=0.115.0",
+    # PR 10: chat composer attachments + wiki PDF ingestion both use
+    # multipart/form-data, which FastAPI delegates to python-multipart.
+    # Without this, /api/uploads and /api/wiki/ingest/pdf raise a
+    # ``RuntimeError: Form data requires "python-multipart"`` at first
+    # use — surfacing the dependency at install time avoids that.
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.9.0",
     "websockets>=13.0",

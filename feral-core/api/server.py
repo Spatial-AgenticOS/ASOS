@@ -77,6 +77,7 @@ from api.routes.consciousness import router as consciousness_router
 from api.routes.about_me import router as about_me_router
 from api.routes.ideas import router as ideas_router
 from api.routes.apps import router as apps_router
+from api.routes.uploads import router as uploads_router  # PR 10
 from api.routes.supervisor import router as supervisor_router
 from api.routes.twin import router as twin_router
 from api.routes.sessions import router as sessions_router  # W17
@@ -459,6 +460,7 @@ app.include_router(consciousness_router)
 app.include_router(about_me_router)
 app.include_router(ideas_router)
 app.include_router(apps_router)
+app.include_router(uploads_router)  # PR 10
 app.include_router(supervisor_router)
 app.include_router(twin_router)
 app.include_router(sessions_router)  # W17
@@ -888,11 +890,35 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
                 msg, payload = parse_message(raw)
 
                 if msg.type == "text_command" and isinstance(payload, TextCommandPayload):
-                    state.memory.working_push(session_id, {"role": "user", "text": payload.text})
+                    # PR 10 — pipe attachments into the orchestrator
+                    # context so the model can ground on them. Each
+                    # attachment is the AttachmentRef dump from
+                    # /api/uploads. We also inline a short marker into
+                    # working memory so the LLM transcript visibly
+                    # carries the attachment list (the context dict
+                    # alone wouldn't appear in the chat history the
+                    # brain shows the model).
+                    attachments = []
+                    if payload.attachments:
+                        attachments = [a.model_dump() if hasattr(a, "model_dump") else dict(a) for a in payload.attachments]
+                    user_msg_text = payload.text
+                    if attachments:
+                        attach_summary = ", ".join(
+                            f"{a.get('filename') or a.get('upload_id')} ({a.get('content_type') or 'unknown'}, "
+                            f"{int(a.get('size_bytes') or 0)} bytes, upload_id={a.get('upload_id')})"
+                            for a in attachments
+                        )
+                        user_msg_text = (
+                            f"{payload.text}\n\n[attached files: {attach_summary}]"
+                        )
+                    state.memory.working_push(session_id, {"role": "user", "text": user_msg_text})
+                    ctx = dict(payload.context or {})
+                    if attachments:
+                        ctx["attachments"] = attachments
                     await state.orchestrator.handle_command_stream(
                         session_id=session_id,
                         text=payload.text,
-                        context=payload.context,
+                        context=ctx,
                     )
 
                     if state.skill_gen:
