@@ -43,10 +43,30 @@ class AudioChunkPayload(BaseModel):
     data_b64: str = ""
 
 
+class AttachmentRef(BaseModel):
+    """Reference to a previously-uploaded file (PR 10).
+
+    The actual bytes live under ``$FERAL_HOME/uploads/<upload_id>`` and
+    are never embedded in the payload — keeping the LLM's prompt
+    bounded and avoiding base64 bloat on the WS. The orchestrator
+    resolves the ref through :class:`memory.uploads.UploadStore`
+    when a tool needs the on-disk path.
+    """
+    upload_id: str
+    filename: str = ""
+    content_type: str = ""
+    size_bytes: int = 0
+    sha256: str = ""
+
+
 class TextCommandPayload(BaseModel):
-    """Text input (for web/CLI clients that type instead of speak)."""
+    """Text input (for web/CLI clients that type instead of speak).
+
+    PR 10: an optional ``attachments`` list lets the composer ship
+    file references alongside the prompt without inlining bytes."""
     text: str
     context: Optional[dict] = None
+    attachments: Optional[list[AttachmentRef]] = None
 
 
 class BiometricPayload(BaseModel):
