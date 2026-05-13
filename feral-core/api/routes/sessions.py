@@ -176,3 +176,230 @@ async def post_spawn_subsession(session_id: str, body: dict | None = None):
         raise HTTPException(status_code=500, detail=f"spawn failed: {exc}") from exc
 
     return {"child_session_id": child_id}
+
+
+# ────────────────────────────────────────────────────────────────────
+# PR 7: List / cancel / steer for live W17 subsessions
+# ────────────────────────────────────────────────────────────────────
+
+
+def _record_subsession_audit(
+    sup,
+    *,
+    session_id: str,
+    child_id: str,
+    decision: str,
+    detail: dict,
+) -> None:
+    """Best-effort supervisor audit for cancel/steer outcomes.
+
+    Used so the supervisor's persistent record (which the UI/status
+    endpoint reads) reflects subsession lifecycle events even though
+    the in-memory registry is process-local."""
+    if sup is None or not hasattr(sup, "record"):
+        return
+    try:
+        sup.record(
+            source="api",
+            kind="subsession_lifecycle",
+            session_id=str(session_id or ""),
+            actor="user",
+            payload={"child_id": child_id, **detail},
+            decision=decision,
+            detail={"child_id": child_id, **detail},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("subsession audit record failed: %s", exc)
+
+
+def _serialize_child(child: dict) -> dict:
+    task = child.get("task")
+    return {
+        "child_id": child.get("child_id"),
+        "parent_id": child.get("parent_id"),
+        "kind": child.get("kind"),
+        "scope_key": child.get("scope_key"),
+        "model_override": child.get("model_override"),
+        "started_at": child.get("started_at"),
+        "running": bool(task and not task.done()),
+        "done": bool(task and task.done()),
+    }
+
+
+@router.get("/api/sessions/{session_id}/subsessions")
+async def list_subsessions(session_id: str):
+    """List active W17 child subsessions for *session_id*.
+
+    Returns ``{"subsessions": [{...}, ...]}``. Unknown parents return
+    an empty list rather than 404 — the absence of children is a
+    valid, non-erroneous state."""
+    try:
+        from agents.subagent_spawner import get_registry
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=503, detail=f"spawner unavailable: {exc}") from exc
+
+    children = get_registry().children_of(session_id)
+    return {"subsessions": [_serialize_child(c) for c in children]}
+
+
+@router.post("/api/sessions/{session_id}/subsessions/{child_id}/cancel")
+async def cancel_subsession(session_id: str, child_id: str):
+    """Cancel a single child subsession (does not affect siblings)."""
+    sup = _require_supervisor()
+    if getattr(sup, "paused", False):
+        raise HTTPException(status_code=423, detail="Supervisor is paused")
+
+    try:
+        from agents.subagent_spawner import get_registry
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=503, detail=f"spawner unavailable: {exc}") from exc
+
+    registry = get_registry()
+    target = None
+    for child in registry.children_of(session_id):
+        if child.get("child_id") == child_id:
+            target = child
+            break
+    if target is None:
+        raise HTTPException(status_code=404, detail="Unknown subsession")
+
+    cancelled = await registry._cancel_targets(session_id, [target])  # type: ignore[attr-defined]
+    _record_subsession_audit(
+        sup,
+        session_id=session_id,
+        child_id=child_id,
+        decision="allowed",
+        detail={"event": "cancelled", "kind": target.get("kind"), "scope_key": target.get("scope_key")},
+    )
+    return {"cancelled": cancelled, "child_id": child_id}
+
+
+@router.post("/api/sessions/{session_id}/subsessions/cancel-all")
+async def cancel_all_subsessions(session_id: str):
+    """Cancel every child subsession registered under *session_id*."""
+    sup = _require_supervisor()
+    if getattr(sup, "paused", False):
+        raise HTTPException(status_code=423, detail="Supervisor is paused")
+
+    try:
+        from agents.subagent_spawner import get_registry
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=503, detail=f"spawner unavailable: {exc}") from exc
+
+    cancelled = await get_registry().cancel_all_children(session_id)
+    _record_subsession_audit(
+        sup,
+        session_id=session_id,
+        child_id="*",
+        decision="allowed",
+        detail={"event": "cancel_all", "count": cancelled},
+    )
+    return {"cancelled": cancelled}
+
+
+@router.post("/api/sessions/{session_id}/subsessions/{child_id}/steer")
+async def steer_subsession_route(session_id: str, child_id: str, body: dict | None = None):
+    """Push a steer message to a running subagent.
+
+    Body shape: ``{"message": str}``."""
+    body = body or {}
+    message = body.get("message")
+    if not isinstance(message, str) or not message.strip():
+        raise HTTPException(status_code=400, detail="'message' is required")
+
+    sup = _require_supervisor()
+    if getattr(sup, "paused", False):
+        raise HTTPException(status_code=423, detail="Supervisor is paused")
+
+    try:
+        from agents.subagent_spawner import get_registry
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=503, detail=f"spawner unavailable: {exc}") from exc
+
+    registry = get_registry()
+    try:
+        outcome = await registry.steer_subsession(session_id, child_id, message)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        # The spawner raises RuntimeError("no steer hook registered")
+        # when the supervisor doesn't expose a steer callback. Surface
+        # that truthfully — don't pretend the steer succeeded.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("steer_subsession failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"steer failed: {exc}") from exc
+
+    _record_subsession_audit(
+        sup,
+        session_id=session_id,
+        child_id=child_id,
+        decision="allowed",
+        detail={"event": "steered", "message_len": len(message)},
+    )
+    return {"steered": True, "child_id": child_id, "outcome": outcome}
+
+
+# ────────────────────────────────────────────────────────────────────
+# PR 7: Active-work status endpoint
+# ────────────────────────────────────────────────────────────────────
+
+
+@router.get("/api/agents/active")
+async def get_active_agents():
+    """Combined snapshot of long-running agent work.
+
+    Returns three buckets:
+
+    * ``subsessions``: live W17 children across every registered parent.
+    * ``taskflows``: open/running/waiting taskflow rows.
+    * ``intent_plans``: active IntentCompiler plans.
+
+    Used by the UI's "agent activity" panel and by `feral doctor` to
+    answer "what is the agent actually doing right now?" honestly,
+    without polling three separate endpoints."""
+    out: dict = {
+        "subsessions": [],
+        "taskflows": [],
+        "intent_plans": [],
+        "warnings": [],
+    }
+
+    # Subsessions
+    try:
+        from agents.subagent_spawner import get_registry
+        reg = get_registry()
+        all_children: list[dict] = []
+        for parent_id, children in reg._by_parent.items():  # type: ignore[attr-defined]
+            for c in children:
+                all_children.append(_serialize_child(c))
+        out["subsessions"] = all_children
+    except Exception as exc:
+        out["warnings"].append(f"subsessions unavailable: {exc}")
+
+    # TaskFlows (waiting/running/queued only — completed/cancelled excluded)
+    try:
+        tf = getattr(state, "taskflows", None)
+        if tf is not None and hasattr(tf, "list_flows"):
+            open_statuses = {"queued", "running", "waiting"}
+            rows = tf.list_flows(limit=200)
+            out["taskflows"] = [
+                r for r in rows
+                if str(r.get("status", "")).lower() in open_statuses
+            ]
+    except Exception as exc:
+        out["warnings"].append(f"taskflows unavailable: {exc}")
+
+    # Intent plans (active only)
+    try:
+        compiler = getattr(state, "intent_compiler", None)
+        if compiler is not None and hasattr(compiler, "list_plans"):
+            plans = compiler.list_plans() or []
+            out["intent_plans"] = [
+                p for p in plans
+                if str(p.get("status", "")).lower() == "active"
+            ]
+    except Exception as exc:
+        out["warnings"].append(f"intent_plans unavailable: {exc}")
+
+    return out
