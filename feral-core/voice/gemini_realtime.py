@@ -14,6 +14,8 @@ import time
 from typing import Optional, Callable
 from uuid import uuid4
 
+from agents.tool_display import tool_feedback_text
+
 logger = logging.getLogger("feral.voice.gemini")
 
 GEMINI_WS_URL = (
@@ -299,6 +301,7 @@ class GeminiRealtimeProxy:
         perception=None,
         send_to_node=None,
         send_to_session=None,
+        orchestrator=None,
     ):
         self._sessions: dict[str, GeminiRealtimeSession] = {}
         self._node_to_session: dict[str, str] = {}
@@ -308,6 +311,10 @@ class GeminiRealtimeProxy:
         self._perception = perception
         self._send_to_node = send_to_node
         self._send_to_session = send_to_session
+        # PR9: see RealtimeProxy.__init__ — Gemini voice tool calls
+        # need the same tool_start/tool_result envelopes the chat path
+        # emits, otherwise the v2 chat trace cannot render them.
+        self._orchestrator = orchestrator
         self._api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
 
     @property
@@ -428,19 +435,7 @@ class GeminiRealtimeProxy:
 
     @staticmethod
     def _tool_feedback_text(tool_name: str) -> str:
-        parts = tool_name.split("__", 1)
-        if len(parts) != 2:
-            return "Working on that now."
-        skill_id, endpoint_id = parts
-        if skill_id == "web_search":
-            return "Searching the web now."
-        if skill_id == "weather_current":
-            return "Checking the weather."
-        if skill_id == "browser":
-            return f"Using the browser to {endpoint_id.replace('_', ' ')}."
-        if skill_id == "computer_use" and endpoint_id == "bash":
-            return "Running a command on your computer."
-        return f"Running {endpoint_id.replace('_', ' ')}."
+        return tool_feedback_text(tool_name)
 
     async def _send_tool_feedback(self, session_id: str, text: str):
         if not text:
@@ -488,6 +483,16 @@ class GeminiRealtimeProxy:
             self._memory.working_push(session_id, {
                 "role": "assistant", "text": text[:300], "source": "gemini_realtime",
             })
+            # PR 9 gap-fill — durable persistence under voice:<sid>.
+            try:
+                if hasattr(self._memory, "conversation_append"):
+                    self._memory.conversation_append(
+                        f"voice:{session_id}", "assistant", text[:300],
+                        source="voice_realtime_gemini",
+                        title=f"Voice session {session_id[:8]}",
+                    )
+            except Exception as exc:
+                logger.debug("gemini voice persistence skipped: %s", exc)
 
     async def _handle_input_transcript(self, session_id: str, text: str):
         """Handle user-speech transcription returned by Gemini."""
@@ -495,6 +500,15 @@ class GeminiRealtimeProxy:
             self._memory.working_push(session_id, {
                 "role": "user", "text": text[:300], "source": "gemini_realtime_input",
             })
+            try:
+                if hasattr(self._memory, "conversation_append"):
+                    self._memory.conversation_append(
+                        f"voice:{session_id}", "user", text[:300],
+                        source="voice_realtime_gemini",
+                        title=f"Voice session {session_id[:8]}",
+                    )
+            except Exception as exc:
+                logger.debug("gemini voice input persistence skipped: %s", exc)
         gs = self._sessions.get(session_id)
         if not gs:
             return
@@ -527,7 +541,28 @@ class GeminiRealtimeProxy:
         if not endpoint:
             return json.dumps({"error": f"Endpoint not found: {endpoint_id}"})
         await self._send_tool_feedback(session_id, self._tool_feedback_text(name))
+
+        # PR9: see realtime_proxy._handle_tool_call — emit the chat
+        # trace envelopes so voice tools render in the v2 ToolTrace.
+        tool_call = {"name": name, "id": call_id, "args": args}
+        t0 = time.time()
+        if self._orchestrator is not None:
+            try:
+                await self._orchestrator._emit_tool_start(session_id, tool_call)
+            except Exception:
+                logger.exception("gemini voice tool_start emit failed")
+
         result = await self._skill_executor.execute(name, args, skill, endpoint)
+
+        if self._orchestrator is not None:
+            latency_ms = (time.time() - t0) * 1000.0
+            try:
+                await self._orchestrator._emit_tool_result(
+                    session_id, tool_call, result, latency_ms,
+                )
+            except Exception:
+                logger.exception("gemini voice tool_result emit failed")
+
         return json.dumps(result.get("data") or {"status": result.get("error", "done")})
 
     async def _handle_speech_started(self, session_id: str):
