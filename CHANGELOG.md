@@ -1,10 +1,36 @@
 # Changelog
 
-<!-- feral-version: 2026.5.22 -->
+<!-- feral-version: 2026.5.23 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.23] — `feral setup` interactive picker P0 fix + UX polish (PR #124)
+
+**Scope of this entry**: brain (`feral-core`) — CLI only. Bug-fix release for the v2026.5.22 CLI UX overhaul (#122). No web client changes.
+
+### Fixed
+
+- **`feral setup` interactive picker silently fell back to the typed numeric prompt on every step (P0).** The wizard runs inside `asyncio.run(_run_async())`, so when an InquirerPy step called `inquirer.X(...).execute()`, prompt_toolkit's `Application.run()` detected the running asyncio loop and returned a coroutine instead of blocking. The defensive `except Exception: pass` in `cli/ui_kit.py` swallowed the resulting `RuntimeWarning` / `TypeError` and dropped every prompt to the typed numeric fallback. Operators on v2026.5.22 saw a typed numeric prompt for provider / model / network even on a real TTY with InquirerPy installed. Fixed by adding `_run_inquirer_safely(builder)` in `cli/ui_kit.py` which detects a running event loop and dispatches the InquirerPy `.execute()` to a worker thread that has no event loop bound to it; prompt_toolkit's normal blocking semantics work inside the worker. Sync callers bypass the thread entirely. The broad `except Exception: pass` is now `logger.debug(exc)` so the next breakage shows up immediately instead of silently degrading every prompt.
+
+### Changed — UX polish on top of the bug fix
+
+- **Space-to-mark + enter-to-confirm picker semantics.** `cli.ui_kit.select` and `fuzzy_select` are now built on `inquirer.checkbox` / `inquirer.fuzzy(multiselect=True)` with a `len(result) == 1` validator. Arrows navigate, **space marks** the chosen option, **enter confirms**. The previous enter-on-cursor-position semantics were unfriendly — operators want to *see* their pick before committing. Defaults pre-mark the matching option so a single enter accepts.
+- **Raccoon + ASCII `FERAL` logo banner on `feral setup`.** `cli/setup/steps/welcome.py` now renders the brand-cyan Rich panel with the ASCII logo and the version, mirroring what `claude` / `codex` CLIs do at first run. First impression instead of a wall of step text.
+- **Step indicators in the wizard.** `cli/setup/state_machine.py` prints `── Step N of M · <Title> ──` in brand cyan before each visible step. `welcome` / `finish` are framing-only and stay header-less so the welcome panel is the operator's first impression.
+- **Removed duplicate provider-table + model-preview re-render on the interactive path** in `cli/setup/steps/llm.py`. The picker now renders status badges inline; the standalone Rich table + `print first 25 models` preview are kept on the typed-fallback path only.
+
+### Honest setup-gated limitations
+
+- **Masked paste still needs a real TTY.** In a pipe / CI / non-interactive shell `ui_kit.password` falls back to `getpass.getpass` (silent — same as the legacy behaviour). The fallback annotates the prompt label so the operator can see they're in the silent path; we never pretend to mask characters when we cannot.
+- **InquirerPy has no native single-mark-checkbox primitive.** The space-to-mark single-select uses `inquirer.checkbox` + a `len == 1` validator. If the operator marks 0 or 2+ items and presses enter, the validator re-prompts with `press space to mark exactly one option, then enter`.
+- **Tested on macOS Terminal.app + iTerm2.** Cursor's integrated terminal sometimes reports `sys.stdout.isatty() == False` depending on launch context — the wizard then drops to the typed-fallback path and prints the `ssh -t` hint, exactly the same way it does for any other non-TTY shell.
+
+### Tests
+
+- `tests/test_cli_ui_kit.py` — `TestRunInquirerSafely` (direct shim tests), `TestAsyncioNested` (drives `asyncio.run()` over `ui_kit.select` / `password` / `confirm` with mocked InquirerPy and `warnings.simplefilter('error', RuntimeWarning)` so any leaked `Application.run_async` coroutine fails the test), `TestSpaceMarkSemantics` (single-item unwrap, fuzzy_select stays multiselect, defaults pre-mark the choice).
+- `tests/test_cli_setup_render_smoke.py` (new) — pins the step indicator emission and the raccoon-logo welcome panel.
 
 ## [2026.5.22] — Audit-r10 overhaul + CLI UX overhaul (PRs #105–#119, #122)
 
