@@ -21,8 +21,9 @@ from __future__ import annotations
 
 import logging
 import platform
+import subprocess
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body, HTTPException
 
 from security.macos_permissions import all_desktop_control_permission_statuses
 
@@ -38,3 +39,47 @@ async def get_system_permissions():
         "platform": platform.system().lower(),
         "permissions": [s.to_dict() for s in statuses],
     }
+
+
+@router.post("/api/system/permissions/open")
+async def open_system_permission(body: dict = Body(...)):
+    """Open the macOS System Settings pane for a specific TCC permission.
+
+    Used by the Phase 13 onboarding wizard's Mac TCC walkthrough step.
+    The iOS wizard shows each Mac permission row with an "Open on Mac"
+    button that hits this endpoint.
+    """
+    permission_key = body.get("permission_key", "")
+    if not permission_key:
+        raise HTTPException(status_code=400, detail="permission_key is required")
+
+    from agents.tcc_card import TCC_CATALOG, _automation_card
+
+    if permission_key.startswith("automation:"):
+        bundle = permission_key.split(":", 1)[1]
+        entry = _automation_card(bundle)
+    else:
+        entry = TCC_CATALOG.get(permission_key)
+
+    if not entry:
+        raise HTTPException(status_code=400, detail=f"Unknown permission key: {permission_key}")
+
+    deeplink = entry.get("macos_deeplink", "")
+    if not deeplink:
+        raise HTTPException(status_code=400, detail=f"No deeplink for permission key: {permission_key}")
+
+    if platform.system() != "Darwin":
+        return {"ok": False, "reason": "Not running on macOS"}
+
+    try:
+        subprocess.run(
+            ["open", deeplink],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        return {"ok": True}
+    except Exception as exc:
+        logger.warning("open_system_permission: open failed: %s", exc)
+        return {"ok": False, "reason": str(exc)}
