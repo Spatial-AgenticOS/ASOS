@@ -45,16 +45,23 @@ async def run_provider_step(state: WizardState) -> None:
     options = _build_options(catalog, statuses)
     extra_notes = _build_notes(catalog, statuses)
 
+    # The state-machine prints the brand-coloured "Step N of M · LLM
+    # Provider" header before this step runs, so we don't repeat it.
     if _RICH_AVAILABLE:
-        console.print()
-        console.print("[bold]Step 1 · LLM Provider[/]")
-        console.print("Pick the provider you want FERAL's brain to talk to. Local providers")
-        console.print("show [green]ready[/] when detected. Cloud providers show [yellow]needs API key[/]")
-        console.print("until you enter one — you can still select them and add the key next.")
-    else:
-        console.print("\nStep 1 · LLM Provider")
+        console.print(
+            "Pick the provider you want FERAL's brain to talk to. Local providers "
+            "show [green]ready[/] when detected; cloud providers show "
+            "[yellow]needs API key[/] until you enter one — you can still pick them "
+            "and add the key next."
+        )
 
-    render_provider_table("Available providers", options, extra_columns=extra_notes)
+    # On the typed-fallback path (off-tty / no InquirerPy) the picker
+    # cannot show inline status badges, so the wide Rich table still
+    # earns its keep. On the interactive path the picker draws each
+    # option with the same status badge inline (see helpers._option_badge)
+    # — rendering the table separately would dump the providers twice.
+    if not (ui_kit.is_inquirer_available() and ui_kit.is_interactive()):
+        render_provider_table("Available providers", options, extra_columns=extra_notes)
 
     default_id = state.get_setting("llm", "provider") or _default_choice(options)
     chosen = ask_choice("Choose a provider", options, default=default_id)
@@ -134,12 +141,12 @@ async def run_model_step(state: WizardState) -> None:
         cached = await catalog.list_models(provider_id, live=False)
     models = list(cached.models)
 
+    # Header is owned by the state-machine step indicator now; we just
+    # surface the discovered-count summary.
     if _RICH_AVAILABLE:
-        console.print()
-        console.print("[bold]Step 2 · Model[/]")
         console.print(
-            f"Discovered {len(models)} models for {desc.display_name} "
-            f"(source: {cached.source})."
+            f"Discovered [bold]{len(models)}[/] models for "
+            f"[bold]{desc.display_name}[/] [dim](source: {cached.source})[/]."
         )
 
     default = state.get_setting("llm", "model") or desc.default_model or (models[0] if models else "")

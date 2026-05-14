@@ -10,12 +10,19 @@ Covers:
 * The masked-character path is gated on TTY + InquirerPy availability;
   we only assert the behaviour we can verify here (the silent fallback
   reads from getpass when stdin is non-tty).
+* The asyncio nested-loop shim (``_run_inquirer_safely``) — this is
+  what was broken in 2026.5.22: every prompt silently fell back to
+  the typed numeric path because ``prompt_toolkit.Application.run()``
+  detected a running asyncio loop and returned a coroutine rather
+  than blocking.
 """
 
 from __future__ import annotations
 
+import asyncio
 import io
 import sys
+import warnings
 
 import pytest
 
@@ -184,3 +191,176 @@ class TestTTYHint:
         # the ssh -t invocation truthfully.
         assert "ssh -t" in captured.out
         assert "🦝" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Asyncio nested-loop shim — the actual P0 fix
+# ---------------------------------------------------------------------------
+
+
+class _FakePrompt:
+    """Fake InquirerPy prompt object — just exposes ``execute()``."""
+
+    def __init__(self, value):
+        self._value = value
+        self.execute_called = False
+
+    def execute(self):
+        self.execute_called = True
+        return self._value
+
+
+class TestRunInquirerSafely:
+    """Direct tests of the worker-thread shim."""
+
+    def test_no_running_loop_calls_directly(self):
+        prompt = _FakePrompt("direct")
+        result = ui_kit._run_inquirer_safely(prompt.execute)
+        assert result == "direct"
+        assert prompt.execute_called is True
+
+    def test_inside_running_loop_runs_in_worker(self):
+        prompt = _FakePrompt("via-worker")
+
+        async def driver():
+            return ui_kit._run_inquirer_safely(prompt.execute)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = asyncio.run(driver())
+        assert result == "via-worker"
+        assert prompt.execute_called is True
+
+    def test_worker_exception_propagates(self):
+        def boom():
+            raise RuntimeError("from worker")
+
+        async def driver():
+            return ui_kit._run_inquirer_safely(boom)
+
+        with pytest.raises(RuntimeError, match="from worker"):
+            asyncio.run(driver())
+
+
+class TestAsyncioNested:
+    """End-to-end: drive the public ``ui_kit.X()`` prompts inside an
+    ``asyncio.run`` and assert no ``RuntimeWarning`` leaks and the
+    return value flows back correctly. Mocks InquirerPy to return a
+    known value without needing a real TTY.
+    """
+
+    def _patch_interactive(self, monkeypatch):
+        monkeypatch.setattr(ui_kit, "_INQUIRER_AVAILABLE", True)
+        monkeypatch.setattr(ui_kit, "_is_interactive", lambda: True)
+
+    def test_select_inside_running_loop_does_not_warn(self, monkeypatch):
+        self._patch_interactive(monkeypatch)
+        # ui_kit.select uses inquirer.checkbox under the hood — return a
+        # one-element list to satisfy the validator.
+        captured: dict[str, object] = {}
+
+        def fake_checkbox(**kwargs):
+            captured["kwargs"] = kwargs
+            return _FakePrompt(["openai"])
+
+        monkeypatch.setattr(ui_kit.inquirer, "checkbox", fake_checkbox)
+
+        async def driver():
+            return ui_kit.select(
+                "Pick one",
+                [{"name": "OpenAI", "value": "openai"},
+                 {"name": "Ollama", "value": "ollama"}],
+            )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = asyncio.run(driver())
+        assert result == "openai"
+        # The picker was called with the brand emoji + a single-selection
+        # validator (so the legacy enter-on-cursor pattern can't slip back in).
+        assert captured["kwargs"]["qmark"] == ui_kit.BRAND_EMOJI
+        assert captured["kwargs"]["validate"]([{"x"}]) is True
+        assert captured["kwargs"]["validate"]([]) is False
+        assert captured["kwargs"]["validate"](["a", "b"]) is False
+
+    def test_password_inside_running_loop_does_not_warn(self, monkeypatch):
+        self._patch_interactive(monkeypatch)
+
+        def fake_secret(**kwargs):
+            return _FakePrompt("sk-xxxx")
+
+        monkeypatch.setattr(ui_kit.inquirer, "secret", fake_secret)
+
+        async def driver():
+            return ui_kit.password("API key")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = asyncio.run(driver())
+        assert result == "sk-xxxx"
+
+    def test_confirm_inside_running_loop_does_not_warn(self, monkeypatch):
+        self._patch_interactive(monkeypatch)
+
+        def fake_confirm(**kwargs):
+            return _FakePrompt(True)
+
+        monkeypatch.setattr(ui_kit.inquirer, "confirm", fake_confirm)
+
+        async def driver():
+            return ui_kit.confirm("ok?", default=False)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = asyncio.run(driver())
+        assert result is True
+
+
+class TestSpaceMarkSemantics:
+    """Verify the new space-to-mark + enter-to-confirm contract."""
+
+    def test_select_unwraps_single_item_from_checkbox(self, monkeypatch):
+        monkeypatch.setattr(ui_kit, "_INQUIRER_AVAILABLE", True)
+        monkeypatch.setattr(ui_kit, "_is_interactive", lambda: True)
+
+        def fake_checkbox(**kwargs):
+            return _FakePrompt(["chosen-id"])
+
+        monkeypatch.setattr(ui_kit.inquirer, "checkbox", fake_checkbox)
+        result = ui_kit.select("pick", ["a", "b", "chosen-id"])
+        assert result == "chosen-id"
+
+    def test_fuzzy_select_unwraps_single_item(self, monkeypatch):
+        monkeypatch.setattr(ui_kit, "_INQUIRER_AVAILABLE", True)
+        monkeypatch.setattr(ui_kit, "_is_interactive", lambda: True)
+
+        def fake_fuzzy(**kwargs):
+            assert kwargs.get("multiselect") is True, "fuzzy_select must be multiselect"
+            return _FakePrompt(["gpt-4o"])
+
+        monkeypatch.setattr(ui_kit.inquirer, "fuzzy", fake_fuzzy)
+        result = ui_kit.fuzzy_select(
+            "pick model", ["gpt-3.5", "gpt-4o", "claude-3-opus"]
+        )
+        assert result == "gpt-4o"
+
+    def test_default_pre_marks_choice(self, monkeypatch):
+        """``default`` should land the user on the option already enabled
+        so they can press enter immediately to accept it."""
+        monkeypatch.setattr(ui_kit, "_INQUIRER_AVAILABLE", True)
+        monkeypatch.setattr(ui_kit, "_is_interactive", lambda: True)
+
+        captured = {}
+
+        def fake_checkbox(**kwargs):
+            captured["choices"] = kwargs["choices"]
+            return _FakePrompt(["beta"])
+
+        monkeypatch.setattr(ui_kit.inquirer, "checkbox", fake_checkbox)
+        ui_kit.select("pick", ["alpha", "beta", "gamma"], default="beta")
+
+        # Each Choice exposes .value + .enabled in InquirerPy's API.
+        enabled_values = [
+            c.value for c in captured["choices"] if getattr(c, "enabled", False)
+        ]
+        assert enabled_values == ["beta"]
