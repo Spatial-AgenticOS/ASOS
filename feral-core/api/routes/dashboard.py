@@ -68,6 +68,77 @@ async def identity_greeting():
     }
 
 
+@router.get("/api/context/live")
+async def context_live():
+    """Return the brain's current perception context for companion apps.
+
+    Structured snapshot of what the brain "knows" right now — sensors,
+    vision, audio, somatic state, plus the formatted system-context string
+    that the LLM receives. The iOS Context tab polls this instead of
+    showing raw metric cards.
+    """
+    now = time.time()
+
+    perception_text = "No active sessions."
+    sensors = {}
+    vision = {}
+    somatic = {}
+
+    if state.perception and state.sessions:
+        for sid in state.sessions:
+            frame = state.perception.get_frame(sid)
+            if frame:
+                perception_text = frame.to_system_context()
+                sensors = {
+                    "heart_rate": frame.heart_rate or None,
+                    "heart_rate_fresh": (
+                        frame.heart_rate > 0
+                        and frame.heart_rate_sample_ts > 0
+                        and (now - frame.heart_rate_sample_ts) <= 120
+                    ),
+                    "heart_rate_source": frame.heart_rate_source or None,
+                    "spo2": frame.spo2_pct or None,
+                    "spo2_fresh": (
+                        frame.spo2_pct > 0
+                        and frame.spo2_sample_ts > 0
+                        and (now - frame.spo2_sample_ts) <= 120
+                    ),
+                    "temperature_c": frame.skin_temperature_c or None,
+                    "activity_state": frame.activity_state if frame.activity_state != "unknown" else None,
+                    "battery_pct": frame.battery_pct if frame.battery_pct < 100 else None,
+                }
+                vision = {
+                    "active": frame.has_vision,
+                    "scene_description": frame.scene_description or None,
+                    "objects": frame.detected_objects[:5] if frame.detected_objects else [],
+                    "text": frame.text_in_scene[:3] if frame.text_in_scene else [],
+                }
+                break
+
+    if hasattr(state, 'somatic_engine') and state.somatic_engine and state.sessions:
+        for sid in state.sessions:
+            vec = state.somatic_engine.get_vector(sid)
+            somatic = {
+                "cognitive_load": vec.cognitive_load,
+                "activity_level": vec.activity_level,
+                "circadian_phase": vec.circadian_phase,
+            }
+            break
+
+    hardware_context = ""
+    if state.device_registry:
+        hardware_context = state.device_registry.to_llm_context()
+
+    return {
+        "perception_text": perception_text,
+        "sensors": sensors,
+        "vision": vision,
+        "somatic": somatic,
+        "hardware_context": hardware_context,
+        "timestamp": now,
+    }
+
+
 @router.get("/health")
 async def health():
     """Health check endpoint for Docker HEALTHCHECK and load balancers."""
