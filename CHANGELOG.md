@@ -1,10 +1,50 @@
 # Changelog
 
-<!-- feral-version: 2026.6.0 -->
+<!-- feral-version: 2026.5.21 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.21] — Audit-r10 overhaul (PRs #105–#119)
+
+**Scope of this entry**: brain (`feral-core`) + web client (`feral-client-v2`). Thirteen PRs landed bottom-up against `main`, each gated on full CI green and per-PR scope review, closing the operator's audit-r10 complaint set end-to-end. Companion iOS work for the same audit (Phases 4–13 iOS surfaces) ships from `FERAL-AI/feral-companion-ios` PRs #5, #7, #8, #9, #10, #11, #12, #13–#17, #19 on its own cadence.
+
+This release closes ten operator-named complaints: chat-not-async, voice-always-on / no-mute / echoes, devices/HUPs invisibility, Mac/FaceTime integration disconnect, vague Settings + QR scanner, "design is horrible", Vitals tab "stupid", brain↔phone communication gaps, app being "minimal", and no clear phone workflow. Each fix is a structured contract change, not a UI band-aid.
+
+### Added
+
+- **`device_target` wire field + ExecutionSurfacePolicy refactor (#105 — phase-1).** `TextCommandPayload` + `chat_request` now carry an explicit `device_target: "brain" | "phone" | "glasses" | "auto"`. `security/dangerous_tools.py` introduces named execution surfaces (`brain_host`, `phone_actuator`, `glasses_actuator`, `node_actuator`) and `resolve_surface_from_context` consults `device_target` BEFORE the legacy heuristic so the orchestrator routes deterministically. Closes the operator's "I asked the app to do X on the Mac and it failed silently" pattern at the policy layer.
+- **PromptRefiner — structured intent + slots + device_target envelope (#106 — phase-2).** New `agents/prompt_refiner.py` runs a fast LLM pass that emits `{intent, slots, device_target, refined_prompt}` before the main orchestrator. Server text/chat handlers consume the envelope so device routing + tool selection happen on validated structure, not free-form prose.
+- **Shared-session lifecycle — surface refcount + primary snapshot persistence (#107 — phase-3).** `BrainState.session_attach_count` tracks the live surface count per `session_id`; cleanup only fires when it hits zero. `memory/session_snapshot.py` persists the primary thread (last ~50 turns) to `<feral_data_home>/primary_session_snapshot.jsonl` so brain restarts rehydrate the operator's history automatically.
+- **`NodeRegisterPayload.skills` wire field (#108 — phase-4a).** Optional `list[dict]` field on the node register envelope so phones / glasses / wearables publish structured skill manifests (`{id, name, description, actions:[{name, summary, requires_permission?}]}`) to the brain at connect time. Old clients without the field still register cleanly (`skills` defaults to `[]`).
+- **Capability registry + `GET /api/capabilities` + capability-aware dispatch (#109 — phase-5).** `memory/capability_registry.py` is the live catalog of which `phone.*` / `glasses.*` action names are routable right now. Tracks node skills (Phase 4) AND brain-host skills (Phase 11). `ToolRunner.execute_capability_action(name, args)` looks up the handler and routes — in-process for `brain_host`, HUP for nodes — or returns a structured `capability_unavailable` envelope when no node publishes the action. Closes the brain's old habit of timing out HUP futures into silent failures.
+- **`permission_card` SDUI flow (#110 — phase-6).** `agents/permission_card.py` turns `permission_denied:<NSKey>` error strings (emitted by Phase 4 iOS skills on iOS permission denial) into structured `permission_card` SDUI elements with title / description / `app-settings:` (or `x-apple-health://`) deeplink sourced from `PERMISSION_CATALOG`. Renderer-side: iOS PermissionCardView (companion #8) + web SduiRenderer (#113) draw the same shape. No more LLM-hallucinated "go to Settings → Privacy → Contacts" prose.
+- **`GET /api/sessions/primary/transcript` (#111 — phase-9).** Live read of the primary-session `conversation_history` with `?since_ms=` incremental polling. iOS reconciles on `scenePhase: .active` (companion #10) so messages the brain emitted while iOS was backgrounded land in the chat on resume — closes "chat stops after a single answer".
+- **Brain-on-Mac `desktop_control` + `tcc_card` SDUI (#112 — phase-11).** New `skills/desktop_control/` package: AppleScript runner (`run_applescript(script, target_bundle=...)` with platform guard, timeout, and stderr → `tcc_target_bundle` detection — modern "Not authorized to send Apple events to X" + legacy `-1743 errAEEventNotPermitted` patterns map to a structured `tcc_denied:automation:<bundle>`); seven brain-host action families (FaceTime / Music / Messages / Notes / URL / app launch+activate+list / notify) registered as `BRAIN_HOST_MANIFESTS`. `agents/tcc_card.py` mirrors `permission_card.py` for Mac TCC denials with the right `x-apple.systempreferences:` deeplink AND fires `open` against it on the Mac so System Settings is already in front of the operator. `CapabilityRegistry.register_brain_host_skills()` + `find_handler` priority (brain-host beats node). `ToolRunner.execute_capability_action` refactored: brain-host dispatched in-process via `dispatch_desktop_action`, then both card kinds flow through `_maybe_emit_capability_cards`. `GET /api/system/permissions` exposes the macOS TCC status grid.
+- **Web `SduiRenderer` renders `permission_card` + `tcc_card` (#113 — phase-11b).** Cross-surface parity for Phase 6 + 11: the web client renders the same structured denial cards iOS does, sourcing copy from the brain's catalogs.
+- **Design tokens (`theme.js`) for JS consumers (#114 — phase-7b-1).** Programmatic export of color / typography / spacing / material tokens so web pages stop hardcoding hex. iOS counterpart (`FeralTheme.swift`) ships in companion #13.
+- **`GET /api/context/live` (#115 — phase-7b-2).** Aggregator endpoint for the iOS Context tab (which replaces the "stupid" Vitals tab — companion #14). Returns the live perception digest: vitals snapshot, next event, ambient state, connected node count.
+- **Token-driven `Pair.jsx` (#116 — phase-7b-6).** Eliminates hardcoded hex from the web pairing surface; all color comes from `theme.js`.
+- **Unified onboarding wizard brain endpoints (#119 — phase-13).** `GET /api/discovery/brain` returns `{brain_id, host, port, version, fingerprint}` so the companion's mDNS discovery can confirm "yes, this is a real FERAL brain on this LAN". `POST /api/system/permissions/open` fires `open <deeplink>` against any catalog-known TCC permission so the wizard's "Open on Mac" buttons land on the right Settings pane. iOS wizard ships in companion #19.
+
+### Changed
+
+- `agents/tool_runner.py` — refactored the Phase 6 permission-card post-processor into `_maybe_emit_capability_cards` so both `permission_denied:<NSKey>` (Phase 6) and `tcc_denied:<key>` (Phase 11) cards flow through one path.
+- `api/routes/capabilities.py` — `GET /api/capabilities` brain_host section now sources structured Phase 11 manifests from the capability registry on top of legacy `SkillRegistry` entries.
+- `memory/capability_registry.py` — `find_handler` checks brain-host BEFORE connected nodes so in-process actions don't queue behind HUP latency.
+
+### Fixed
+
+- **`memory/sync.py`** — refactored discovery loop to `AsyncZeroconf` (Phase 3 incidental fix) so the brain doesn't trip `EventLoopBlocked` on first-run discovery.
+- **`feral-core/webui_v2/` bundled-asset drift** — the Phase 7b-1 / 7b-2 / 7b-6 PRs added new JS source without rebuilding the committed dist; the "WebUI v2 — bundled asset coherence" CI step failed on every push since. This release commit rebuilds and commits the matching dist so CI is green on `main` again.
+
+### Honest setup-gated limitations (still required to go from "real" to "live")
+
+- **macOS Automation grants** (#112) are per-target. The brain reports each denial as a structured `tcc_denied:automation:<bundle>` token; the operator must approve the row in System Settings → Privacy & Security → Automation the first time FERAL scripts each app (FaceTime / Music / Messages / Notes / Reminders / Calendar / Safari). The `tcc_card` flow opens the right pane automatically; manual approval still needed.
+- **iOS Skill permissions** (#108 / #110) — same pattern on the phone. First-call denial returns `permission_denied:<NSKey>`; PermissionCardView (companion #8) renders the `app-settings:` deeplink. Granular HealthKit auth is per-type and lives in the Devices tab.
+- **Web client `permission_card` / `tcc_card` deeplinks** (#113) — `app-settings:` only works when the browser is on iOS; `x-apple.systempreferences:` only on macOS. Non-matching combinations fall back gracefully (read-only copy + the brain side already fired the open on the Mac when the card was minted).
+- **Phase 13 onboarding wizard** (companion #19) — `BrainPairFlow` calls `POST /api/devices/pair` with `kind: browser_node_v2` for tap-to-pair from a discovered mDNS brain; if your brain build doesn't have that endpoint yet, the QR + paste-link paths still work. Location permission is grant-via-Settings only (CLLocationManager delegate-lifecycle inline prompt is a Phase 13.1 follow-up). HealthKit shows "Unknown" with no inline request because HK auth is per-type — granular auth lives in the Devices tab.
 
 ## [2026.5.20] — Agent runtime recovery (PRs #93–#103)
 
