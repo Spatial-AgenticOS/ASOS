@@ -153,6 +153,46 @@ class TestProtocolRoundtrip:
         )
         assert payload.node_type == "glasses"
 
+    def test_skills_field_optional_default_empty(self):
+        # Old clients that don't send `skills` still register cleanly.
+        # Phase 4 wire-compat regression: NodeRegisterPayload.skills
+        # must default to `[]` so v2026.5.x companion builds keep
+        # working after the brain ships the new field.
+        payload = NodeRegisterPayload(
+            node_id="daemon_legacy",
+            node_type="phone",
+            capabilities=["accel"],
+        )
+        assert payload.skills == []
+
+    def test_skills_field_accepts_phase4_manifests(self):
+        # Phase 4 iOS companion (CallKitSkill, etc.) publishes
+        # structured skill manifests in node_register.skills.
+        # Validation is intentionally loose at the protocol layer —
+        # Phase 5's capability registry tightens the shape.
+        payload = NodeRegisterPayload(
+            node_id="daemon_iphone",
+            node_type="phone",
+            platform="ios",
+            capabilities=["phone_call"],
+            skills=[
+                {
+                    "id": "phone_call",
+                    "name": "Phone Call",
+                    "description": "Place a call via iOS Phone / FaceTime.",
+                    "actions": [
+                        {
+                            "name": "phone.call.start",
+                            "summary": "Start a call.",
+                            "requiresPermission": None,
+                        }
+                    ],
+                }
+            ],
+        )
+        assert len(payload.skills) == 1
+        assert payload.skills[0]["actions"][0]["name"] == "phone.call.start"
+
 
 # ─── Skill Registry + Executor ───
 
