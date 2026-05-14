@@ -847,6 +847,14 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
     requested_sid = ws.query_params.get("session_id", "").strip() if hasattr(ws, "query_params") else ""
     session_id = requested_sid or getattr(state, "primary_session_id", "") or str(uuid4())
     state.sessions[session_id] = ws
+    # Phase 3 (audit-r10) — refcount this attachment so concurrent
+    # tabs sharing the primary session each register; per-session
+    # cleanup only fires when the last surface detaches AND the
+    # session isn't the persistent primary.
+    try:
+        state.attach_session(session_id)
+    except Exception:  # best-effort — never block accept on bookkeeping
+        pass
     logger.info(f"Client connected: {session_id}")
 
     gw_session = GatewaySession(session_id, ws, state.gateway_registry)
@@ -1118,25 +1126,55 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
 
     except WebSocketDisconnect:
         logger.info(f"Client disconnected: {session_id}")
-        if state.orchestrator:
-            try:
-                await state.orchestrator.on_session_disconnect(session_id)
-            except Exception as e:
-                logger.warning(f"Session summarization failed: {e}")
-        if state.identity_workspace:
-            try:
-                _llm = state.orchestrator.llm if state.orchestrator else None
-                await state.identity_workspace.maintenance_cycle(
-                    memory_store=state.memory,
-                    llm=_llm,
-                    session_id=session_id,
-                )
-            except Exception as e:
-                logger.debug(f"Identity maintenance skipped: {e}")
+        # Phase 3 (audit-r10) — decrement refcount; only run cleanup
+        # when the last surface for this session_id has detached AND
+        # the session is not the persistent `primary_session_id`. This
+        # is the residual fix for operator complaint #15 ("app can't
+        # fetch stuff I did on the local brain chat"): web tab close
+        # used to wipe the shared primary thread in RAM even with the
+        # iOS surface still attached. Now the primary thread is
+        # protected at the lifecycle layer AND persisted to disk via
+        # the snapshot store.
+        try:
+            remaining_attachments = state.detach_session(session_id)
+        except Exception:
+            remaining_attachments = 0
+        should_clear = state.should_clear_on_disconnect(session_id)
+        if remaining_attachments == 0 and should_clear:
+            if state.orchestrator:
+                try:
+                    await state.orchestrator.on_session_disconnect(session_id)
+                except Exception as e:
+                    logger.warning(f"Session summarization failed: {e}")
+            if state.identity_workspace:
+                try:
+                    _llm = state.orchestrator.llm if state.orchestrator else None
+                    await state.identity_workspace.maintenance_cycle(
+                        memory_store=state.memory,
+                        llm=_llm,
+                        session_id=session_id,
+                    )
+                except Exception as e:
+                    logger.debug(f"Identity maintenance skipped: {e}")
         state.sessions.pop(session_id, None)
         state.audio.clear_session(session_id)
+        # Perception buffers are surface-local (one fusion frame per
+        # active socket); clear unconditionally so a stale frame from
+        # a closed tab doesn't leak into the next session.
         state.perception.clear(session_id)
-        state.memory.working_clear(session_id)
+        # Working memory + orchestrator history persist while ANY
+        # surface remains AND for the primary session always. The
+        # snapshot store handles cold-boot durability.
+        if remaining_attachments == 0 and should_clear:
+            state.memory.working_clear(session_id)
+        elif remaining_attachments == 0 and session_id == state.primary_session_id:
+            # Force a snapshot on the way out so a brain restart
+            # immediately after losing all surfaces still has the
+            # latest turn on disk.
+            try:
+                state.snapshot_primary_thread(force=True)
+            except Exception as snap_exc:
+                logger.debug(f"Primary snapshot on disconnect failed: {snap_exc}")
     except Exception as exc:
         logger.error(f"Unexpected error in session {session_id[:8]}: {exc}", exc_info=True)
         state.sessions.pop(session_id, None)
