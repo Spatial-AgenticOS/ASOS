@@ -24,6 +24,7 @@ from memory.store import MemoryStore
 from memory.ingest import MemoryIngestor
 from memory.node_subdevices import NodeSubdeviceStore
 from memory.session_snapshot import SessionSnapshotStore
+from memory.capability_registry import CapabilityRegistry
 from perception.fusion import PerceptionEngine
 from perception.audio_pipeline import AudioPipeline
 from perception.scene import SceneAnalyzer
@@ -196,6 +197,12 @@ class BrainState:
         self.session_snapshot: Optional[SessionSnapshotStore] = None
         self.devices: dict[str, dict] = {}
         self.skill_registry = SkillRegistry()
+        # Phase 5 (audit-r10 overhaul) — runtime catalog of which
+        # `phone.*` / `glasses.*` action names connected nodes can
+        # handle. Populated from `node_register.skills` in
+        # `api/server.py` and consumed by `GET /api/capabilities` +
+        # the orchestrator's capability-aware routing.
+        self.capability_registry = CapabilityRegistry()
         self.memory = MemoryStore()
         self.vision_buffer = VisionBuffer()
         self.perception = PerceptionEngine()
@@ -743,6 +750,17 @@ class BrainState:
                 logger.warning(
                     "Primary session snapshot wiring failed: %s — boot continues",
                     snap_exc,
+                )
+            # Phase 5 (audit-r10 overhaul) — wire capability registry
+            # so `ToolRunner.execute_capability_action(...)` can route
+            # `phone.*` / `glasses.*` actions or fail truthfully when
+            # no connected node publishes the action.
+            try:
+                self.orchestrator.set_capability_registry(self.capability_registry)
+            except Exception as cap_exc:
+                logger.warning(
+                    "Capability registry wiring failed: %s — boot continues",
+                    cap_exc,
                 )
             if self.vault:
                 self.orchestrator.set_vault(self.vault)
