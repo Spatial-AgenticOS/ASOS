@@ -298,7 +298,14 @@ class TestSessionWebSocket:
         args, kwargs = ws_mock_state.orchestrator.handle_command_stream.call_args
         assert kwargs["session_id"] == sid
         assert kwargs["text"] == "hello brain"
-        assert kwargs["context"] == {"src": "test"}
+        # Phase 2 (audit-r10) — web chat now threads a `refinement`
+        # envelope into context so the Mind tab can show what the
+        # brain "heard". Operator-supplied fields still pass through
+        # unchanged; we assert the original keys plus tolerate the
+        # additional `refinement` key.
+        assert kwargs["context"]["src"] == "test"
+        if "refinement" in kwargs["context"]:
+            assert kwargs["context"]["refinement"].get("raw_text") == "hello brain"
 
     def test_req_message_uses_gateway_session(self, ws_mock_state, ws_client):
         gw = MagicMock()
