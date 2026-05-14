@@ -21,10 +21,11 @@ importing the whole brain.
 from __future__ import annotations
 
 import argparse
-import getpass
 import os
 import sys
 from typing import Optional
+
+from cli import ui_kit
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -114,7 +115,7 @@ def register_key_subparser(sub: "argparse._SubParsersAction") -> None:
         "--key",
         default=None,
         help="W16: new API key value. Only meaningful with --provider; "
-             "if omitted, prompted via getpass.",
+             "if omitted, prompted via masked-character input.",
     )
 
 
@@ -211,20 +212,21 @@ def cmd_key_rotate(*, skip_confirm: bool = False) -> int:
         return 1
 
     if not skip_confirm:
-        print("  About to rotate the vault master key.")
-        print()
-        print("  - The previous master key will be REMOVED from the OS keychain.")
-        print("  - The previous credentials.enc will be kept as credentials.enc.prev")
-        print("    until the next successful brain boot, then deleted.")
-        print("  - A new recovery code will be printed ONCE. Write it down.")
-        print()
+        ui_kit.brand_panel(
+            "feral key rotate",
+            body=(
+                "About to rotate the vault master key.\n"
+                "  - Previous master key will be REMOVED from the OS keychain.\n"
+                "  - credentials.enc.prev kept until the next successful brain boot.\n"
+                "  - A new recovery code will be printed ONCE. Write it down."
+            ),
+        )
         try:
-            answer = input("  Continue? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
+            if not ui_kit.confirm("Continue with rotation?", default=False):
+                print("  Cancelled.")
+                return 1
+        except KeyboardInterrupt:
             print()
-            print("  Cancelled.")
-            return 1
-        if answer not in {"y", "yes"}:
             print("  Cancelled.")
             return 1
 
@@ -252,12 +254,17 @@ def cmd_key_recover(*, code: str = "") -> int:
     from security.vault import get_vault, VaultError, decode_recovery_code
 
     if not code:
-        print("  Paste the recovery code you wrote down at first boot")
-        print("  (or the most recent `feral key rotate`).")
-        print("  The code looks like: ABCD-EFGH-IJKL-MNOP-... (13 groups).")
-        print()
+        ui_kit.brand_panel(
+            "feral key recover",
+            body=(
+                "Paste the recovery code you wrote down at first boot "
+                "(or the most recent `feral key rotate`).\n"
+                "Format: ABCD-EFGH-IJKL-MNOP-… (13 groups). "
+                "Each character is masked as you paste."
+            ),
+        )
         try:
-            code = getpass.getpass("  Recovery code: ").strip()
+            code = ui_kit.password("Recovery code", allow_empty=False).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             print("  Cancelled.")
@@ -459,9 +466,15 @@ def cmd_key_rotate_provider(
         return 1
 
     if not new_key:
-        print(f"  Paste the NEW key for provider {provider!r}, agent {cleaned!r}:")
+        ui_kit.brand_panel(
+            f"feral key rotate — {provider}",
+            body=(
+                f"Paste the NEW key for provider {provider!r}, agent "
+                f"{cleaned!r}. Each character is masked as you paste."
+            ),
+        )
         try:
-            new_key = getpass.getpass("  New key: ").strip()
+            new_key = ui_kit.password("New key", allow_empty=False).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             print("  Cancelled.")

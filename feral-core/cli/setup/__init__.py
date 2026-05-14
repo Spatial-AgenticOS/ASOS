@@ -37,6 +37,7 @@ from .steps import (
     llm,
     welcome,
 )
+from .steps import network as network_step
 
 logger = logging.getLogger("feral.cli.setup")
 
@@ -66,6 +67,7 @@ async def _run_async() -> None:
             ("llm_model", llm.run_model_step),
             ("audio", audio.run),
             ("identity", identity.run),
+            ("network", network_step.run),
             ("home_assistant", home_assistant.run),
             ("channels", channels.run),
             ("finish", finish.run),

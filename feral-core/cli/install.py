@@ -253,6 +253,7 @@ def _append_mcp_config(server_config: dict) -> None:
 
 def cmd_install(item_id: str, registry: Optional[str] = None) -> None:
     """Install a published item by id from the FERAL registry."""
+    from cli import ui_kit
     from cli.publish import registry_base_url
 
     _require_nacl()
@@ -263,7 +264,8 @@ def cmd_install(item_id: str, registry: Optional[str] = None) -> None:
         sys.exit(2)
 
     base = registry_base_url(registry)
-    print(f"  Fetching {item_id} from {base}...")
+    ui_kit.brand_panel(f"feral install — {item_id}", body=f"registry: {base}")
+    ui_kit.banner_line(f"Fetching {item_id} from {base}…")
     item = _fetch_item(base, item_id)
 
     manifest = item.get("manifest") or {}
@@ -276,14 +278,15 @@ def cmd_install(item_id: str, registry: Optional[str] = None) -> None:
     name = manifest.get("name") or manifest.get("brand", {}).get("name") or manifest.get("id") or item_id
     version = manifest.get("version", "?")
 
-    print(f"  Downloading bundle ({kind}) {name} v{version}...")
+    ui_kit.banner_line(f"Downloading bundle ({kind}) {name} v{version}…")
     tarball = _download_bundle(download_url)
+    ui_kit.banner_line("Verifying SHA-256 + Ed25519 signature…")
     _verify(item, tarball)
 
     home = _feral_home()
 
     dispatch_install(kind, manifest, tarball, item_id, home)
-    print(f"  Installed {name} v{version}. Ready to use.")
+    ui_kit.banner_line(f"Installed {name} v{version}. Ready to use.", style="green")
 
 
 def dispatch_install(

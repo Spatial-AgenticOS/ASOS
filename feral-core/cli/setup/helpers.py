@@ -1,35 +1,41 @@
-"""Shared prompt + table helpers used by every step.
+"""Shared prompt + table helpers used by every setup step.
 
-Design rules:
+The real prompt UX lives in :mod:`cli.ui_kit` (InquirerPy + Rich); the
+public ``ask_choice`` / ``ask_text`` / ``confirm`` / ``resolve_option``
+/ ``render_provider_table`` API here is preserved verbatim so every
+existing step (audio, identity, channels, home_assistant, etc.) keeps
+working without edits, and the legacy tests in
+``tests/test_cli_setup.py`` keep importing the same symbols.
 
-* ``ask_choice`` never rejects a valid user input because of a typo
-  or capitalisation mismatch. It accepts the canonical id, any
-  declared alias, a 1-based index, or an unambiguous substring. When
-  multiple options match it re-prompts with the disambiguation list
-  instead of silently picking one.
+Behaviour rules carried over from the old typed-text wizard:
+
+* ``ask_choice`` accepts either an arrow-key pick (when InquirerPy is
+  available + the shell is interactive) or a typed canonical id /
+  alias / numeric index / unambiguous substring; ambiguous typed input
+  re-prompts with the candidate list rather than picking silently.
 * ``ask_text`` is free-text with a sane default. Empty input accepts
-  the default. Leading/trailing whitespace is stripped.
+  the default.
 * ``confirm`` is yes/no with a default.
+* Typing ``back`` / ``quit`` at any prompt raises ``BackNavigation``
+  / ``QuitNavigation`` so the state machine can navigate centrally.
 * ``render_table`` uses Rich when available; falls back to a plain
   markdown-ish renderer so headless environments still see the data.
-* ``STATUS_READY`` / ``STATUS_NEEDS_KEY`` / ``STATUS_UNREACHABLE`` are
-  the three states the provider table renders.
 """
 
 from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional, Sequence
+from typing import Optional, Sequence
+
+from cli import ui_kit
 
 try:
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.prompt import Prompt, Confirm
     from rich.table import Table
 
     _RICH_AVAILABLE = True
 except Exception:  # pragma: no cover - rich is a hard dep but guard anyway
+    Table = None  # type: ignore[assignment]
     _RICH_AVAILABLE = False
 
 
@@ -39,18 +45,9 @@ STATUS_UNREACHABLE = "unreachable"
 STATUS_UNAVAILABLE = "unavailable"
 
 
+# Legacy entry-point preserved (every step imports from here).
 def get_console():
-    if _RICH_AVAILABLE:
-        return Console()
-    return _FallbackConsole()
-
-
-class _FallbackConsole:
-    def print(self, *args, **kwargs) -> None:
-        text = " ".join(str(a) for a in args)
-        # Strip any markup tags the caller might have passed.
-        sys.stdout.write(text + "\n")
-        sys.stdout.flush()
+    return ui_kit.get_console()
 
 
 @dataclass(frozen=True)
@@ -86,7 +83,6 @@ def resolve_option(text: str, options: Sequence[Option]) -> Optional[Option]:
     if not norm:
         return None
 
-    # 1-based numeric index
     if norm.isdigit():
         idx = int(norm) - 1
         if 0 <= idx < len(options):
@@ -101,7 +97,6 @@ def resolve_option(text: str, options: Sequence[Option]) -> Optional[Option]:
         if any(norm == _normalize(a) for a in opt.aliases):
             return opt
 
-    # Substring match — unambiguous only.
     hits = []
     for opt in options:
         needles = [opt.id, opt.label, *opt.aliases]
@@ -112,6 +107,15 @@ def resolve_option(text: str, options: Sequence[Option]) -> Optional[Option]:
     return None
 
 
+# ----------------------------------------------------------------------
+# Prompts (delegate to ui_kit)
+# ----------------------------------------------------------------------
+
+
+_BACK_SENTINEL = "__feral_back__"
+_QUIT_SENTINEL = "__feral_quit__"
+
+
 def ask_choice(
     prompt: str,
     options: Sequence[Option],
@@ -119,17 +123,47 @@ def ask_choice(
     default: Optional[str] = None,
     console=None,
 ) -> Option:
-    """Prompt the user for one of the given options, retrying on bad input.
+    """Prompt the user for one of the given options.
 
-    Empty input accepts ``default`` when supplied. Typing ``back`` /
-    ``quit`` raises :class:`BackNavigation` / :class:`QuitNavigation`
-    so the state machine can handle navigation centrally.
+    Uses arrow-key selection when InquirerPy is available + the shell
+    is a TTY; otherwise falls back to the legacy typed prompt that
+    accepts canonical ids / aliases / numeric indices / unambiguous
+    substrings. Both paths support ``back`` and ``quit`` navigation.
     """
     console = console or get_console()
     default_opt: Optional[Option] = None
     if default:
         default_opt = next((o for o in options if o.id == default), None)
 
+    # Interactive arrow-key path — preferred.
+    if ui_kit.is_inquirer_available() and ui_kit.is_interactive():
+        choices: list = []
+        for opt in options:
+            badge = _option_badge(opt)
+            label = f"{opt.label}{badge}".strip()
+            choices.append({"name": label, "value": opt.id})
+        # Pseudo-choices for navigation parity with the legacy prompt.
+        choices.append({"name": "← back", "value": _BACK_SENTINEL})
+        choices.append({"name": "✕ quit setup", "value": _QUIT_SENTINEL})
+        try:
+            picked = ui_kit.select(
+                prompt,
+                choices,
+                default=default_opt.id if default_opt else None,
+            )
+        except KeyboardInterrupt:
+            raise QuitNavigation()
+        if picked == _BACK_SENTINEL:
+            raise BackNavigation()
+        if picked == _QUIT_SENTINEL:
+            raise QuitNavigation()
+        match = next((o for o in options if o.id == picked), None)
+        if match is not None:
+            return match
+        # Defensive — fall through to the typed path if the picker returned
+        # something we don't recognise (shouldn't happen).
+
+    # Typed fallback (and the path the existing tests drive).
     while True:
         default_display = f" [{default_opt.label}]" if default_opt else ""
         raw = _prompt_raw(f"{prompt}{default_display}", console)
@@ -147,11 +181,12 @@ def ask_choice(
         if hit is not None:
             return hit
 
-        # Suggest candidates if the substring matched multiple.
         norm = _normalize(raw)
         candidates = [
-            o for o in options
-            if norm in _normalize(o.id) or norm in _normalize(o.label)
+            o
+            for o in options
+            if norm in _normalize(o.id)
+            or norm in _normalize(o.label)
             or any(norm in _normalize(a) for a in o.aliases)
         ]
         if candidates:
@@ -169,11 +204,21 @@ def ask_text(
     secret: bool = False,
     console=None,
 ) -> str:
-    """Free-text input with back/quit support."""
+    """Free-text input with back/quit support.
+
+    ``secret=True`` routes to :func:`cli.ui_kit.password`, which masks
+    every typed character with ``*`` so the operator gets visible
+    feedback that their paste landed.
+    """
     console = console or get_console()
+    if secret:
+        # The masked path doesn't honour back/quit by typed sentinel —
+        # an API key shouldn't get matched against literal "back".
+        return ui_kit.password(prompt, allow_empty=allow_empty)
+
     while True:
         default_display = f" [{default}]" if default else ""
-        raw = _prompt_raw(f"{prompt}{default_display}", console, password=secret)
+        raw = _prompt_raw(f"{prompt}{default_display}", console)
         if raw == "" and default:
             return default
         if raw.lower() in ("back", "b"):
@@ -187,7 +232,19 @@ def ask_text(
 
 
 def confirm(prompt: str, *, default: bool = False, console=None) -> bool:
+    """Yes/no prompt.
+
+    The arrow-key path is delegated to :func:`cli.ui_kit.confirm`; the
+    typed fallback supports ``back`` / ``quit`` for parity with the
+    legacy wizard navigation.
+    """
     console = console or get_console()
+    if ui_kit.is_inquirer_available() and ui_kit.is_interactive():
+        try:
+            return ui_kit.confirm(prompt, default=default)
+        except KeyboardInterrupt:
+            raise QuitNavigation()
+
     suffix = "Y/n" if default else "y/N"
     while True:
         raw = _prompt_raw(f"{prompt} [{suffix}]", console)
@@ -204,23 +261,32 @@ def confirm(prompt: str, *, default: bool = False, console=None) -> bool:
         console.print("Please answer yes or no.")
 
 
-def _prompt_raw(prompt: str, console, *, password: bool = False) -> str:
+def _prompt_raw(prompt: str, console) -> str:
+    """Plain-text input fallback — kept for the typed code path that
+    still handles ``back`` / ``quit`` sentinels.
+    """
     try:
-        if _RICH_AVAILABLE:
-            return Prompt.ask(prompt, password=password, show_default=False).strip()
-    except EOFError:
-        raise QuitNavigation()
-
-    # Plain fallback.
-    try:
-        if password:
-            import getpass
-            return getpass.getpass(prompt + ": ").strip()
         sys.stdout.write(prompt + ": ")
         sys.stdout.flush()
-        return sys.stdin.readline().strip()
+        line = sys.stdin.readline()
     except (EOFError, KeyboardInterrupt):
         raise QuitNavigation()
+    if line == "":
+        # EOF — same semantics as the legacy Rich path.
+        raise QuitNavigation()
+    return line.strip()
+
+
+def _option_badge(opt: Option) -> str:
+    if not opt.status:
+        return ""
+    mapping = {
+        STATUS_READY: "  · ready",
+        STATUS_NEEDS_KEY: "  · needs API key",
+        STATUS_UNREACHABLE: "  · unreachable",
+        STATUS_UNAVAILABLE: "  · unavailable",
+    }
+    return mapping.get(opt.status, "")
 
 
 # ----------------------------------------------------------------------
@@ -238,7 +304,7 @@ def render_provider_table(
     """Render the side-by-side provider table with ready/needs-key/unreachable."""
     console = console or get_console()
     extra_columns = extra_columns or {}
-    if _RICH_AVAILABLE:
+    if _RICH_AVAILABLE and Table is not None:
         table = Table(title=title, show_lines=False)
         table.add_column("#", style="dim", justify="right")
         table.add_column("Provider", style="bold")
@@ -255,7 +321,6 @@ def render_provider_table(
         console.print(table)
         return
 
-    # Fallback plain renderer
     console.print(title)
     for i, opt in enumerate(options, start=1):
         console.print(f"  {i}. {opt.label} — {_pretty_status(opt.status)}  {opt.hint}")
