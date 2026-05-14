@@ -10,7 +10,7 @@
  * own z-index resolved inside that stacking context — strictly below
  * the dock + menubar even though the literal value was higher.
  *
- * Names mirror FEATURE_STABILITY_ROADMAP.md Appendix A.2 fix shape:
+ * Named slots:
  *   z-base    1   — page content (.v2-shell-main, generic page surfaces)
  *   z-dock   50   — bottom dock + top menubar
  *   z-orb    60   — persona orb anchor + floating chips
@@ -19,8 +19,7 @@
  *   z-toast  110  — toasts/proactive notifications above modals
  *
  * Anything above z-toast (e.g. .v2-voice-overlay at 200) is reserved
- * for full-screen takeovers and stays a numeric literal until W14
- * unifies the rest of the layers — see docs/AGENT_PROMPTS_FOLLOWUPS.md.
+ * for full-screen takeovers and stays a numeric literal for now.
  */
 :root {
   --z-base: 1;

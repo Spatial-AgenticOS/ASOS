@@ -1,5 +1,5 @@
 """
-W12 — voice soak harness (FEATURE_STABILITY_ROADMAP §3.4 #3-4).
+W12 — voice soak harness.
 
 Long-duration smoke test for the OpenAI Realtime and Gemini Live voice
 WebSocket protocols. The point is not to exercise the real provider

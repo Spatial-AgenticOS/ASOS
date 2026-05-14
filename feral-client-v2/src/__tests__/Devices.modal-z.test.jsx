@@ -3,7 +3,7 @@
  *
  * The user-facing bug: clicking "+ Pair new device" on /devices added
  * a row to the historical list but the modal never became visible.
- * Root cause (FEATURE_STABILITY_ROADMAP.md §A.2): the modal rendered
+ * Root cause: the modal rendered
  * inline inside .v2-shell-main, which itself has a positive z-index,
  * trapping the modal below the dock + menubar regardless of its own
  * z-index value.

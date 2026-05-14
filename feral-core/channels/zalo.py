@@ -7,7 +7,7 @@ Ships the shape so later contributors have a concrete target. It
 deliberately does **not** fake a connection: without an OA access
 token, it reports honestly that it is disabled.
 
-Ship-ready checklist (follow-up PR — see `TRACK_A_CHANNELS_PROVIDERS.md`):
+Ship-ready checklist (follow-up PR):
 1. Add ``httpx`` is already a dep; the Zalo REST API is plain HTTPS so
    no SDK bump is required. Add a ``[channel-zalo]`` extra only if a
    webhook framework is needed beyond the Brain's existing router.
@@ -57,8 +57,8 @@ class ZaloChannel(Channel):
 
         logger.info(
             "Zalo channel (app_secret=%s) is at stub-level in this build. "
-            "Full implementation lands with the Track A Zalo PR — see "
-            "TRACK_A_CHANNELS_PROVIDERS.md.",
+            "Full implementation lands in a follow-up PR — see the module "
+            "docstring for the ship-ready checklist.",
             "set" if app_secret else "unset",
         )
         self._connected = False

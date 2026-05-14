@@ -7,7 +7,7 @@ connection: without a homeserver URL + access token it reports honestly
 that it is disabled, and without the ``matrix-nio`` dependency installed
 it refuses to start.
 
-Ship-ready checklist (follow-up PR — see `TRACK_A_CHANNELS_PROVIDERS.md`):
+Ship-ready checklist (follow-up PR):
 1. Add `matrix-nio>=0.24.0` to `feral-core/pyproject.toml` under a new
    ``[channel-matrix]`` extra.
 2. Replace the stub ``start`` / ``send`` methods with the real
@@ -76,11 +76,10 @@ class MatrixChannel(Channel):
             self._running = False
             return
 
-        # Full implementation deferred to the follow-up PR in TRACK_A.
         logger.info(
             "Matrix channel is at stub-level in this build. Full "
-            "implementation lands with the Track A Matrix PR — see "
-            "TRACK_A_CHANNELS_PROVIDERS.md."
+            "implementation lands in a follow-up PR — see the module "
+            "docstring for the ship-ready checklist."
         )
         self._connected = False
         self._running = False

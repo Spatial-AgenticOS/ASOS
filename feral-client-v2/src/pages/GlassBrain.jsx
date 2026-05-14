@@ -89,8 +89,8 @@ export default function GlassBrain() {
   // baseline kinds (intent/flow) so the colour key stays stable while
   // the graph fills in. With zero entities there is nothing to legend,
   // and rendering the dots used to bleed coloured `border-radius: 50%`
-  // pills into the centred empty-state prompt — see Appendix A.3 in
-  // FEATURE_STABILITY_ROADMAP.md and GlassBrain.empty-state.test.jsx.
+  // pills into the centred empty-state prompt — see
+  // GlassBrain.empty-state.test.jsx.
   const kindRows = useMemo(
     () => (hasNodes
       ? Object.keys(KIND_LABELS)

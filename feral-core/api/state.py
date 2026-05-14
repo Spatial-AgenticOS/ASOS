@@ -287,8 +287,7 @@ class BrainState:
         self._boot_report: BootReport = BootReport()
         # First-party agent personas and workflow packs loaded from
         # feral-core/agents/personas/ and feral-core/workflows/ at boot.
-        # See feral-core/agents/persona_loader.py + Track C in
-        # TRACK_C_PERSONAS_WORKFLOWS.md.
+        # See feral-core/agents/persona_loader.py.
         self.personas: dict = {}
         self.workflow_packs: dict = {}
         # ConsciousnessStore (5th memory tier — in-flight operational state).

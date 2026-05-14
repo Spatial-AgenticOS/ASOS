@@ -6,11 +6,17 @@
 <p align="center"><em>Install FERAL on your machine. It connects software and hardware, keeps long-lived memory, learns your baseline, and executes with explicit control.</em></p>
 
 <p align="center">
+  <strong>🚧 Public beta — macOS &amp; Linux supported. We are looking for contributors:</strong>
+  <a href="CONTRIBUTING.md">CONTRIBUTING.md</a> · <a href="https://github.com/FERAL-AI/FERAL-AI/issues">file an issue</a> · <a href="https://x.com/FeralAi67724">@FeralAi67724</a>
+</p>
+
+<p align="center">
   <a href="#quickstart-pypi-first">Quickstart</a> &nbsp;·&nbsp;
   <a href="#pair-your-phone-lan-vs-anywhere">Pairing</a> &nbsp;·&nbsp;
   <a href="#what-gen-ui-actually-does">Gen-UI</a> &nbsp;·&nbsp;
   <a href="#stable-today">Stability</a> &nbsp;·&nbsp;
-  <a href="#develop-from-source">Develop</a>
+  <a href="#develop-from-source">Develop</a> &nbsp;·&nbsp;
+  <a href="#contribute">Contribute</a>
 </p>
 
 <p align="center">
@@ -41,11 +47,14 @@ Today this ships as `feral-core` (brain runtime), `feral-client-v2` (web control
 
 ## Status
 
-- Package: `feral-ai` on PyPI, current CalVer `2026.5.13`.
-- Maturity: Beta (single-user local deployment is the primary target).
+- Package: [`feral-ai`](https://pypi.org/project/feral-ai/) on PyPI. Current CalVer is shown in the version badge above and tracks `feral-core/pyproject.toml`.
+- Maturity: **Public beta**. Single-user local deployment is the primary target. Multi-user / HA scenarios are not in scope yet.
+- Supported hosts: **macOS 13+** and **modern Linux** (Ubuntu 22.04+, Fedora 40+, Arch). Windows is not supported yet — use WSL2.
 - Default startup mode: "This Mac only" pairing until you opt into LAN or Anywhere.
 
-## Quickstart (PyPI First)
+## Quickstart (PyPI first)
+
+Requires Python 3.11+.
 
 ```bash
 pip install "feral-ai[all]"
@@ -53,20 +62,31 @@ feral setup
 feral start
 ```
 
+`feral setup` is an arrow-key driven wizard (space to mark, enter to confirm). It walks you through:
+
+1. **LLM provider** (OpenAI, Anthropic, Ollama, LM Studio, Together, OpenRouter, Fireworks, Bedrock, …) with masked API key paste.
+2. **Model** (type to filter through hundreds of model ids).
+3. **Speech in / out** (cloud or fully local).
+4. **Identity** (so the agent knows who it is talking to).
+5. **Network access** — `localhost` (default), `LAN` (`0.0.0.0` so phones on the same Wi-Fi can pair), or `Tailscale Funnel` (free public DNS for cross-internet pairing).
+6. **Optional**: Home Assistant, messaging channels.
+
 Then open `http://localhost:9090`.
 
 What this gives you:
 
 - A local brain server on port `9090`.
 - Bundled Web UI v2 served by the brain.
-- Local config under `~/.feral/`.
+- Local config under `~/.feral/` (settings + encrypted vault for keys).
 
 Useful commands:
 
 ```bash
-feral serve     # headless brain only
-feral status    # runtime status
-feral doctor    # diagnostics
+feral serve            # headless brain only (no chat / no client)
+feral status           # runtime status
+feral doctor           # diagnostics — what's reachable, what needs setup
+feral access status    # current pairing / network mode
+feral key paste        # add or rotate a credential without re-running setup
 ```
 
 If you prefer the installer script:
@@ -162,18 +182,13 @@ Current CI snapshot: **2842 backend + 259 frontend tests**.
 | Gen-UI advanced app-platform features | Mixed (stable core renderer, evolving platform contracts) |
 | Long-tail ecosystem claims | Vary by integration; verify before production commitments |
 
-## Recent Release Focus (Last 10 Bumps)
+## Recent Release Focus
 
-- `v2026.5.10`: pairing lifecycle hardening, explicit token issuance UX, embedding fallback resilience.
-- `v2026.5.9`: fixed pairing token leak behavior and improved pairing/marketplace UX errors.
-- `v2026.5.8`: introduced pairing access modes (Same WiFi / This Mac only / Anywhere), setup flow updates, and remote access wiring.
-- `v2026.5.7`: refreshed bundled Web UI assets to keep release/runtime coherence.
-- `v2026.5.6`: runtime reliability hardening wave.
-- `v2026.5.5`: release pipeline hardening for wheel smoke/install checks.
-- `v2026.5.4`: fixed base-wheel dependency coherence (`prometheus-client`).
-- `v2026.5.3`: incident recovery hardening.
-- `v2026.5.2`: provider/runtime truth fixes and secure credential flow hardening.
-- `v2026.5.1`: post-`v2026.5.0` hotfix wave for provider switching, model picker/runtime params, and credential leak regressions.
+For the full per-release breakdown see [`CHANGELOG.md`](CHANGELOG.md). Highlights from the last few releases:
+
+- **`v2026.5.23`** — fixes a P0 in `feral setup` where the InquirerPy arrow-key picker silently fell back to a typed numeric prompt because the wizard ran inside `asyncio.run()`. Adds the raccoon ASCII logo banner, "── Step N of M ──" indicators, and the space-to-mark + enter-to-confirm picker pattern.
+- **`v2026.5.22`** — first interactive CLI overhaul: arrow-key provider/model picker, masked API key paste, raccoon brand chrome across `feral setup` / `install` / `key` / `access`, and a new "Network access" wizard step (localhost / LAN / Tailscale Funnel). Bundles the audit-r10 brain overhaul (PRs #105–#119).
+- **`v2026.5.20`** — agent runtime recovery: canonical execution + Desktop grants, Playwright/CDP browser runtime + tracing/HAR/downloads, provider-neutral ComputerUseDriver, CodingRun loop, sub-sessions REST + GoalChecker, MemoryRetriever + IntentGate, in-composer voice, uploads end-to-end, Google/Microsoft OAuth + manifests + MCP projection.
 
 ## Architecture in 60 Seconds
 
@@ -216,12 +231,43 @@ cd feral-client-v2
 npm run dev
 ```
 
+Run the test suite locally:
+
+```bash
+cd feral-core && python -m pytest tests/ --no-cov -q
+cd ../feral-client-v2 && npm test
+```
+
 ## Docs
 
-- User docs: `docs/mintlify/`
-- Architecture deep dive: `docs/orchestration.md`
-- Contribution guide: `CONTRIBUTING.md`
-- Security policy: `SECURITY.md`
+- User docs: `docs/mintlify/` (also published at <https://docs.feral.sh>)
+- Architecture deep dive: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/orchestration.md`](docs/orchestration.md)
+- Capability scorecard (shipped vs partial vs planned): [`docs/SCORECARD.md`](docs/SCORECARD.md)
+- Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- Contribution guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Security policy: [`SECURITY.md`](SECURITY.md)
+
+## Contribute
+
+FERAL is **public beta** and we are actively looking for contributors across every layer:
+
+- **Runtime / orchestrator** — agent loop, LLM routing, multi-agent dispatch, security enforcement.
+- **Memory / knowledge** — 4-tier memory store, ingest pipelines, knowledge graph.
+- **GenUI / provider surfaces** — SDUI engine, third-party app contracts, client renderer.
+- **Hardware / daemons** — Node WebSocket protocol, BLE / MQTT / serial / ROS bridges.
+- **Voice / perception** — realtime voice proxy, wake word, vision pipeline.
+- **Channels / providers** — Telegram, Slack, Discord, Matrix, Signal, Feishu, Zalo + LLM provider adapters.
+- **Frontend / shell** — web UI, Tauri desktop wrapper, mobile bridges.
+- **Packaging / release** — wheel build, version coherence, NixOS flake, HA add-on.
+
+How to start:
+
+1. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) — picks the lane that matches your interest and lists the canonical entry files.
+2. Browse [open issues](https://github.com/FERAL-AI/FERAL-AI/issues) or open a new one with `feral doctor` output + repro.
+3. Join the conversation on [GitHub Discussions](https://github.com/FERAL-AI/FERAL-AI/discussions).
+4. Follow [@FeralAi67724](https://x.com/FeralAi67724) on X for release drops.
+
+The website ([feral.sh](https://feral.sh), source: [FERAL-AI/Feral-web](https://github.com/FERAL-AI/Feral-web)) is also open and welcomes design + copy + accessibility PRs.
 
 ## What FERAL Is Not
 

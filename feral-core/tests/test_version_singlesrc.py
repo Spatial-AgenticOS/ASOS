@@ -19,8 +19,6 @@ These tests fail loudly the moment any of the W7 invariants slips:
   * The CHANGELOG carries the ``<!-- feral-version: X -->`` marker so
     sync_versions.py can keep it in lockstep with pyproject.
 
-Source: docs/AGENT_PROMPTS.md §D.W7, FEATURE_STABILITY_ROADMAP.md §3.1 #3,
-§4.3 #9, §4.4 #1.
 """
 from __future__ import annotations
 

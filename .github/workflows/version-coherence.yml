@@ -1,6 +1,5 @@
 name: Version coherence
 
-# W7 (docs/AGENT_PROMPTS.md §D.W7 / FEATURE_STABILITY_ROADMAP.md §3.1 #2-3)
 #
 # This workflow has two responsibilities, split into two jobs:
 #

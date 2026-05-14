@@ -1,118 +1,178 @@
 # Contributing to FERAL
 
-FERAL is building an agent-native computing platform. Contributions across all system layers are welcome.
+FERAL is in **public beta** and we are actively looking for contributors. Whether you want to add a new LLM provider, ship a hardware daemon, harden security, or just file good bug reports — every lane below has a clear entry point.
 
-## Development Setup
+> **Where the project runs today**
+> macOS 13+ and modern Linux (Ubuntu 22.04+, Fedora 40+, Arch). Windows is not supported as a host yet — use WSL2 if you must. The CLI ships on PyPI as `feral-ai`.
+
+## Development setup
 
 Prerequisites:
-- Python 3.11+
-- Node.js 20+ (for `feral-client`)
+
+- **Python 3.11+** (3.11 / 3.12 / 3.13 supported in CI).
+- **Node.js 20+** (for `feral-client-v2`).
+- **Git**, **make**, a working C toolchain (Xcode CLT on macOS, `build-essential` on Debian-likes).
+
+Clone and bootstrap:
 
 ```bash
 git clone https://github.com/FERAL-AI/FERAL-AI.git
-cd FERAL-AI/feral-core
-pip install -e ".[llm,dev]"
-pytest                    # run tests
-feral setup              # configure locally
-feral serve              # start the brain
+cd FERAL-AI
+make dev                                 # creates .venv, installs feral-core in editable mode
 ```
 
-For the web client:
+Or install the published package and run from anywhere:
 
 ```bash
-cd FERAL-AI/feral-client
+pip install "feral-ai[all]"
+feral setup                              # interactive wizard: provider, model, network, identity
+feral start                              # brain + dashboard + chat
+```
+
+The wizard renders an arrow-key picker (space to mark, enter to confirm). API key paste is masked. If your shell does not advertise itself as a TTY (some CI runners, raw `ssh` without `-t`) the wizard prints a typed-fallback hint.
+
+For the web client live dev:
+
+```bash
+cd feral-client-v2
 npm install
 npm run dev
 ```
 
-For the Nix dev shell (Linux):
-
-```bash
-nix develop
-```
-
-## Project Layout
+Project layout:
 
 | Directory | What it contains |
 |:----------|:-----------------|
-| `feral-core/` | Python backend: brain API, orchestrator, memory, voice, security, GenUI, hardware protocol |
-| `feral-client/` | React web UI (Vite + Tailwind) |
-| `feral-nodes/` | Hardware daemon SDKs (Python, iOS Swift, Android Kotlin) |
-| `desktop/` | Tauri desktop app |
-| `registry/` | Skill marketplace server |
-| `scripts/` | Install, test, and demo scripts |
-| `docs/` | Architecture, runtime contract, roadmap, specs |
+| `feral-core/` | Python brain runtime — orchestrator, memory, voice, security, GenUI, hardware protocol |
+| `feral-client-v2/` | React web UI (Vite + Tailwind), bundled into `feral-core/webui_v2/dist/` for release |
+| `feral-nodes/` | Hardware daemon SDKs (Python, iOS Swift, Android Kotlin) + HUP protocol spec |
+| `desktop/` | Tauri desktop wrapper |
+| `feral-ha-addon/` | Home Assistant add-on packaging |
+| `feral-extension/` | Browser extension surface |
+| `registry/`, `feral-registry/` | Skill / app marketplace + signing flow |
+| `scripts/` | Install, release, sync, audit scripts |
+| `docs/` | Architecture, capability scorecard, roadmap |
 
-## Contributor Lanes
+## Contributor lanes
 
-Pick the lane that matches your expertise. Each lane has clear entry files and scope.
+Pick the lane that matches your interest. Each lane lists the canonical entry files.
 
-### Runtime / Orchestrator
-Agent loop, LLM routing, multi-agent dispatch, TaskFlows, session management, security enforcement.
+### Runtime / orchestrator
+
+Agent loop, LLM routing, multi-agent dispatch, TaskFlows, session lifecycle, security enforcement.
+
 - `feral-core/agents/orchestrator.py`
 - `feral-core/agents/multi_agent.py`
 - `feral-core/api/server.py`
 - `feral-core/security/`
 
-### Memory / Knowledge
+### Memory / knowledge
+
 4-tier memory store, wiki compilation, ingest pipelines, federated sync, knowledge graph.
+
 - `feral-core/memory/store.py`
 - `feral-core/memory/sync.py`
 
-### GenUI / Provider Surfaces
+### GenUI / provider surfaces
+
 SDUI engine, provider contract lifecycle, surface caching, client renderer, component library.
+
 - `feral-core/genui/generator.py`
-- `feral-client/src/components/SduiRenderer.jsx`
+- `feral-client-v2/src/components/SduiRenderer.jsx`
 - See [`docs/GENUI_PROVIDER_SPEC.md`](docs/GENUI_PROVIDER_SPEC.md) for the contract format.
 
-### Hardware / Daemons
+### Hardware / daemons
+
 Node WebSocket protocol, daemon SDKs, device profiles, edge bridges (BLE, MQTT, serial, ROS).
+
 - `feral-core/hardware/protocol.py`
 - `feral-core/hardware/mesh.py`
 - `feral-nodes/`
 - See [`docs/HARDWARE_ECOSYSTEM.md`](docs/HARDWARE_ECOSYSTEM.md) for the daemon contract.
 
-### Voice / Perception
+### Voice / perception
+
 Realtime voice proxy, wake word detection, vision pipeline, multimodal sensor fusion.
+
 - `feral-core/voice/`
 - `feral-core/perception/`
 
-### Nix / Packaging
-Flake outputs, NixOS service modules, reproducible builds, dependency closures.
-- `flake.nix`
-- See [`docs/NIX.md`](docs/NIX.md) for current foundation.
+### Channels / providers
 
-### Frontend / Shell
+Telegram, Slack, Discord, Matrix, Signal, voice-call (Twilio), Feishu, Zalo + LLM provider adapters (OpenAI, Anthropic, Ollama, Together, OpenRouter, Fireworks, Bedrock).
+
+- `feral-core/channels/` — see `base.py` (`Channel`) + `telegram.py` for the working exemplar.
+- `feral-core/providers/` — see `openai_provider.py` for the working exemplar.
+
+### Frontend / shell
+
 Web UI pages, dashboard, Tauri desktop wrapper, mobile bridges.
-- `feral-client/src/`
+
+- `feral-client-v2/src/`
 - `desktop/`
 
-## Running Tests
+### Packaging / release
+
+Wheel build, version coherence, sync_versions, PyPI publish workflow, Home Assistant add-on, NixOS flake.
+
+- `feral-core/pyproject.toml`
+- `scripts/sync_versions.py`
+- `.github/workflows/`
+- `flake.nix`
+
+## Running tests
 
 ```bash
 cd feral-core
-python -m pytest tests/ -v
+python -m pytest tests/ -v --no-cov           # backend unit tests
+ruff check .                                  # lint
 ```
 
-## Code Style
+```bash
+cd feral-client-v2
+npm test                                      # vitest
+npm run build                                 # vite production bundle
+```
 
-- Python: follow existing patterns in the codebase. Type hints are encouraged.
-- JavaScript/React: follow existing JSX patterns. Tailwind for styling.
-- Avoid adding comments that just narrate what the code does.
+CI runs the same commands plus an architecture-boundary check, version-coherence check, and webui_v2 bundled-asset coherence check.
 
-## Pull Requests
+## Code style
+
+- Python: follow existing patterns. Type hints encouraged. `ruff` is the source of truth.
+- JavaScript / React: existing JSX patterns, Tailwind for styling.
+- Don't add comments that just narrate what the code does. Comments should capture intent, trade-offs, or constraints the code itself cannot convey.
+
+## Pull requests
 
 - One focused change per PR.
-- Reference the relevant contributor lane or area.
-- Include a brief description of what changed and why.
-- If you are adding a new extension surface (provider, daemon, skill), include a minimal working example.
+- Reference the contributor lane or area touched.
+- Briefly describe what changed and why; call out any new dependency or migration.
+- If you add a new extension surface (provider, daemon, skill), include a minimal working example.
+- Be honest about limitations. We prefer "X works on macOS, Linux untested" over a silent assumption.
 
-## Key Documentation
+## Reporting bugs
 
-- [`docs/DEVELOPER_MISSION.md`](docs/DEVELOPER_MISSION.md) — What we are building and why
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — System architecture overview
-- [`docs/RUNTIME_CONTRACT.md`](docs/RUNTIME_CONTRACT.md) — Env vars, state paths, startup contract
+Open an issue at <https://github.com/FERAL-AI/FERAL-AI/issues> with:
+
+- `feral doctor` output.
+- Reproduction steps.
+- What you expected vs. what happened.
+- OS + Python version + `pip show feral-ai` output.
+
+## Key documentation
+
+- [`docs/DEVELOPER_MISSION.md`](docs/DEVELOPER_MISSION.md) — what we are building and why
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system architecture overview
 - [`docs/GENUI_PROVIDER_SPEC.md`](docs/GENUI_PROVIDER_SPEC.md) — GenUI provider surface contract
-- [`docs/HARDWARE_ECOSYSTEM.md`](docs/HARDWARE_ECOSYSTEM.md) — Hardware daemon contract
-- [`docs/SCORECARD.md`](docs/SCORECARD.md) — Capability status (shipped / partial / planned)
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — Strategic execution order
+- [`docs/HARDWARE_ECOSYSTEM.md`](docs/HARDWARE_ECOSYSTEM.md) — hardware daemon contract
+- [`docs/SCORECARD.md`](docs/SCORECARD.md) — capability status (shipped / partial / planned)
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — strategic execution order
+
+## Community
+
+- Issues: <https://github.com/FERAL-AI/FERAL-AI/issues>
+- Discussions: <https://github.com/FERAL-AI/FERAL-AI/discussions>
+- Follow on X: [@FeralAi67724](https://x.com/FeralAi67724)
+- Web: <https://feral.sh>
+
+We answer every PR. If a maintainer hasn't responded in 5 days, ping the PR — your message didn't get lost, we just got buried.

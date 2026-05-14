@@ -10,7 +10,7 @@ import os
 os.environ.setdefault("FERAL_RATE_LIMIT_RPM", "10000")
 
 
-# W12 (FEATURE_STABILITY_ROADMAP §3.4 #3-4): soak tests are gated behind
+# W12: soak tests are gated behind
 # `--runsoak`. Without the flag every test marked `@pytest.mark.soak` is
 # skipped so the regular CI run stays fast and deterministic.
 def pytest_addoption(parser):

@@ -284,4 +284,3 @@ All three are ~200 lines each; use them as the shape of your own daemon.
 - Architecture overview: [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
 - Adding a skill by hand (no Tool Genesis): [`docs/ADDING_SKILLS.md`](ADDING_SKILLS.md).
 - Hardware ecosystem: [`docs/HARDWARE_ECOSYSTEM.md`](HARDWARE_ECOSYSTEM.md).
-- Runtime guarantees: [`docs/RUNTIME_CONTRACT.md`](RUNTIME_CONTRACT.md).

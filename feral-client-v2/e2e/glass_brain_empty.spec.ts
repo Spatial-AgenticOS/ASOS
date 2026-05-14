@@ -1,7 +1,7 @@
 /**
  * Glass Brain — empty-state visual contract (Playwright).
  *
- * User-reported bug (FEATURE_STABILITY_ROADMAP.md Appendix A.3):
+ * User-reported bug:
  *   On /glass-brain when the consciousness graph is empty, a coloured
  *   ball overlapped the centred empty-state prompt.
  *

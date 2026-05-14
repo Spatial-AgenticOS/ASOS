@@ -1,5 +1,5 @@
 """
-W12 — channels soak harness (FEATURE_STABILITY_ROADMAP §3.4 #3-4).
+W12 — channels soak harness.
 
 Posts one message every 30 seconds for 24 hours to personal *staging*
 Telegram, Slack, and Discord bots and asserts:
