@@ -31,6 +31,77 @@ logger = logging.getLogger("feral.api.sessions")
 router = APIRouter(tags=["sessions"])
 
 
+@router.get("/api/sessions/primary/transcript")
+async def get_primary_transcript(limit: int = 100, since_ms: int = 0):
+    """Phase 9 (audit-r10 overhaul) — read the live primary-session
+    conversation history.
+
+    The iOS chat client calls this on reconnect (`scenePhase: .active`)
+    to recover messages the brain emitted while the WebSocket was
+    torn down for background. Without this round-trip those messages
+    were lost — the operator's "chat stops after a single answer
+    instead of continuing" complaint when they backgrounded the app
+    mid-response.
+
+    Returns ``{messages: [{role, text, ts_ms}, ...], primary_session_id}``.
+    `ts_ms` is the message's logical position in the thread expressed
+    as milliseconds; clients can pass it back as `since_ms` for an
+    incremental refresh that doesn't re-download the full history.
+
+    `limit` caps the most-recent messages returned (default 100,
+    clamped 1..500). Read-only; no auth — LAN-public like the other
+    capability probes.
+    """
+    limit = max(1, min(limit, 500))
+    sid = state.primary_session_id
+
+    orchestrator = getattr(state, "orchestrator", None)
+    if orchestrator is None:
+        return {"primary_session_id": sid, "messages": [], "error": "orchestrator not ready"}
+
+    raw_history = []
+    try:
+        raw_history = orchestrator.conversation_history.get(sid, []) or []
+    except Exception as exc:
+        return {"primary_session_id": sid, "messages": [], "error": f"history read failed: {exc}"}
+
+    # The orchestrator stores OpenAI-shaped dicts: `{role, content, ...}`.
+    # Filter to user / assistant turns only — tool calls + system
+    # prompts aren't useful to the client and would just inflate the
+    # payload. Position-based ts_ms is enough for the iOS client to
+    # do `since_ms` incremental reads; we don't have wall-clock
+    # timestamps on every history entry.
+    out: list[dict] = []
+    for idx, entry in enumerate(raw_history):
+        role = entry.get("role") if isinstance(entry, dict) else None
+        if role not in ("user", "assistant"):
+            continue
+        content = entry.get("content")
+        if isinstance(content, list):
+            # OpenAI vision-style content arrays — join the text
+            # segments so the client gets a plain string.
+            text_parts = [
+                p.get("text", "") for p in content
+                if isinstance(p, dict) and p.get("type") in (None, "text")
+            ]
+            text = "".join(text_parts).strip()
+        else:
+            text = str(content or "").strip()
+        if not text:
+            continue
+        ts_ms = idx + 1  # monotonic position; 1-based
+        if ts_ms <= since_ms:
+            continue
+        out.append({"role": role, "text": text, "ts_ms": ts_ms})
+
+    out = out[-limit:]
+    return {
+        "primary_session_id": sid,
+        "messages": out,
+        "count": len(out),
+    }
+
+
 @router.get("/api/sessions/primary")
 async def get_primary_session():
     """Return the per-install shared chat session id.
