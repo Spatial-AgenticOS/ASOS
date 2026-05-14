@@ -463,13 +463,53 @@ class ToolRunner:
                 ),
                 "data": None,
             }
-        return await self.execute_daemon_command_with_ack(
+        result = await self.execute_daemon_command_with_ack(
             session_id=session_id,
             node_id=handler.node_id,
             action=action,
             args=args,
             timeout=timeout,
         )
+        # Phase 6 (audit-r10 overhaul) — intercept structured
+        # `permission_denied:<NSKey>` failures from the node and emit
+        # a permission_card SDUI element to the client BEFORE
+        # returning the result to the LLM. The result envelope is
+        # left intact so the LLM still sees the wire-level truth and
+        # can verbalize a one-liner referencing the card; the user
+        # sees a tappable Settings deeplink instead of brain prose
+        # naming a non-existent menu path.
+        try:
+            from agents.permission_card import card_for_action_result
+
+            card = card_for_action_result(
+                result,
+                skill_id=handler.node_type,
+                action=action,
+            )
+            if card is not None:
+                from models.protocol import FeralMessage, SDUIPayload
+
+                try:
+                    await self._orch.send(
+                        session_id,
+                        FeralMessage(
+                            session_id=session_id,
+                            hop="brain",
+                            type="sdui",
+                            payload=SDUIPayload(root=card).model_dump(),
+                        ),
+                    )
+                except Exception:
+                    # Surface delivery is best-effort — if the
+                    # client socket is gone, fall through and let the
+                    # LLM render the textual error envelope.
+                    pass
+        except Exception:
+            # Permission card emission is strictly additive. Any
+            # failure here must not break the existing tool result
+            # path.
+            pass
+        return result
 
     async def execute_daemon_command_with_ack(
         self,
