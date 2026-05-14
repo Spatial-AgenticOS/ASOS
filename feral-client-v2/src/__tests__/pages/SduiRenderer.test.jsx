@@ -174,3 +174,57 @@ describe('applySduiPatches', () => {
     expect(next.value).toBe('x');
   });
 });
+
+// Phase 6 (permission_card) + Phase 11 (tcc_card) cards.
+describe('SduiRenderer — permission_card / tcc_card', () => {
+  it('renders permission_card with iOS deeplink button', () => {
+    const tree = {
+      type: 'permission_card',
+      permission_key: 'NSContactsUsageDescription',
+      title: 'FERAL needs access to Contacts',
+      description: 'Looking up John requires Contacts access.',
+      ios_deeplink: 'app-settings:',
+      ios_deeplink_label: 'Open Settings',
+      skill_id: 'contacts',
+      action: 'phone.contact.lookup',
+      retryable: true,
+    };
+    const { getByText } = renderV2(<SduiRenderer tree={tree} />);
+    expect(getByText('FERAL needs access to Contacts')).toBeInTheDocument();
+    expect(getByText('Looking up John requires Contacts access.')).toBeInTheDocument();
+    expect(getByText('Open Settings')).toBeInTheDocument();
+    expect(getByText('NSContactsUsageDescription')).toBeInTheDocument();
+  });
+
+  it('renders tcc_card with macOS surface label', () => {
+    const tree = {
+      type: 'tcc_card',
+      permission_key: 'automation:com.apple.FaceTime',
+      title: 'FERAL needs Automation access to FaceTime',
+      description: 'macOS asks per-target permission to script FaceTime.',
+      macos_deeplink: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation',
+      macos_deeplink_label: 'Open System Settings',
+      skill_id: 'desktop_facetime',
+      action: 'desktop.facetime.start',
+      retryable: true,
+    };
+    const { getByText } = renderV2(<SduiRenderer tree={tree} />);
+    expect(getByText('FERAL needs Automation access to FaceTime')).toBeInTheDocument();
+    expect(getByText('Open System Settings')).toBeInTheDocument();
+    expect(getByText('automation:com.apple.FaceTime')).toBeInTheDocument();
+  });
+
+  it('falls back gracefully when deeplink is missing', () => {
+    const tree = {
+      type: 'permission_card',
+      title: 'FERAL needs a permission',
+      description: 'no deeplink',
+      ios_deeplink: '',
+      ios_deeplink_label: 'Open Settings',
+    };
+    // No button, just the fallback label text — assert by counting.
+    const { container } = renderV2(<SduiRenderer tree={tree} />);
+    const buttons = container.querySelectorAll('button');
+    expect(buttons.length).toBe(0);
+  });
+});
