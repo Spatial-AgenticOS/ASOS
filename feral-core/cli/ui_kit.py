@@ -17,13 +17,30 @@ Truthfulness rules
 * ``warn_non_interactive_setup_hint`` prints the exact ``ssh -t``
   invocation needed when the wizard is launched without a controlling
   TTY, instead of silently falling back to a degraded UX.
+
+Asyncio nested-loop fix
+-----------------------
+The wizard runs inside ``asyncio.run(_run_async())`` so every prompt
+call lands while an event loop is already running. ``prompt_toolkit``
+(which InquirerPy wraps) detects the running loop and returns a
+coroutine from ``Application.run()`` instead of blocking — that broke
+v2026.5.22 where the prompts silently fell back to the typed numeric
+fallback. ``_run_inquirer_safely`` detects this case and runs the
+prompt in a worker thread that has no event loop of its own, so
+prompt_toolkit's normal blocking path works. When called from a sync
+context (no running loop) we bypass the thread entirely.
 """
 
 from __future__ import annotations
 
+import asyncio
 import getpass
+import logging
 import sys
+import threading
 from typing import Any, Callable, Optional, Sequence, Union
+
+logger = logging.getLogger("feral.cli.ui_kit")
 
 try:
     from rich.console import Console
@@ -130,6 +147,54 @@ def banner_line(
 
 
 # ---------------------------------------------------------------------------
+# Asyncio nested-loop shim
+# ---------------------------------------------------------------------------
+
+
+def _run_inquirer_safely(builder: Callable[[], Any]) -> Any:
+    """Call an InquirerPy prompt's ``.execute()`` in a context where
+    prompt_toolkit will actually block.
+
+    The wizard runs inside ``asyncio.run(_run_async())``, so when a
+    step calls ``inquirer.X(...).execute()`` prompt_toolkit detects the
+    already-running loop and returns a coroutine instead of blocking
+    (and emits ``RuntimeWarning: coroutine 'Application.run_async' was
+    never awaited``). To get the normal blocking semantics back we run
+    the builder in a worker thread that has no event loop bound to it.
+    The main thread then ``done.wait()``s the worker — that intentionally
+    blocks the asyncio loop, which is fine because the wizard step is
+    the only thing happening at that point.
+    """
+    try:
+        asyncio.get_running_loop()
+        nested = True
+    except RuntimeError:
+        nested = False
+
+    if not nested:
+        return builder()
+
+    result: dict[str, Any] = {}
+    error: dict[str, BaseException] = {}
+    done = threading.Event()
+
+    def _worker() -> None:
+        try:
+            result["v"] = builder()
+        except BaseException as exc:  # noqa: BLE001 — propagate every exception type
+            error["e"] = exc
+        finally:
+            done.set()
+
+    worker = threading.Thread(target=_worker, name="feral-ui-prompt", daemon=True)
+    worker.start()
+    done.wait()
+    if "e" in error:
+        raise error["e"]
+    return result.get("v")
+
+
+# ---------------------------------------------------------------------------
 # Choice normalisation
 # ---------------------------------------------------------------------------
 
@@ -215,9 +280,37 @@ def _fallback_select(
         sys.stdout.write("  Invalid choice — try again.\n")
 
 
+def _normalise_default_for_checkbox(default: Any, choices: Sequence[ChoiceLike]) -> list:
+    """Mark the matching choice as enabled so the user lands on it pre-marked."""
+    if default is None:
+        return _normalise_choices(choices)
+    out: list = []
+    for c in choices:
+        value = c if isinstance(c, str) else (c.get("value") if isinstance(c, dict) else c)
+        name = (
+            c
+            if isinstance(c, str)
+            else (c.get("name") or str(c.get("value", ""))) if isinstance(c, dict) else str(c)
+        )
+        is_default = value == default
+        if _INQUIRER_AVAILABLE:
+            out.append(Choice(value=value, name=name, enabled=is_default))
+        else:
+            out.append({"name": name, "value": value, "enabled": is_default})
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Public prompts
 # ---------------------------------------------------------------------------
+
+
+_SELECT_INSTRUCTION = "↑/↓ navigate · space to mark · enter to confirm"
+_FUZZY_INSTRUCTION = "type to filter · ↑/↓ navigate · space to mark · enter to confirm"
+
+
+def _validate_single_selection(result) -> bool:
+    return isinstance(result, list) and len(result) == 1
 
 
 def select(
@@ -225,25 +318,44 @@ def select(
     choices: Sequence[ChoiceLike],
     *,
     default: Any = None,
-    instruction: str = "↑/↓ to move · enter to select",
+    instruction: str = _SELECT_INSTRUCTION,
 ) -> Any:
-    """Arrow-key single-select. Falls back to numeric prompt off-tty."""
+    """Single-pick from a list using arrow keys + space + enter.
+
+    Implemented on top of InquirerPy's ``checkbox`` with a
+    ``len(result) == 1`` validator so the user marks exactly one item
+    with space, then confirms with enter (the user's preferred UX —
+    they want to *see* their pick before committing instead of
+    enter-on-cursor-position semantics). Falls back to a numeric typed
+    prompt off-tty.
+    """
     if _INQUIRER_AVAILABLE and _is_interactive():
         try:
-            return inquirer.select(  # type: ignore[union-attr]
-                message=message,
-                choices=_normalise_choices(choices),
-                default=default,
-                instruction=instruction,
-                qmark=BRAND_EMOJI,
-                amark=BRAND_EMOJI,
-                pointer="❯",
-            ).execute()
+            normalised = _normalise_default_for_checkbox(default, choices)
+
+            def _build():
+                return inquirer.checkbox(  # type: ignore[union-attr]
+                    message=message,
+                    choices=normalised,
+                    instruction=instruction,
+                    qmark=BRAND_EMOJI,
+                    amark=BRAND_EMOJI,
+                    pointer="❯",
+                    enabled_symbol="[*]",
+                    disabled_symbol="[ ]",
+                    validate=_validate_single_selection,
+                    invalid_message="press space to mark exactly one option, then enter",
+                    transformer=lambda r: r[0] if isinstance(r, list) and r else "",
+                ).execute()
+
+            picked = _run_inquirer_safely(_build)
+            if isinstance(picked, list) and picked:
+                return picked[0]
+            return picked
         except KeyboardInterrupt:
             raise
-        except Exception:
-            # Defensive — degrade to the fallback rather than crash the CLI.
-            pass
+        except Exception as exc:  # pragma: no cover - last-ditch defensive log
+            logger.debug("ui_kit.select InquirerPy path failed: %r", exc)
     return _fallback_select(message, choices, default=default)
 
 
@@ -252,24 +364,40 @@ def fuzzy_select(
     choices: Sequence[ChoiceLike],
     *,
     default: Any = None,
-    instruction: str = "type to filter · ↑/↓ to move · enter to select",
+    instruction: str = _FUZZY_INSTRUCTION,
 ) -> Any:
-    """Type-to-filter single-select (e.g. for hundreds of model ids)."""
+    """Type-to-filter single-pick (e.g. for hundreds of model ids).
+
+    Same UX contract as ``select``: arrows navigate, space marks the
+    choice, enter confirms. Implemented on top of ``inquirer.fuzzy``
+    with ``multiselect=True`` + a single-selection validator.
+    """
     if _INQUIRER_AVAILABLE and _is_interactive():
         try:
-            return inquirer.fuzzy(  # type: ignore[union-attr]
-                message=message,
-                choices=_normalise_choices(choices),
-                default=default,
-                instruction=instruction,
-                qmark=BRAND_EMOJI,
-                amark=BRAND_EMOJI,
-                border=True,
-            ).execute()
+            normalised = _normalise_default_for_checkbox(default, choices)
+
+            def _build():
+                return inquirer.fuzzy(  # type: ignore[union-attr]
+                    message=message,
+                    choices=normalised,
+                    instruction=instruction,
+                    qmark=BRAND_EMOJI,
+                    amark=BRAND_EMOJI,
+                    border=True,
+                    multiselect=True,
+                    validate=_validate_single_selection,
+                    invalid_message="press space to mark exactly one option, then enter",
+                    transformer=lambda r: r[0] if isinstance(r, list) and r else "",
+                ).execute()
+
+            picked = _run_inquirer_safely(_build)
+            if isinstance(picked, list) and picked:
+                return picked[0]
+            return picked
         except KeyboardInterrupt:
             raise
-        except Exception:
-            pass
+        except Exception as exc:  # pragma: no cover
+            logger.debug("ui_kit.fuzzy_select InquirerPy path failed: %r", exc)
     return _fallback_select(message, choices, default=default)
 
 
@@ -302,18 +430,22 @@ def password(
 
     if _INQUIRER_AVAILABLE and _is_interactive():
         try:
-            return inquirer.secret(  # type: ignore[union-attr]
-                message=message,
-                qmark=BRAND_EMOJI,
-                amark=BRAND_EMOJI,
-                transformer=lambda r: mask * len(r) if r else "",
-                validate=_final_validate,
-                invalid_message="value cannot be empty",
-            ).execute()
+
+            def _build():
+                return inquirer.secret(  # type: ignore[union-attr]
+                    message=message,
+                    qmark=BRAND_EMOJI,
+                    amark=BRAND_EMOJI,
+                    transformer=lambda r: mask * len(r) if r else "",
+                    validate=_final_validate,
+                    invalid_message="value cannot be empty",
+                ).execute()
+
+            return _run_inquirer_safely(_build)
         except KeyboardInterrupt:
             raise
-        except Exception:
-            pass
+        except Exception as exc:  # pragma: no cover
+            logger.debug("ui_kit.password InquirerPy path failed: %r", exc)
 
     label = f"{message} (silent — non-interactive shell)"
     while True:
@@ -330,18 +462,22 @@ def confirm(message: str, *, default: bool = False) -> bool:
     """Yes/no with a default."""
     if _INQUIRER_AVAILABLE and _is_interactive():
         try:
-            return bool(
-                inquirer.confirm(  # type: ignore[union-attr]
-                    message=message,
-                    default=default,
-                    qmark=BRAND_EMOJI,
-                    amark=BRAND_EMOJI,
-                ).execute()
-            )
+
+            def _build():
+                return bool(
+                    inquirer.confirm(  # type: ignore[union-attr]
+                        message=message,
+                        default=default,
+                        qmark=BRAND_EMOJI,
+                        amark=BRAND_EMOJI,
+                    ).execute()
+                )
+
+            return _run_inquirer_safely(_build)
         except KeyboardInterrupt:
             raise
-        except Exception:
-            pass
+        except Exception as exc:  # pragma: no cover
+            logger.debug("ui_kit.confirm InquirerPy path failed: %r", exc)
     suffix = "Y/n" if default else "y/N"
     while True:
         sys.stdout.write(f"{message} [{suffix}]: ")
@@ -381,19 +517,23 @@ def text(
 
     if _INQUIRER_AVAILABLE and _is_interactive():
         try:
-            return inquirer.text(  # type: ignore[union-attr]
-                message=message,
-                default=default,
-                qmark=BRAND_EMOJI,
-                amark=BRAND_EMOJI,
-                validate=_final_validate,
-                instruction=instruction,
-                invalid_message="value cannot be empty",
-            ).execute()
+
+            def _build():
+                return inquirer.text(  # type: ignore[union-attr]
+                    message=message,
+                    default=default,
+                    qmark=BRAND_EMOJI,
+                    amark=BRAND_EMOJI,
+                    validate=_final_validate,
+                    instruction=instruction,
+                    invalid_message="value cannot be empty",
+                ).execute()
+
+            return _run_inquirer_safely(_build)
         except KeyboardInterrupt:
             raise
-        except Exception:
-            pass
+        except Exception as exc:  # pragma: no cover
+            logger.debug("ui_kit.text InquirerPy path failed: %r", exc)
     suffix = f" [{default}]" if default else ""
     while True:
         sys.stdout.write(f"{message}{suffix}: ")
