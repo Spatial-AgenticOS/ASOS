@@ -158,12 +158,24 @@ class ToolRunner:
                 if decision.sources.get("surface_deny")
                 else "Safety Protocol: Action Blocked"
             )
+            # Phase 1 (audit-r10 overhaul) — structured audit fields so
+            # iOS / web clients can render a real `permission_card`
+            # (Phase 6) instead of the LLM hallucinating "go to
+            # Settings". `setup_step` is reserved for Phase 6 (macOS
+            # TCC probes + structured deeplinks) and stays None here;
+            # `target_device_capabilities` is reserved for Phase 5
+            # (capability registry) and stays None too. The wire
+            # contract is locked NOW so downstream phases just fill
+            # the values without another protocol bump.
             return {
                 "status": "PermissionOutcome::Deny",
                 "error": error,
                 "note": note,
                 "safety_level": "deny",
                 "policy_sources": dict(decision.sources),
+                "surface": surface,
+                "setup_step": None,
+                "target_device_capabilities": None,
             }
 
         level = decision.level

@@ -107,6 +107,16 @@ class ChatRequestPayload(BaseModel):
     reply_mode: Literal["stream", "final"] = "final"
     channel: Literal["chat", "vision_ask"] = "chat"
     reply_to: Optional[str] = None
+    # Phase 1 (audit-r10 overhaul plan) — device_target tells the brain
+    # WHERE the requested action should run. The orchestrator's
+    # ExecutionSurfacePolicy dispatches Mac-side skills when
+    # `device_target == "brain"`, phone-native skills when
+    # `device_target == "phone"`, glasses bridged via phone when
+    # `device_target == "glasses"`, and falls back to the conservative
+    # `http_api` surface when `auto` / None so existing behavior is
+    # preserved until the PromptRefiner (Phase 2) starts populating
+    # this field deterministically.
+    device_target: Optional[Literal["brain", "phone", "glasses", "auto"]] = None
 
 
 class ChatResponsePayload(BaseModel):
@@ -532,6 +542,14 @@ class HUPActionRequestPayload(BaseModel):
     params: dict = Field(default_factory=dict)
     timeout_ms: int = 5000
     requires_confirmation: bool = False
+    # Phase 1 — device_target lets the orchestrator address a specific
+    # node-type when fanning out actions (e.g. "phone" for native
+    # iOS/Android skills, "glasses" for BLE-bridged peripherals). The
+    # daemon ignores this field when it owns the action regardless;
+    # carried on the wire for symmetry with ChatRequestPayload + future
+    # multi-node fan-out where the brain must pick which daemon runs
+    # the same action name.
+    device_target: Optional[Literal["brain", "phone", "glasses", "auto"]] = None
 
 
 class HUPActionResponsePayload(BaseModel):
