@@ -373,6 +373,19 @@ class NodeRegisterPayload(BaseModel):
     model: str = ""
     firmware_version: str = ""
     capabilities: list[str] = []  # ["applescript", "keyboard", "filesystem", "camera", "gpio"]
+    # Phase 4 (audit-r10 overhaul) — structured skill manifests the
+    # node publishes alongside its flat capability list. Each entry
+    # is `{"id", "name", "description", "actions": [{"name",
+    # "summary", "requires_permission"?}]}`. Phase 5's capability
+    # registry consumes these to drive `GET /api/capabilities` and
+    # to teach the orchestrator which `phone.*` / `glasses.*` action
+    # names actually exist on the currently connected nodes.
+    #
+    # Typed as `list[dict]` rather than a nested model because the
+    # node SDK is the source of truth for the manifest shape — the
+    # brain is a passive consumer that re-emits whatever the node
+    # published. Validation lives in the registry, not here.
+    skills: list[dict] = []
 
 
 class ExecuteCommandPayload(BaseModel):
