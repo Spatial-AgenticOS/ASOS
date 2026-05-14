@@ -216,14 +216,105 @@ def check_screen_recording() -> TCCStatus:
     )
 
 
+_AUTOMATION_REMEDIATION_TMPL = (
+    "Open System Settings -> Privacy & Security -> Automation, click "
+    "the lock to unlock, and enable the FERAL host process's row for "
+    "'{target}'. macOS adds the row the first time FERAL asks to "
+    "control {target}; if you don't see it yet, retry the action so "
+    "the dialog appears, then approve."
+)
+
+
+def check_automation_for(target_bundle_id: str) -> TCCStatus:
+    """Probe Automation entitlement for a specific target app bundle.
+
+    Phase 11 (audit-r10 overhaul). AppleScript-driven control of
+    FaceTime / Music / Mail / Notes / Messages / Reminders / Calendar
+    on macOS 10.14+ requires per-target Automation grants under the
+    Privacy & Security pane. There is no single "Automation: on"
+    flag — each scripted app gets its own row.
+
+    macOS doesn't expose a public Boolean preflight for Automation,
+    only a side-effecting test: sending a benign AppleEvent and
+    catching the ``errAEEventNotPermitted`` (-1743) result. We do
+    NOT execute that probe here because it would prompt the user
+    every time the doctor runs. Instead we read the cached value
+    from a previous tool invocation in
+    `state.desktop_control_tcc_cache` when available, otherwise
+    return ``unknown`` with the structured remediation step.
+
+    Callers that genuinely need a live readout call the AppleScript
+    runner once and check the result envelope.
+    """
+    if platform.system() != "Darwin":
+        return _not_applicable(f"automation:{target_bundle_id}", "AEDeterminePermissionToAutomateTarget")
+    return TCCStatus(
+        permission=f"automation:{target_bundle_id}",
+        status="unknown",
+        api="AEDeterminePermissionToAutomateTarget",
+        setup_step=_AUTOMATION_REMEDIATION_TMPL.format(target=_friendly_name(target_bundle_id)),
+        error=(
+            "Automation grants are per-target and have no public "
+            "preflight Boolean; status is resolved at first invoke."
+        ),
+    )
+
+
+_FRIENDLY_NAMES = {
+    "com.apple.FaceTime": "FaceTime",
+    "com.apple.Music": "Music",
+    "com.apple.Mail": "Mail",
+    "com.apple.Notes": "Notes",
+    "com.apple.MobileSMS": "Messages",
+    "com.apple.Reminders": "Reminders",
+    "com.apple.iCal": "Calendar",
+    "com.apple.Safari": "Safari",
+    "com.apple.Finder": "Finder",
+    "com.apple.systemevents": "System Events",
+}
+
+
+def _friendly_name(bundle_id: str) -> str:
+    return _FRIENDLY_NAMES.get(bundle_id, bundle_id)
+
+
 def all_gui_permission_statuses() -> list[TCCStatus]:
     """Convenience wrapper that returns every GUI-relevant TCC probe."""
     return [check_accessibility(), check_screen_recording()]
+
+
+# Bundle IDs the brain's desktop_control facade will script. Probed
+# eagerly by `all_desktop_control_permission_statuses` so the iOS
+# Brain Network section can render a row per target right next to
+# Accessibility + Screen Recording.
+DESKTOP_CONTROL_TARGETS = (
+    "com.apple.FaceTime",
+    "com.apple.Music",
+    "com.apple.Mail",
+    "com.apple.Notes",
+    "com.apple.MobileSMS",
+    "com.apple.Reminders",
+    "com.apple.iCal",
+    "com.apple.Safari",
+)
+
+
+def all_desktop_control_permission_statuses() -> list[TCCStatus]:
+    """Union of GUI TCC probes + the Automation targets the brain's
+    desktop_control facade can script. Used by the Phase 11
+    `/api/system/permissions` endpoint."""
+    out: list[TCCStatus] = list(all_gui_permission_statuses())
+    for bundle in DESKTOP_CONTROL_TARGETS:
+        out.append(check_automation_for(bundle))
+    return out
 
 
 __all__ = [
     "TCCStatus",
     "check_accessibility",
     "check_screen_recording",
+    "check_automation_for",
     "all_gui_permission_statuses",
+    "all_desktop_control_permission_statuses",
+    "DESKTOP_CONTROL_TARGETS",
 ]

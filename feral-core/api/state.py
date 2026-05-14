@@ -762,6 +762,27 @@ class BrainState:
                     "Capability registry wiring failed: %s — boot continues",
                     cap_exc,
                 )
+            # Phase 11 (audit-r10 overhaul) — register the
+            # desktop_control facade's brain-host skill manifests so
+            # GET /api/capabilities surfaces them and the orchestrator
+            # can route `desktop.*` actions in-process without an HUP
+            # round-trip. Imported lazily so a non-Darwin host still
+            # boots cleanly; the dispatcher's own platform guard
+            # raises AppleScriptUnsupportedPlatform at action time on
+            # those hosts.
+            try:
+                from skills.desktop_control import BRAIN_HOST_MANIFESTS
+
+                self.capability_registry.register_brain_host_skills(BRAIN_HOST_MANIFESTS)
+                logger.info(
+                    "Registered %d brain-host desktop_control skill manifests",
+                    len(BRAIN_HOST_MANIFESTS),
+                )
+            except Exception as dc_exc:
+                logger.warning(
+                    "desktop_control registration failed: %s — boot continues",
+                    dc_exc,
+                )
             if self.vault:
                 self.orchestrator.set_vault(self.vault)
             if self.wasm_sandbox:

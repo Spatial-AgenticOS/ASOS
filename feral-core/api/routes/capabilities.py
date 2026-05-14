@@ -88,8 +88,26 @@ async def get_capabilities():
     Phase 6 wraps individual capability entries with permission cards
     when an action returns `permission_denied:<NSKey>` at runtime;
     the static manifest here doesn't carry permission state.
+
+    The brain-host section is the union of:
+      * Phase 11 ``desktop_control`` skill manifests (FaceTime / Music /
+        Messages / Notes / URL / app / notify) tracked by the
+        capability registry — these carry the same shape as node
+        skills (id / name / description / actions[]) so the iOS
+        BrainNetworkSection renders them identically.
+      * Legacy ``SkillRegistry`` entries (web automation, Phase 5+
+        connectors, etc.) shaped via _serialize_brain_host_skill.
     """
     brain_host_skills: list[dict] = []
+
+    # Phase 11 — structured desktop_control manifests.
+    try:
+        for skill in state.capability_registry.brain_host_skills():
+            brain_host_skills.append(dict(skill))
+    except Exception as exc:
+        logger.warning("brain_host capability_registry read failed: %s", exc)
+
+    # Legacy SkillRegistry entries (different shape; keep for back-compat).
     skill_registry = getattr(state, "skill_registry", None)
     if skill_registry is not None:
         try:

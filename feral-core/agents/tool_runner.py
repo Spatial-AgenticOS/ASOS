@@ -446,7 +446,7 @@ class ToolRunner:
                 "data": None,
             }
         handler = registry.find_handler(action)
-        if handler is None or handler.node_id is None:
+        if handler is None:
             connected_types = sorted({
                 info["node_type"]
                 for info in registry._nodes.values()  # noqa: SLF001 — internal read
@@ -463,6 +463,43 @@ class ToolRunner:
                 ),
                 "data": None,
             }
+
+        # Phase 11 (audit-r10 overhaul) — brain-host dispatch.
+        # `find_handler` may return a handler with `node_id=None` and
+        # `surface="brain_host"` when the action is published by the
+        # desktop_control facade running in-process on the Mac. Route
+        # those through the synchronous facade dispatcher instead of
+        # an HUP round-trip, then run the same post-processing path
+        # (permission_card / tcc_card emission) so the orchestrator
+        # behaves identically for brain-host vs node actions.
+        if handler.node_id is None and handler.surface == "brain_host":
+            try:
+                from skills.desktop_control import dispatch_desktop_action
+
+                result = dispatch_desktop_action(action, args)
+            except Exception as exc:  # noqa: BLE001
+                result = {
+                    "success": False,
+                    "status_code": 500,
+                    "error": f"brain_host dispatch raised: {exc}",
+                }
+            await self._maybe_emit_capability_cards(
+                session_id=session_id, action=action, handler=handler,
+                result=result,
+            )
+            return result
+
+        if handler.node_id is None:
+            return {
+                "success": False,
+                "status_code": 503,
+                "error": (
+                    f"capability_unavailable: handler for `{action}` "
+                    f"resolved to surface `{handler.surface}` but no "
+                    "in-process dispatcher is wired."
+                ),
+                "data": None,
+            }
         result = await self.execute_daemon_command_with_ack(
             session_id=session_id,
             node_id=handler.node_id,
@@ -470,46 +507,72 @@ class ToolRunner:
             args=args,
             timeout=timeout,
         )
-        # Phase 6 (audit-r10 overhaul) — intercept structured
-        # `permission_denied:<NSKey>` failures from the node and emit
-        # a permission_card SDUI element to the client BEFORE
-        # returning the result to the LLM. The result envelope is
-        # left intact so the LLM still sees the wire-level truth and
-        # can verbalize a one-liner referencing the card; the user
-        # sees a tappable Settings deeplink instead of brain prose
-        # naming a non-existent menu path.
-        try:
-            from agents.permission_card import card_for_action_result
+        await self._maybe_emit_capability_cards(
+            session_id=session_id, action=action, handler=handler,
+            result=result,
+        )
+        return result
 
-            card = card_for_action_result(
+    async def _maybe_emit_capability_cards(
+        self,
+        *,
+        session_id: str,
+        action: str,
+        handler,
+        result: dict,
+    ) -> None:
+        """Phase 6 (iOS permission_card) + Phase 11 (Mac tcc_card)
+        post-processor for capability dispatch results.
+
+        Looks at the result envelope; if the error string matches one
+        of our structured contracts:
+        * ``permission_denied:<NSKey>`` → iOS permission_card SDUI.
+        * ``tcc_denied:<key>`` → Mac tcc_card SDUI (also opens the
+          relevant System Settings pane on the Mac as a side effect).
+
+        Wire-level result envelope is left untouched so the LLM still
+        sees the truth and can verbalize a one-liner referencing the
+        card. Emission is best-effort — any failure leaves the
+        existing tool-result flow untouched.
+        """
+        try:
+            from agents.permission_card import card_for_action_result as ios_card
+            from agents.tcc_card import card_for_action_result as tcc_card_for
+            from models.protocol import FeralMessage, SDUIPayload
+
+            card = ios_card(
                 result,
-                skill_id=handler.node_type,
+                skill_id=getattr(handler, "node_type", "") or "",
                 action=action,
             )
-            if card is not None:
-                from models.protocol import FeralMessage, SDUIPayload
+            if card is None:
+                card = tcc_card_for(
+                    result,
+                    skill_id=getattr(handler, "node_type", "") or "",
+                    action=action,
+                )
+            if card is None:
+                return
 
-                try:
-                    await self._orch.send(
-                        session_id,
-                        FeralMessage(
-                            session_id=session_id,
-                            hop="brain",
-                            type="sdui",
-                            payload=SDUIPayload(root=card).model_dump(),
-                        ),
-                    )
-                except Exception:
-                    # Surface delivery is best-effort — if the
-                    # client socket is gone, fall through and let the
-                    # LLM render the textual error envelope.
-                    pass
+            try:
+                await self._orch.send(
+                    session_id,
+                    FeralMessage(
+                        session_id=session_id,
+                        hop="brain",
+                        type="sdui",
+                        payload=SDUIPayload(root=card).model_dump(),
+                    ),
+                )
+            except Exception:
+                # Surface delivery is best-effort — if the client
+                # socket is gone, fall through and let the LLM render
+                # the textual error envelope.
+                pass
         except Exception:
-            # Permission card emission is strictly additive. Any
-            # failure here must not break the existing tool result
-            # path.
+            # Card emission is strictly additive. Never break the
+            # surrounding tool-result path on a card failure.
             pass
-        return result
 
     async def execute_daemon_command_with_ack(
         self,

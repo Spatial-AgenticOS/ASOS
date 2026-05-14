@@ -65,7 +65,16 @@ def _surface_for_node_type(node_type: str) -> str:
 
 
 class CapabilityRegistry:
-    """Live catalog of node-published skill manifests."""
+    """Live catalog of node-published skill manifests AND brain-host
+    skill manifests (Phase 11).
+
+    Phase 5 wired node skills; Phase 11 mirrors the same manifest
+    shape for the desktop_control facade so ``find_handler`` returns
+    a uniform ``CapabilityHandler`` regardless of whether the action
+    lives on a connected iPhone (``surface=phone_actuator``,
+    ``node_id=...``) or in-process on the brain's Mac
+    (``surface=brain_host``, ``node_id=None``).
+    """
 
     def __init__(self) -> None:
         self._lock = RLock()
@@ -73,6 +82,9 @@ class CapabilityRegistry:
         # where each skill dict matches the Phase 4 SkillManifest
         # wire shape: {id, name, description, actions: [...]}.
         self._nodes: dict[str, dict] = {}
+        # Phase 11 — brain-host skills (desktop_control facade etc.).
+        # Same manifest shape; surface is always `brain_host`.
+        self._brain_host_skills: list[dict] = []
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -101,20 +113,53 @@ class CapabilityRegistry:
         with self._lock:
             self._nodes.pop(node_id, None)
 
+    # ── Brain-host registration (Phase 11) ───────────────────────
+
+    def register_brain_host_skills(self, manifests: list[dict]) -> None:
+        """Replace the brain-host manifest list. Called from
+        ``BrainState.init`` with ``desktop_control.BRAIN_HOST_MANIFESTS``.
+        Idempotent — Phase 11 ships a fixed set; future phases can
+        repeatedly call this to swap the catalog at runtime.
+        """
+        with self._lock:
+            self._brain_host_skills = [dict(m) for m in (manifests or [])]
+
+    def brain_host_skills(self) -> list[dict]:
+        """Snapshot of brain-host manifests for ``/api/capabilities``."""
+        with self._lock:
+            return [dict(skill) for skill in self._brain_host_skills]
+
     # ── Query ────────────────────────────────────────────────────
 
     def find_handler(self, action_name: str) -> Optional[CapabilityHandler]:
-        """Return the first connected node that publishes `action_name`,
-        or `None` when no node currently advertises it.
+        """Return the handler that publishes ``action_name`` — brain-host
+        first, then connected nodes — or ``None`` when nothing
+        advertises it right now.
+
+        Brain-host takes priority because Phase 11 actions
+        (``desktop.*``) are always in-process and never queue behind
+        network round-trips. Node actions (``phone.*`` / ``glasses.*``)
+        only match when a node is currently online.
 
         First-match semantics are fine while at most one phone /
-        glasses / wearable of each kind is connected at a time, which
-        is the operator's actual deployment. Multi-phone routing is
-        a Phase 12+ concern.
+        glasses / wearable of each kind is connected, which is the
+        operator's actual deployment. Multi-phone routing is a
+        Phase 12+ concern.
         """
         if not action_name:
             return None
         with self._lock:
+            # Brain-host first.
+            for skill in self._brain_host_skills:
+                for action in skill.get("actions", []) or []:
+                    if action.get("name") == action_name:
+                        return CapabilityHandler(
+                            surface="brain_host",
+                            node_id=None,
+                            node_type="desktop",
+                            platform="macos",
+                        )
+            # Then connected nodes.
             for node_id, info in self._nodes.items():
                 for skill in info["skills"]:
                     for action in skill.get("actions", []) or []:
