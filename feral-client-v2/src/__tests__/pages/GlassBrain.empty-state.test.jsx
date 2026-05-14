@@ -1,7 +1,7 @@
 /**
  * Glass Brain — empty-state geometry contract.
  *
- * User-reported bug (FEATURE_STABILITY_ROADMAP.md Appendix A.3):
+ * User-reported bug:
  *
  *   On /glass-brain when the consciousness graph is empty, a coloured
  *   ball overlapped the centred empty-state prompt ("No in-flight
@@ -9,8 +9,8 @@
  *
  * Root-cause analysis (this PR):
  *
- *   The offender is the legend dot block at GlassBrain.jsx:141-152
- *   (option (a) per the roadmap). `kindRows` always retained the
+ *   The offender is the legend dot block at GlassBrain.jsx:141-152.
+ *   `kindRows` always retained the
  *   `intent` and `flow` rows even when their counts were 0, so two
  *   `.v2-glass-brain-legend-dot` spans (each `border-radius: 50%`,
  *   `width: 8px`) rendered inside the Pane's `actions` slot. On

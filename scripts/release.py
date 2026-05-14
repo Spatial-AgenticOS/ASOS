@@ -286,8 +286,7 @@ def _open_pr(new_version: str, branch: str) -> None:
         "- every location declared in `scripts/sync_versions.py::"
         "VERSION_LOCATIONS`\n\n"
         "## Roadmap diff\n"
-        "Update FEATURE_STABILITY_ROADMAP.md §0 with this run's test "
-        "counts before merging.\n"
+        "Update CHANGELOG.md with this run's test counts before merging.\n"
     )
     _run(
         [

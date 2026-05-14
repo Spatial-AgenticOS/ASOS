@@ -101,9 +101,9 @@ class BedrockProvider(BaseProvider):
         **kwargs: Any,
     ) -> ChatResponse:
         raise RuntimeError(
-            "bedrock provider is at stub level — follow-up PR wires "
+            "bedrock provider is at stub level — a follow-up PR will wire "
             "bedrock-runtime.converse once an AWS account with Bedrock "
-            "access is configured. See TRACK_A_CHANNELS_PROVIDERS.md."
+            "access is configured."
         )
 
     async def refresh_models(self) -> list[str]:

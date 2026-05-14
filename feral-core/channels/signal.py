@@ -5,7 +5,7 @@ target. It deliberately does **not** fake a working connection: without
 a ``signald`` or ``signal-cli`` endpoint configured, it reports honestly
 that it is disabled.
 
-Ship-ready checklist (follow-up PR — see `TRACK_A_CHANNELS_PROVIDERS.md`):
+Ship-ready checklist (follow-up PR):
 1. Decide on the backend: ``signald`` JSON-socket daemon (cleaner
    surface, harder to deploy) or ``signal-cli`` (subprocess, easier).
    Add the chosen dep to a new ``[channel-signal]`` extra in
@@ -58,8 +58,8 @@ class SignalChannel(Channel):
 
         logger.info(
             "Signal channel (%s) is at stub-level in this build. Full "
-            "implementation lands with the Track A Signal PR — see "
-            "TRACK_A_CHANNELS_PROVIDERS.md.",
+            "implementation lands in a follow-up PR — see the module "
+            "docstring for the ship-ready checklist.",
             backend,
         )
         self._connected = False

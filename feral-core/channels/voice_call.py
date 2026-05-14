@@ -10,7 +10,7 @@ deliberately does **not** fake a working call: without a Twilio auth
 token + verified number + public webhook URL, it reports honestly that
 it is disabled.
 
-Ship-ready checklist (follow-up PR — see `TRACK_A_CHANNELS_PROVIDERS.md`):
+Ship-ready checklist (follow-up PR):
 1. Add ``twilio>=9.0`` to a ``[channel-voice-call]`` extra in
    ``feral-core/pyproject.toml``.
 2. Implement ``start``: boot a small ASGI app that Twilio POSTs to;
@@ -62,8 +62,8 @@ class VoiceCallChannel(Channel):
 
         logger.info(
             "Voice-call channel (%s) is at stub-level in this build. Full "
-            "implementation lands with the Track A Voice-Call PR — see "
-            "TRACK_A_CHANNELS_PROVIDERS.md.",
+            "implementation lands in a follow-up PR — see the module "
+            "docstring for the ship-ready checklist.",
             provider,
         )
         self._connected = False

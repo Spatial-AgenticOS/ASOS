@@ -10,7 +10,7 @@ deliberately does **not** fake a connection: without an app_id +
 app_secret + tenant access token, it reports honestly that it is
 disabled.
 
-Ship-ready checklist (follow-up PR — see `TRACK_A_CHANNELS_PROVIDERS.md`):
+Ship-ready checklist (follow-up PR):
 1. Add ``lark-oapi>=1.4`` (official SDK) to a new ``[channel-feishu]``
    extra in ``feral-core/pyproject.toml``.
 2. Implement ``start``: fetch the tenant_access_token, mount the
@@ -63,8 +63,8 @@ class FeishuChannel(Channel):
 
         logger.info(
             "Feishu channel (encrypt_key=%s) is at stub-level in this build. "
-            "Full implementation lands with the Track A Feishu PR — see "
-            "TRACK_A_CHANNELS_PROVIDERS.md.",
+            "Full implementation lands in a follow-up PR — see the module "
+            "docstring for the ship-ready checklist.",
             "set" if encrypt_key else "unset",
         )
         self._connected = False

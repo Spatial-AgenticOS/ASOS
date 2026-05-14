@@ -74,14 +74,14 @@
   - Explainable drift detection (why did a baseline shift?)
   - Digital twin with provenance and reasoning transparency
 
-- **Warehouse / business scale** — ref `docs/WAREHOUSE_SPEC.md`
+- **Warehouse / business scale**
   - Fleet registry with per-device identity
   - Command translation: human intent → validated plan → execution
   - Multi-camera ingestion with sampling, routing, alerts
   - Multi-tenant RBAC, audit trails
   - Simulation / dry-run before live execution
 
-- **NixOS native layer** — ref `docs/NIXOS_VISION.md`
+- **NixOS native layer**
   - NixOS module for brain + daemon services
   - Declarative config, systemd hardening, immutable builds
   - Device provisioning via SD card images

@@ -1,7 +1,7 @@
 /**
  * W4 — Pair-a-device modal regression spec.
  *
- * User report (FEATURE_STABILITY_ROADMAP.md §A.2):
+ * User report:
  *   "clicking 'Pair a device' adds a row to the historical list but
  *    the modal never becomes visible."
  *
