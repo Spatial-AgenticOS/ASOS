@@ -1,12 +1,18 @@
 # Changelog
 
-<!-- feral-version: 2026.5.21 -->
+<!-- feral-version: 2026.5.22 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
-### Added
+## [2026.5.22] — Audit-r10 overhaul + CLI UX overhaul (PRs #105–#119, #122)
+
+**Scope of this entry**: brain (`feral-core`) + web client (`feral-client-v2`) + CLI. Unified PyPI release covering both the audit-r10 work (Phases 1–13, originally tagged as `v2026.5.21` in git) AND the InquirerPy-based CLI UX overhaul (#122). One release, two coherent slices.
+
+**Why this version skips v2026.5.21 on PyPI.** Tag `v2026.5.21` exists in git (commit `ea028ebe`) and the Release workflow ran end-to-end, but the staged TestPyPI canary smoke step lost an eventual-consistency race against the simple-index propagation, and production publish is gated behind a successful canary. The wheel was built and the audit-r10 work IS on `main`; the version just never made it to PyPI proper. Rolling forward as `v2026.5.22` (audit-r10 + CLI overhaul) is cleaner than fighting the failed v2026.5.21 workflow. **The orphan `v2026.6.0` release on PyPI was the Phase 13 agent's botched first publish; it should be yanked at <https://pypi.org/manage/project/feral-ai/release/2026.6.0/> since the underlying tag was deleted from git.**
+
+### Added — CLI UX overhaul (#122)
 
 - **CLI UX overhaul — InquirerPy arrow-key selects + masked-character paste + raccoon-branded chrome.** New `feral-core/cli/ui_kit.py` is the single source of truth for prompt UX across every `feral` subcommand (`feral setup`, `feral install`, `feral key`, `feral access`, `feral doctor`). Provider + model selection in `feral setup` is now arrow-key driven (`select`) with type-to-filter (`fuzzy_select`) for the ~hundreds of model ids per provider. API key paste shows one `*` per character so the operator gets visible feedback that the paste landed (the legacy `Prompt.ask(password=True)` echoed nothing). `feral key paste|recover|rotate --provider` use the same masked input. `feral install` and `feral access` now wear the same brand panel with the raccoon logo (🦝). Banner + doctor section header carry the same raccoon prefix.
 - **Setup wizard "Network access" step — pick localhost / LAN / Tailscale.** New `feral-core/cli/setup/steps/network.py` slots between the identity and home-assistant steps. Three profiles: loopback (default), LAN bind (`0.0.0.0` so other devices on the same Wi-Fi can pair without Tailscale, gated on an explicit confirmation that the network is trusted), and Tailscale Funnel (free, public DNS for cross-internet pairing). Shared core at `feral-core/cli/setup/network.py` (`get_snapshot`, `apply_localhost`, `apply_lan`, `apply_tailscale_funnel`, `disable_tailscale_funnel`) is also what `feral access {status, remote-up, remote-down}` calls into now, so the wizard step and the standalone CLI can never disagree about what "remote mode" looks like.
@@ -24,6 +30,32 @@ All notable changes to FERAL are documented here.
 - **`ssh host feral setup` cannot draw arrow-key menus.** Detected and printed: the wizard prints the exact `ssh -t <host> feral setup` invocation to re-run with a controlling TTY. Without `-t` the prompts silently degrade to numeric/typed fallback.
 - **Tailscale auth opens on the machine running `tailscale up`,** not necessarily where the operator is sitting (relevant for headless installs). The wizard surfaces this truthfully when stdout is non-interactive.
 - **LAN mode (`0.0.0.0` bind) intentionally exposes the Brain to anyone on the local network.** Opt-in only with a deliberate confirmation; default stays loopback. The wizard prints the warning + the operator-API-key requirement before flipping the bind host.
+
+### Audit-r10 surface (also in this PyPI release)
+
+The full audit-r10 overhaul (13 PRs, #105–#119) shipped to `main` and was tagged `v2026.5.21` but did not reach PyPI — see the v2026.5.21 entry below for the per-PR breakdown. That same surface is included verbatim in this `v2026.5.22` release, so installing `feral-ai==2026.5.22` from PyPI gives you the audit-r10 work AND the CLI overhaul together.
+
+Phase summary (full details in the v2026.5.21 entry):
+
+- **Phase 1** (#105) — `device_target` wire field + ExecutionSurfacePolicy refactor.
+- **Phase 2** (#106) — PromptRefiner (structured intent + slots envelope).
+- **Phase 3** (#107) — shared-session lifecycle + primary snapshot persistence.
+- **Phase 4a** (#108) — `NodeRegisterPayload.skills` wire field.
+- **Phase 5** (#109) — capability registry + `GET /api/capabilities` + capability-aware dispatch.
+- **Phase 6** (#110) — `permission_card` SDUI flow.
+- **Phase 9** (#111) — `GET /api/sessions/primary/transcript`.
+- **Phase 11** (#112) — brain-on-Mac `desktop_control` + `tcc_card` SDUI.
+- **Phase 11b** (#113) — web `SduiRenderer` renders `permission_card` + `tcc_card`.
+- **Phase 7b-1** (#114) — design tokens (`theme.js`) for JS consumers.
+- **Phase 7b-2** (#115) — `GET /api/context/live` for the iOS Context tab.
+- **Phase 7b-6** (#116) — token-driven `Pair.jsx` (no hardcoded hex).
+- **Phase 13** (#119) — unified onboarding wizard brain endpoints (`GET /api/discovery/brain`, `POST /api/system/permissions/open`).
+
+Companion iOS work for the same audit ships from `FERAL-AI/feral-companion-ios` PRs #5, #7, #8, #9, #10, #11, #12, #13–#17, #19 on its own cadence.
+
+### Fixed — webui_v2 bundled-asset drift
+
+The Phase 7b-1/7b-2/7b-6 PRs added new JS source (`feral-client-v2/src/ui/theme.js`, `Pair.jsx` token edits) without rebuilding the committed dist. The "WebUI v2 — bundled asset coherence" CI step failed on every push to main from #116 through the (botched) v2026.6.0 release until the v2026.5.21 release commit (#121) ran `scripts/build_webui_v2.sh` and committed the matching dist. CI is green on `main` again.
 
 ## [2026.5.21] — Audit-r10 overhaul (PRs #105–#119)
 
