@@ -81,6 +81,7 @@ from api.routes.uploads import router as uploads_router  # PR 10
 from api.routes.supervisor import router as supervisor_router
 from api.routes.twin import router as twin_router
 from api.routes.sessions import router as sessions_router  # W17
+from api.routes.capabilities import router as capabilities_router  # Phase 5
 from api.routes.approvals import router as approvals_router
 # --- Subagent A (realtime GA) additions ---
 from api.routes.realtime_client_secret import router as realtime_client_secret_router
@@ -464,6 +465,7 @@ app.include_router(uploads_router)  # PR 10
 app.include_router(supervisor_router)
 app.include_router(twin_router)
 app.include_router(sessions_router)  # W17
+app.include_router(capabilities_router)  # Phase 5 — capability registry
 app.include_router(approvals_router)
 # --- Subagent A (realtime GA) additions ---
 app.include_router(realtime_client_secret_router)
@@ -1376,7 +1378,21 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 setattr(ws, "_feral_model", getattr(payload, "model", "") or "")
                 if state.skill_executor:
                     state.skill_executor.register_daemon_type(node_id, payload.node_type)
-                logger.info(f"Node registered: {node_id} ({payload.node_type}/{payload.platform}) — caps: {payload.capabilities}")
+                # Phase 5 (audit-r10 overhaul) — record the structured
+                # skill manifests this node publishes so
+                # `GET /api/capabilities` and the orchestrator's
+                # capability-aware routing know which `phone.*` /
+                # `glasses.*` action names are live right now.
+                # `payload.skills` is the Phase 4 wire field; legacy
+                # nodes (v2026.5.x and earlier) don't set it and the
+                # registry happily records an empty list.
+                state.capability_registry.register_node(
+                    node_id,
+                    node_type=payload.node_type,
+                    platform=payload.platform,
+                    skills=getattr(payload, "skills", []) or [],
+                )
+                logger.info(f"Node registered: {node_id} ({payload.node_type}/{payload.platform}) — caps: {payload.capabilities}, skills: {len(getattr(payload, 'skills', []) or [])}")
                 _log_activity("device_connected", f"{node_id} ({payload.node_type})")
 
                 for sid in state.sessions:
@@ -1561,6 +1577,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         state.skill_executor.unregister_daemon(node_id)
                     if state.hardware_mesh:
                         state.hardware_mesh.on_node_disconnected(node_id)
+                    state.capability_registry.unregister_node(node_id)
                 await ws.close(code=1000)
                 return
 
@@ -2324,6 +2341,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 state.skill_executor.unregister_daemon(node_id)
             if state.hardware_mesh:
                 state.hardware_mesh.on_node_disconnected(node_id)
+            state.capability_registry.unregister_node(node_id)
             for sid in state.get_sessions_for_daemon(node_id):
                 state.perception.update_connected_nodes(sid, list(state.daemons.keys()))
 

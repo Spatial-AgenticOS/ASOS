@@ -409,6 +409,68 @@ class ToolRunner:
         await ws.send_json(daemon_msg)
         await self._orch._send_text(session_id, f"Action sent to node '{actual_node_id}'...")
 
+    async def execute_capability_action(
+        self,
+        session_id: str,
+        action: str,
+        args: dict,
+        timeout: float = 30.0,
+    ) -> dict:
+        """Phase 5 (audit-r10 overhaul) — capability-aware dispatch.
+
+        The caller passes ONLY the action name (e.g. ``phone.call.start``)
+        and the args; this method consults the brain's capability
+        registry to find which connected node currently publishes that
+        action, then dispatches through ``execute_daemon_command_with_ack``.
+
+        When no connected node advertises the action, returns a
+        structured ``capability_unavailable`` envelope so the LLM can
+        answer truthfully ("you'd need to connect your iPhone first")
+        instead of hallucinating a "done!" reply or timing out the
+        HUP future. This is the missing-handler half of the Phase 1
+        ``device_target`` work — together they close the loop on the
+        operator's complaint #8.
+        """
+        registry = getattr(self._orch, "capability_registry", None)
+        if registry is None:
+            # Fall back to legacy behaviour for tests / contexts that
+            # don't construct a full BrainState. The orchestrator
+            # always wires `state` in production.
+            return {
+                "success": False,
+                "status_code": 503,
+                "error": (
+                    f"capability_unavailable: no capability registry available "
+                    f"to route action '{action}'"
+                ),
+                "data": None,
+            }
+        handler = registry.find_handler(action)
+        if handler is None or handler.node_id is None:
+            connected_types = sorted({
+                info["node_type"]
+                for info in registry._nodes.values()  # noqa: SLF001 — internal read
+            }) if registry.connected_node_ids() else []
+            return {
+                "success": False,
+                "status_code": 404,
+                "error": (
+                    f"capability_unavailable: no connected node publishes "
+                    f"`{action}`. Connected node types: "
+                    f"{connected_types or 'none'}. The user likely needs to "
+                    f"connect the relevant device (e.g. iPhone for "
+                    f"`phone.*` actions, glasses for `glasses.*`)."
+                ),
+                "data": None,
+            }
+        return await self.execute_daemon_command_with_ack(
+            session_id=session_id,
+            node_id=handler.node_id,
+            action=action,
+            args=args,
+            timeout=timeout,
+        )
+
     async def execute_daemon_command_with_ack(
         self,
         session_id: str,

@@ -120,6 +120,11 @@ class Orchestrator:
         self.skills = skill_registry
         self.send = send_to_client
         self.daemons = daemons
+        # Phase 5 (audit-r10 overhaul) — capability registry for
+        # capability-aware action dispatch. Populated by BrainState
+        # after construction via `set_capability_registry`. None-safe
+        # so unit tests that build a bare Orchestrator keep working.
+        self.capability_registry = None
         self.memory = memory
         self.vision_buffer = vision_buffer
         self.perception = perception or PerceptionEngine()
@@ -203,6 +208,19 @@ class Orchestrator:
         self.llm = llm
         if self._multi_agent_enabled:
             self._init_multi_agent()
+
+    def set_capability_registry(self, registry) -> None:
+        """Phase 5 (audit-r10) — inject the brain's CapabilityRegistry.
+
+        Called from `BrainState.init()` after both the orchestrator
+        and registry exist. The registry tracks which `phone.*` /
+        `glasses.*` action names connected nodes currently publish
+        (via `node_register.skills` per Phase 4) so
+        `ToolRunner.execute_capability_action(...)` can route or fail
+        truthfully instead of blindly sending an HUP action into the
+        void.
+        """
+        self.capability_registry = registry
 
     def set_session_snapshot_hook(self, hook) -> None:
         """Phase 3 (audit-r10) — register a no-arg callable that the
