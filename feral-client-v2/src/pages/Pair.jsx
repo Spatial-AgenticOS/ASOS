@@ -346,18 +346,18 @@ export default function Pair() {
             <LiveRow
               label="Location"
               active={permissions.location}
-              color="var(--v2-state-live)"
+              color="#30D158"
             />
             <LiveRow
               label="Microphone"
               active={permissions.mic}
-              color="var(--v2-state-warn)"
+              color="#FF9F0A"
               onToggle={toggleMic}
             />
             <LiveRow
               label="Camera"
               active={permissions.camera}
-              color="var(--v2-state-error)"
+              color="#FF453A"
               onToggle={toggleCamera}
             />
           </div>
@@ -495,7 +495,7 @@ function Card({ children }) {
 }
 
 function Header({ icon: Icon, title, tone }) {
-  const color = tone === "live" ? "var(--v2-state-live)" : tone === "warn" ? "var(--v2-state-warn)" : "var(--v2-text-primary)";
+  const color = tone === "live" ? "#30D158" : tone === "warn" ? "#FFD60A" : "#F5F5F7";
   return (
     <header style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
       <div style={{ ...iconStyle, color }}>
@@ -560,17 +560,18 @@ const frameStyle = {
   alignItems: "center",
   justifyContent: "center",
   padding: 24,
-  background: "var(--v2-shell-ambient, linear-gradient(180deg, #1F1F27 0%, #0F0F15 100%))",
-  color: "var(--v2-text-primary)",
-  fontFamily: "var(--v2-font-system)",
+  background: "linear-gradient(180deg, #1F1F27 0%, #0F0F15 100%)",
+  color: "#F5F5F7",
+  fontFamily:
+    "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Inter', 'Segoe UI', Roboto, sans-serif",
 };
 
 const cardStyle = {
   padding: 20,
-  borderRadius: "var(--v2-radius-lg)",
-  background: "var(--v2-surface-1)",
-  backdropFilter: "var(--v2-blur-md)",
-  border: "1px solid var(--v2-hairline)",
+  borderRadius: 20,
+  background: "rgba(28, 28, 34, 0.7)",
+  backdropFilter: "saturate(1.8) blur(40px)",
+  border: "1px solid rgba(255, 255, 255, 0.1)",
   boxShadow: "0 12px 36px rgba(0,0,0,0.45)",
 };
 
@@ -588,10 +589,10 @@ const btnPrimary = {
   alignItems: "center",
   gap: 6,
   padding: "10px 16px",
-  borderRadius: "var(--v2-radius-sm)",
-  border: "1px solid var(--v2-hairline-strong)",
-  background: "var(--v2-accent)",
-  color: "var(--v2-text-inverse)",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "#0A84FF",
+  color: "white",
   fontSize: 14,
   fontWeight: 600,
   cursor: "pointer",
@@ -599,10 +600,10 @@ const btnPrimary = {
 
 const btnSecondary = {
   padding: "8px 14px",
-  borderRadius: "var(--v2-radius-sm)",
-  border: "1px solid var(--v2-hairline)",
-  background: "var(--v2-surface-0)",
-  color: "var(--v2-text-primary)",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(255,255,255,0.06)",
+  color: "white",
   fontSize: 13,
   fontWeight: 500,
   cursor: "pointer",
@@ -614,18 +615,18 @@ const toggleRow = {
   justifyContent: "space-between",
   alignItems: "center",
   padding: "10px 12px",
-  borderRadius: "var(--v2-radius-sm)",
-  border: "1px solid var(--v2-hairline)",
-  background: "var(--v2-surface-0)",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
   fontSize: 14,
 };
 
 const pinHelpBox = {
   padding: 14,
-  borderRadius: "var(--v2-radius-sm)",
-  border: "1px solid var(--v2-state-warn-soft)",
-  background: "var(--v2-state-warn-soft)",
-  color: "var(--v2-state-warn)",
+  borderRadius: 12,
+  border: "1px solid rgba(255, 213, 87, 0.3)",
+  background: "rgba(255, 213, 87, 0.06)",
+  color: "#FFE9A7",
 };
 
 const pinInputStyle = {
@@ -653,10 +654,10 @@ const bulletList = {
 const errorBox = {
   marginTop: 12,
   padding: "8px 12px",
-  borderRadius: "var(--v2-radius-sm)",
-  background: "var(--v2-state-error-soft)",
-  border: "1px solid var(--v2-state-error-soft)",
-  color: "var(--v2-state-error)",
+  borderRadius: 10,
+  background: "rgba(255, 69, 58, 0.14)",
+  border: "1px solid rgba(255, 69, 58, 0.3)",
+  color: "#FFB2AB",
   fontSize: 13,
   display: "flex",
   alignItems: "center",

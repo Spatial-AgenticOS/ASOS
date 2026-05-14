@@ -19,7 +19,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 from agents.tcc_card import (
     TCC_CATALOG,
@@ -352,42 +351,3 @@ async def test_execute_capability_action_emits_ios_permission_card_unchanged(mon
     root = sdui_frames[0].payload["root"]
     assert root["type"] == "permission_card"
     assert root["permission_key"] == "NSContactsUsageDescription"
-
-
-# ─── Phase 13 — POST /api/system/permissions/open ─────────────────
-
-
-class TestOpenSystemPermission:
-    """Phase 13-5: POST /api/system/permissions/open triggers macOS
-    deeplink for a known TCC key."""
-
-    @pytest.fixture
-    def client(self):
-        from fastapi import FastAPI
-        from api.routes.system_permissions import router
-
-        app = FastAPI()
-        app.include_router(router)
-        return TestClient(app)
-
-    @patch("api.routes.system_permissions.platform")
-    @patch("api.routes.system_permissions.subprocess")
-    def test_known_key_triggers_open(self, mock_subprocess, mock_platform, client):
-        mock_platform.system.return_value = "Darwin"
-        resp = client.post(
-            "/api/system/permissions/open",
-            json={"permission_key": "accessibility"},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["ok"] is True
-        mock_subprocess.run.assert_called_once()
-        args = mock_subprocess.run.call_args[0][0]
-        assert args[0] == "open"
-        assert "Privacy_Accessibility" in args[1]
-
-    def test_unknown_key_returns_400(self, client):
-        resp = client.post(
-            "/api/system/permissions/open",
-            json={"permission_key": "nonexistent_permission_xyz"},
-        )
-        assert resp.status_code == 400

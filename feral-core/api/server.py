@@ -83,7 +83,6 @@ from api.routes.twin import router as twin_router
 from api.routes.sessions import router as sessions_router  # W17
 from api.routes.capabilities import router as capabilities_router  # Phase 5
 from api.routes.system_permissions import router as system_permissions_router  # Phase 11
-from api.routes.discovery import router as discovery_router  # Phase 13
 from api.routes.approvals import router as approvals_router
 # --- Subagent A (realtime GA) additions ---
 from api.routes.realtime_client_secret import router as realtime_client_secret_router
@@ -469,7 +468,6 @@ app.include_router(twin_router)
 app.include_router(sessions_router)  # W17
 app.include_router(capabilities_router)  # Phase 5 — capability registry
 app.include_router(system_permissions_router)  # Phase 11 — macOS TCC state
-app.include_router(discovery_router)  # Phase 13 — brain identity discovery
 app.include_router(approvals_router)
 # --- Subagent A (realtime GA) additions ---
 app.include_router(realtime_client_secret_router)
