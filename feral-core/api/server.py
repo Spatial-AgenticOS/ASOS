@@ -915,9 +915,40 @@ async def client_session(ws: WebSocket, token: str = Query(default=None)):
                     ctx = dict(payload.context or {})
                     if attachments:
                         ctx["attachments"] = attachments
+
+                    # Phase 2 (audit-r10 overhaul) — PromptRefiner runs
+                    # on the web path too so web + phone share the same
+                    # refinement contract + observability. Feature-flag
+                    # gated; identity envelope when off.
+                    refined_text_web = payload.text
+                    refined_envelope_web = None
+                    try:
+                        from agents.prompt_refiner import refine as _refine_prompt
+                        history_web = []
+                        try:
+                            history_web = state.memory.working_get(session_id) or []
+                        except Exception:
+                            history_web = []
+                        refined_envelope_web = await _refine_prompt(
+                            payload.text,
+                            llm=getattr(state.orchestrator, "llm", None),
+                            device_target_hint=ctx.get("device_target"),
+                            history=history_web,
+                        )
+                        if refined_envelope_web.refined_text:
+                            refined_text_web = refined_envelope_web.refined_text
+                        if (
+                            refined_envelope_web.device_target
+                            and "device_target" not in ctx
+                        ):
+                            ctx["device_target"] = refined_envelope_web.device_target
+                        ctx["refinement"] = refined_envelope_web.model_dump()
+                    except Exception as _refine_exc:
+                        logger.debug("PromptRefiner skipped (web): %s", _refine_exc)
+
                     await state.orchestrator.handle_command_stream(
                         session_id=session_id,
-                        text=payload.text,
+                        text=refined_text_web,
                         context=ctx,
                     )
 
@@ -1590,6 +1621,37 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                     if isinstance(device_target_raw, str)
                     else None
                 ) or None
+
+                # Phase 2 (audit-r10 overhaul plan) — PromptRefiner runs
+                # BEFORE the orchestrator so the LLM gets a cleaned,
+                # disambiguated rewrite + an inferred device_target
+                # when the iOS client didn't set one. Feature-flagged
+                # via FERAL_PROMPT_REFINER (default off) so this PR
+                # lands the wiring without changing behavior; flip the
+                # flag once shadow metrics show it improves routing.
+                refined_text = text
+                refined_envelope = None
+                try:
+                    from agents.prompt_refiner import refine as _refine_prompt
+                    history = []
+                    if state.memory:
+                        try:
+                            history = state.memory.working_get(target_sid) or []
+                        except Exception:
+                            history = []
+                    refined_envelope = await _refine_prompt(
+                        text,
+                        llm=getattr(state.orchestrator, "llm", None),
+                        device_target_hint=device_target,
+                        history=history,
+                    )
+                    if refined_envelope.refined_text:
+                        refined_text = refined_envelope.refined_text
+                    if refined_envelope.device_target and not device_target:
+                        device_target = refined_envelope.device_target
+                except Exception as _refine_exc:
+                    logger.debug("PromptRefiner skipped: %s", _refine_exc)
+
                 context = {
                     "source": "phone_surface",
                     "mode": "phone_surface",
@@ -1600,6 +1662,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                 }
                 if device_target:
                     context["device_target"] = device_target
+                if refined_envelope is not None:
+                    context["refinement"] = refined_envelope.model_dump()
                 if reply_to:
                     context["reply_to"] = reply_to
 
@@ -1608,13 +1672,13 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                     if reply_mode == "stream":
                         result = await state.orchestrator.handle_command_stream(
                             session_id=target_sid,
-                            text=text,
+                            text=refined_text,
                             context=context,
                         )
                     else:
                         result = await state.orchestrator.handle_command(
                             session_id=target_sid,
-                            text=text,
+                            text=refined_text,
                             context=context,
                         )
                     if isinstance(result, str):
