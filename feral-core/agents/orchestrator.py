@@ -204,6 +204,46 @@ class Orchestrator:
         if self._multi_agent_enabled:
             self._init_multi_agent()
 
+    def set_session_snapshot_hook(self, hook) -> None:
+        """Phase 3 (audit-r10) — register a no-arg callable that the
+        orchestrator invokes after each successful turn whose
+        session_id matches the brain's `primary_session_id`. Hook is
+        responsible for persisting the current primary thread to disk
+        (see `BrainState.snapshot_primary_thread`). Debouncing and
+        error handling live in the hook so the orchestrator stays
+        agnostic of the persistence layer.
+        """
+        self._session_snapshot_hook = hook
+
+    def _maybe_snapshot_primary(self, session_id: str) -> None:
+        """Best-effort persistence after a turn. Never raises.
+
+        Called from both `_handle_command_impl` and
+        `_handle_command_stream_impl` at completion so a crash mid-
+        chat at worst loses the in-flight turn — last completed turn
+        is durable.
+        """
+        hook = getattr(self, "_session_snapshot_hook", None)
+        if hook is None:
+            return
+        primary = getattr(self, "_primary_session_id_resolver", None)
+        # Resolver may be wired by BrainState; otherwise we can read
+        # `api.state.state.primary_session_id` defensively.
+        try:
+            if primary is not None:
+                primary_id = primary() if callable(primary) else primary
+            else:
+                from api.state import state as _state
+                primary_id = getattr(_state, "primary_session_id", "")
+        except Exception:
+            primary_id = ""
+        if not primary_id or session_id != primary_id:
+            return
+        try:
+            hook()  # BrainState.snapshot_primary_thread()
+        except Exception as exc:
+            logger.debug("snapshot hook raised: %s", exc)
+
     def register_paused_thought(self, *, session_id: str, thought_id: str, text: str) -> None:
         """Queue a paused-thought fragment so the next turn re-threads it.
 
@@ -1186,6 +1226,10 @@ class Orchestrator:
         if self.learner:
             asyncio.ensure_future(self.learner.on_message(session_id, "user", text))
 
+        # Phase 3 (audit-r10) — persist primary thread snapshot so the
+        # operator's last 50 turns survive brain restart.
+        self._maybe_snapshot_primary(session_id)
+
     async def handle_command_stream(self, session_id: str, text: str, context: Optional[dict] = None):
         """Streaming variant of handle_command with a per-session lock."""
         try:
@@ -1473,6 +1517,10 @@ class Orchestrator:
         self._evict_stale_sessions()
         if self.learner:
             asyncio.ensure_future(self.learner.on_message(session_id, "user", text))
+
+        # Phase 3 (audit-r10) — stream path snapshot, symmetric with
+        # the non-stream `_handle_command_impl` epilogue.
+        self._maybe_snapshot_primary(session_id)
 
     # ─────────────────────────────────────────────
     # Proactive Agent Loop

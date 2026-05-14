@@ -23,6 +23,7 @@ from skills.registry import SkillRegistry
 from memory.store import MemoryStore
 from memory.ingest import MemoryIngestor
 from memory.node_subdevices import NodeSubdeviceStore
+from memory.session_snapshot import SessionSnapshotStore
 from perception.fusion import PerceptionEngine
 from perception.audio_pipeline import AudioPipeline
 from perception.scene import SceneAnalyzer
@@ -177,6 +178,22 @@ class BrainState:
         # An explicit `session_id` from the client (e.g. a "new chat"
         # button, a multi-thread feature later) still wins.
         self.primary_session_id: str = self._load_or_mint_primary_session_id()
+        # Phase 3 (audit-r10 overhaul) — refcount of live surfaces
+        # attached to each `session_id`. `/v1/session` increments on
+        # WebSocket accept, decrements on disconnect; cleanup only
+        # fires when the count reaches zero. Without this, closing
+        # one web tab (or refreshing) wiped the shared `primary_session_id`
+        # thread in RAM even though the iOS surface was still
+        # connected — that's the residual bug behind operator
+        # complaint #15 ("app can't fetch stuff I did on the local
+        # brain chat"). The primary session also persists across
+        # zero-count detaches (see `SessionSnapshotStore` below).
+        self.session_attach_count: dict[str, int] = {}
+        # Phase 3 — primary thread snapshot store. Persists the last
+        # ~50 turns to disk so a brain restart rehydrates them
+        # automatically. Loaded later in `init()` after `orchestrator`
+        # + `memory` exist.
+        self.session_snapshot: Optional[SessionSnapshotStore] = None
         self.devices: dict[str, dict] = {}
         self.skill_registry = SkillRegistry()
         self.memory = MemoryStore()
@@ -712,6 +729,21 @@ class BrainState:
                 approval_manager=self.approval_manager,
             )
             self.orchestrator.set_llm(_shared_llm)
+            # Phase 3 (audit-r10 overhaul) — wire snapshot store +
+            # hydrate the primary thread from disk so the operator's
+            # last ~50 turns survive brain restart. Persistence on the
+            # write side fires from `Orchestrator._maybe_snapshot_primary`
+            # after each turn; this just hands the orchestrator a
+            # reference back to BrainState so it can call us.
+            try:
+                self.session_snapshot = SessionSnapshotStore(feral_data_home())
+                self.orchestrator.set_session_snapshot_hook(self.snapshot_primary_thread)
+                self._hydrate_primary_thread_from_snapshot()
+            except Exception as snap_exc:
+                logger.warning(
+                    "Primary session snapshot wiring failed: %s — boot continues",
+                    snap_exc,
+                )
             if self.vault:
                 self.orchestrator.set_vault(self.vault)
             if self.wasm_sandbox:
@@ -1126,6 +1158,127 @@ class BrainState:
             f"Brain v{__version__} initialized{demo_tag} — {len(self.skill_registry.skills)} skills, "
             f"{stats['notes']} notes, {stats['knowledge_triples']} knowledge triples, "
             f"{stats['episodes']} episodes | Self-learning: ON | Vault: {len(self.vault.list_keys()) if self.vault else 0} keys"
+        )
+
+    # ─────────────────────────────────────────────────────────────────
+    # Phase 3 — primary-session lifecycle helpers
+    # ─────────────────────────────────────────────────────────────────
+
+    def attach_session(self, session_id: str) -> int:
+        """Mark a new surface (web tab, phone daemon) as attached to a
+        session_id. Returns the post-attach reference count.
+
+        Called from `/v1/session` WebSocket accept. Multiple browser
+        tabs sharing `primary_session_id` each call attach once; the
+        count tracks how many sockets are alive on that thread.
+        """
+        if not session_id:
+            return 0
+        n = self.session_attach_count.get(session_id, 0) + 1
+        self.session_attach_count[session_id] = n
+        return n
+
+    def detach_session(self, session_id: str) -> int:
+        """Mark a surface as detached. Returns the post-detach reference
+        count.
+
+        Server's `WebSocketDisconnect` handler MUST call this before
+        running per-session cleanup; cleanup only runs when the
+        returned count is zero. For `primary_session_id` the cleanup
+        path is additionally short-circuited by
+        `should_clear_on_disconnect()` so the primary thread survives
+        even when every surface has detached momentarily.
+        """
+        if not session_id:
+            return 0
+        current = self.session_attach_count.get(session_id, 0)
+        n = max(0, current - 1)
+        if n == 0:
+            self.session_attach_count.pop(session_id, None)
+        else:
+            self.session_attach_count[session_id] = n
+        return n
+
+    def should_clear_on_disconnect(self, session_id: str) -> bool:
+        """Return True when per-session cleanup should run after the
+        last surface detaches.
+
+        Returns False for `primary_session_id` so the shared thread
+        survives surface lifecycle — the persistent thread is durable
+        by design. Non-primary sessions still clean up on last detach
+        as today.
+        """
+        if not session_id:
+            return False
+        if session_id == self.primary_session_id:
+            return False
+        return self.session_attach_count.get(session_id, 0) == 0
+
+    def snapshot_primary_thread(self, *, force: bool = False) -> bool:
+        """Save the current primary `conversation_history` +
+        `working_memory` to disk so the next boot rehydrates.
+
+        Called from the orchestrator after each successful turn, and
+        on FastAPI shutdown. The store is debounced (~2.5s) so a hot
+        chat loop isn't IO-bound. ``force=True`` bypasses debounce —
+        used on shutdown to guarantee the last turn lands.
+        """
+        if self.session_snapshot is None or not self.primary_session_id:
+            return False
+        sid = self.primary_session_id
+        history = None
+        if self.orchestrator is not None:
+            ch = getattr(self.orchestrator, "conversation_history", None)
+            if isinstance(ch, dict):
+                history = list(ch.get(sid, []) or [])
+        working = None
+        if self.memory is not None:
+            try:
+                working = self.memory.working_get(sid, limit=200) or []
+            except Exception:
+                working = None
+        return self.session_snapshot.save(
+            sid,
+            conversation_history=history,
+            working_memory=working,
+            force=force,
+        )
+
+    def _hydrate_primary_thread_from_snapshot(self) -> None:
+        """Read the on-disk primary-session snapshot (if any) and
+        replay it into the in-RAM orchestrator + working memory.
+
+        Called late in ``init()`` after orchestrator + memory are
+        constructed. Never raises — if anything goes wrong the brain
+        boots with an empty primary thread (today's behaviour).
+        """
+        if self.session_snapshot is None or self.orchestrator is None:
+            return
+        snapshot = self.session_snapshot.load()
+        if not snapshot:
+            return
+        sid = snapshot.get("session_id") or self.primary_session_id
+        if not sid:
+            return
+        # Orchestrator conversation_history (LLM tool-call format).
+        ch_rows = snapshot.get("conversation_history") or []
+        if isinstance(ch_rows, list) and ch_rows:
+            ch_attr = getattr(self.orchestrator, "conversation_history", None)
+            if isinstance(ch_attr, dict):
+                # Defensive deep-copy so future mutations don't bleed
+                # back into the snapshot in-memory.
+                ch_attr[sid] = [dict(x) for x in ch_rows if isinstance(x, dict)]
+        # Working-memory deque (LLM-context format).
+        wm_rows = snapshot.get("working_memory") or []
+        if isinstance(wm_rows, list) and wm_rows and self.memory is not None:
+            try:
+                self.memory.working_replace(sid, [dict(x) for x in wm_rows if isinstance(x, dict)])
+            except Exception:
+                pass
+        logger.info(
+            "Primary session rehydrated from snapshot: %d conv rows, %d working rows",
+            len(ch_rows) if isinstance(ch_rows, list) else 0,
+            len(wm_rows) if isinstance(wm_rows, list) else 0,
         )
 
     def _load_or_mint_primary_session_id(self) -> str:

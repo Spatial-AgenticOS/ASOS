@@ -48,6 +48,35 @@ def _make_ws_mock_state() -> MagicMock:
     # string so the legacy `str(uuid4())` fallback fires in tests.
     s.primary_session_id = ""
 
+    # Phase 3 (audit-r10) — refcount + cleanup-gating methods need to
+    # behave like the real implementation in the mock, otherwise
+    # `remaining_attachments = MagicMock()` is truthy and the cleanup
+    # branch never fires (causing `on_session_disconnect` mocks to
+    # appear "never awaited").
+    s.session_attach_count = {}
+
+    def _attach(sid: str) -> int:
+        s.session_attach_count[sid] = s.session_attach_count.get(sid, 0) + 1
+        return s.session_attach_count[sid]
+
+    def _detach(sid: str) -> int:
+        n = max(0, s.session_attach_count.get(sid, 0) - 1)
+        if n == 0:
+            s.session_attach_count.pop(sid, None)
+        else:
+            s.session_attach_count[sid] = n
+        return n
+
+    def _should_clear(sid: str) -> bool:
+        if sid == s.primary_session_id and s.primary_session_id:
+            return False
+        return s.session_attach_count.get(sid, 0) == 0
+
+    s.attach_session = MagicMock(side_effect=_attach)
+    s.detach_session = MagicMock(side_effect=_detach)
+    s.should_clear_on_disconnect = MagicMock(side_effect=_should_clear)
+    s.snapshot_primary_thread = MagicMock(return_value=True)
+
     s.init = AsyncMock(return_value=None)
     s.cron_service = None
 
