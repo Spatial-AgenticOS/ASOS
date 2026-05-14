@@ -6,6 +6,25 @@ All notable changes to FERAL are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **CLI UX overhaul — InquirerPy arrow-key selects + masked-character paste + raccoon-branded chrome.** New `feral-core/cli/ui_kit.py` is the single source of truth for prompt UX across every `feral` subcommand (`feral setup`, `feral install`, `feral key`, `feral access`, `feral doctor`). Provider + model selection in `feral setup` is now arrow-key driven (`select`) with type-to-filter (`fuzzy_select`) for the ~hundreds of model ids per provider. API key paste shows one `*` per character so the operator gets visible feedback that the paste landed (the legacy `Prompt.ask(password=True)` echoed nothing). `feral key paste|recover|rotate --provider` use the same masked input. `feral install` and `feral access` now wear the same brand panel with the raccoon logo (🦝). Banner + doctor section header carry the same raccoon prefix.
+- **Setup wizard "Network access" step — pick localhost / LAN / Tailscale.** New `feral-core/cli/setup/steps/network.py` slots between the identity and home-assistant steps. Three profiles: loopback (default), LAN bind (`0.0.0.0` so other devices on the same Wi-Fi can pair without Tailscale, gated on an explicit confirmation that the network is trusted), and Tailscale Funnel (free, public DNS for cross-internet pairing). Shared core at `feral-core/cli/setup/network.py` (`get_snapshot`, `apply_localhost`, `apply_lan`, `apply_tailscale_funnel`, `disable_tailscale_funnel`) is also what `feral access {status, remote-up, remote-down}` calls into now, so the wizard step and the standalone CLI can never disagree about what "remote mode" looks like.
+- **`config/runtime.brain_bind_host` consults persisted `network.bind_host`.** Subsequent `feral start` honours the wizard's LAN choice without the operator having to remember to export `FERAL_BIND_HOST`. Existing env vars still win — deployments that pin the host via systemd / docker keep their behaviour verbatim.
+
+### Changed
+
+- `feral-core/cli/setup/helpers.py` is now a thin shim over `cli/ui_kit.py` (`ask_choice` → `ui_kit.select` + back/quit pseudo-choices, `ask_text(secret=True)` → `ui_kit.password`, `confirm` → `ui_kit.confirm`). All call signatures preserved so existing wizard steps (audio, identity, channels, home_assistant) need zero edits.
+- `feral-core/cli/access_commands.py` reduced to a thin shim that delegates persistence + Tailscale remediation to `cli/setup/network.py` (the same shared core the new wizard step uses).
+- `feral-core/pyproject.toml` adds `InquirerPy>=0.3.4` (prompt_toolkit-backed arrow-key UX) to core dependencies.
+
+### Honest setup-gated limitations
+
+- **Masked paste needs a real TTY.** In a pipe / CI / non-interactive shell `ui_kit.password` falls back to `getpass.getpass` (silent — same behaviour as before this slice). The fallback annotates the prompt label so the operator can see they're in the silent path; we never pretend to mask characters when we cannot.
+- **`ssh host feral setup` cannot draw arrow-key menus.** Detected and printed: the wizard prints the exact `ssh -t <host> feral setup` invocation to re-run with a controlling TTY. Without `-t` the prompts silently degrade to numeric/typed fallback.
+- **Tailscale auth opens on the machine running `tailscale up`,** not necessarily where the operator is sitting (relevant for headless installs). The wizard surfaces this truthfully when stdout is non-interactive.
+- **LAN mode (`0.0.0.0` bind) intentionally exposes the Brain to anyone on the local network.** Opt-in only with a deliberate confirmation; default stays loopback. The wizard prints the warning + the operator-API-key requirement before flipping the bind host.
+
 ## [2026.5.21] — Audit-r10 overhaul (PRs #105–#119)
 
 **Scope of this entry**: brain (`feral-core`) + web client (`feral-client-v2`). Thirteen PRs landed bottom-up against `main`, each gated on full CI green and per-PR scope review, closing the operator's audit-r10 complaint set end-to-end. Companion iOS work for the same audit (Phases 4–13 iOS surfaces) ships from `FERAL-AI/feral-companion-ios` PRs #5, #7, #8, #9, #10, #11, #12, #13–#17, #19 on its own cadence.

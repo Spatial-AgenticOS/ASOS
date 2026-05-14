@@ -25,7 +25,34 @@ def _int_env(*keys: str, default: int) -> int:
 
 
 def brain_bind_host() -> str:
-    return os.getenv("FERAL_HOST") or os.getenv("FERAL_BIND_HOST") or "127.0.0.1"
+    """Resolve the host the brain binds to.
+
+    Precedence: ``FERAL_HOST`` env > ``FERAL_BIND_HOST`` env >
+    persisted ``network.bind_host`` in ``~/.feral/settings.json`` (the
+    new wizard's network step writes this when the operator picks the
+    LAN profile) > loopback-only default (``127.0.0.1``). The settings
+    file is only consulted when neither env var is set so existing
+    deployments that pin the host via systemd/docker keep their
+    behaviour verbatim.
+    """
+    env = os.getenv("FERAL_HOST") or os.getenv("FERAL_BIND_HOST")
+    if env:
+        return env
+    try:
+        from config.loader import feral_home
+
+        import json as _json
+
+        path = feral_home() / "settings.json"
+        if path.exists():
+            data = _json.loads(path.read_text())
+            persisted = (data.get("network") or {}).get("bind_host")
+            if isinstance(persisted, str) and persisted:
+                return persisted
+    except Exception:
+        # Truthful fallback — never crash boot on a malformed config.
+        pass
+    return "127.0.0.1"
 
 
 def brain_port() -> int:

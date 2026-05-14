@@ -66,7 +66,7 @@ HTTP_BASE = _runtime_http_base()
 
 BANNER = f"""
 ╔══════════════════════════════════════╗
-║          F E R A L                    ║
+║   🦝   F E R A L                       ║
 ║   Unleashed AI  v{__version__:<21s}║
 ╚══════════════════════════════════════╝
   Type a message to chat. Commands:
@@ -842,7 +842,10 @@ def cmd_doctor():
         if fix:
             fixes.append(fix)
 
-    console.print(Panel("[bold]FERAL Doctor[/bold] — installation health check", border_style="cyan"))
+    console.print(Panel(
+        "[bold]🦝  FERAL Doctor[/bold] — installation health check",
+        border_style="cyan",
+    ))
     console.print()
 
     # ── 1. Python version ──
@@ -1242,6 +1245,16 @@ def cmd_setup(*, browser: bool = False, terminal: bool = False):
         # Even in browser mode we still want a session token for the
         # server-side auth layer; generate it now.
     else:
+        # Print a one-line ssh -t hint when the wizard is launched
+        # without a controlling TTY so the operator isn't surprised
+        # when the arrow-key picker silently degrades to a numeric
+        # prompt.
+        try:
+            from cli import ui_kit
+
+            ui_kit.warn_non_interactive_setup_hint()
+        except Exception:
+            pass
         try:
             from cli.setup import run_setup
             run_setup()

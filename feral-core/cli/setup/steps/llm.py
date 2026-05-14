@@ -17,6 +17,8 @@ from providers.catalog import (
     get_shared_catalog,
 )
 
+from cli import ui_kit
+
 from ..helpers import (
     STATUS_NEEDS_KEY,
     STATUS_READY,
@@ -140,7 +142,40 @@ async def run_model_step(state: WizardState) -> None:
             f"(source: {cached.source})."
         )
 
-    # Show the first 25 models as a quick reference, then accept any input.
+    default = state.get_setting("llm", "model") or desc.default_model or (models[0] if models else "")
+
+    # Interactive arrow-key + fuzzy filter when InquirerPy is available
+    # and the shell is a real TTY. This is what the operator gets in
+    # day-to-day use; it scales to 100+ model ids per provider without
+    # the unreadable scrollback dump the typed picker produced.
+    if models and ui_kit.is_inquirer_available() and ui_kit.is_interactive():
+        # Append a "type a custom id" sentinel so users can pick a
+        # provider model that's newer than the cache (e.g. a freshly
+        # released gpt-N).
+        custom_sentinel = "__feral_custom_model__"
+        choices: list[dict] = [{"name": m, "value": m} for m in models]
+        choices.append({"name": "↳ type a custom model id…", "value": custom_sentinel})
+        try:
+            picked = ui_kit.fuzzy_select(
+                f"Which model for {desc.display_name}?",
+                choices,
+                default=default if default in models else None,
+            )
+        except KeyboardInterrupt:
+            from ..helpers import QuitNavigation
+            raise QuitNavigation()
+        if picked == custom_sentinel:
+            picked = ask_text(
+                "Custom model id",
+                default=default,
+                allow_empty=False,
+            )
+        state.set_setting("llm", "model", picked)
+        return
+
+    # Typed fallback path — also the path pytest exercises (the suite
+    # monkeypatches ``ask_text`` directly). Show the first 25 ids as a
+    # quick numeric picker, then accept any free-text id.
     if models:
         preview = models[:25]
         for i, model in enumerate(preview, start=1):
@@ -152,15 +187,12 @@ async def run_model_step(state: WizardState) -> None:
             "  (Could not fetch a live list — type the exact model name for this provider.)"
         )
 
-    default = state.get_setting("llm", "model") or desc.default_model or (models[0] if models else "")
-
     while True:
         raw = ask_text(
             "Which model? (paste the id or pick a number above)",
             default=default,
             allow_empty=False,
         )
-        # Numeric picker shortcut.
         if raw.isdigit():
             idx = int(raw) - 1
             if 0 <= idx < len(models):
