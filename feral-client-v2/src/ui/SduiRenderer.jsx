@@ -374,6 +374,10 @@ export function SduiNode({ node, onAction, depth = 0 }) {
     );
   }
 
+  if (type === 'permission_card' || type === 'tcc_card') {
+    return <PermissionOrTccCardNode node={node} kind={type} />;
+  }
+
   if (type === '' || !type) {
     return null;
   }
@@ -382,6 +386,99 @@ export function SduiNode({ node, onAction, depth = 0 }) {
     <div className="v2-sdui-unknown" style={{ padding: 6, fontSize: 11, opacity: 0.7, border: '1px dashed #c1a75a', borderRadius: 4 }}>
       Unknown SDUI component: {type}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Phase 6 (permission_card) + Phase 11 (tcc_card) — structured
+// permission denial cards. Shape sourced from the brain's
+// `agents/permission_card.py:build_permission_card` and
+// `agents/tcc_card.py:build_tcc_card`. The same component renders
+// both because they share the same wire shape with a `kind`
+// discriminator — iOS deeplinks are tappable in the browser the
+// same way as macOS ones (they fail gracefully when the OS can't
+// open the scheme).
+// ---------------------------------------------------------------------
+
+function PermissionOrTccCardNode({ node, kind }) {
+  const isMac = kind === 'tcc_card';
+  const title = String(node.title || (isMac ? 'FERAL needs a Mac permission' : 'FERAL needs a permission'));
+  const description = String(node.description || '');
+  const permissionKey = String(node.permission_key || '');
+  const deeplink = isMac
+    ? String(node.macos_deeplink || '')
+    : String(node.ios_deeplink || '');
+  const deeplinkLabel = isMac
+    ? String(node.macos_deeplink_label || 'Open System Settings on this Mac')
+    : String(node.ios_deeplink_label || 'Open Settings');
+
+  const handleOpen = useCallback(() => {
+    if (!deeplink) return;
+    try {
+      // Browsers honour many `x-apple.systempreferences:` /
+      // `app-settings:` URLs natively. When they don't (e.g. iOS
+      // PWA fallback), the assignment is a no-op and the user can
+      // copy the description text manually.
+      window.location.href = deeplink;
+    } catch (_err) {
+      /* swallow — best-effort */
+    }
+  }, [deeplink]);
+
+  const accent = isMac
+    ? 'rgba(58, 134, 255, 0.45)'
+    : 'rgba(255, 159, 67, 0.45)';
+  const accentBg = isMac
+    ? 'rgba(58, 134, 255, 0.10)'
+    : 'rgba(255, 159, 67, 0.10)';
+
+  return (
+    <Glass
+      level={1}
+      radius="md"
+      padding="sm"
+      className="v2-sdui-permission-card"
+      style={{ borderColor: accent, background: accentBg }}
+    >
+      <div
+        style={{
+          display: 'flex', alignItems: 'baseline', gap: 8,
+          marginBottom: 6,
+        }}
+      >
+        <span aria-hidden style={{ fontSize: 18 }}>{isMac ? '🖥️' : '🔒'}</span>
+        <strong style={{ fontSize: 15, lineHeight: 1.3 }}>{title}</strong>
+      </div>
+      {description && (
+        <div style={{ fontSize: 13, opacity: 0.85, lineHeight: 1.45, marginBottom: 8 }}>
+          {description}
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {deeplink ? (
+          <button
+            type="button"
+            className="v2-btn v2-btn--primary"
+            onClick={handleOpen}
+          >
+            {deeplinkLabel}
+          </button>
+        ) : (
+          <span style={{ fontSize: 12, opacity: 0.7 }}>{deeplinkLabel}</span>
+        )}
+        {permissionKey && (
+          <code
+            style={{
+              fontSize: 11, opacity: 0.55, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220,
+            }}
+            title={permissionKey}
+          >
+            {permissionKey}
+          </code>
+        )}
+      </div>
+    </Glass>
   );
 }
 
