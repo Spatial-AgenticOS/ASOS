@@ -1,10 +1,63 @@
 # Changelog
 
-<!-- feral-version: 2026.5.24 -->
+<!-- feral-version: 2026.5.25 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.25] — Responses adapter content-type translation + Pro-model param clamps + payload extraction audit
+
+**Scope of this entry**: brain (`feral-core`) only. Follow-up to v2026.5.24's Responses-API adapter — the operator reported chat still broken after upgrading.
+
+**What still failed on v2026.5.24** (operator's exact production log):
+
+```
+[feral.llm] Responses API error: HTTP 400 — invalid_request_error,
+  code=invalid_value, param=input[0].content[0].type:
+  Invalid value: 'text'. Supported values are: 'input_text',
+  'input_image', 'output_text', 'refusal', 'input_file',
+  'computer_screenshot', and 'summary_text'.
+```
+
+`v2026.5.24` correctly routed Pro models to `/v1/responses` but `_messages_to_responses_input` passed Chat-Completions content parts through verbatim. The Responses API rejects the Chat-Completions content-part types (`text`, `image_url`) and demands its own vocabulary (`input_text`, `input_image`, `output_text`). FERAL's `perception/fusion.py:to_llm_user_content` emits the Chat-Completions shape for every vision-enabled chat turn, so once the scene engine attached an image-or-text content list to `conversation_history`, every subsequent chat turn 400'd. Failover to OpenRouter kept rescuing OTHER subsystems (screen-loop / scene / prompt-refiner via `llm.chat()`) so the operator saw OpenRouter 200s in the same log — but the streaming chat turn never reached the user.
+
+### Verified empirically (live OpenAI verification, 2026-05-14)
+
+A live verification harness (built outside the repo, key passed via env, never committed, key revoked after) exercised gpt-5.5-pro on `/v1/responses` directly + through the FERAL adapter. Three additional Pro-model constraints were uncovered beyond the type-translation bug:
+
+* `max_output_tokens < 16` → HTTP 400 "integer below minimum value". The v2026.5.24 availability probe used `max_tokens=1`, which my probe correctly post-`apply_responses_param_fork` translated to `max_output_tokens=1` — and tripped this 400 on every boot. That's why operators saw `Probe failed: integer below minimum value — available=False` even with a working key.
+* `reasoning.effort` valid values for `gpt-5.5-pro` are **only** `medium`, `high`, `xhigh`. Operators who set `low` / `none` / `minimal` in config get 400 "Unsupported value".
+* Pro models often spend the entire `max_output_tokens` budget on internal reasoning before producing visible output. The response is then `status: "incomplete"` with an empty assistant message. v2026.5.24's payload normaliser returned empty content + `finish_reason="stop"`, which the orchestrator's stream loop silently dropped. Now surfaced as `finish_reason="incomplete"` so the orchestrator's "I processed your request but have nothing to report" branch fires.
+
+### Fixed
+
+- **Content-part translation per role** (`agents/llm_provider.py`). New `_translate_content_part(role, part)` + `_normalize_message_content(role, content)` helpers. `_messages_to_responses_input` runs every message's content through them:
+  - `{type:"text"}` on user / system / tool roles → `{type:"input_text"}`.
+  - `{type:"text"}` on assistant role → `{type:"output_text"}`.
+  - `{type:"image_url", image_url:{url, detail}}` → `{type:"input_image", image_url:"<url>", detail:"<detail>"}` (Responses API takes the URL as a string, not a nested object).
+  - Native Responses types (`input_text`, `input_image`, `output_text`, `refusal`, `summary_text`, `computer_screenshot`, `input_file`) → pass through unchanged.
+  - Unknown types → pass through (let OpenAI's server be the validator).
+- **`max_output_tokens` floor** (`agents/llm_reasoning.py:apply_responses_param_fork`). Pro family clamped to a 16-token minimum. Non-Pro Responses callers (none in FERAL today, but future-proof) get a 1-token floor.
+- **`reasoning.effort` clamp** (`agents/llm_reasoning.py:apply_responses_param_fork`). Pro family clamped to `{medium, high, xhigh}`. `low` / `none` / `minimal` rewrite to `medium`. Non-Pro callers keep whatever effort string they passed.
+- **Availability probe minimum** (`agents/llm_provider.py:_probe_chat_availability`). Bumped `max_tokens` from 1 to 16. Tolerates `status: "incomplete"` as a soft success — model is reachable + key is valid, which is exactly what the probe was supposed to confirm.
+- **Payload normalisation** (`agents/llm_provider.py:_responses_payload_to_chat_dict`):
+  - `message.content` parts of type `refusal` surface as `[refusal] <text>` so the orchestrator doesn't render an empty assistant turn when the model declined.
+  - `reasoning.summary.summary_text` items extracted into a top-level `_reasoning_summary` key (orchestrator can show / log it without polluting the assistant message).
+  - Empty visible text + no tool call sets `finish_reason="incomplete"` so the orchestrator's existing "nothing to report" branch fires instead of a silent frozen turn.
+- **System message with list-of-parts content** flattens to a plain `instructions` string (Responses API instructions is plain text).
+- **Tool role with list-of-parts content** flattens to a plain `output` string on the `function_call_output` item.
+
+### Added
+
+- 36 new mocked tests in `tests/test_responses_adapter_v2026_5_23.py` covering: every content-part translation case (text user / system / assistant / image_url / native pass-through / unknown pass-through), Pro-model param clamps (max_output_tokens floor, effort low→medium / minimal→medium / high preserved / xhigh preserved / non-Pro untouched), payload normalisation (refusal tagging, reasoning summary extraction, empty-text incomplete, function_call regression), probe minimum (`max_output_tokens >= 16`, incomplete tolerated, failed surfaced). Total file 68 tests + 4 live tests.
+- 4 `@pytest.mark.live` tests gated on `FERAL_LIVE_TESTS=1 + OPENAI_API_KEY` env vars. Skipped in CI; manually executable for end-to-end verification against live OpenAI on every release. New `live` pytest marker registered in `pyproject.toml`.
+
+### Honest setup-gated limitations
+
+- **Live tests cost real money** (a few cents per run on gpt-5.5-pro). Manual opt-in via `FERAL_LIVE_TESTS=1` + a budgeted key. CI never enables them.
+- **CLI setup wizard does not live-reload the running brain** after picking / changing a model. WebUI Settings page DOES (via `switch_provider` after vault.store). CLI wizard requires `feral start` restart. That's the documented path; a wizard-side live-reload would be a future UX improvement.
+- **Key persistence audit**: all three paths (CLI `feral key paste`, CLI setup wizard, WebUI Settings) converge on `state.vault.store(env_var, key)` → encrypted `~/.feral/credentials.enc` (no plaintext on disk). Confirmed in audit.
 
 ## [2026.5.24] — Pro-model chat 404 fix: OpenAI /v1/responses adapter + real availability probe + tool-gate user notification
 

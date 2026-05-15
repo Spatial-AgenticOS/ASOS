@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "feral-ai"
-version = "2026.5.24"
+version = "2026.5.25"
 description = "FERAL — Open-source AI agent with computer use, GenUI, voice, hardware control, and persistent memory."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -257,7 +257,9 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
     "no_auto_feral_home: skip the autouse FERAL_HOME isolation fixture",
-    "chaos: federated-sync chaos / recovery tests (W11, roadmap §3.3 #1)",    "soak: long-duration soak test (gated behind --runsoak); see W12 / roadmap §3.4 #3-4",]
+    "chaos: federated-sync chaos / recovery tests (W11, roadmap §3.3 #1)",    "soak: long-duration soak test (gated behind --runsoak); see W12 / roadmap §3.4 #3-4",
+    "live: round-trip against live external APIs (OpenAI etc); gated by FERAL_LIVE_TESTS=1 + API key env vars; never run in CI",
+]
 # Coverage is on by default for every `pytest` run. The previous setup
 # configured [tool.coverage.*] but never forced `--cov`, so pytest-cov
 # was installed and dormant. Overridable: `pytest --no-cov` to skip

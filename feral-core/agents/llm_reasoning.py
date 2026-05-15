@@ -10,6 +10,16 @@ compatibility.
 
 from __future__ import annotations
 
+import re
+
+# v2026.5.25 — Pro-model family. Used by ``apply_responses_param_fork``
+# to clamp the Responses-API param subset OpenAI accepts on these
+# specific SKUs (live-verified 2026-05-14 against gpt-5.5-pro):
+#   * ``max_output_tokens`` minimum is 16 (not 1).
+#   * ``reasoning.effort`` accepts only ``medium`` / ``high`` / ``xhigh``.
+# Pattern accepts dated snapshots (``gpt-5-pro-2026-05-08``).
+_PRO_MODEL_RX = re.compile(r"^gpt-5(\.[0-9]+)?-pro(-\d{4}-\d{2}-\d{2})?$")
+
 
 def _apply_openai_reasoning_fork(model: str, body: dict) -> dict:
     """Rewrite *body* for OpenAI's reasoning-family contract.
@@ -154,19 +164,26 @@ def apply_reasoning_fork(provider: str, model: str, body: dict) -> dict:
 def apply_responses_param_fork(model: str, body: dict) -> dict:
     """Rewrite *body* in-place for OpenAI's ``/v1/responses`` API.
 
-    v2026.5.23. Called by the dispatcher when the model class returned
-    by ``providers.model_classes.classify_endpoint`` is ``"responses"``.
+    v2026.5.23 initial. v2026.5.25 — tightens for live-verified
+    gpt-5.5-pro constraints (operator's launch-blocking bug):
+
+    * ``max_output_tokens`` minimum is **16** for ``gpt-5-pro`` /
+      ``gpt-5.5-pro`` families. Anything below trips 400 "integer
+      below minimum value". We clamp here so callers passing low
+      caps (e.g. the availability probe) don't hit the 400.
+    * ``reasoning.effort`` valid values for ``gpt-5.5-pro`` are
+      **only** ``medium``, ``high``, ``xhigh``. ``low`` / ``none`` /
+      ``minimal`` trip 400 "Unsupported value". For other Pro models
+      OpenAI's accepted set may include ``low`` etc; we clamp the
+      ``gpt-5(.x)?-pro`` family to the valid set and pass through
+      for everything else.
 
     Differences from the Chat-Completions reasoning fork:
 
     * Token cap is ``max_output_tokens`` (counts reasoning + visible
       output), NOT ``max_completion_tokens``.
     * Reasoning controls live under a nested ``reasoning`` object,
-      not the top-level ``reasoning_effort`` string. Valid effort
-      values per OpenAI's docs: ``none|minimal|low|medium|high|xhigh``.
-      Some Pro models (e.g. ``gpt-5-pro``) hard-fix effort to ``high``;
-      we still send the field so the operator's chosen effort is
-      respected when the model allows it.
+      not the top-level ``reasoning_effort`` string.
     * The chat-shaped ``messages`` / ``temperature`` / ``top_p`` /
       penalty params are deliberately left for the dispatcher to
       translate; this fork only normalises the keys that already
@@ -182,9 +199,20 @@ def apply_responses_param_fork(model: str, body: dict) -> dict:
         body.pop("max_tokens", None)
         body.pop("max_completion_tokens", None)
 
-    # Nest reasoning under an object. Honour an existing ``reasoning_effort``
-    # string the chat-completions fork may have set so the operator's
-    # configured effort survives the endpoint switch.
+    # v2026.5.25 — clamp max_output_tokens to the per-model floor.
+    # Pro families enforce a 16-token minimum. Non-Pro Responses
+    # callers (none in FERAL today, but future-proof) get a lower
+    # floor of 1.
+    is_pro = bool(_PRO_MODEL_RX.match(model or ""))
+    floor = 16 if is_pro else 1
+    cap = body.get("max_output_tokens")
+    if isinstance(cap, int) and cap < floor:
+        body["max_output_tokens"] = floor
+
+    # Nest reasoning under an object. Honour an existing
+    # ``reasoning_effort`` string the chat-completions fork may have
+    # set so the operator's configured effort survives the endpoint
+    # switch.
     legacy_effort = body.pop("reasoning_effort", None)
     reasoning = body.get("reasoning")
     if not isinstance(reasoning, dict):
@@ -192,6 +220,13 @@ def apply_responses_param_fork(model: str, body: dict) -> dict:
         body["reasoning"] = reasoning
     if "effort" not in reasoning:
         reasoning["effort"] = legacy_effort or "medium"
+
+    # v2026.5.25 — Pro models only accept medium / high / xhigh.
+    # Live-verified against gpt-5.5-pro 2026-05-14. Clamp.
+    if is_pro:
+        effort = str(reasoning.get("effort") or "medium").lower()
+        if effort not in ("medium", "high", "xhigh"):
+            reasoning["effort"] = "medium"
 
     # Strip chat-shaped sampling params that Responses API doesn't honour
     # for reasoning models. Temperature is supported for non-reasoning

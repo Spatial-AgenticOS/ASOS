@@ -878,11 +878,25 @@ class LLMProvider:
     # ``available=False`` flip with no explanation.
 
     async def _probe_chat_availability(self) -> tuple[bool, str]:
-        """Probe the live endpoint with a 1-token request.
+        """Probe the live endpoint with a minimal request.
 
         Returns ``(ok, reason)``. On success, ``reason`` is empty.
         On failure, ``reason`` is a short string suitable for the
         log + the CLI / web UI to surface to the user.
+
+        v2026.5.25 — uses ``max_tokens=16`` (not 1). gpt-5.5-pro
+        rejects ``max_output_tokens<16`` with a 400 ("integer below
+        minimum value"), which my v2026.5.24 probe (max_tokens=1)
+        tripped on every boot for operators on Pro models, flipping
+        `available=False` falsely. 16 is the live-verified minimum.
+
+        v2026.5.25 — also tolerates the ``incomplete`` response
+        status. Pro models often burn 16+ reasoning tokens before
+        producing visible output; the response is technically
+        ``status=incomplete`` but the model IS reachable + the key
+        IS valid, which is exactly what the probe was supposed to
+        confirm. Anything other than 200 + ``failed`` / outright
+        rejection is a soft success.
 
         Soft failures (DNS, connection reset) are reported as
         failures here but the surrounding code may still leave
@@ -902,28 +916,42 @@ class LLMProvider:
                     [{"role": "user", "content": "."}],
                     tools=None,
                     temperature=1,
-                    max_tokens=1,
+                    max_tokens=16,  # gpt-5.5-pro hard minimum for max_output_tokens
                     stream=False,
                 )
-                resp = await self.client.post("/responses", json=body, timeout=10.0)
+                resp = await self.client.post("/responses", json=body, timeout=15.0)
             else:
                 body = {
                     "model": self.model,
                     "messages": [{"role": "user", "content": "."}],
-                    "max_tokens": 1,
+                    "max_tokens": 16,
                     "temperature": 1,
                 }
                 # Run the reasoning fork so reasoning models get
                 # max_completion_tokens / reasoning_effort.
                 from agents.llm_reasoning import apply_reasoning_fork
                 apply_reasoning_fork(self.provider, self.model, body)
-                resp = await self.client.post("/chat/completions", json=body, timeout=10.0)
+                resp = await self.client.post("/chat/completions", json=body, timeout=15.0)
         except httpx.HTTPStatusError as exc:
             return False, _describe_http_status_error(exc)
         except Exception as exc:
             return False, f"probe transport error: {exc}"
 
         if resp.status_code == 200:
+            # v2026.5.25 — Responses-API may legitimately return 200
+            # with ``status: "incomplete"`` when reasoning tokens fill
+            # the small budget before any visible output. That still
+            # proves the model is reachable + the key is valid, which
+            # is the probe's job. Treat as success.
+            try:
+                payload = resp.json()
+            except Exception:
+                return True, ""
+            status_value = payload.get("status") if isinstance(payload, dict) else None
+            if status_value == "failed":
+                err = payload.get("error", {}) if isinstance(payload, dict) else {}
+                msg = err.get("message", "") if isinstance(err, dict) else str(err)
+                return False, f"probe response.status=failed{(' — ' + msg) if msg else ''}"
             return True, ""
         # Surface the structured server message — that's what the
         # operator needs (e.g. "This is not a chat model").
@@ -979,16 +1007,120 @@ class LLMProvider:
     # bookkeeping on tool-call result resubmission. Switch to stateful
     # later if latency becomes a real issue.
 
+    # v2026.5.25 — Responses-API content-part schema. The supported
+    # part types per OpenAI docs (verified live against gpt-5.5-pro
+    # on 2026-05-14) are EXACTLY:
+    #
+    #   input_text       — text in a user / system / tool input item
+    #   input_image      — image in a user input item (url or b64)
+    #   input_file       — file reference (file_id or url)
+    #   output_text      — text in an assistant output item
+    #   refusal          — refusal text in an assistant output item
+    #   summary_text     — reasoning summary in an assistant item
+    #   computer_screenshot — computer-use response
+    #
+    # Chat-Completions multimodal content uses the legacy types
+    # `text` / `image_url`. FERAL's perception/fusion.py emits these
+    # for every vision-enabled chat turn, so the Responses adapter
+    # MUST translate them before POSTing or the API returns 400 with
+    # "Invalid value: 'text'" (operator's exact production error).
+    _RESPONSES_PART_TYPES_NATIVE = frozenset({
+        "input_text", "input_image", "input_file",
+        "output_text", "refusal", "summary_text",
+        "computer_screenshot",
+    })
+
+    @staticmethod
+    def _translate_content_part(role: str, part: dict) -> dict:
+        """Translate one Chat-Completions content part to its
+        Responses-API equivalent. Roles ``user`` / ``system`` / ``tool``
+        accept input-side types; ``assistant`` accepts output-side
+        types. Already-native Responses types pass through unchanged.
+
+        Unknown types are passed through as-is so the OpenAI server
+        is the source of truth for shape validation — we don't want
+        to silently drop a new content type that lands at OpenAI
+        before this code knows about it.
+        """
+        if not isinstance(part, dict):
+            return part
+        ptype = part.get("type", "")
+        if ptype in LLMProvider._RESPONSES_PART_TYPES_NATIVE:
+            return part
+
+        # The two common Chat-Completions content-part types FERAL's
+        # perception/fusion.py and the multimodal chat path emit.
+        if ptype == "text":
+            text = part.get("text", "")
+            if role == "assistant":
+                return {"type": "output_text", "text": text}
+            return {"type": "input_text", "text": text}
+
+        if ptype == "image_url":
+            # Chat-Completions vision shape:
+            #   {"type": "image_url", "image_url": {"url": "...", "detail": "low"}}
+            # Responses-API vision shape:
+            #   {"type": "input_image", "image_url": "https://..."}
+            # OpenAI's Responses API takes `image_url` as a STRING (the
+            # URL itself or a data: URL). Coerce the nested object.
+            img = part.get("image_url")
+            url = ""
+            if isinstance(img, dict):
+                url = img.get("url", "")
+            elif isinstance(img, str):
+                url = img
+            translated: dict = {"type": "input_image", "image_url": url}
+            # Preserve the `detail` hint when present so token-cost
+            # behaviour matches the Chat-Completions caller.
+            if isinstance(img, dict) and img.get("detail"):
+                translated["detail"] = img["detail"]
+            return translated
+
+        # Unknown content-part type — pass through unchanged. OpenAI's
+        # server is the source of truth for validation; logging a
+        # warning here would spam for every legitimate new part type
+        # we haven't catalogued yet.
+        return part
+
+    @staticmethod
+    def _normalize_message_content(
+        role: str, content
+    ) -> "str | list[dict]":
+        """Return content shaped for the Responses-API ``input`` array.
+
+        * ``str`` is returned as-is — Responses accepts plain strings
+          in role-bearing items (verified live; the API auto-wraps).
+        * ``list[dict]`` has each part run through
+          ``_translate_content_part`` so Chat-Completions
+          ``text`` / ``image_url`` become Responses
+          ``input_text`` / ``input_image`` (or ``output_text`` for
+          assistant turns).
+        * Anything else (e.g. None) falls back to an empty string so
+          the API rejects on the body shape we control, not on a
+          surprise content value.
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return [LLMProvider._translate_content_part(role, p) for p in content]
+        if content is None:
+            return ""
+        return str(content)
+
     @staticmethod
     def _messages_to_responses_input(messages: list[dict]) -> tuple[str, list[dict]]:
         """Translate OpenAI Chat-Completions ``messages`` into a
         Responses-API ``(instructions, input)`` pair.
 
+        v2026.5.25 — content parts are now translated per role through
+        ``_translate_content_part`` so multimodal turns from
+        ``perception/fusion.py:to_llm_user_content`` (which emits
+        ``[{type:"text"}, {type:"image_url"}]``) no longer 400 on
+        ``/v1/responses``.
+
         * The first ``system`` message becomes ``instructions``.
         * Every remaining message becomes an ``input`` item with
-          ``role`` + ``content`` (string for text-only, array for
-          vision/multimodal — passed through unchanged because the
-          Responses API accepts the same content-part shape).
+          ``role`` + translated ``content``.
         * Assistant tool-call replays become ``function_call`` items.
         * ``tool`` role messages (results) become
           ``function_call_output`` items linked by ``call_id``.
@@ -1006,13 +1138,46 @@ class LLMProvider:
                 # input items so multi-step prompts (e.g. PromptRefiner
                 # injecting a refined system note) aren't silently lost.
                 if not instructions:
-                    instructions = content if isinstance(content, str) else str(content)
+                    if isinstance(content, str):
+                        instructions = content
+                    elif isinstance(content, list):
+                        # Extract text from content parts. Responses-API
+                        # `instructions` is a plain string; flatten any
+                        # text-bearing parts.
+                        text_chunks: list[str] = []
+                        for p in content:
+                            if not isinstance(p, dict):
+                                continue
+                            t = p.get("text", "")
+                            if t:
+                                text_chunks.append(t)
+                        instructions = "".join(text_chunks)
+                    else:
+                        instructions = str(content)
                     continue
-                input_items.append({"role": "user", "content": str(content)})
+                input_items.append({
+                    "role": "system",
+                    "content": LLMProvider._normalize_message_content("system", content),
+                })
                 continue
             if role == "tool":
                 call_id = msg.get("tool_call_id") or msg.get("call_id") or ""
-                output = content if isinstance(content, str) else str(content)
+                # `function_call_output.output` accepts a plain string
+                # per OpenAI's Responses API. Tool results from FERAL's
+                # tool_runner are already stringified before reaching
+                # here (see agents/orchestrator.py history append paths),
+                # so a defensive `str()` is enough.
+                if isinstance(content, str):
+                    output = content
+                elif isinstance(content, list):
+                    # Flatten content-parts back to a single string.
+                    output = "".join(
+                        p.get("text", "")
+                        for p in content
+                        if isinstance(p, dict)
+                    )
+                else:
+                    output = str(content or "")
                 input_items.append({
                     "type": "function_call_output",
                     "call_id": call_id,
@@ -1034,11 +1199,19 @@ class LLMProvider:
                         "name": fn.get("name", ""),
                         "arguments": args or "{}",
                     })
-                if isinstance(content, str) and content:
-                    input_items.append({"role": "assistant", "content": content})
+                # If there's an accompanying assistant text body (some
+                # models emit a short pre-tool narration), preserve it
+                # as a translated assistant input item.
+                if content:
+                    normalized = LLMProvider._normalize_message_content("assistant", content)
+                    if normalized:
+                        input_items.append({"role": "assistant", "content": normalized})
                 continue
-            # Plain user / assistant content.
-            input_items.append({"role": role, "content": content})
+            # Plain user / assistant content — translate parts.
+            input_items.append({
+                "role": role,
+                "content": LLMProvider._normalize_message_content(role, content),
+            })
         return instructions, input_items
 
     @staticmethod
@@ -1147,6 +1320,25 @@ class LLMProvider:
         chat-completions adapter returns. Keeps every existing caller
         (``extract_response``, the orchestrator, the digital twin)
         unchanged.
+
+        v2026.5.25 — handles every output-item type Responses API
+        emits that carries text or tool calls:
+
+        * ``message`` items with ``content`` parts of type
+          ``output_text`` (the standard reply text), ``text`` (legacy
+          alias accepted server-side), and ``refusal`` (surfaces as
+          ``[refusal] <text>`` so callers don't render an empty
+          assistant turn when the model declined).
+        * ``function_call`` items → chat-completions ``tool_calls``.
+        * ``reasoning`` items with ``summary`` content parts of type
+          ``summary_text`` — when the model exposes a brief reasoning
+          summary, we surface it as a hidden ``_reasoning_summary``
+          key so the orchestrator can show / log it without polluting
+          the assistant message.
+
+        Empty visible text + no tool calls is reported as an explicit
+        ``finish_reason="incomplete"`` so the orchestrator's stream
+        loop can yield a placeholder rather than appearing frozen.
         """
         if not isinstance(payload, dict):
             return {"error": "responses: empty payload", "choices": []}
@@ -1154,6 +1346,8 @@ class LLMProvider:
             err = payload["error"]
             return {"error": err.get("message", str(err)), "choices": []}
         text_chunks: list[str] = []
+        refusal_chunks: list[str] = []
+        reasoning_summary_chunks: list[str] = []
         tool_calls: list[dict] = []
         for item in payload.get("output", []) or []:
             if not isinstance(item, dict):
@@ -1161,10 +1355,15 @@ class LLMProvider:
             it = item.get("type", "")
             if it == "message":
                 for part in item.get("content", []) or []:
-                    if isinstance(part, dict) and part.get("type") in ("output_text", "text"):
+                    if not isinstance(part, dict):
+                        continue
+                    ptype = part.get("type", "")
+                    if ptype in ("output_text", "text"):
                         t = part.get("text", "")
                         if t:
                             text_chunks.append(t)
+                    elif ptype == "refusal":
+                        refusal_chunks.append(part.get("refusal", "") or part.get("text", ""))
             elif it == "function_call":
                 args = item.get("arguments", "{}")
                 if not isinstance(args, str):
@@ -1177,16 +1376,54 @@ class LLMProvider:
                         "arguments": args,
                     },
                 })
-        message: dict = {"role": "assistant", "content": "".join(text_chunks)}
+            elif it == "reasoning":
+                # Reasoning items may carry a ``summary`` array with
+                # ``summary_text`` parts. The model's actual reasoning
+                # tokens stay opaque; the summary is a short rationale
+                # the server explicitly exposes.
+                summary = item.get("summary") or []
+                if isinstance(summary, list):
+                    for part in summary:
+                        if isinstance(part, dict) and part.get("type") == "summary_text":
+                            t = part.get("text", "")
+                            if t:
+                                reasoning_summary_chunks.append(t)
+
+        visible_text = "".join(text_chunks)
+        if refusal_chunks:
+            # Make the refusal visible to the orchestrator + the user.
+            # Prefix tagged so the chat surface knows this is a refusal
+            # not a normal reply (Phase 7b chat rendering can style it).
+            refusal_blob = "\n".join(r for r in refusal_chunks if r)
+            visible_text = (
+                f"{visible_text}\n\n[refusal] {refusal_blob}".strip()
+                if visible_text
+                else f"[refusal] {refusal_blob}"
+            )
+
+        message: dict = {"role": "assistant", "content": visible_text}
         if tool_calls:
             message["tool_calls"] = tool_calls
-        return {
+
+        status = payload.get("status", "")
+        finish_reason = status if status else "stop"
+        # If the model returned literally nothing user-visible and made
+        # no tool call, mark the finish so the orchestrator can emit
+        # a placeholder instead of a silent frozen turn. The most
+        # common cause is `max_output_tokens` exhausted by reasoning.
+        if not visible_text and not tool_calls and status != "failed":
+            finish_reason = "incomplete"
+
+        result: dict = {
             "id": payload.get("id", ""),
             "object": "chat.completion",
-            "choices": [{"index": 0, "message": message, "finish_reason": payload.get("status", "stop")}],
+            "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
             "usage": payload.get("usage", {}),
             "_responses_id": payload.get("id"),
         }
+        if reasoning_summary_chunks:
+            result["_reasoning_summary"] = "".join(reasoning_summary_chunks)
+        return result
 
     async def _responses_stream(
         self,

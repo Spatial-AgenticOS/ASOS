@@ -26,6 +26,7 @@ operator's blocked-chat report (gpt-5.5-pro 404 on /v1/chat/completions):
 from __future__ import annotations
 
 import json
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -199,10 +200,12 @@ class TestResponsesMessageTranslation:
         assert instructions == "You are FERAL."
         assert items == [{"role": "user", "content": "Hi"}]
 
-    def test_second_system_becomes_user_item(self):
-        # First system wins as instructions; later ones aren't silently
-        # lost — they become user-role items so PromptRefiner-style
-        # additional system notes still reach the model.
+    def test_second_system_becomes_system_input_item(self):
+        # v2026.5.25: first system wins as instructions; later
+        # ones aren't silently lost — they become system-role input
+        # items (Responses API accepts system role) so
+        # PromptRefiner-style additional system notes still reach
+        # the model with their intended role intact.
         from agents.llm_provider import LLMProvider
 
         msgs = [
@@ -212,7 +215,9 @@ class TestResponsesMessageTranslation:
         ]
         instructions, items = LLMProvider._messages_to_responses_input(msgs)
         assert instructions == "primary"
-        assert items[0] == {"role": "user", "content": "appendix"}
+        # Second system → system input item with translated content.
+        assert items[0]["role"] == "system"
+        assert items[0]["content"] == "appendix"
 
     def test_tool_role_becomes_function_call_output(self):
         from agents.llm_provider import LLMProvider
@@ -533,3 +538,548 @@ async def test_probe_returns_structured_failure_on_404():
     assert ok is False
     assert "404" in reason
     assert "not a chat model" in reason
+
+
+# ─── v2026.5.25 — content-part translation (operator's 400 fix) ─
+
+
+class TestContentPartTranslation:
+    """v2026.5.25 launch-blocker fix.
+
+    Live verification on 2026-05-14 against gpt-5.5-pro:
+    sending `{"type":"text","text":"..."}` (the legacy
+    Chat-Completions multimodal shape FERAL's perception/fusion.py
+    emits) on the Responses API returns HTTP 400 with
+    "Invalid value: 'text'. Supported: input_text / input_image /
+    output_text / refusal / input_file / computer_screenshot /
+    summary_text". This block pins the translation table.
+    """
+
+    def test_translate_text_part_user_becomes_input_text(self):
+        from agents.llm_provider import LLMProvider
+
+        out = LLMProvider._translate_content_part(
+            "user", {"type": "text", "text": "hi"},
+        )
+        assert out == {"type": "input_text", "text": "hi"}
+
+    def test_translate_text_part_system_becomes_input_text(self):
+        # System input items use input_text the same way user items
+        # do — there is no "system_text" type.
+        from agents.llm_provider import LLMProvider
+
+        out = LLMProvider._translate_content_part(
+            "system", {"type": "text", "text": "sys"},
+        )
+        assert out == {"type": "input_text", "text": "sys"}
+
+    def test_translate_text_part_assistant_becomes_output_text(self):
+        # The launch-blocker's other half: history replay where the
+        # assistant turn carried `[{type:"text"}]` — Responses API
+        # rejects that on the assistant role too. Must translate to
+        # output_text.
+        from agents.llm_provider import LLMProvider
+
+        out = LLMProvider._translate_content_part(
+            "assistant", {"type": "text", "text": "ok"},
+        )
+        assert out == {"type": "output_text", "text": "ok"}
+
+    def test_translate_image_url_part_becomes_input_image(self):
+        from agents.llm_provider import LLMProvider
+
+        out = LLMProvider._translate_content_part(
+            "user",
+            {"type": "image_url", "image_url": {
+                "url": "https://x/y.png", "detail": "low",
+            }},
+        )
+        # Responses API takes the URL as a string + the detail hint.
+        assert out["type"] == "input_image"
+        assert out["image_url"] == "https://x/y.png"
+        assert out["detail"] == "low"
+
+    def test_translate_image_url_string_form_supported(self):
+        # Some clients pass image_url as a bare string. Coerce.
+        from agents.llm_provider import LLMProvider
+
+        out = LLMProvider._translate_content_part(
+            "user",
+            {"type": "image_url", "image_url": "data:image/png;base64,xx"},
+        )
+        assert out == {"type": "input_image",
+                       "image_url": "data:image/png;base64,xx"}
+
+    def test_native_responses_part_passes_through_unchanged(self):
+        # If callers already speak the Responses-API shape, don't
+        # double-translate.
+        from agents.llm_provider import LLMProvider
+
+        native_in = {"type": "input_text", "text": "x"}
+        assert LLMProvider._translate_content_part("user", native_in) == native_in
+
+        native_out = {"type": "output_text", "text": "x"}
+        assert LLMProvider._translate_content_part("assistant", native_out) == native_out
+
+        native_img = {"type": "input_image", "image_url": "https://x"}
+        assert LLMProvider._translate_content_part("user", native_img) == native_img
+
+    def test_unknown_part_type_passes_through(self):
+        # Future part types we haven't catalogued yet — let OpenAI's
+        # server be the validator. Silently dropping would hide bugs.
+        from agents.llm_provider import LLMProvider
+
+        weird = {"type": "future_part", "blob": "..."}
+        assert LLMProvider._translate_content_part("user", weird) == weird
+
+    def test_normalize_message_content_string_passthrough(self):
+        from agents.llm_provider import LLMProvider
+
+        assert LLMProvider._normalize_message_content("user", "hi") == "hi"
+
+    def test_normalize_message_content_list_translates_each_part(self):
+        from agents.llm_provider import LLMProvider
+
+        out = LLMProvider._normalize_message_content("user", [
+            {"type": "text", "text": "hi"},
+            {"type": "image_url", "image_url": {"url": "https://x"}},
+        ])
+        assert out == [
+            {"type": "input_text", "text": "hi"},
+            {"type": "input_image", "image_url": "https://x"},
+        ]
+
+    def test_normalize_message_content_none_becomes_empty(self):
+        from agents.llm_provider import LLMProvider
+
+        assert LLMProvider._normalize_message_content("user", None) == ""
+
+    def test_messages_to_responses_input_translates_multimodal_user(self):
+        # End-to-end via _messages_to_responses_input — the operator's
+        # actual chat flow. Before v2026.5.25 this passed the user
+        # content through verbatim and OpenAI 400'd.
+        from agents.llm_provider import LLMProvider
+
+        _, items = LLMProvider._messages_to_responses_input([
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ])
+        assert items == [
+            {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        ]
+
+    def test_messages_to_responses_input_translates_assistant_history(self):
+        # When the orchestrator replays a multi-turn history, the
+        # assistant turn's [{type:text}] must become output_text.
+        from agents.llm_provider import LLMProvider
+
+        _, items = LLMProvider._messages_to_responses_input([
+            {"role": "user", "content": [{"type": "text", "text": "q"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "a"}]},
+        ])
+        assert items[0]["content"][0]["type"] == "input_text"
+        assert items[1]["content"][0]["type"] == "output_text"
+
+    def test_messages_to_responses_input_system_with_list_content_flattens(self):
+        # System content as a list of parts flattens into the
+        # instructions string. Responses API instructions is plain
+        # text, not a parts array.
+        from agents.llm_provider import LLMProvider
+
+        instr, items = LLMProvider._messages_to_responses_input([
+            {"role": "system", "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "text", "text": " world."},
+            ]},
+            {"role": "user", "content": "hi"},
+        ])
+        assert instr == "Hello world."
+        assert items == [{"role": "user", "content": "hi"}]
+
+    def test_messages_to_responses_input_tool_role_list_content_flattens(self):
+        # Tool results may arrive as a string OR as a parts list
+        # (some callers wrap before reaching the adapter). Either
+        # way we want a plain `output: <string>` on the wire.
+        from agents.llm_provider import LLMProvider
+
+        _, items = LLMProvider._messages_to_responses_input([
+            {"role": "tool", "tool_call_id": "c1", "content": [
+                {"type": "text", "text": '{"ok":'},
+                {"type": "text", "text": "true}"},
+            ]},
+        ])
+        assert items == [
+            {"type": "function_call_output", "call_id": "c1", "output": '{"ok":true}'},
+        ]
+
+
+# ─── v2026.5.25 — Pro-model probe minimum + reasoning effort clamp ─
+
+
+class TestProModelParamClamps:
+    """Live-verified constraints on gpt-5.5-pro (2026-05-14):
+
+    * ``max_output_tokens`` < 16 → 400 "integer below minimum value"
+    * ``reasoning.effort`` in {none, minimal, low} → 400 "Unsupported"
+    """
+
+    def test_responses_fork_clamps_max_output_tokens_to_16(self):
+        from agents.llm_reasoning import apply_responses_param_fork
+
+        body = {"max_tokens": 1}
+        apply_responses_param_fork("gpt-5.5-pro", body)
+        assert body["max_output_tokens"] == 16
+
+    def test_responses_fork_clamps_effort_low_to_medium(self):
+        from agents.llm_reasoning import apply_responses_param_fork
+
+        body = {"max_tokens": 100, "reasoning_effort": "low"}
+        apply_responses_param_fork("gpt-5.5-pro", body)
+        assert body["reasoning"]["effort"] == "medium"
+
+    def test_responses_fork_clamps_effort_minimal_to_medium(self):
+        from agents.llm_reasoning import apply_responses_param_fork
+
+        body = {"max_tokens": 100, "reasoning": {"effort": "minimal"}}
+        apply_responses_param_fork("gpt-5.5-pro", body)
+        assert body["reasoning"]["effort"] == "medium"
+
+    def test_responses_fork_keeps_high_effort_for_pro(self):
+        from agents.llm_reasoning import apply_responses_param_fork
+
+        body = {"max_tokens": 100, "reasoning_effort": "high"}
+        apply_responses_param_fork("gpt-5.5-pro", body)
+        assert body["reasoning"]["effort"] == "high"
+
+    def test_responses_fork_keeps_xhigh_effort_for_pro(self):
+        from agents.llm_reasoning import apply_responses_param_fork
+
+        body = {"max_tokens": 100, "reasoning_effort": "xhigh"}
+        apply_responses_param_fork("gpt-5.5-pro", body)
+        assert body["reasoning"]["effort"] == "xhigh"
+
+    def test_responses_fork_keeps_low_effort_for_non_pro(self):
+        # Future-proof: if FERAL ever uses /v1/responses for a non-Pro
+        # model that accepts low effort, don't strip it. The pro clamp
+        # is targeted.
+        from agents.llm_reasoning import apply_responses_param_fork
+
+        body = {"max_tokens": 100, "reasoning_effort": "low"}
+        apply_responses_param_fork("some-future-model", body)
+        assert body["reasoning"]["effort"] == "low"
+
+    def test_responses_fork_keeps_existing_max_tokens_when_above_floor(self):
+        from agents.llm_reasoning import apply_responses_param_fork
+
+        body = {"max_tokens": 1024}
+        apply_responses_param_fork("gpt-5.5-pro", body)
+        assert body["max_output_tokens"] == 1024
+
+
+# ─── v2026.5.25 — payload normalisation (reasoning / refusal / incomplete) ─
+
+
+class TestPayloadNormalisation:
+    def test_refusal_content_part_surfaces_as_tagged_assistant_text(self):
+        from agents.llm_provider import LLMProvider
+
+        payload = {
+            "id": "resp_refusal",
+            "output": [{
+                "type": "message",
+                "content": [{"type": "refusal", "refusal": "I can't help with that."}],
+            }],
+            "status": "completed",
+        }
+        result = LLMProvider._responses_payload_to_chat_dict(payload)
+        content = result["choices"][0]["message"]["content"]
+        assert "[refusal]" in content
+        assert "I can't help with that." in content
+
+    def test_reasoning_summary_extracted_as_separate_key(self):
+        # Reasoning items are server-emitted summaries; they should
+        # NOT pollute the user-facing assistant message but the
+        # orchestrator can surface them in a brain-trace.
+        from agents.llm_provider import LLMProvider
+
+        payload = {
+            "id": "resp_r",
+            "output": [
+                {"type": "reasoning", "summary": [
+                    {"type": "summary_text", "text": "Thought about it briefly."},
+                ]},
+                {"type": "message", "content": [
+                    {"type": "output_text", "text": "Done."},
+                ]},
+            ],
+            "status": "completed",
+        }
+        result = LLMProvider._responses_payload_to_chat_dict(payload)
+        assert result["choices"][0]["message"]["content"] == "Done."
+        assert result["_reasoning_summary"] == "Thought about it briefly."
+
+    def test_empty_visible_text_no_tool_returns_incomplete_finish_reason(self):
+        # Pro models can eat the entire max_output_tokens budget in
+        # reasoning, leaving no visible text. Surfacing this as
+        # finish_reason=incomplete lets the orchestrator's "I
+        # processed your request but have nothing to report" branch
+        # fire instead of a silent frozen turn.
+        from agents.llm_provider import LLMProvider
+
+        payload = {
+            "id": "resp_inc",
+            "output": [],
+            "status": "incomplete",
+        }
+        result = LLMProvider._responses_payload_to_chat_dict(payload)
+        assert result["choices"][0]["finish_reason"] == "incomplete"
+        assert result["choices"][0]["message"]["content"] == ""
+        # tool_calls absent on empty result.
+        assert "tool_calls" not in result["choices"][0]["message"]
+
+    def test_function_call_still_extracts_to_tool_calls(self):
+        # Regression — v2026.5.23/24 already extracted these; make
+        # sure the v2026.5.25 refactor didn't break the path.
+        from agents.llm_provider import LLMProvider
+
+        payload = {
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_x",
+                "name": "do_thing",
+                "arguments": '{"x":1}',
+            }],
+            "status": "completed",
+        }
+        result = LLMProvider._responses_payload_to_chat_dict(payload)
+        tc = result["choices"][0]["message"]["tool_calls"][0]
+        assert tc["id"] == "call_x"
+        assert tc["function"]["name"] == "do_thing"
+        assert json.loads(tc["function"]["arguments"]) == {"x": 1}
+
+
+# ─── v2026.5.25 — _probe_chat_availability max_output_tokens minimum ─
+
+
+@pytest.mark.asyncio
+async def test_probe_uses_minimum_16_max_output_tokens_for_pro():
+    """gpt-5.5-pro rejects max_output_tokens < 16 with HTTP 400. The
+    probe must use ≥16 so it doesn't false-fail every operator on a
+    Pro model."""
+    from agents.llm_provider import LLMProvider
+
+    p = LLMProvider.__new__(LLMProvider)
+    p.provider = "openai"
+    p.model = "gpt-5.5-pro"
+
+    captured_body: dict = {}
+
+    async def fake_post(path, json=None, timeout=None):
+        captured_body["path"] = path
+        captured_body["body"] = json
+        mock = MagicMock()
+        mock.status_code = 200
+        mock.json = MagicMock(return_value={"status": "completed"})
+        return mock
+
+    p.client = MagicMock()
+    p.client.post = fake_post
+
+    ok, _ = await p._probe_chat_availability()
+    assert ok is True
+    assert captured_body["path"] == "/responses"
+    assert captured_body["body"]["max_output_tokens"] >= 16
+
+
+@pytest.mark.asyncio
+async def test_probe_tolerates_responses_incomplete_status():
+    """Pro models often spend the 16-token budget on reasoning and
+    return ``status=incomplete``. That still proves the model is
+    reachable + the key is valid — exactly what the probe is for.
+    Don't flip available=False on this."""
+    from agents.llm_provider import LLMProvider
+
+    p = LLMProvider.__new__(LLMProvider)
+    p.provider = "openai"
+    p.model = "gpt-5.5-pro"
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json = MagicMock(return_value={
+        "status": "incomplete",
+        "incomplete_details": {"reason": "max_output_tokens"},
+    })
+    p.client = MagicMock()
+    p.client.post = AsyncMock(return_value=mock_resp)
+
+    ok, reason = await p._probe_chat_availability()
+    assert ok is True, f"incomplete is reachable, got reason={reason!r}"
+
+
+@pytest.mark.asyncio
+async def test_probe_fails_on_responses_failed_status():
+    """``status=failed`` is a real probe failure — surface it
+    truthfully."""
+    from agents.llm_provider import LLMProvider
+
+    p = LLMProvider.__new__(LLMProvider)
+    p.provider = "openai"
+    p.model = "gpt-5.5-pro"
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json = MagicMock(return_value={
+        "status": "failed",
+        "error": {"message": "internal_error"},
+    })
+    p.client = MagicMock()
+    p.client.post = AsyncMock(return_value=mock_resp)
+
+    ok, reason = await p._probe_chat_availability()
+    assert ok is False
+    assert "failed" in reason
+    assert "internal_error" in reason
+
+
+# ─── v2026.5.25 — LIVE tests (skipped in CI, opt-in via env) ─────
+#
+# Run locally with:
+#   export OPENAI_API_KEY=sk-...
+#   FERAL_LIVE_TESTS=1 pytest tests/test_responses_adapter_v2026_5_23.py -m live -v
+#
+# CI never sets FERAL_LIVE_TESTS=1, so these are skipped there.
+# Each test costs a few cents max (max_output_tokens capped at 32).
+# Use a budgeted / revocable key.
+
+
+_LIVE_TESTS_ENABLED = (
+    os.environ.get("FERAL_LIVE_TESTS") == "1"
+    and bool(os.environ.get("OPENAI_API_KEY"))
+)
+_LIVE_MODEL = os.environ.get("FERAL_VERIFY_MODEL", "gpt-5.5-pro")
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not _LIVE_TESTS_ENABLED,
+    reason="live tests require FERAL_LIVE_TESTS=1 + OPENAI_API_KEY",
+)
+async def test_live_responses_plain_string():
+    """Baseline: gpt-5.5-pro on plain user string content."""
+    from agents.llm_provider import LLMProvider
+
+    provider = LLMProvider()
+    await provider.switch_provider(
+        "openai",
+        model=_LIVE_MODEL,
+        api_key=os.environ["OPENAI_API_KEY"],
+    )
+    # gpt-5.5-pro requires max_tokens >= 16 + ate-reasoning-tokens
+    # behaviour means we should bump well above the floor to get a
+    # visible reply within the test.
+    result = await provider._responses_chat(
+        [{"role": "user", "content": "Reply 'hi' once."}],
+        tools=None, temperature=1, max_tokens=256,
+    )
+    # Either we got visible text OR finish_reason=incomplete.
+    # Both prove the request hit /v1/responses cleanly without a 400.
+    assert "error" not in result or not result.get("error"), result
+    msg = result["choices"][0]["message"]
+    finish = result["choices"][0]["finish_reason"]
+    assert msg.get("content") or finish == "incomplete", \
+        f"unexpected empty reply with finish={finish}: {result}"
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not _LIVE_TESTS_ENABLED,
+    reason="live tests require FERAL_LIVE_TESTS=1 + OPENAI_API_KEY",
+)
+async def test_live_responses_multimodal_content_no_400():
+    """The operator's actual production bug — chat-completions
+    multimodal content `[{type:"text"}]` on gpt-5.5-pro used to
+    400. After v2026.5.25 it MUST 200."""
+    from agents.llm_provider import LLMProvider
+
+    provider = LLMProvider()
+    await provider.switch_provider(
+        "openai",
+        model=_LIVE_MODEL,
+        api_key=os.environ["OPENAI_API_KEY"],
+    )
+    result = await provider._responses_chat(
+        [{"role": "user", "content": [
+            {"type": "text", "text": "Reply 'ok'."},
+        ]}],
+        tools=None, temperature=1, max_tokens=256,
+    )
+    assert not result.get("error"), \
+        f"multimodal user content still 400s: {result.get('error')}"
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not _LIVE_TESTS_ENABLED,
+    reason="live tests require FERAL_LIVE_TESTS=1 + OPENAI_API_KEY",
+)
+async def test_live_responses_history_with_assistant_text_part():
+    """Multi-turn history replay where the assistant turn had
+    `[{type:"text"}]` content. v2026.5.25 must translate to
+    `output_text` before resending."""
+    from agents.llm_provider import LLMProvider
+
+    provider = LLMProvider()
+    await provider.switch_provider(
+        "openai",
+        model=_LIVE_MODEL,
+        api_key=os.environ["OPENAI_API_KEY"],
+    )
+    result = await provider._responses_chat(
+        [
+            {"role": "system", "content": "Answer in one word."},
+            {"role": "user", "content": [{"type": "text", "text": "Reply 'ok'."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+            {"role": "user", "content": "Now reply 'done'."},
+        ],
+        tools=None, temperature=1, max_tokens=256,
+    )
+    assert not result.get("error"), result.get("error")
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not _LIVE_TESTS_ENABLED,
+    reason="live tests require FERAL_LIVE_TESTS=1 + OPENAI_API_KEY",
+)
+async def test_live_responses_streaming_sse_yields_text_delta():
+    """SSE consumer must yield ``text_delta`` events for streamed
+    output_text deltas + a terminal ``done`` event. Without this
+    the chat UI sits silent through the whole reply."""
+    from agents.llm_provider import LLMProvider
+
+    provider = LLMProvider()
+    await provider.switch_provider(
+        "openai",
+        model=_LIVE_MODEL,
+        api_key=os.environ["OPENAI_API_KEY"],
+    )
+    events_by_type: dict[str, int] = {}
+    text_buf = ""
+    async for evt in provider._responses_stream(
+        [{"role": "user", "content": [{"type": "text", "text": "Count 1 to 3."}]}],
+        tools=None, temperature=1, max_tokens=256,
+    ):
+        et = evt.get("type", "")
+        events_by_type[et] = events_by_type.get(et, 0) + 1
+        if et == "text_delta":
+            text_buf += evt.get("content", "")
+    assert "done" in events_by_type, f"no done event; events={events_by_type}"
+    assert "error" not in events_by_type, \
+        f"streaming emitted error events: {events_by_type}"
+    # Either visible text or just the lifecycle — both prove the
+    # stream survived without a 400.
+    # (Pro models can spend the whole budget on reasoning, so the
+    # text buffer may be empty even on a successful run.)
