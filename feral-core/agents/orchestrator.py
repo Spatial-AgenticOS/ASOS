@@ -471,12 +471,28 @@ class Orchestrator:
         handler declined (e.g. tool_genesis is not initialized in strict mode
         fallback paths).
         """
+        # v2026.5.26 — prefer the live ToolRunner state (the runtime
+        # source of truth); fall back to persisted settings.json under
+        # ``security.autonomy_mode`` via ``ConfigLoader.get`` (the
+        # pre-fix code used ``get_setting`` which doesn't exist, so it
+        # silently always fell to "hybrid").
         mode = "hybrid"
         try:
-            from api.state import state as _state
-            cfg = getattr(_state, "config", None)
-            if cfg and hasattr(cfg, "get_setting"):
-                mode = str(cfg.get_setting("autonomy_mode") or "hybrid").lower()
+            live = getattr(self.tool_runner, "autonomy_mode", "")
+            if live:
+                mode = str(live).lower()
+            else:
+                from api.state import state as _state
+                cfg = getattr(_state, "config", None)
+                if cfg:
+                    getter = getattr(cfg, "get_setting", None) or getattr(cfg, "get", None)
+                    if getter:
+                        try:
+                            val = getter("security", "autonomy_mode")
+                        except TypeError:
+                            val = getter("autonomy_mode")
+                        if val:
+                            mode = str(val).lower()
         except Exception:
             pass
 

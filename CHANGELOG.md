@@ -1,10 +1,39 @@
 # Changelog
 
-<!-- feral-version: 2026.5.25 -->
+<!-- feral-version: 2026.5.26 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.26] — Autonomy persistence + phone-bearer HTTP auth
+
+**Scope of this entry**: brain (`feral-core`) only. Two operator-reported P0 bugs blocking the launch demo. No web client or companion changes.
+
+### Fixed
+
+- **Autonomy mode reverts to "hybrid" on every brain restart.** `POST /api/autonomy {mode}` from the WebUI Settings -> Autonomy pane only updated the in-memory `ToolRunner._autonomy_mode` (`feral-core/agents/tool_runner.py:318-326`) — it never wrote to disk. On `feral start` the value was re-read from the `FERAL_AUTONOMY` env var or fell back to "hybrid". The operator's screenshot showed "loose" Active in the UI but after restart it was gone again. Fix: `POST /api/autonomy` now also calls `state.config.update_settings("security", "autonomy_mode", mode)` so the choice lands in `~/.feral/settings.json`. Boot-time loader in `api/state.py` reads the persisted value after orchestrator construction and applies it via `set_autonomy_mode`. `FERAL_AUTONOMY` env var still wins for ops who explicitly pin it. Response body now includes `persisted: bool` so the client can surface a "restart will revert" hint if the disk write failed (read-only fs etc).
+
+- **iOS phone bearer rejected on HTTP (401 "Waiting for brain auth").** `APIKeyMiddleware` at `feral-core/api/server.py:364-395` only accepted `Authorization: Bearer ${FERAL_API_KEY}` — the dashboard key. The brain HAS a `phone_bearer` scheme (minted during pair flow at `security/device_pairing.py:666-796`, verified for **WebSocket** auth at `server.py:1234` via `verify_phone_bearer`), but **the HTTP path never consulted `verify_phone_bearer`**. So when the iOS Context tab (Phase 7b-2) called `GET /api/context/live` with its phone-bearer token, the middleware 401'd. Operator screenshot showed the Phase 13 Context tab stuck on "Brain rejected this request (401). The brain needs to accept the phone bearer on HTTP — update the brain or re-pair." even though WebSocket pair succeeded. Fix: `APIKeyMiddleware.dispatch` now does a phone-bearer probe via `state.device_pairing_store.verify_phone_bearer(bearer)` BEFORE the 401, gated to a curated path allowlist that covers exactly what the iOS app reads:
+  - GET allowlist: `/api/context/live`, `/api/sessions/primary`, `/api/sessions/primary/transcript`, `/api/capabilities`, `/api/capabilities/has`, `/api/system/permissions`, `/api/discovery/brain`, `/api/devices`, `/api/devices/connected`, `/api/ambient/next_event`, `/api/ambient/digest`, `/api/conversations`, `/api/conversations/active/thread`, `/api/memory/context`, `/api/skills`, `/api/autonomy`; plus prefix-allowlist `/api/conversations/`, `/api/skills/`, `/api/timeline/`.
+  - POST allowlist: `/api/sessions/primary/transcript`, `/api/capabilities/has`, `/api/system/permissions/open`, `/api/approvals/approve`, `/api/approvals/deny`.
+  - Destructive endpoints (delete, write, config mutate, OAuth grants, etc.) remain locked to the dashboard `FERAL_API_KEY`. No phone-only mutation surface.
+  - Successful phone-bearer verification stashes the device id on `request.state.phone_device_id` so downstream handlers can per-device-filter without re-verifying. `verify_phone_bearer`'s sliding TTL still fires on every successful HTTP call (so phones that talk to the brain regularly never expire).
+
+### Also fixed in passing
+
+- `agents/self_model.py:_autonomy_mode` and `agents/orchestrator.py` autonomy-read sites used `ConfigLoader.get_setting(...)` which doesn't exist (the method is `ConfigLoader.get(section, key)`). The `hasattr(cfg, "get_setting")` guard silently always missed, so both call sites always returned "hybrid" even when settings.json had the right value. Both sites now prefer the live `ToolRunner.autonomy_mode` (single source of truth) with `ConfigLoader.get` as a documented fallback.
+
+### Tests
+
+- 8 new tests in `tests/test_phone_bearer_http_auth.py`: allowlisted GET with valid bearer → 200, no auth → 401, bogus bearer → 401, expired → 401, destructive DELETE with phone bearer → 401, allowlisted POST with phone bearer → 200, non-allowlisted GET with phone bearer → 401, dashboard `FERAL_API_KEY` still works everywhere.
+- 5 new tests in `tests/test_autonomy_persist.py`: POST persists to settings.json, GET returns the live runner value, invalid mode doesn't persist, persist failure doesn't roll back the live state, boot-load prefers settings.json over the default.
+- 414 regression tests across the LLM / pair / orchestrator / tool-runner / capability / desktop_control / permission_card stack still green.
+
+### Honest limitations
+
+- The CLI setup wizard's autonomy step (if it exists) is not in this fix — the WebUI Settings -> Autonomy pane is the supported path. CLI ops who want to pin autonomy still use `FERAL_AUTONOMY=loose feral start` (env var takes priority).
+- Phone-bearer HTTP acceptance is scoped to the curated allowlist. Adding a new iOS-facing HTTP endpoint requires explicitly adding its path to the allowlist — keeps the destructive surface tight.
 
 ## [2026.5.25] — Responses adapter content-type translation + Pro-model param clamps + payload extraction audit
 

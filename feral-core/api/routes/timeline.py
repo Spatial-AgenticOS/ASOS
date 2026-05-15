@@ -324,12 +324,39 @@ async def get_autonomy():
 
 @router.post("/api/autonomy")
 async def set_autonomy(body: dict):
-    """Set autonomy mode (strict/hybrid/loose)."""
+    """Set autonomy mode (strict/hybrid/loose).
+
+    v2026.5.26 — also persists the choice to ``~/.feral/settings.json``
+    under ``security.autonomy_mode`` so the chosen tier survives brain
+    restart. Pre-fix this endpoint only mutated the in-memory
+    ``ToolRunner._autonomy_mode``; on next ``feral start`` the value
+    reverted to ``hybrid`` (or whatever ``FERAL_AUTONOMY`` env var
+    pinned). Operator's WebUI Settings -> Autonomy pick was effectively
+    a no-op across sessions.
+    """
     mode = body.get("mode", "hybrid")
     if mode not in ("strict", "hybrid", "loose"):
         return {"error": "mode must be strict, hybrid, or loose"}
     orch = state.orchestrator
-    if orch and hasattr(orch, "tool_runner"):
-        orch.tool_runner.set_autonomy_mode(mode)
-        return {"success": True, "mode": mode}
-    return {"error": "Orchestrator not ready"}
+    if not (orch and hasattr(orch, "tool_runner")):
+        return {"error": "Orchestrator not ready"}
+
+    # Live-update the running process so the next tool call respects
+    # the new tier without waiting for a restart.
+    orch.tool_runner.set_autonomy_mode(mode)
+
+    # Persist so restarts honour the operator's choice. Best-effort:
+    # the in-memory flip ABOVE already succeeded; a disk-write failure
+    # shouldn't roll back the live state, just log truthfully.
+    persisted = False
+    try:
+        if state.config and hasattr(state.config, "update_settings"):
+            state.config.update_settings("security", "autonomy_mode", mode)
+            persisted = True
+    except Exception as exc:
+        import logging
+        logging.getLogger("feral.api.autonomy").warning(
+            "set_autonomy: persist to settings.json failed: %s — "
+            "live mode is %s but restart will revert", exc, mode,
+        )
+    return {"success": True, "mode": mode, "persisted": persisted}
