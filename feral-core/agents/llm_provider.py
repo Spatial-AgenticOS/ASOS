@@ -230,6 +230,35 @@ def _cooldown_state_path() -> str:
         return ""
 
 
+def _finalise_tool_call(entry: dict) -> dict:
+    """v2026.5.27 — convert an in-progress Responses-API tool-call
+    accumulator into the shape the orchestrator / tool_runner expects.
+
+    Input shape (built up across multiple SSE events):
+        {item_id: "fc_…", call_id: "call_…", name: "...", arguments: "{...}"}
+
+    Output shape (chat-completions-equivalent tool_call_delta):
+        {id: "call_…", name: "...", arguments: "{...}", args: {...}}
+
+    The orchestrator's stream loop merges these into the assistant
+    message's ``tool_calls`` list using ``id`` as the tool-call id and
+    ``args`` as the parsed function arguments. ``id`` MUST be the
+    model-facing ``call_id`` because that's what the next turn echoes
+    back as ``function_call_output.call_id`` to thread the response.
+    """
+    args_str = entry.get("arguments", "") or "{}"
+    try:
+        args = json.loads(args_str)
+    except (json.JSONDecodeError, TypeError):
+        args = {}
+    return {
+        "id": entry.get("call_id") or entry.get("item_id", ""),
+        "name": entry.get("name", ""),
+        "arguments": args_str,
+        "args": args,
+    }
+
+
 class LLMProvider:
     """
     Pluggable LLM interface.
@@ -1445,9 +1474,25 @@ class LLMProvider:
             "provider": self.provider, "model": self.model, "endpoint": "responses_stream",
         })
 
-        # Accumulator for streamed tool-call argument deltas. Keyed by
-        # the call_id assigned in the first ``function_call_arguments``
-        # event so concurrent parallel tool calls don't collide.
+        # v2026.5.27 — accumulator MUST be keyed by ``item_id`` (the
+        # ``fc_…`` opaque id), NOT ``call_id`` (the ``call_…`` id sent
+        # back to the model on tool_result). The Responses API uses
+        # ``item_id`` in every streaming delta event
+        # (``response.function_call_arguments.delta/.done``) while
+        # ``response.output_item.added`` carries BOTH ``item.id``
+        # (== item_id) and ``item.call_id``. v2026.5.25 keyed by
+        # ``call_id`` in ``output_item.added``, then the delta events
+        # set up a SECOND entry under ``item_id`` — so the entry with
+        # the function NAME never accumulated args, and the entry
+        # with the accumulated args had no name. Result: every Pro-
+        # model streaming tool call landed at the orchestrator as
+        # ``<name>({})`` (operator's demo hit the
+        # ``web_search__web_search({})`` failure mode every turn).
+        #
+        # Fix: key the accumulator by ``item_id``, stash the
+        # ``call_id`` inside the entry, and emit
+        # ``{id: call_id, name, args}`` on completion so the
+        # orchestrator + tool_runner see the correct tool-call shape.
         tool_calls: dict[str, dict] = {}
         stream_cm = None
         try:
@@ -1487,11 +1532,7 @@ class LLMProvider:
                 data_str = line[6:].strip()
                 if data_str == "[DONE]":
                     for tc in tool_calls.values():
-                        try:
-                            tc["args"] = json.loads(tc.get("arguments", "{}"))
-                        except json.JSONDecodeError:
-                            tc["args"] = {}
-                        yield {"type": "tool_call_delta", "tool_call": tc}
+                        yield {"type": "tool_call_delta", "tool_call": _finalise_tool_call(tc)}
                     yield {"type": "done"}
                     return
                 try:
@@ -1508,9 +1549,9 @@ class LLMProvider:
                         if clean:
                             yield {"type": "text_delta", "content": clean}
                 elif event_type == "response.function_call_arguments.delta":
-                    call_id = chunk.get("item_id") or chunk.get("call_id", "")
-                    entry = tool_calls.setdefault(call_id, {
-                        "id": call_id, "name": "", "arguments": "",
+                    item_id = chunk.get("item_id", "") or chunk.get("id", "")
+                    entry = tool_calls.setdefault(item_id, {
+                        "item_id": item_id, "call_id": "", "name": "", "arguments": "",
                     })
                     delta_args = chunk.get("delta", "") or chunk.get("arguments", "")
                     if isinstance(delta_args, str):
@@ -1518,29 +1559,54 @@ class LLMProvider:
                 elif event_type == "response.output_item.added":
                     item = chunk.get("item", {}) or {}
                     if item.get("type") == "function_call":
-                        call_id = item.get("call_id") or item.get("id", "")
-                        entry = tool_calls.setdefault(call_id, {
-                            "id": call_id, "name": "", "arguments": "",
+                        # Key by item.id (the "fc_…" opaque id) so the
+                        # subsequent arguments-delta events hit the SAME
+                        # entry. The model-facing tool-call identifier
+                        # is item.call_id ("call_…"); stash it on the
+                        # entry so we can emit it on completion.
+                        item_id = item.get("id", "") or item.get("call_id", "")
+                        entry = tool_calls.setdefault(item_id, {
+                            "item_id": item_id, "call_id": "", "name": "", "arguments": "",
                         })
+                        if item.get("call_id") and not entry["call_id"]:
+                            entry["call_id"] = item["call_id"]
                         if item.get("name"):
                             entry["name"] = item["name"]
                         if item.get("arguments") and not entry["arguments"]:
                             entry["arguments"] = item["arguments"]
                 elif event_type == "response.function_call_arguments.done":
-                    call_id = chunk.get("item_id") or chunk.get("call_id", "")
-                    if call_id in tool_calls:
-                        # Name may arrive in the ``done`` event for some
-                        # SDK versions; ensure we have it.
+                    item_id = chunk.get("item_id", "") or chunk.get("id", "")
+                    entry = tool_calls.get(item_id)
+                    if entry is not None:
+                        # The ``done`` event carries the final
+                        # arguments string. Use it as the source of
+                        # truth in case any delta was lost.
+                        final_args = chunk.get("arguments")
+                        if isinstance(final_args, str) and final_args:
+                            entry["arguments"] = final_args
                         name = chunk.get("name")
-                        if name and not tool_calls[call_id].get("name"):
-                            tool_calls[call_id]["name"] = name
+                        if name and not entry.get("name"):
+                            entry["name"] = name
+                elif event_type == "response.output_item.done":
+                    # Final consistent payload — the item.added event
+                    # may have emitted before arguments accumulated;
+                    # done has them. Use it to backfill anything we
+                    # might have missed (defensive).
+                    item = chunk.get("item", {}) or {}
+                    if item.get("type") == "function_call":
+                        item_id = item.get("id", "") or item.get("call_id", "")
+                        entry = tool_calls.setdefault(item_id, {
+                            "item_id": item_id, "call_id": "", "name": "", "arguments": "",
+                        })
+                        if item.get("call_id") and not entry.get("call_id"):
+                            entry["call_id"] = item["call_id"]
+                        if item.get("name"):
+                            entry["name"] = item["name"]
+                        if item.get("arguments"):
+                            entry["arguments"] = item["arguments"]
                 elif event_type == "response.completed":
                     for tc in tool_calls.values():
-                        try:
-                            tc["args"] = json.loads(tc.get("arguments", "{}"))
-                        except json.JSONDecodeError:
-                            tc["args"] = {}
-                        yield {"type": "tool_call_delta", "tool_call": tc}
+                        yield {"type": "tool_call_delta", "tool_call": _finalise_tool_call(tc)}
                     yield {"type": "done"}
                     return
                 elif event_type == "response.failed":
@@ -1557,11 +1623,7 @@ class LLMProvider:
             # treat as success so the orchestrator commits whatever it
             # got and the user sees a reply.
             for tc in tool_calls.values():
-                try:
-                    tc["args"] = json.loads(tc.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    tc["args"] = {}
-                yield {"type": "tool_call_delta", "tool_call": tc}
+                yield {"type": "tool_call_delta", "tool_call": _finalise_tool_call(tc)}
             yield {"type": "done"}
         except httpx.HTTPStatusError as e:
             detail = _describe_http_status_error(e)

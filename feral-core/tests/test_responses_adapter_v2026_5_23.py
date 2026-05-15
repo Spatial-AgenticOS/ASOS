@@ -940,6 +940,165 @@ async def test_probe_fails_on_responses_failed_status():
     assert "internal_error" in reason
 
 
+# ─── v2026.5.27 — streaming tool-call ID-key bug ────────────────
+
+
+class TestStreamingToolCallIdKey:
+    """v2026.5.27 — Responses-API SSE keying bug.
+
+    Verified live against gpt-5.5-pro on 2026-05-15: SSE events use
+    TWO different identifiers for a single function call:
+
+      response.output_item.added   item.id ("fc_…")  item.call_id ("call_…")
+      response.function_call_arguments.delta   item_id ("fc_…")
+      response.function_call_arguments.done    item_id ("fc_…")
+      response.output_item.done    item.id ("fc_…")  item.call_id ("call_…")
+
+    v2026.5.25 keyed the accumulator by ``call_id`` in `output_item.added`
+    but by ``item_id`` in the delta events. The entries didn't match,
+    so the model's emitted tool call landed at the orchestrator as
+    ``<name>({})`` (empty args). Operator's research-doc demo hit
+    this on EVERY ``web_search__web_search`` call (terminal log:
+    "Anti-loop guard: blocked repeated call 'web_search__web_search'
+    with identical arguments").
+
+    Fix: key by ``item_id``, stash ``call_id`` inside the entry,
+    emit ``id = call_id`` on completion so the orchestrator's
+    tool_runner receives the right shape.
+    """
+
+    def test_finalise_tool_call_emits_call_id_as_id_and_parses_args(self):
+        from agents.llm_provider import _finalise_tool_call
+
+        out = _finalise_tool_call({
+            "item_id": "fc_abc",
+            "call_id": "call_xyz",
+            "name": "web_search",
+            "arguments": '{"query":"state of AI agents 2026"}',
+        })
+        # The model-facing call_id is what gets echoed in
+        # function_call_output.call_id, so the orchestrator must
+        # see it as `id`.
+        assert out["id"] == "call_xyz"
+        assert out["name"] == "web_search"
+        assert out["arguments"] == '{"query":"state of AI agents 2026"}'
+        assert out["args"] == {"query": "state of AI agents 2026"}
+
+    def test_finalise_falls_back_to_item_id_when_call_id_missing(self):
+        from agents.llm_provider import _finalise_tool_call
+
+        out = _finalise_tool_call({
+            "item_id": "fc_only", "call_id": "",
+            "name": "x", "arguments": "{}",
+        })
+        assert out["id"] == "fc_only"
+
+    def test_finalise_invalid_args_becomes_empty_dict(self):
+        from agents.llm_provider import _finalise_tool_call
+
+        out = _finalise_tool_call({
+            "item_id": "fc_x", "call_id": "call_x",
+            "name": "x", "arguments": "{not json",
+        })
+        assert out["args"] == {}
+        assert out["arguments"] == "{not json"
+
+    @pytest.mark.asyncio
+    async def test_responses_stream_round_trips_function_call_with_args(self):
+        """End-to-end: simulate the real Responses-API SSE sequence
+        (output_item.added → function_call_arguments.delta x2 →
+        function_call_arguments.done → output_item.done →
+        response.completed) and confirm the adapter yields a
+        tool_call_delta with BOTH name AND args populated.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from agents.llm_provider import LLMProvider
+
+        # Build the SSE stream a real Pro-model call would produce
+        # (captured from the live OpenAI verification harness).
+        sse_lines = [
+            "event: response.created",
+            'data: {"type":"response.created"}',
+            "",
+            "event: response.output_item.added",
+            'data: {"type":"response.output_item.added","output_index":1,'
+            '"item":{"id":"fc_abc","type":"function_call","status":"in_progress",'
+            '"arguments":"","call_id":"call_xyz","name":"web_search"}}',
+            "",
+            "event: response.function_call_arguments.delta",
+            'data: {"type":"response.function_call_arguments.delta",'
+            '"item_id":"fc_abc","output_index":1,"delta":"{\\"query\\":\\"state of"}',
+            "",
+            "event: response.function_call_arguments.delta",
+            'data: {"type":"response.function_call_arguments.delta",'
+            '"item_id":"fc_abc","output_index":1,"delta":" AI agents 2026\\"}"}',
+            "",
+            "event: response.function_call_arguments.done",
+            'data: {"type":"response.function_call_arguments.done",'
+            '"item_id":"fc_abc","output_index":1,'
+            '"arguments":"{\\"query\\":\\"state of AI agents 2026\\"}"}',
+            "",
+            "event: response.output_item.done",
+            'data: {"type":"response.output_item.done","output_index":1,'
+            '"item":{"id":"fc_abc","type":"function_call","status":"completed",'
+            '"arguments":"{\\"query\\":\\"state of AI agents 2026\\"}",'
+            '"call_id":"call_xyz","name":"web_search"}}',
+            "",
+            "event: response.completed",
+            'data: {"type":"response.completed"}',
+            "",
+        ]
+
+        # AsyncMock SSE response.
+        class _FakeStreamResp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            async def aiter_lines(self):
+                for line in sse_lines:
+                    yield line
+
+        class _FakeCM:
+            async def __aenter__(self_inner):
+                return _FakeStreamResp()
+
+            async def __aexit__(self_inner, *a, **kw):
+                return None
+
+        fake_client = MagicMock()
+        fake_client.stream = MagicMock(return_value=_FakeCM())
+
+        p = LLMProvider.__new__(LLMProvider)
+        p.provider = "openai"
+        p.model = "gpt-5.5-pro"
+        p.client = fake_client
+
+        events = []
+        async for evt in p._responses_stream(
+            [{"role": "user", "content": "search the web"}],
+            tools=[{"type": "function", "function": {
+                "name": "web_search", "description": "",
+                "parameters": {"type": "object",
+                               "properties": {"query": {"type": "string"}}},
+            }}],
+            temperature=1, max_tokens=128,
+        ):
+            events.append(evt)
+
+        tool_call_deltas = [e for e in events if e["type"] == "tool_call_delta"]
+        assert len(tool_call_deltas) == 1, f"events={events}"
+        tc = tool_call_deltas[0]["tool_call"]
+        # The model-facing call_id flows through as the tool-call id.
+        assert tc["id"] == "call_xyz"
+        # Name + args BOTH populated — the v2026.5.25 bug.
+        assert tc["name"] == "web_search"
+        assert tc["args"] == {"query": "state of AI agents 2026"}
+        # Terminal done event was yielded.
+        assert any(e["type"] == "done" for e in events)
+
+
 # ─── v2026.5.25 — LIVE tests (skipped in CI, opt-in via env) ─────
 #
 # Run locally with:
