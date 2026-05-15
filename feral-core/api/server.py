@@ -349,6 +349,68 @@ _OPEN_GET_PATH_PREFIXES = (
 )
 
 
+# v2026.5.26 — paths the iOS companion / web client reads with the
+# operator's phone-bearer token (minted during pair flow). The
+# APIKeyMiddleware below treats a valid `phone_bearer` like the
+# dashboard API key for these endpoints ONLY — destructive operations
+# still require the explicit FERAL_API_KEY.
+#
+# Background: prior to this release, APIKeyMiddleware accepted only
+# `Bearer <FERAL_API_KEY>` on HTTP. The phone-bearer scheme worked on
+# the WebSocket handshake (verify_phone_bearer at server.py:1234) but
+# every HTTP call from the iOS app 401'd, breaking the Phase 7b-2
+# Context tab + the entire Phase 13 / Phase 10 phone surface
+# (operator screenshot: "Brain rejected this request (401). The brain
+# needs to accept the phone bearer on HTTP — update the brain or
+# re-pair.").
+#
+# Scope is intentionally narrow — every endpoint in this list is
+# read-mostly or returns operator-owned data the phone already has
+# implicit access to via the WS bridge. Anything that mutates
+# server-wide state (skill installs, vault writes, autonomy changes,
+# config updates, OAuth grants, etc.) stays gated to the dashboard
+# API key.
+_PHONE_BEARER_GET_PATHS = frozenset({
+    "/api/context/live",            # Phase 7b-2 iOS Context tab
+    "/api/sessions/primary",        # Phase 3 — primary session id
+    "/api/sessions/primary/transcript",  # Phase 9 — chat resume
+    "/api/capabilities",            # Phase 5 — capability registry
+    "/api/capabilities/has",        # Phase 5 — routability probe
+    "/api/system/permissions",      # Phase 11 — macOS TCC status
+    "/api/discovery/brain",         # Phase 13 — onboarding wizard
+    "/api/devices",                 # Phase 10 — connected devices
+    "/api/devices/connected",       # Phase 10 — live HUP set
+    "/api/ambient/next_event",      # ambient calendar context
+    "/api/ambient/digest",          # ambient summary
+    "/api/conversations",           # chat history list
+    "/api/conversations/active/thread",
+    "/api/memory/context",          # memory read
+    "/api/skills",                  # capability discovery
+    "/api/autonomy",                # iOS may surface current tier
+})
+
+# Prefix-matched read-mostly families. Anything below a prefix here is
+# accepted for phone bearers. Specific paths under these prefixes that
+# need to stay dashboard-only should be FILTERED later in middleware,
+# but today the prefixes here are read-only by construction.
+_PHONE_BEARER_GET_PREFIXES = (
+    "/api/conversations/",   # GET /api/conversations/{id}
+    "/api/skills/",          # GET /api/skills/{id}
+    "/api/timeline/",
+)
+
+# POST endpoints the iOS app legitimately needs. Tight allowlist; chat
+# + approvals + UI events are the operator-facing surface that already
+# has WebSocket equivalents (so the security envelope is unchanged).
+_PHONE_BEARER_POST_PATHS = frozenset({
+    "/api/sessions/primary/transcript",  # iOS reconcile (POST since_ms)
+    "/api/capabilities/has",             # body-form probe
+    "/api/system/permissions/open",      # Phase 13 — open Settings pane
+    "/api/approvals/approve",            # operator approval surface
+    "/api/approvals/deny",
+})
+
+
 def _is_webhook_receive(path: str) -> bool:
     """External webhook endpoints (POST /api/webhooks/{app_id}) must be public.
     
@@ -388,6 +450,45 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("authorization", "")
         if auth == f"Bearer {FERAL_API_KEY}":
             return await call_next(request)
+
+        # v2026.5.26 — phone-bearer HTTP auth. Pre-fix the middleware
+        # accepted only the dashboard FERAL_API_KEY, so the iOS app's
+        # phone_bearer (minted during pair flow + accepted on the WS
+        # handshake) 401'd on every HTTP call (operator screenshot:
+        # Context tab stuck on "Waiting for brain auth").
+        #
+        # Acceptance is path-allowlisted to read-mostly endpoints the
+        # iOS app actually consumes (see _PHONE_BEARER_GET_PATHS,
+        # _PHONE_BEARER_GET_PREFIXES, _PHONE_BEARER_POST_PATHS above).
+        # Destructive paths still require the dashboard API key.
+        if auth.startswith("Bearer "):
+            phone_ok = False
+            if request.method in ("GET", "HEAD") and (
+                path in _PHONE_BEARER_GET_PATHS
+                or any(path.startswith(p) for p in _PHONE_BEARER_GET_PREFIXES)
+            ):
+                phone_ok = True
+            elif request.method == "POST" and path in _PHONE_BEARER_POST_PATHS:
+                phone_ok = True
+
+            if phone_ok:
+                bearer = auth[len("Bearer "):].strip()
+                try:
+                    from api.state import state as _state
+                    store = getattr(_state, "device_pairing_store", None)
+                    verifier = getattr(store, "verify_phone_bearer", None) if store else None
+                    device_id = verifier(bearer) if callable(verifier) else None
+                except Exception:
+                    device_id = None
+                if device_id:
+                    # Stash the verified device id on the request so
+                    # downstream handlers can use it for per-device
+                    # filtering / auditing without re-verifying.
+                    try:
+                        request.state.phone_device_id = device_id
+                    except Exception:
+                        pass
+                    return await call_next(request)
 
         return JSONResponse({"error": "Unauthorized — provide Authorization: Bearer <key>"}, status_code=401)
 

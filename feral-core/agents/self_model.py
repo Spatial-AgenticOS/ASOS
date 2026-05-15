@@ -96,11 +96,31 @@ def _connected_devices(frame) -> list[str]:
 
 
 def _autonomy_mode() -> str:
+    # v2026.5.26: prefer the live ToolRunner state (single source of
+    # truth) rather than reading settings.json — the runtime value
+    # reflects WebUI mid-session changes that the persisted file
+    # captures only after a future POST. Falls back to the persisted
+    # value, then "hybrid".
     try:
         from api.state import state as _state
+        orch = getattr(_state, "orchestrator", None)
+        if orch and hasattr(orch, "tool_runner"):
+            live = getattr(orch.tool_runner, "autonomy_mode", "")
+            if live:
+                return str(live)
         cfg = getattr(_state, "config", None)
-        if cfg and hasattr(cfg, "get_setting"):
-            return str(cfg.get_setting("autonomy_mode") or "hybrid")
+        if cfg:
+            # ConfigLoader exposes ``get(section, key)``, NOT
+            # ``get_setting`` — the legacy hasattr check silently
+            # always missed.
+            getter = getattr(cfg, "get_setting", None) or getattr(cfg, "get", None)
+            if getter:
+                try:
+                    val = getter("security", "autonomy_mode")
+                except TypeError:
+                    val = getter("autonomy_mode")
+                if val:
+                    return str(val)
     except Exception:
         pass
     return "hybrid"
@@ -122,7 +142,7 @@ def build_runtime_line(frame=None) -> str:
     """One-line environment summary appended near the bottom of the system prompt.
 
     Example:
-        Runtime: agent=feral version=2026.5.25 host=mbp os=Darwin model=openai/gpt-4o channels=telegram(@feral_bot) devices=wristband autonomy=hybrid capabilities=voice,vision,somatic,mdns,sdui,tool_genesis,mitosis
+        Runtime: agent=feral version=2026.5.26 host=mbp os=Darwin model=openai/gpt-4o channels=telegram(@feral_bot) devices=wristband autonomy=hybrid capabilities=voice,vision,somatic,mdns,sdui,tool_genesis,mitosis
     """
     version = _feral_version()
     host = socket.gethostname() or "localhost"

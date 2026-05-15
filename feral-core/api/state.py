@@ -735,6 +735,41 @@ class BrainState:
                 approval_manager=self.approval_manager,
             )
             self.orchestrator.set_llm(_shared_llm)
+            # v2026.5.26 — apply persisted autonomy mode from
+            # `~/.feral/settings.json::security.autonomy_mode`.
+            # Pre-fix the boot path always reverted to "hybrid" (or
+            # whatever `FERAL_AUTONOMY` env var pinned), so the
+            # operator's WebUI Settings -> Autonomy choice never
+            # survived a restart. Env var still wins for ops who
+            # explicitly pin it via `FERAL_AUTONOMY`.
+            try:
+                _autonomy_env = os.environ.get("FERAL_AUTONOMY", "").strip().lower()
+                if not _autonomy_env and self.config:
+                    cfg_get = getattr(self.config, "get_setting", None) or self.config.get
+                    _persisted = ""
+                    if cfg_get is self.config.get:
+                        # `ConfigLoader.get(section, key)` is the
+                        # canonical accessor — `get_setting` doesn't
+                        # exist on ConfigLoader (the API mismatch
+                        # flagged by the v2026.5.26 audit).
+                        _persisted = cfg_get("security", "autonomy_mode") or ""
+                    else:
+                        try:
+                            _persisted = cfg_get("security", "autonomy_mode") or ""
+                        except Exception:
+                            _persisted = ""
+                    _persisted = str(_persisted).strip().lower()
+                    if _persisted in ("strict", "hybrid", "loose"):
+                        self.orchestrator.tool_runner.set_autonomy_mode(_persisted)
+                        logger.info(
+                            "Loaded persisted autonomy_mode=%s from settings.json",
+                            _persisted,
+                        )
+            except Exception as _auto_exc:
+                logger.warning(
+                    "autonomy boot-load skipped: %s — defaulting to hybrid",
+                    _auto_exc,
+                )
             # Phase 3 (audit-r10 overhaul) — wire snapshot store +
             # hydrate the primary thread from disk so the operator's
             # last ~50 turns survive brain restart. Persistence on the
