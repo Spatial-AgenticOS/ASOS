@@ -1,10 +1,42 @@
 # Changelog
 
-<!-- feral-version: 2026.5.26 -->
+<!-- feral-version: 2026.5.27 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.27] — Responses-API streaming tool-call ID-key fix
+
+**Scope of this entry**: brain (`feral-core`) only. Single-file P0 fix surfaced by the v2026.5.26 live demo. No other changes.
+
+### Fixed
+
+- **Pro-model streaming tool calls landed at the orchestrator with empty args** (`agents/llm_provider.py:_responses_stream`). Live evidence from the v2026.5.26 launch demo: the model emitted `web_search` with `{"query":"state of AI agents 2026"}` to the wire, but the orchestrator received `web_search__web_search({})` and the anti-loop guard tripped after 5 identical empty-args repeats. Operator demo froze.
+
+  Root cause: OpenAI's Responses API uses TWO different identifiers for a single function call across its SSE events —
+  - `response.output_item.added` → carries both `item.id` (`"fc_…"`) AND `item.call_id` (`"call_…"`)
+  - `response.function_call_arguments.delta` → carries `item_id` (`"fc_…"` only)
+  - `response.function_call_arguments.done` → same `item_id`
+  - `response.output_item.done` → same `item.id`/`item.call_id`
+
+  v2026.5.25/26 keyed the accumulator dict by `call_id` in `output_item.added` but by `item_id` in the delta events. The entries didn't match. The dict ended up with TWO entries per call: one with the `name` (`call_…` key) but empty `arguments`, and one with accumulated `arguments` (`fc_…` key) but no `name`. The orchestrator picked up the first and emitted `<name>({})`.
+
+  Fix: key the accumulator by `item_id` consistently. Stash the model-facing `call_id` inside the entry. New `_finalise_tool_call(entry)` helper converts the in-progress accumulator to the chat-completions-shaped tool-call dict the orchestrator/tool_runner expect (`id=call_id`, `name`, `arguments`, `args`). Also handle `response.output_item.done` for backfill if any earlier event was lost.
+
+### Tests
+
+- 4 new in `tests/test_responses_adapter_v2026_5_23.py::TestStreamingToolCallIdKey`:
+  - `test_finalise_tool_call_emits_call_id_as_id_and_parses_args` — the model-facing `call_id` is what the orchestrator sees as the tool-call `id`, args parse cleanly.
+  - `test_finalise_falls_back_to_item_id_when_call_id_missing` — defense against malformed SSE.
+  - `test_finalise_invalid_args_becomes_empty_dict` — bad JSON in args doesn't crash the loop.
+  - `test_responses_stream_round_trips_function_call_with_args` — END-TO-END: feed the EXACT SSE event sequence the live API produces (captured from the live verification harness on 2026-05-15), confirm the adapter emits ONE `tool_call_delta` with `id=call_xyz`, `name=web_search`, `args={"query":...}`. This is the regression test for the operator's demo bug.
+
+- 68/68 mocked tests pass (4 live tests skipped). 414+ regression across LLM / pair / orchestrator / tool_runner / capability_registry / desktop_control / permission_card stack still green.
+
+### Verification
+
+After installing v2026.5.27 and restarting the brain, the operator's research-doc demo prompt fires `web_search({"query":"state of AI agents 2026"})` correctly on the first turn — no more empty-args anti-loop trip.
 
 ## [2026.5.26] — Autonomy persistence + phone-bearer HTTP auth
 
