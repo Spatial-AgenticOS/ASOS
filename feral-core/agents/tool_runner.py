@@ -668,6 +668,41 @@ class ToolRunner:
     # Tool Execution (LLM loop variant)
     # ─────────────────────────────────────────────
 
+    async def _notify_user_of_pending_approval(
+        self, session_id: str, tool_name: str, denial: dict,
+    ) -> None:
+        """v2026.5.23 — emit a user-visible chat line + approval card
+        when the LLM loop hits a `pending_approval` safety gate.
+
+        Pre-fix: ``execute_tool_call_for_llm`` only logged ``Safety gate
+        (pending_approval)`` and returned the envelope to the LLM. The
+        streaming chat loop in the orchestrator then ``continue``d
+        without emitting any text, so the user saw a frozen turn.
+        This helper sends a short text + the approval ID so the user
+        knows the brain wants to do something + how to approve it.
+        Best-effort; failures here never block the underlying tool
+        loop.
+        """
+        if (denial or {}).get("status") != "pending_approval":
+            return
+        try:
+            send_text = getattr(self._orch, "_send_text", None)
+            if send_text is None:
+                return
+            request_id = denial.get("request_id", "")
+            human = denial.get("tool_name", tool_name)
+            level = denial.get("safety_level", "confirm")
+            msg = (
+                f"I'd like to run `{human}` but it needs approval "
+                f"({level}). Approve in the Devices/Approvals pane "
+                f"to continue."
+            )
+            if request_id:
+                msg += f"\n\nrequest_id: `{request_id}`"
+            await send_text(session_id, msg)
+        except Exception as exc:
+            logger.debug("pending_approval user-notify failed: %s", exc)
+
     async def execute_tool_call_for_llm(
         self,
         session_id: str,
@@ -688,6 +723,7 @@ class ToolRunner:
             )
             if denial:
                 logger.warning(f"Safety gate ({denial.get('status')}): {tool_name}")
+                await self._notify_user_of_pending_approval(session_id, tool_name, denial)
                 return denial
             logger.info(f"  MCP tool: {tool_name}")
             result = await mcp_client.call_tool(tool_name, args)
@@ -707,6 +743,7 @@ class ToolRunner:
             )
             if denial:
                 logger.warning(f"Safety gate ({denial.get('status')}): {tool_name}")
+                await self._notify_user_of_pending_approval(session_id, tool_name, denial)
                 return denial
             return await self.spawn_subagents(session_id, args)
 
@@ -735,6 +772,7 @@ class ToolRunner:
         )
         if denial:
             logger.warning(f"Safety gate ({denial.get('status')}): {tool_name}")
+            await self._notify_user_of_pending_approval(session_id, tool_name, denial)
             return denial
 
         if skill_id.startswith("daemon_"):

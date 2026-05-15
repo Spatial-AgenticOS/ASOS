@@ -397,6 +397,114 @@ __all__ = [
     "ModelClass",
     "classify",
     "classify_many",
+    "classify_endpoint",
     "filter_models",
+    "is_responses_only",
     "list_classes",
 ]
+
+
+# ---------------------------------------------------------------------------
+# v2026.5.23 — endpoint classification (chat_completions vs responses)
+# ---------------------------------------------------------------------------
+#
+# Some reasoning models on OpenAI are flagged ``ResponsesOnlyModel`` —
+# they answer at ``POST /v1/responses`` but the ``/v1/chat/completions``
+# endpoint either rejects them outright (404 "not a chat model") or
+# only accepts the non-streaming subset, which breaks FERAL's
+# streaming UI runtime.
+#
+# This module is the single source of truth the OpenAI adapter and the
+# CLI / web pickers consult to decide which HTTP endpoint to use. It
+# stays orthogonal to ``ModelClass`` (which exists for the reasoning
+# param fork in ``llm_provider.py`` — we do NOT want to reclassify
+# Pro models out of ``reasoning`` because the reasoning param shape
+# is still needed regardless of which endpoint we POST to).
+#
+# Rules
+# -----
+# * Deterministic. Pure function. No network. No env reads.
+# * "responses" classification implies BOTH (a) the model needs
+#   ``/v1/responses`` for correctness/streaming, AND (b) the request
+#   body uses the Responses-API shape (``input``/``instructions``,
+#   ``reasoning.effort``, ``max_output_tokens``) not the chat shape.
+# * Default is "chat_completions" for everything else — the adapter's
+#   established path. The picker won't suddenly route models that
+#   already work.
+#
+# The list below tracks OpenAI's ``ResponsesOnlyModel`` union (verified
+# from the 2026-05 Responses API reference + cookbook examples). When
+# a new responses-only model lands at OpenAI, add a regex here; the
+# adapter picks it up automatically. The flag pattern is regex match
+# (anchored) to support dated snapshots like ``gpt-5-pro-2026-05-08``.
+
+import re as _re_endpoint
+
+_RESPONSES_ONLY_OPENAI: tuple[_re_endpoint.Pattern[str], ...] = (
+    # gpt-5-pro / gpt-5.4-pro / gpt-5.5-pro and dated snapshots.
+    _re_endpoint.compile(r"^gpt-5(\.[0-9]+)?-pro(-\d{4}-\d{2}-\d{2})?$"),
+    # o-series reasoning Pro variants (o3-pro etc).
+    _re_endpoint.compile(r"^o[134]-pro(-.*)?$"),
+    # Deep research models (responses-only per OpenAI docs).
+    _re_endpoint.compile(r"^.+-deep-research(-.+)?$"),
+    # Codex-on-responses + computer-use preview models.
+    _re_endpoint.compile(r"^gpt-5-codex(-.+)?$"),
+    _re_endpoint.compile(r"^computer-use-preview(-.+)?$"),
+)
+
+
+def is_responses_only(provider_id: str, model_id: str) -> bool:
+    """True iff ``(provider_id, model_id)`` MUST be routed through
+    ``/v1/responses`` to function. False for every model that can be
+    served by ``/v1/chat/completions`` (the legacy adapter path).
+
+    Today only OpenAI exposes responses-only models. OpenRouter routes
+    that wrap them are also responses-only (the OR ``openai/`` prefix
+    delegates to the same upstream behaviour); other providers return
+    False.
+    """
+    if not model_id:
+        return False
+    provider = (provider_id or "").lower()
+    model = model_id.strip()
+
+    if provider == "openrouter" and "/" in model:
+        vendor, sub = model.split("/", 1)
+        if vendor.lower() == "openai":
+            base = sub.split(":", 1)[0]
+            return is_responses_only("openai", base)
+        return False
+
+    if provider != "openai":
+        return False
+
+    for pattern in _RESPONSES_ONLY_OPENAI:
+        if pattern.match(model):
+            return True
+    return False
+
+
+def classify_endpoint(
+    provider_id: str, model_id: str
+) -> Literal["chat_completions", "responses"]:
+    """Return the HTTP endpoint family the LLM provider should use for
+    ``(provider_id, model_id)``.
+
+    * ``"responses"`` — route through ``/v1/responses`` with the
+      Responses-API body shape. Streaming + tool calls + background
+      mode all live here. Examples: ``gpt-5-pro``, ``gpt-5.5-pro``,
+      ``o3-pro``, ``-deep-research`` variants, ``gpt-5-codex``,
+      ``computer-use-preview``.
+    * ``"chat_completions"`` — route through ``/v1/chat/completions``
+      with the OpenAI-compat body shape. Every other reachable model,
+      including non-Pro reasoning models like ``gpt-5.5`` /
+      ``gpt-5.4`` / ``o3`` (which are dual-stack: OpenAI recommends
+      Responses for them but Chat Completions still works).
+
+    The chat-completions default is deliberate — we don't want to
+    silently re-route models the existing adapter already handles
+    correctly. The opt-in is by membership in ``_RESPONSES_ONLY_OPENAI``.
+    """
+    if is_responses_only(provider_id, model_id):
+        return "responses"
+    return "chat_completions"

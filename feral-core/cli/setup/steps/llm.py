@@ -139,14 +139,36 @@ async def run_model_step(state: WizardState) -> None:
         cached = await catalog.list_models(provider_id, live=True, force=True)
     except Exception:
         cached = await catalog.list_models(provider_id, live=False)
-    models = list(cached.models)
+    raw_models = list(cached.models)
+
+    # v2026.5.23 — split chat-completions-safe models from the
+    # responses-only Pro family. Without this, the picker shows
+    # `gpt-5.5-pro` / `o3-pro` / deep-research as plain chat choices,
+    # but on a fresh install the LLM provider didn't have the
+    # /v1/responses adapter wired (now it does, v2026.5.23+). We keep
+    # the disclosure regardless so the operator knows which models
+    # take longer / cost more / behave differently before they pick.
+    try:
+        from providers.model_classes import classify_endpoint
+        chat_models = [m for m in raw_models if classify_endpoint(provider_id, m) == "chat_completions"]
+        responses_models = [m for m in raw_models if classify_endpoint(provider_id, m) == "responses"]
+    except Exception:
+        chat_models = raw_models
+        responses_models = []
+    models = chat_models
 
     # Header is owned by the state-machine step indicator now; we just
     # surface the discovered-count summary.
     if _RICH_AVAILABLE:
+        extra = ""
+        if responses_models:
+            extra = (
+                f" [dim](+ {len(responses_models)} responses-API models "
+                f"hidden by default; type a custom id to use one)[/]"
+            )
         console.print(
-            f"Discovered [bold]{len(models)}[/] models for "
-            f"[bold]{desc.display_name}[/] [dim](source: {cached.source})[/]."
+            f"Discovered [bold]{len(models)}[/] chat models for "
+            f"[bold]{desc.display_name}[/] [dim](source: {cached.source})[/]{extra}."
         )
 
     default = state.get_setting("llm", "model") or desc.default_model or (models[0] if models else "")

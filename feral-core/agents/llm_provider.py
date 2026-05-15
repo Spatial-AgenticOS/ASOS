@@ -471,9 +471,16 @@ class LLMProvider:
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> dict:
-        """
-        Send a chat completion request.
-        Returns the full response dict.
+        """Send a chat completion request and return the full response dict.
+
+        v2026.5.23: when the current model is classified as
+        ``responses``-only (gpt-5-pro / gpt-5.5-pro / o3-pro /
+        deep-research / gpt-5-codex / computer-use-preview), route
+        through ``_responses_chat`` against OpenAI's ``/v1/responses``
+        endpoint. Everything else stays on the existing
+        ``/v1/chat/completions`` path. The returned dict normalises to
+        the same shape callers already consume (``choices[0].message``
+        + optional ``tool_calls``).
 
         When ``fallback_providers`` is configured in ``self._config``,
         transparently delegates to :meth:`chat_with_failover` so every
@@ -502,6 +509,30 @@ class LLMProvider:
                     "choices": [],
                     "auth_permanent": True,
                 }
+
+        # v2026.5.23 — Responses-API route for OpenAI Pro / o-Pro /
+        # deep-research / Codex / computer-use models. Must run BEFORE
+        # the fallback-providers short-circuit so the primary actually
+        # gets a chance to answer through the right endpoint instead
+        # of immediately deferring to OpenRouter for every turn.
+        try:
+            from providers.model_classes import classify_endpoint
+            if classify_endpoint(self.provider, self.model) == "responses":
+                result = await self._responses_chat(
+                    messages, tools, temperature, max_tokens,
+                )
+                if result and not result.get("error"):
+                    return result
+                # Responses path failed — fall through to the normal
+                # failover ladder so fallback providers (OpenRouter)
+                # still have a shot. Log truthfully.
+                if result and result.get("error"):
+                    logger.warning(
+                        "Responses-API primary failed: %s — falling through to failover",
+                        result["error"],
+                    )
+        except Exception as resp_exc:
+            logger.warning("Responses-API route raised: %s", resp_exc)
 
         fallbacks = self._config.get("fallback_providers") if isinstance(self._config, dict) else None
         if fallbacks and not (self._local_engine and self.provider in ("local", "hybrid")):
@@ -835,6 +866,481 @@ class LLMProvider:
             logger.error(f"Local inference failed: {e}")
             return {"error": str(e), "choices": []}
 
+    # ─────────────────────────────────────────────────────────────
+    # v2026.5.23 — real round-trip availability probe
+    # ─────────────────────────────────────────────────────────────
+    #
+    # Called from ``switch_provider`` and (via ``api/state.py``)
+    # boot self-heal. Sends the smallest possible request through
+    # the right endpoint for the current model and reports a
+    # one-line reason on failure so the operator sees WHY a model
+    # was rejected (404 / 401 / 429 / DNS) instead of a silent
+    # ``available=False`` flip with no explanation.
+
+    async def _probe_chat_availability(self) -> tuple[bool, str]:
+        """Probe the live endpoint with a 1-token request.
+
+        Returns ``(ok, reason)``. On success, ``reason`` is empty.
+        On failure, ``reason`` is a short string suitable for the
+        log + the CLI / web UI to surface to the user.
+
+        Soft failures (DNS, connection reset) are reported as
+        failures here but the surrounding code may still leave
+        ``available=True`` and rely on the existing cooldown ladder —
+        the probe is advisory at boot time, not a circuit breaker
+        for in-flight traffic.
+        """
+        try:
+            from providers.model_classes import classify_endpoint
+            endpoint_class = classify_endpoint(self.provider, self.model)
+        except Exception:
+            endpoint_class = "chat_completions"
+
+        try:
+            if endpoint_class == "responses":
+                body = self._build_responses_body(
+                    [{"role": "user", "content": "."}],
+                    tools=None,
+                    temperature=1,
+                    max_tokens=1,
+                    stream=False,
+                )
+                resp = await self.client.post("/responses", json=body, timeout=10.0)
+            else:
+                body = {
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": "."}],
+                    "max_tokens": 1,
+                    "temperature": 1,
+                }
+                # Run the reasoning fork so reasoning models get
+                # max_completion_tokens / reasoning_effort.
+                from agents.llm_reasoning import apply_reasoning_fork
+                apply_reasoning_fork(self.provider, self.model, body)
+                resp = await self.client.post("/chat/completions", json=body, timeout=10.0)
+        except httpx.HTTPStatusError as exc:
+            return False, _describe_http_status_error(exc)
+        except Exception as exc:
+            return False, f"probe transport error: {exc}"
+
+        if resp.status_code == 200:
+            return True, ""
+        # Surface the structured server message — that's what the
+        # operator needs (e.g. "This is not a chat model").
+        try:
+            err = resp.json().get("error", {})
+            msg = err.get("message", "") if isinstance(err, dict) else str(err)
+        except Exception:
+            msg = resp.text[:200] if resp.text else ""
+        return False, f"HTTP {resp.status_code}{(' — ' + msg) if msg else ''}"
+
+    # ─────────────────────────────────────────────────────────────
+    # v2026.5.23 — OpenAI /v1/responses adapter
+    # ─────────────────────────────────────────────────────────────
+    #
+    # Pro models (gpt-5-pro / gpt-5.5-pro / o3-pro / deep-research /
+    # gpt-5-codex / computer-use-preview) are flagged
+    # ``ResponsesOnlyModel`` by OpenAI and either reject chat
+    # completions outright or only accept the non-streaming subset.
+    # FERAL's UI runtime depends on token streaming + multi-step tool
+    # loops, so we wire a dedicated Responses-API path here.
+    #
+    # Wire shape — verified against the 2026-05 Responses API
+    # reference + the function-call cookbook:
+    #
+    #   POST https://api.openai.com/v1/responses
+    #     model            <required string>
+    #     input            <string OR array of items>
+    #     instructions     <optional string — system prompt>
+    #     tools            <optional array — function schemas>
+    #     tool_choice      <optional string|object>
+    #     reasoning        { effort: none|minimal|low|medium|high|xhigh }
+    #     max_output_tokens <int>
+    #     stream           <bool>
+    #     background       <bool — for jobs that may take minutes>
+    #     previous_response_id <stateful continuation>
+    #
+    # SSE events the adapter consumes (terminal event names from the
+    # docs dump + the externally-confirmed function-call deltas):
+    #   response.created
+    #   response.in_progress
+    #   response.output_item.added
+    #   response.output_text.delta              -> yield text_delta
+    #   response.output_text.done
+    #   response.function_call_arguments.delta  -> accumulate
+    #   response.function_call_arguments.done   -> finalise tool call
+    #   response.output_item.done
+    #   response.completed                       -> yield done
+    #   response.failed                          -> yield error
+    #
+    # Stateful mode: we omit ``previous_response_id`` and resend the
+    # full message thread as ``input`` each turn. Simpler, matches the
+    # chat-completions semantics callers already expect, no extra
+    # bookkeeping on tool-call result resubmission. Switch to stateful
+    # later if latency becomes a real issue.
+
+    @staticmethod
+    def _messages_to_responses_input(messages: list[dict]) -> tuple[str, list[dict]]:
+        """Translate OpenAI Chat-Completions ``messages`` into a
+        Responses-API ``(instructions, input)`` pair.
+
+        * The first ``system`` message becomes ``instructions``.
+        * Every remaining message becomes an ``input`` item with
+          ``role`` + ``content`` (string for text-only, array for
+          vision/multimodal — passed through unchanged because the
+          Responses API accepts the same content-part shape).
+        * Assistant tool-call replays become ``function_call`` items.
+        * ``tool`` role messages (results) become
+          ``function_call_output`` items linked by ``call_id``.
+
+        Returns ``(instructions, input_items)``. ``instructions`` may
+        be the empty string when no system role was present.
+        """
+        instructions = ""
+        input_items: list[dict] = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                # First system wins as instructions; later ones become
+                # input items so multi-step prompts (e.g. PromptRefiner
+                # injecting a refined system note) aren't silently lost.
+                if not instructions:
+                    instructions = content if isinstance(content, str) else str(content)
+                    continue
+                input_items.append({"role": "user", "content": str(content)})
+                continue
+            if role == "tool":
+                call_id = msg.get("tool_call_id") or msg.get("call_id") or ""
+                output = content if isinstance(content, str) else str(content)
+                input_items.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output,
+                })
+                continue
+            if role == "assistant" and msg.get("tool_calls"):
+                # Assistant message with a tool call request — replay
+                # as function_call items so the model sees the same
+                # history it produced.
+                for tc in msg["tool_calls"]:
+                    fn = tc.get("function", {})
+                    args = fn.get("arguments")
+                    if isinstance(args, dict):
+                        args = json.dumps(args)
+                    input_items.append({
+                        "type": "function_call",
+                        "call_id": tc.get("id", ""),
+                        "name": fn.get("name", ""),
+                        "arguments": args or "{}",
+                    })
+                if isinstance(content, str) and content:
+                    input_items.append({"role": "assistant", "content": content})
+                continue
+            # Plain user / assistant content.
+            input_items.append({"role": role, "content": content})
+        return instructions, input_items
+
+    @staticmethod
+    def _chat_tools_to_responses_tools(tools: Optional[list[dict]]) -> Optional[list[dict]]:
+        """Convert Chat-Completions ``tools`` schemas to the
+        Responses-API shape (flat ``{type, name, description, parameters}``)
+        from the nested ``{type:"function", function:{...}}``."""
+        if not tools:
+            return None
+        out: list[dict] = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
+                fn = tool["function"]
+                out.append({
+                    "type": "function",
+                    "name": fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
+                })
+            else:
+                # Pass-through for already-flat tool schemas or
+                # built-in tools (web_search, code_interpreter, etc).
+                out.append({k: v for k, v in tool.items() if k != "_feral_meta"})
+        return out
+
+    def _build_responses_body(
+        self,
+        messages: list[dict],
+        tools: Optional[list[dict]],
+        temperature: float,
+        max_tokens: int,
+        *,
+        stream: bool,
+    ) -> dict:
+        from agents.llm_reasoning import apply_responses_param_fork
+
+        instructions, input_items = self._messages_to_responses_input(messages)
+        body: dict = {
+            "model": self.model,
+            "input": input_items,
+            "max_tokens": max_tokens,           # apply_responses_param_fork renames
+            "temperature": temperature,         # apply_responses_param_fork drops if !=1
+            "stream": bool(stream),
+        }
+        if instructions:
+            body["instructions"] = instructions
+        clean_tools = self._chat_tools_to_responses_tools(tools)
+        if clean_tools:
+            body["tools"] = clean_tools
+            body["tool_choice"] = "auto"
+        apply_responses_param_fork(self.model, body)
+        return body
+
+    async def _responses_chat(
+        self,
+        messages: list[dict],
+        tools: Optional[list[dict]],
+        temperature: float,
+        max_tokens: int,
+    ) -> dict:
+        """Non-streaming POST to ``/v1/responses``. Returns a dict
+        normalised to the chat-completions shape callers consume
+        (``choices[0].message.content`` + optional ``tool_calls``).
+        On error returns ``{"error": str, "choices": []}``.
+        """
+        from observability.metrics import increment, measure
+        body = self._build_responses_body(
+            messages, tools, temperature, max_tokens, stream=False,
+        )
+        increment("feral.llm.calls_total", attributes={
+            "provider": self.provider, "model": self.model, "endpoint": "responses",
+        })
+        try:
+            async def _do_responses():
+                resp = await self.client.post("/responses", json=body)
+                resp.raise_for_status()
+                return resp.json()
+
+            with measure("feral.llm.latency", {
+                "provider": self.provider, "model": self.model, "endpoint": "responses",
+            }):
+                payload = await _retry_llm_call(_do_responses)
+        except httpx.HTTPStatusError as e:
+            increment("feral.llm.errors_total", attributes={
+                "provider": self.provider, "model": self.model, "endpoint": "responses",
+            })
+            detail = _describe_http_status_error(e)
+            logger.error("Responses API error: %s", detail)
+            return {"error": detail, "choices": []}
+        except Exception as e:
+            increment("feral.llm.errors_total", attributes={
+                "provider": self.provider, "model": self.model, "endpoint": "responses",
+            })
+            detail = _describe_error(e)
+            logger.error("Responses API failed: %s", detail)
+            return {"error": detail, "choices": []}
+
+        return self._responses_payload_to_chat_dict(payload)
+
+    @staticmethod
+    def _responses_payload_to_chat_dict(payload: dict) -> dict:
+        """Walk the Responses API output and synthesise the same
+        ``{choices:[{message:{content, tool_calls}}]}`` shape the
+        chat-completions adapter returns. Keeps every existing caller
+        (``extract_response``, the orchestrator, the digital twin)
+        unchanged.
+        """
+        if not isinstance(payload, dict):
+            return {"error": "responses: empty payload", "choices": []}
+        if payload.get("error"):
+            err = payload["error"]
+            return {"error": err.get("message", str(err)), "choices": []}
+        text_chunks: list[str] = []
+        tool_calls: list[dict] = []
+        for item in payload.get("output", []) or []:
+            if not isinstance(item, dict):
+                continue
+            it = item.get("type", "")
+            if it == "message":
+                for part in item.get("content", []) or []:
+                    if isinstance(part, dict) and part.get("type") in ("output_text", "text"):
+                        t = part.get("text", "")
+                        if t:
+                            text_chunks.append(t)
+            elif it == "function_call":
+                args = item.get("arguments", "{}")
+                if not isinstance(args, str):
+                    args = json.dumps(args)
+                tool_calls.append({
+                    "id": item.get("call_id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name", ""),
+                        "arguments": args,
+                    },
+                })
+        message: dict = {"role": "assistant", "content": "".join(text_chunks)}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        return {
+            "id": payload.get("id", ""),
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": message, "finish_reason": payload.get("status", "stop")}],
+            "usage": payload.get("usage", {}),
+            "_responses_id": payload.get("id"),
+        }
+
+    async def _responses_stream(
+        self,
+        messages: list[dict],
+        tools: Optional[list[dict]],
+        temperature: float,
+        max_tokens: int,
+    ) -> AsyncGenerator[dict, None]:
+        """Stream from ``/v1/responses`` using SSE. Yields the same
+        event vocabulary the chat-completions stream yields
+        (``text_delta`` / ``tool_call_delta`` / ``done`` / ``error``)
+        so the orchestrator's stream loop stays unchanged.
+        """
+        from observability.metrics import increment
+        body = self._build_responses_body(
+            messages, tools, temperature, max_tokens, stream=True,
+        )
+        increment("feral.llm.calls_total", attributes={
+            "provider": self.provider, "model": self.model, "endpoint": "responses_stream",
+        })
+
+        # Accumulator for streamed tool-call argument deltas. Keyed by
+        # the call_id assigned in the first ``function_call_arguments``
+        # event so concurrent parallel tool calls don't collide.
+        tool_calls: dict[str, dict] = {}
+        stream_cm = None
+        try:
+            for _attempt in range(MAX_RETRIES):
+                try:
+                    stream_cm = self.client.stream("POST", "/responses", json=body)
+                    resp = await stream_cm.__aenter__()
+                    resp.raise_for_status()
+                    break
+                except Exception as e:
+                    if stream_cm:
+                        try:
+                            await stream_cm.__aexit__(type(e), e, e.__traceback__)
+                        except Exception:
+                            pass
+                        stream_cm = None
+                    err_str = str(e).lower()
+                    retriable = any(c in err_str for c in _RETRIABLE_CODES)
+                    if not retriable or _attempt == MAX_RETRIES - 1:
+                        raise
+                    logger.warning("Responses stream connect failed (attempt %d/%d)",
+                                   _attempt + 1, MAX_RETRIES)
+                    await asyncio.sleep(RETRY_DELAYS[_attempt])
+
+            current_event: Optional[str] = None
+            async for line in resp.aiter_lines():
+                if line is None or line == "":
+                    current_event = None
+                    continue
+                if line.startswith(":"):
+                    continue
+                if line.startswith("event: "):
+                    current_event = line[7:].strip()
+                    continue
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:].strip()
+                if data_str == "[DONE]":
+                    for tc in tool_calls.values():
+                        try:
+                            tc["args"] = json.loads(tc.get("arguments", "{}"))
+                        except json.JSONDecodeError:
+                            tc["args"] = {}
+                        yield {"type": "tool_call_delta", "tool_call": tc}
+                    yield {"type": "done"}
+                    return
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = current_event or chunk.get("type", "")
+
+                if event_type == "response.output_text.delta":
+                    delta_txt = chunk.get("delta", "") or chunk.get("text", "")
+                    if delta_txt:
+                        clean = sanitize_assistant_display_text(delta_txt)
+                        if clean:
+                            yield {"type": "text_delta", "content": clean}
+                elif event_type == "response.function_call_arguments.delta":
+                    call_id = chunk.get("item_id") or chunk.get("call_id", "")
+                    entry = tool_calls.setdefault(call_id, {
+                        "id": call_id, "name": "", "arguments": "",
+                    })
+                    delta_args = chunk.get("delta", "") or chunk.get("arguments", "")
+                    if isinstance(delta_args, str):
+                        entry["arguments"] += delta_args
+                elif event_type == "response.output_item.added":
+                    item = chunk.get("item", {}) or {}
+                    if item.get("type") == "function_call":
+                        call_id = item.get("call_id") or item.get("id", "")
+                        entry = tool_calls.setdefault(call_id, {
+                            "id": call_id, "name": "", "arguments": "",
+                        })
+                        if item.get("name"):
+                            entry["name"] = item["name"]
+                        if item.get("arguments") and not entry["arguments"]:
+                            entry["arguments"] = item["arguments"]
+                elif event_type == "response.function_call_arguments.done":
+                    call_id = chunk.get("item_id") or chunk.get("call_id", "")
+                    if call_id in tool_calls:
+                        # Name may arrive in the ``done`` event for some
+                        # SDK versions; ensure we have it.
+                        name = chunk.get("name")
+                        if name and not tool_calls[call_id].get("name"):
+                            tool_calls[call_id]["name"] = name
+                elif event_type == "response.completed":
+                    for tc in tool_calls.values():
+                        try:
+                            tc["args"] = json.loads(tc.get("arguments", "{}"))
+                        except json.JSONDecodeError:
+                            tc["args"] = {}
+                        yield {"type": "tool_call_delta", "tool_call": tc}
+                    yield {"type": "done"}
+                    return
+                elif event_type == "response.failed":
+                    err = chunk.get("response", {}).get("error") or chunk.get("error")
+                    msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                    yield {"type": "error", "content": f"responses failed: {msg}"}
+                    return
+                # Unhandled event types (audio.*, code_interpreter.*,
+                # reasoning_text.*, etc) are intentionally ignored;
+                # they don't carry user-facing text or tool calls in
+                # the FERAL chat surface today.
+
+            # Stream ended without an explicit completed/failed marker —
+            # treat as success so the orchestrator commits whatever it
+            # got and the user sees a reply.
+            for tc in tool_calls.values():
+                try:
+                    tc["args"] = json.loads(tc.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    tc["args"] = {}
+                yield {"type": "tool_call_delta", "tool_call": tc}
+            yield {"type": "done"}
+        except httpx.HTTPStatusError as e:
+            detail = _describe_http_status_error(e)
+            logger.error("Responses stream HTTP error: %s", detail)
+            yield {"type": "error", "content": detail}
+        except Exception as e:
+            detail = _describe_error(e)
+            logger.error("Responses stream failed: %s", detail)
+            yield {"type": "error", "content": detail}
+        finally:
+            if stream_cm:
+                try:
+                    await stream_cm.__aexit__(None, None, None)
+                except Exception:
+                    pass
+
     async def _stream_via_nonstream_failover(
         self,
         messages: list[dict],
@@ -943,6 +1449,34 @@ class LLMProvider:
                 ),
             }
             return
+
+        # v2026.5.23 — Responses-API stream route for OpenAI Pro / o-Pro /
+        # deep-research / Codex / computer-use models. Yields the same
+        # event vocabulary (text_delta / tool_call_delta / done / error)
+        # so orchestrator.handle_command_stream stays unchanged.
+        try:
+            from providers.model_classes import classify_endpoint
+            if classify_endpoint(self.provider, self.model) == "responses":
+                streamed_anything = False
+                async for event in self._responses_stream(
+                    messages, tools, temperature, max_tokens,
+                ):
+                    if event.get("type") in ("text_delta", "tool_call_delta"):
+                        streamed_anything = True
+                    if event.get("type") == "error" and not streamed_anything:
+                        # Yield error to caller; chat_stream's existing
+                        # failover-on-error logic in the outer handler
+                        # picks up after the generator finishes.
+                        yield event
+                        return
+                    yield event
+                if streamed_anything:
+                    return
+                # Responses route returned no usable content — fall
+                # through to chat-completions so failover / OR still
+                # gets a chance.
+        except Exception as resp_exc:
+            logger.warning("Responses-API stream route raised: %s", resp_exc)
 
         model_guard_error = _chat_completions_model_guard(self.provider, self.model)
         if model_guard_error:
@@ -1355,6 +1889,43 @@ class LLMProvider:
         # until the next chat call 404'd.
         self.available = bool(self.api_key) and bool(self.base_url)
         logger.info(f"Switched LLM to {provider}/{self.model} (available={self.available})")
+
+        # v2026.5.23 — Real round-trip availability probe.
+        #
+        # Pre-fix, ``available=True`` was set purely on key + base_url
+        # presence. That let the picker land the operator on models
+        # that DO appear in /v1/models but DON'T actually answer at
+        # /v1/chat/completions (e.g. gpt-5.5-pro returns 404 "not a
+        # chat model" because it routes through /v1/responses). The
+        # log said "available=True" but every subsequent chat 404'd.
+        #
+        # The probe sends a 1-token throwaway request through the
+        # endpoint the model is classified to use (chat-completions
+        # OR responses) and flips ``available=False`` on hard failure
+        # so the picker / orchestrator / health surface tell the
+        # truth from the first turn onwards.
+        #
+        # We deliberately ONLY probe known runtime providers — for
+        # custom-base_url gateways (operator-supplied OpenAI-compat
+        # endpoints behind their own DNS), the network may be slow
+        # / firewalled / unresolvable at boot time and the probe's
+        # DNS failure shouldn't disable the provider. Operators
+        # debugging connectivity get the existing cooldown-on-error
+        # ladder instead.
+        _probe_eligible = (
+            self.available
+            and provider in ("openai", "anthropic", "openrouter", "deepseek", "gemini", "groq", "kimi", "qwen")
+        )
+        if _probe_eligible:
+            probe_ok, probe_reason = await self._probe_chat_availability()
+            if not probe_ok:
+                self.available = False
+                logger.warning(
+                    "Probe failed for %s/%s: %s — `available` set to False. "
+                    "The model is unreachable from this endpoint; pick a "
+                    "different model or check the API key.",
+                    provider, self.model, probe_reason,
+                )
 
     async def reconfigure(
         self,
