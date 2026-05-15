@@ -151,6 +151,61 @@ def apply_reasoning_fork(provider: str, model: str, body: dict) -> dict:
     return body
 
 
+def apply_responses_param_fork(model: str, body: dict) -> dict:
+    """Rewrite *body* in-place for OpenAI's ``/v1/responses`` API.
+
+    v2026.5.23. Called by the dispatcher when the model class returned
+    by ``providers.model_classes.classify_endpoint`` is ``"responses"``.
+
+    Differences from the Chat-Completions reasoning fork:
+
+    * Token cap is ``max_output_tokens`` (counts reasoning + visible
+      output), NOT ``max_completion_tokens``.
+    * Reasoning controls live under a nested ``reasoning`` object,
+      not the top-level ``reasoning_effort`` string. Valid effort
+      values per OpenAI's docs: ``none|minimal|low|medium|high|xhigh``.
+      Some Pro models (e.g. ``gpt-5-pro``) hard-fix effort to ``high``;
+      we still send the field so the operator's chosen effort is
+      respected when the model allows it.
+    * The chat-shaped ``messages`` / ``temperature`` / ``top_p`` /
+      penalty params are deliberately left for the dispatcher to
+      translate; this fork only normalises the keys that already
+      live on the body.
+    """
+    if "max_tokens" in body and "max_output_tokens" not in body:
+        body["max_output_tokens"] = body.pop("max_tokens")
+    elif "max_completion_tokens" in body and "max_output_tokens" not in body:
+        # Caller already ran the chat-completions reasoning fork and is
+        # now switching adapters; honour the renamed cap.
+        body["max_output_tokens"] = body.pop("max_completion_tokens")
+    else:
+        body.pop("max_tokens", None)
+        body.pop("max_completion_tokens", None)
+
+    # Nest reasoning under an object. Honour an existing ``reasoning_effort``
+    # string the chat-completions fork may have set so the operator's
+    # configured effort survives the endpoint switch.
+    legacy_effort = body.pop("reasoning_effort", None)
+    reasoning = body.get("reasoning")
+    if not isinstance(reasoning, dict):
+        reasoning = {}
+        body["reasoning"] = reasoning
+    if "effort" not in reasoning:
+        reasoning["effort"] = legacy_effort or "medium"
+
+    # Strip chat-shaped sampling params that Responses API doesn't honour
+    # for reasoning models. Temperature is supported for non-reasoning
+    # Responses models but Pro / o-series reject anything other than 1
+    # — and our caller only hits this fork for responses-class models,
+    # which are all reasoning. Drop temperature to avoid the 400.
+    temp = body.get("temperature")
+    if temp is not None and temp != 1 and temp != 1.0:
+        body.pop("temperature", None)
+    for key in ("top_p", "presence_penalty", "frequency_penalty"):
+        body.pop(key, None)
+    return body
+
+
 __all__ = [
     "_apply_openai_reasoning_fork",
     "_apply_deepseek_reasoning_fork",
@@ -158,4 +213,5 @@ __all__ = [
     "_apply_anthropic_reasoning_fork",
     "_apply_groq_reasoning_fork",
     "apply_reasoning_fork",
+    "apply_responses_param_fork",
 ]

@@ -1,10 +1,54 @@
 # Changelog
 
-<!-- feral-version: 2026.5.23 -->
+<!-- feral-version: 2026.5.24 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.24] — Pro-model chat 404 fix: OpenAI /v1/responses adapter + real availability probe + tool-gate user notification
+
+**Scope of this entry**: brain (`feral-core`) only. Launch-blocking fix. No companion or web client changes.
+
+**The operator-reported failure**: an OpenAI-keyed install with `llm.model = "gpt-5.5-pro"` produced this loop on every chat turn —
+
+```
+[feral.llm] Switched LLM to openai/gpt-5.5-pro (available=True)
+POST https://api.openai.com/v1/chat/completions "HTTP 404 — invalid_request_error,
+  param=model: This is not a chat model and thus not supported in the
+  v1/chat/completions endpoint. Did you mean to use v1/completions?"
+[feral.llm] Stream primary openai/gpt-5.5-pro failed (model_not_found);
+  attempting non-stream failover
+```
+
+The user-facing chat never displayed a reply. A `computer_use__write_file` tool call hit the safety gate, the LLM loop logged `Safety gate (pending_approval)` without emitting any chat text, and the turn froze silently. OpenRouter 200 OKs in parallel were from the screen-loop / scene-analyzer / prompt-refiner subsystems — they reached OpenRouter via `llm.chat()` failover, but the broken streaming chat turn never reached the user.
+
+Four real root causes, four real fixes — not workarounds:
+
+### Fixed
+
+- **OpenAI `/v1/responses` adapter (`agents/llm_provider.py`).** Pro models (`gpt-5-pro`, `gpt-5.4-pro`, `gpt-5.5-pro`, dated snapshots), `o3-pro` / `o4-pro` and other o-series Pro variants, deep-research variants (`-deep-research`), `gpt-5-codex`, and `computer-use-preview` are OpenAI's `ResponsesOnlyModel` family. They either reject `/v1/chat/completions` outright or only accept the non-streaming subset, which breaks FERAL's token-streaming UI runtime. New `_responses_chat` (non-stream) + `_responses_stream` (SSE) methods POST to `/v1/responses` with the canonical body shape (`input` items + optional `instructions`, nested `reasoning.effort`, `max_output_tokens`, flattened tool schemas). SSE consumer handles `response.output_text.delta` (→ `text_delta`), `response.function_call_arguments.delta` / `.done` (→ `tool_call_delta`), `response.completed` (→ `done`), and `response.failed` (→ `error`). Tool-call history round-trips correctly: assistant `tool_calls` become `function_call` items, `tool` role messages become `function_call_output` items linked by `call_id`. Stateful continuation via `previous_response_id` deliberately deferred — every turn resends the full `input` thread so callers behave identically to the chat-completions path. Routing is automatic: `providers.model_classes.classify_endpoint(provider, model)` returns `"responses"` for the ResponsesOnlyModel family and `"chat_completions"` for everything else; `chat()` and `chat_stream()` check the classification first and dispatch accordingly. Failover is unchanged — Responses path failures fall through to the existing `_stream_via_nonstream_failover` → `chat_with_failover` ladder so OpenRouter / fallback providers still rescue traffic.
+
+- **Responses-API param fork (`agents/llm_reasoning.py`).** New `apply_responses_param_fork(model, body)` renames `max_tokens` (or `max_completion_tokens` from a prior chat-completions fork) → `max_output_tokens`, nests `reasoning_effort` under a `reasoning: {effort: ...}` object (valid values `none|minimal|low|medium|high|xhigh` per OpenAI docs), and strips chat-shaped sampling params (`temperature` != 1, `top_p`, presence/frequency penalties) that Pro models reject.
+
+- **Endpoint-aware availability probe (`agents/llm_provider.py:_probe_chat_availability` + `switch_provider`).** Pre-fix, `switch_provider` set `available=True` purely on `bool(api_key) and bool(base_url)` — a lie. A model that DOES appear in `/v1/models` but DOESN'T answer at `/v1/chat/completions` (the gpt-5.5-pro case) was tagged "ready" and every subsequent turn 404'd silently. The probe sends a 1-token throwaway request through the endpoint the model is classified to use, captures the structured server message (e.g. "This is not a chat model"), and flips `available=False` with the reason logged. Only runs for known runtime providers (openai / anthropic / openrouter / deepseek / gemini / groq / kimi / qwen) — custom-base_url gateways behind operator-supplied DNS skip the probe so a transient DNS miss doesn't disable a real gateway.
+
+- **`pending_approval` user-visible notification (`agents/tool_runner.py`).** When `execute_tool_call_for_llm` hit a safety-gated tool (e.g. `computer_use__write_file` on a plain "hi" turn), the runner logged `Safety gate (pending_approval): <tool>` and returned the envelope to the LLM, but the streaming chat loop in the orchestrator then `continue`d without emitting any text — the user saw a frozen turn with no signal that approval was needed. New helper `_notify_user_of_pending_approval` calls `orchestrator._send_text(session_id, msg)` with the tool name + request_id + safety level so the user sees `"I'd like to run \`computer_use__write_file\` but it needs approval (confirm)..."` and knows to open the Approvals pane. Best-effort: failures in the user-notification path never break the underlying tool loop.
+
+### Added
+
+- **`providers.model_classes.classify_endpoint(provider, model)`** — pure deterministic function returning `Literal["chat_completions", "responses"]`. Source of truth consulted by both `LLMProvider.chat` / `chat_stream` (dispatch) and `cli/setup/steps/llm.py` (picker filtering). `is_responses_only(provider, model)` is the lower-level predicate; OpenRouter `openai/<id>` slugs delegate correctly through vendor prefix stripping.
+
+- **CLI picker split (`cli/setup/steps/llm.py`).** The wizard's model list now calls `classify_endpoint` and shows only chat-completions-safe ids in the default picker. Responses-only models (the ones that 404'd the operator) are hidden behind the existing "↳ type a custom model id…" sentinel so power users who specifically want Pro models can still pick them — they route through the new adapter and the probe verifies reachability before save. The header now reads `Discovered N chat models for X (+ M responses-API models hidden by default; type a custom id to use one)` so the count is honest.
+
+### Tests
+
+36 new tests in `tests/test_responses_adapter_v2026_5_23.py` covering endpoint classification (Pro family, dated snapshots, OpenRouter delegation, non-Pro reasoning, plain chat, unknown id fallback), the Responses param fork (rename + nest + drop), `_messages_to_responses_input` round-trip (system → instructions, tool → function_call_output, assistant tool_calls → function_call), `_chat_tools_to_responses_tools` flatten, `_build_responses_body` canonical shape, `_responses_payload_to_chat_dict` text + tool_call + error normalisation, `_probe_chat_availability` endpoint dispatch + 404 surface, and `_notify_user_of_pending_approval` send_text emission + non-pending skip + transport-failure swallow. Full regression on Phase 1-13 (~731 tests across llm_provider / model_classes / chat_only_filter / catalog / self_heal / reasoning / failover / tool_runner / orchestrator / capability_registry / desktop_control / permission_card / phase11 / phase13 / etc.) — all green.
+
+### Honest limitations
+
+- **Background mode (`background: true` on Responses)** is supported by OpenAI for minutes-long jobs but the FERAL adapter currently always uses synchronous streaming. Operators running a Pro model that legitimately takes >5 min per turn may want to enable `background: true` + GET polling — that's a follow-up (v2026.5.25+).
+- **Existing v2026.5.22 / v2026.5.23 installs with `llm.model = "gpt-5.5-pro"`** will continue to fail until the brain process restarts on v2026.5.24. After restart, chat works through the new Responses adapter without any operator action.
 
 ## [2026.5.23] — `feral setup` interactive picker P0 fix + UX polish (PR #124)
 
