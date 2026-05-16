@@ -1,10 +1,91 @@
 # Changelog
 
-<!-- feral-version: 2026.5.27 -->
+<!-- feral-version: 2026.5.28 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.28] — CLI service mode + Android HUP parity + setup/start config parity + voice playback + manifest
+
+### Fixed — voice silent in WebUI despite brain emitting audio frames
+
+Operator reported on 2026-05-15: in the WebUI, the assistant replies in text but no audio plays. iOS phone playback works against the same brain.
+
+Two root causes, both browser-side:
+
+- **Suspended `AudioContext`** in `VoiceFullscreen.jsx`. Pre-fix, each modal instance created its own `AudioContext` inside an async playback helper. Chrome's autoplay policy leaves fresh contexts in `suspended` and `resume()` only moves them to `running` when called inside a user-gesture stack. The async helper landed outside that stack, so the context stayed suspended and every PCM `start()` produced silence. Fix: new `feral-client-v2/src/lib/audioContext.js` installs a one-shot global listener on `click`/`touchstart`/`keydown` from `bootstrap.js`, unlocks a shared `AudioContext` on the first user gesture anywhere in the app, and `VoiceFullscreen` reuses that singleton instead of minting suspended copies.
+- **Chunked MP3 decode failure** in `voice/chained_pipeline.py:_emit_tts`. Pre-fix the pipeline emitted one `audio_chunk` frame per 4096-byte transport slice from `OpenAITTSProvider.synthesize`, each labelled `encoding: "mp3"`. A slice is not a self-contained MP3 file; the client's `decodeAudioData` threw `EncodingError` per slice and the playback queue's `.catch` swallowed every failure. Fix: buffer the full TTS output and emit one complete MP3 frame, matching the working `perception/audio_pipeline.py:_synthesize_cloud` path. Streaming voice (PCM-shaped) is a follow-up.
+
+### Fixed — `Manifest: Line 1 col 1 Syntax error` in browser console
+
+The bundled `webui_v2/index.html` uses a relative manifest href (`./manifest.webmanifest`) because Vite is configured with `base: './'` so the `/v2/` alias and the canonical `/` mount serve the same bundle. On a deep SPA route like `/chat/`, the browser resolved that to `/chat/manifest.webmanifest`, the SPA-fallback catch-all returned `index.html` for the missing path, and the browser tried to parse HTML as JSON.
+
+Fix in `feral-core/api/server.py:serve_webui_or_fallback`: special-case `manifest.webmanifest` and `sw.js` so any request whose basename matches a PWA bundle file serves the canonical bundle-root copy with the right `application/manifest+json` / `application/javascript` content type, regardless of the requested subpath.
+
+### Fixed — model picker UX: "press space to mark exactly one option, then enter"
+
+Operator's 2026-05-15 screenshot: in `feral setup` step 2 (model picker), the fuzzy filter footer says "press space to mark exactly one option, then enter" because `ui_kit.fuzzy_select` is implemented on top of `inquirer.fuzzy(multiselect=True)` with a single-selection validator. That mark-then-confirm UX was added so users can "see their pick before committing" but it confused every first-time operator who expected the standard arrow-keys-then-enter direct-pick.
+
+Fix: new `cli/ui_kit.pick` and `cli/ui_kit.fuzzy_pick` use `inquirer.select` / `inquirer.fuzzy(multiselect=False)` for direct enter-on-cursor-position semantics. Model picker, provider picker, network-profile picker, autonomy picker all switched to the new helpers. Legacy `select` / `fuzzy_select` kept for flows that genuinely want a confirm step before commit (none today, but the contract stays).
+
+### Fixed — Responses-API `400` hid the real OpenAI error message
+
+Operator's 2026-05-15 chat showed `Stream error: HTTP 400 — Client error '400 Bad Request' for url 'https://api.openai.com/v1/responses'` with no structured detail — no `type`, no `code`, no `param`, no `message` — so the actual cause of the 400 was unknowable. Root cause: when `resp.raise_for_status()` fires inside `client.stream("POST", ...)`, the response body is lazy. `_describe_http_status_error` calls `response.json()` which returns `{}` because the body was never read, then falls back to the bare httpx string.
+
+Fix in `agents/llm_provider.py:_responses_stream` and the matching Chat-Completions streaming path: before `raise_for_status()`, `await resp.aread()` on any non-2xx so the OpenAI / Anthropic / DeepSeek error JSON populates `response.text` + `response.json()`. Next reproduction shows the actual `error.type` / `error.code` / `error.param` / `error.message` from the provider.
+
+**Scope**: brain (`feral-core`) + web client (`feral-client-v2`) + Android bridge (`feral-nodes/android-bridge`) + docs. The companion iOS app build fix ships as a separate PR against `FERAL-AI/feral-companion-ios` (#24).
+
+### Fixed — `feral start` now a real macOS / Linux service
+
+Pre-v2026.5.28 `feral start` ran uvicorn in a non-daemon thread of the operator's interactive shell, so closing the terminal killed the brain. An older `feral install-service` subcommand existed but installed under the wrong label, did not propagate `FERAL_*` env, and had no companion `feral stop` / `feral status` / `feral logs` / `feral restart`.
+
+- **`feral start` defaults to service mode** on macOS (`com.feral.brain` launchd LaunchAgent) and Linux (`feral-brain.service` user systemd unit). Terminal returns immediately. Use `feral start --foreground` for the legacy REPL-attached behaviour (which is exactly what the LaunchAgent itself invokes).
+- **New subcommands**: `feral stop`, `feral restart`, `feral service-status` (distinct from `feral status` which still hits the brain HTTP API), and `feral logs [--no-follow] [-n N] [--stderr]` that tails `~/.feral/logs/brain.{log,err}`.
+- **Label migration**: legacy `ai.feral.brain` plists are auto-`bootout`'d and removed on every install so operators don't end up with two copies of the brain.
+- **Env propagation**: every `FERAL_*` env var the operator currently has set is captured into the plist's `EnvironmentVariables` (launchd does not source shell rc). A one-shot `FERAL_TLS=1 feral start` therefore survives reboots until `feral start` is rerun.
+- **`ProgramArguments` delegates to `feral start --foreground --no-browser`** so the launchd-launched brain renders the same Rich banner chrome an operator sees interactively, captured directly to the log file.
+- Back-compat: `feral install-service` / `feral uninstall-service` shims still exist and still return `True`/`False` for old CI scripts.
+
+12 new tests in `tests/test_service_lifecycle.py`.
+
+### Fixed — `feral start` honors `feral setup` config
+
+Pre-v2026.5.28 the CLI runtime read port and TLS from env only, so persisted values from `feral setup` were silently ignored at boot.
+
+- `config.runtime.brain_port()` now reads `network.port` from `~/.feral/settings.json` when neither `FERAL_PORT` nor `FERAL_BRAIN_PORT` is set in the env. Env still wins.
+- `config.runtime.brain_tls_enabled()` now reads `network.tls` from `~/.feral/settings.json` when `FERAL_TLS` is unset. Env still wins.
+- `cli/setup/network.py` gains public `persist_port(port)` / `persist_tls(enabled)` helpers for setup steps + future `feral config` commands to write the same JSON shape.
+- `cmd_start` health-probe scheme bug fixed: pre-v2026.5.28 the boot-wait loop hardcoded `http://` against the local health endpoint, so `feral start --tls` always reported "Failed to start" even when the TLS server was healthy. The probe now follows the configured scheme.
+
+10 new tests in `tests/test_start_honors_settings.py`.
+
+### Fixed — `feral start` visual parity with `feral setup`
+
+- New `cli.ui_kit.print_start_banner(port, tls, bind_host)` and `print_ready_panel(port, llm_ok, ...)` render the same Rich `Panel` chrome (raccoon-prefixed title, brand cyan border, structured body) the setup wizard uses for its Welcome screen.
+- `cmd_start` and `cmd_serve` both call into these helpers. The legacy ASCII `╔══ F E R A L ══╗` box is removed.
+- Boot-wait dot loop replaced with a Rich `Progress` spinner that surfaces the current subsystem name from `/api/boot-report`.
+- Post-REPL shutdown messages use `banner_line` instead of plain `print` so the brand emoji + color persists across the full lifecycle.
+
+### Fixed — `cmd_doctor` no longer reads legacy plaintext `credentials.json`
+
+Pre-v2026.5.28 `feral doctor` probed for LLM API keys by reading `~/.feral/credentials.json` directly. That diverged from the encrypted `BlindVault` the setup wizard + brain runtime actually use, so vault-only installs saw "No API key" despite the brain having a working key.
+
+- LLM + voice credential probes now query `security.vault.BlindVault.get_credential` first, then env. Doctor reports the split (`N from env; M in vault`) so operators can see exactly where their keys live.
+- Source-level regression guard in `tests/test_start_honors_settings.py::test_cmd_doctor_no_longer_reads_credentials_json_for_keys` fails CI if the plaintext file probe is re-added.
+
+### Fixed — Android HUP wire-protocol parity with iOS
+
+`feral-nodes/android-bridge/bridge/.../TheoraBrainClient.kt` shipped a strict subset of the iOS `FeralBrainClient.swift` surface. Android phones could not send batched sensor frames, camera frames, skill approvals, or confirmation responses, and could not react to the corresponding inbound prompts.
+
+- **Class renamed** `TheoraBrainClient` → `FeralBrainClient` (matches iOS canonical name); file renamed accordingly.
+- **Directory renamed** `bridge/src/main/java/io/feral/bridge/` → `bridge/src/main/java/ai/feral/bridge/` so the filesystem path matches the `ai.feral.bridge` package declaration. Same rename for `sample/` (`io.feral.sample` → `ai.feral.sample`) and the test tree.
+- **Outbound additions**: `sendBatchSensorData(readings, source)` (`sensor_batch`), `sendCameraFrame(imageB64, source)` (`frame`), `sendSkillApproval(skillId, approved)` / `approveSkill` / `rejectSkill` (`skill_approval`), `sendConfirmationResponse(action, approved)` (`confirmation_response`).
+- **Inbound additions**: `registered` → `brainDidRegister(sessionId)`, `skill_proposal` → `brainDidProposeSkill(manifest, reason)`, `confirmation_required` → `brainRequestsConfirmation(action, tier, respond)` with a `ConfirmationResponder` typealias mirroring the iOS callback closure.
+- **`FeralV2Tokens.kt`** ported from `ios-app/App/FeralV2Tokens.swift`. Lives in the bridge module with no Compose dependency (raw `Int` ARGB + `dp` / `sp` numbers) so any consuming Android surface — Compose or View — uses the same palette / type scale / motion constants. `V2_MOBILE_PORTING.md` §1 table updated to point at the real path.
+
+13 new tests in `tests/test_hup_message_parity.py` (text-parses both Swift and Kotlin sources, asserts the supported-type sets stay in sync regardless of future refactors).
 
 ## [2026.5.27] — Responses-API streaming tool-call ID-key fix
 

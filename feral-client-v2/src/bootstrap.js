@@ -8,6 +8,15 @@
  * WebSocket + REST calls authenticate correctly.
  */
 import { API_BASE } from './lib/config';
+import { installAudioUnlock } from './lib/audioContext';
+
+// v2026.5.28 — install the global audio-unlock listener as early as
+// possible so the shared AudioContext is `running` by the time the
+// user opens the voice overlay. See ./lib/audioContext.js for the
+// rationale (Chrome autoplay policy + suspended-context silence).
+if (typeof window !== 'undefined') {
+  installAudioUnlock();
+}
 
 export async function bootstrapLocalApiKey() {
   try {

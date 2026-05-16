@@ -72,15 +72,24 @@ it via `swift test` from a plain macOS shell is not supported. Open
 the Xcode project to execute. The Kotlin test similarly needs the
 Android SDK (`testRuntimeOnly` of the JUnit + Android test runner).
 
-## 1. Token parity (shipped in this commit)
+## 1. Token parity (shipped 2026.5.28)
 
 | Web token file | iOS token file | Android token file |
 |---|---|---|
-| [`feral-client-v2/src/styles/tokens.css`](../feral-client-v2/src/styles/tokens.css) | [`ios-app/App/FeralV2Tokens.swift`](ios-app/App/FeralV2Tokens.swift) | [`android-app/src/main/java/ai/feral/node/FeralV2Tokens.kt`](android-app/src/main/java/ai/feral/node/FeralV2Tokens.kt) |
+| [`feral-client-v2/src/styles/tokens.css`](../feral-client-v2/src/styles/tokens.css) | [`ios-app/App/FeralV2Tokens.swift`](ios-app/App/FeralV2Tokens.swift) | [`android-bridge/bridge/src/main/java/ai/feral/bridge/FeralV2Tokens.kt`](android-bridge/bridge/src/main/java/ai/feral/bridge/FeralV2Tokens.kt) |
 
 All three files declare the same palette, type scale, radii, and motion
 constants. If you update one, update all three **in the same commit** per
 the systematic-sync rule in `ASOS/AGENT_PROMPT.md`.
+
+The Android token file lives in the `bridge/` library module (not in
+the `sample/` app) so any consuming Android surface — including
+third-party apps embedding the FERAL SDK — picks up the same tokens
+without an extra dependency. The bridge module deliberately has **no
+Compose dependency**, so the file exposes raw `Int` ARGB values + `dp`
+/ `sp` numbers; consumers convert in their own UI layer
+(`Color(FeralV2Tokens.bgBaseArgb)` for Compose, `setBackgroundColor`
+for View).
 
 ## 2. Persona-critical screens to port (follow-up work)
 
@@ -104,9 +113,13 @@ feeling. Everything else can migrate later.
 - **iOS port target:** replace `App/ChatView.swift` so messages render
   with a small `OrbView` (size=22) as role indicator and no bubbles.
   Composer pill matches the web `.v2-chat-composer`.
-- **Android port target:** replace `src/main/java/ai/feral/node/ChatScreen.kt`
-  using the same bubble-less pattern + Compose `Surface` with
-  `FeralV2Tokens.surface1` + `hairline`.
+- **Android port target:** add a `ChatScreen.kt` under
+  `android-bridge/sample/src/main/java/ai/feral/sample/ui/` using the
+  same bubble-less pattern + Compose `Surface` with
+  `FeralV2Tokens.surface1Argb` + `hairlineArgb`. The legacy
+  `src/main/java/ai/feral/node/ChatScreen.kt` referenced in earlier
+  drafts of this doc lived inside the deleted `feral-nodes/android-app/`
+  tree (see §0) and is no longer present.
 
 ### 2.3 Voice mode (visual takeover)
 
@@ -119,6 +132,35 @@ feeling. Everything else can migrate later.
   `Dialog` / `ModalBottomSheet` with Orb takeover. Honest
   provider label: OpenAI Realtime / Gemini Live / Local Whisper+Piper —
   never hide which provider is driving.
+
+## 2.4 HUP wire-protocol parity (shipped 2026.5.28)
+
+Until v2026.5.28 the Android bridge's `TheoraBrainClient.kt` was
+missing four outbound HUP message types and three inbound branches
+that iOS `feral-nodes/ios-bridge/FeralBrainClient.swift` already
+shipped. That left Android phones unable to:
+
+- Send batched sensor frames (`sensor_batch`)
+- Stream camera frames (`frame`)
+- Respond to skill installation prompts (`skill_approval`)
+- Confirm safety-gated tool actions (`confirmation_response`)
+
+…and to react to the corresponding inbound prompts (`registered`,
+`skill_proposal`, `confirmation_required`).
+
+In v2026.5.28 the file was:
+
+1. Renamed to [`FeralBrainClient.kt`](android-bridge/bridge/src/main/java/ai/feral/bridge/FeralBrainClient.kt)
+   (matching iOS).
+2. Moved from `bridge/src/main/java/io/feral/bridge/` to
+   `bridge/src/main/java/ai/feral/bridge/` so the directory layout
+   matches the `ai.feral.bridge` package declaration (the package vs
+   path mismatch had been confusing IDE import organizers for months).
+3. Extended with the four missing outbound methods +
+   `ConfirmationResponder` callback on `FeralBrainDelegate`.
+
+`tests/test_hup_message_parity.py` (brain repo) text-parses both
+client files and fails CI if the supported HUP type sets diverge again.
 
 ## 3. Verification bar (before merging screen rewrites)
 

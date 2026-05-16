@@ -146,7 +146,14 @@ def ask_choice(
         choices.append({"name": "← back", "value": _BACK_SENTINEL})
         choices.append({"name": "✕ quit setup", "value": _QUIT_SENTINEL})
         try:
-            picked = ui_kit.select(
+            # v2026.5.28 — pick (direct-pick) instead of select
+            # (space-to-mark). Provider / network-profile / autonomy
+            # pickers are all "choose one and move on" interactions;
+            # the mark-then-confirm UX was confusing for every
+            # first-time operator. See cli/ui_kit.py for the
+            # rationale + the kept `select` for flows that really
+            # want a confirm step.
+            picked = ui_kit.pick(
                 prompt,
                 choices,
                 default=default_opt.id if default_opt else None,

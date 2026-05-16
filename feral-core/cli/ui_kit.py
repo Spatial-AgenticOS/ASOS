@@ -147,6 +147,104 @@ def banner_line(
 
 
 # ---------------------------------------------------------------------------
+# ``feral start`` chrome — shared with ``feral serve`` and the launchd
+# foreground entrypoint so every boot path renders the same brand panel
+# instead of the legacy ASCII box.
+# ---------------------------------------------------------------------------
+
+
+def print_start_banner(
+    *,
+    port: int,
+    tls: bool,
+    bind_host: Optional[str] = None,
+    console=None,
+) -> None:
+    """Boot banner for ``feral start`` / ``feral serve``.
+
+    Renders the same Rich ``Panel`` chrome as the setup wizard's
+    Welcome screen so the brand styling stays consistent across every
+    command, instead of the legacy ``╔══ F E R A L ══╗`` ASCII box.
+    """
+    console = console or get_console()
+    scheme = "https" if tls else "http"
+    host_label = bind_host or "127.0.0.1"
+    lines = [
+        f"Starting brain on [{BRAND_COLOR}]{scheme}://{host_label}:{port}[/]",
+    ]
+    if tls:
+        lines.append("[dim]TLS enabled (self-signed cert in ~/.feral/tls)[/dim]")
+    body = "\n".join(lines)
+
+    if _RICH_AVAILABLE and Panel is not None:
+        console.print(
+            Panel.fit(
+                body,
+                title=f"{BRAND_EMOJI}  F E R A L",
+                border_style=BRAND_COLOR,
+                padding=(1, 2),
+            )
+        )
+        return
+
+    bar = "─" * 40
+    console.print(bar)
+    console.print(f"{BRAND_EMOJI}  F E R A L")
+    console.print(f"   Starting brain on {scheme}://{host_label}:{port}")
+    if tls:
+        console.print("   TLS enabled")
+    console.print(bar)
+
+
+def print_ready_panel(
+    *,
+    port: int,
+    llm_ok: bool,
+    skills_count: object = "?",
+    memory_notes: object = 0,
+    public_url: Optional[str] = None,
+    tls: bool = False,
+    console=None,
+) -> None:
+    """Post-boot summary card for ``feral start`` / ``feral serve``.
+
+    Mirrors the wizard's finish screen — same panel, same brand
+    color, same bullet shape. Renders an ``http://`` or ``https://``
+    URL based on the ``tls`` flag so the link is clickable in modern
+    terminals without scheme drift.
+    """
+    console = console or get_console()
+    scheme = "https" if tls else "http"
+    url = public_url or f"{scheme}://localhost:{port}"
+    llm_label = "ready" if llm_ok else "no key (run feral key)"
+    body_lines = [
+        f"[bold]Dashboard:[/bold] [{BRAND_COLOR}]{url}[/]",
+        f"[bold]LLM:[/bold] {llm_label}",
+        f"[bold]Skills:[/bold] {skills_count}",
+        f"[bold]Memory:[/bold] {memory_notes} notes",
+    ]
+    body = "\n".join(body_lines)
+
+    if _RICH_AVAILABLE and Panel is not None:
+        console.print(
+            Panel.fit(
+                body,
+                title=f"{BRAND_EMOJI}  Brain ready",
+                border_style=BRAND_COLOR,
+                padding=(1, 2),
+            )
+        )
+        return
+
+    console.print(f"{BRAND_EMOJI}  Brain ready")
+    for line in body_lines:
+        # Strip rich tags for the fallback path.
+        clean = line.replace("[bold]", "").replace("[/bold]", "")
+        clean = clean.replace(f"[{BRAND_COLOR}]", "").replace("[/]", "")
+        console.print(f"   {clean}")
+
+
+# ---------------------------------------------------------------------------
 # Asyncio nested-loop shim
 # ---------------------------------------------------------------------------
 
@@ -308,6 +406,14 @@ def _normalise_default_for_checkbox(default: Any, choices: Sequence[ChoiceLike])
 _SELECT_INSTRUCTION = "↑/↓ navigate · space to mark · enter to confirm"
 _FUZZY_INSTRUCTION = "type to filter · ↑/↓ navigate · space to mark · enter to confirm"
 
+# v2026.5.28 — direct-pick instructions (single press, no mark phase).
+# Used by the new ``pick`` / ``fuzzy_pick`` callers below; the legacy
+# ``select`` / ``fuzzy_select`` callers keep the mark-then-confirm UX
+# because some flows (e.g. autonomy mode) genuinely want a confirm
+# step before committing.
+_PICK_INSTRUCTION = "↑/↓ navigate · enter to pick"
+_FUZZY_PICK_INSTRUCTION = "type to filter · ↑/↓ navigate · enter to pick"
+
 
 def _validate_single_selection(result) -> bool:
     return isinstance(result, list) and len(result) == 1
@@ -398,6 +504,101 @@ def fuzzy_select(
             raise
         except Exception as exc:  # pragma: no cover
             logger.debug("ui_kit.fuzzy_select InquirerPy path failed: %r", exc)
+    return _fallback_select(message, choices, default=default)
+
+
+def pick(
+    message: str,
+    choices: Sequence[ChoiceLike],
+    *,
+    default: Any = None,
+    instruction: str = _PICK_INSTRUCTION,
+) -> Any:
+    """Direct single-pick with enter-on-cursor-position semantics.
+
+    v2026.5.28 — added because the legacy ``select`` (space-to-mark +
+    enter-to-confirm) confused every first-time operator coming from
+    the standard arrow-keys-then-enter UX. Use ``pick`` for any
+    single-pick where the user's intent is "I want this one, get me
+    out of this menu" — model pickers, provider pickers, yes/no/maybe
+    triplets. Keep ``select`` for flows that genuinely want a mark
+    step before commit.
+
+    Falls back to the same typed numeric prompt off-tty.
+    """
+    if _INQUIRER_AVAILABLE and _is_interactive():
+        try:
+            normalised = _normalise_choices(choices)
+            default_value = default if default in [
+                getattr(c, "value", c if isinstance(c, str) else c.get("value"))
+                for c in choices
+            ] else None
+
+            def _build():
+                return inquirer.select(  # type: ignore[union-attr]
+                    message=message,
+                    choices=normalised,
+                    default=default_value,
+                    instruction=instruction,
+                    qmark=BRAND_EMOJI,
+                    amark=BRAND_EMOJI,
+                    pointer="❯",
+                    cycle=False,
+                ).execute()
+
+            return _run_inquirer_safely(_build)
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:  # pragma: no cover
+            logger.debug("ui_kit.pick InquirerPy path failed: %r", exc)
+    return _fallback_select(message, choices, default=default)
+
+
+def fuzzy_pick(
+    message: str,
+    choices: Sequence[ChoiceLike],
+    *,
+    default: Any = None,
+    instruction: str = _FUZZY_PICK_INSTRUCTION,
+) -> Any:
+    """Type-to-filter direct single-pick.
+
+    v2026.5.28 — companion to ``pick`` for choice lists too long to
+    scroll (e.g. 100+ LLM model ids). One keystroke filters; enter
+    commits the highlighted item. No space-to-mark phase.
+
+    Mirrors ``inquirer.fuzzy(multiselect=False, ...)``; the legacy
+    ``fuzzy_select`` runs ``multiselect=True`` with a
+    single-selection validator, which is the UX that confused
+    operators with the "press space to mark exactly one option, then
+    enter" footer.
+    """
+    if _INQUIRER_AVAILABLE and _is_interactive():
+        try:
+            normalised = _normalise_choices(choices)
+            default_value = default if default in [
+                getattr(c, "value", c if isinstance(c, str) else c.get("value"))
+                for c in choices
+            ] else None
+
+            def _build():
+                return inquirer.fuzzy(  # type: ignore[union-attr]
+                    message=message,
+                    choices=normalised,
+                    default=default_value,
+                    instruction=instruction,
+                    qmark=BRAND_EMOJI,
+                    amark=BRAND_EMOJI,
+                    border=True,
+                    multiselect=False,
+                    cycle=False,
+                ).execute()
+
+            return _run_inquirer_safely(_build)
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:  # pragma: no cover
+            logger.debug("ui_kit.fuzzy_pick InquirerPy path failed: %r", exc)
     return _fallback_select(message, choices, default=default)
 
 
@@ -573,11 +774,15 @@ __all__ = [
     "BRAND_COLOR",
     "select",
     "fuzzy_select",
+    "pick",
+    "fuzzy_pick",
     "password",
     "confirm",
     "text",
     "brand_panel",
     "banner_line",
+    "print_start_banner",
+    "print_ready_panel",
     "get_console",
     "is_inquirer_available",
     "is_interactive",

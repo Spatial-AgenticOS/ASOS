@@ -150,6 +150,114 @@ def _installed_pkg_info() -> tuple[str, str]:
         return "unknown", "unknown"
 
 
+def cmd_stop():
+    """Stop the FERAL Brain service (and any matching launchd plist)."""
+    from cli import daemon as _daemon
+    from cli.ui_kit import banner_line as _banner
+
+    if not _daemon.is_service_supported():
+        _banner("Service control is only available on macOS and Linux.", style="yellow")
+        return
+
+    status = _daemon.service_status()
+    if not status.get("installed") and not status.get("running"):
+        _banner("No FERAL Brain service installed.", style="dim")
+        return
+
+    ok = _daemon.stop_service()
+    if ok:
+        _banner(f"Stopped {_daemon.SERVICE_LABEL}.")
+    else:
+        _banner(f"Failed to stop {_daemon.SERVICE_LABEL} — check `feral status` and the launchd log.", style="red")
+
+
+def cmd_restart():
+    """Restart the FERAL Brain service. Re-renders the plist."""
+    from cli import daemon as _daemon
+    from cli.ui_kit import banner_line as _banner, brand_panel as _panel
+
+    if not _daemon.is_service_supported():
+        _banner("Service control is only available on macOS and Linux.", style="yellow")
+        return
+
+    _banner(f"Restarting {_daemon.SERVICE_LABEL}...")
+    status = _daemon.restart_service()
+    body = (
+        f"[bold]Label:[/bold] {_daemon.SERVICE_LABEL}\n"
+        f"[bold]PID:[/bold]   {status.get('pid') or '—'}\n"
+        f"[bold]State:[/bold] {status.get('state') or 'starting'}"
+    )
+    _panel("Brain service restarted", body)
+
+
+def cmd_service_status():
+    """Show launchd / systemd state for the FERAL Brain service.
+
+    Distinct from ``cmd_status`` (which hits the brain's HTTP API for
+    a live dashboard snapshot). This one inspects the OS process
+    manager, which is what an operator wants when the brain isn't
+    responding to HTTP and they need to know whether it crashed.
+    """
+    from cli import daemon as _daemon
+    from cli.ui_kit import brand_panel as _panel, banner_line as _banner
+
+    if not _daemon.is_service_supported():
+        _banner("Service control is only available on macOS and Linux.", style="yellow")
+        return
+
+    status = _daemon.service_status()
+    if not status.get("installed"):
+        _banner("No FERAL Brain service installed. Run `feral start` to install.", style="dim")
+        return
+
+    pid = status.get("pid")
+    state = status.get("state") or ("running" if status.get("running") else "stopped")
+    body = (
+        f"[bold]Label:[/bold]   {_daemon.SERVICE_LABEL}\n"
+        f"[bold]PID:[/bold]     {pid if pid is not None else '—'}\n"
+        f"[bold]State:[/bold]   {state}\n"
+        f"[bold]Plist:[/bold]   {status.get('plist', '—')}\n"
+        f"[bold]Stdout:[/bold]  {status.get('stdout_log', '—')}\n"
+        f"[bold]Stderr:[/bold]  {status.get('stderr_log', '—')}"
+    )
+    _panel("Service status", body)
+
+
+def cmd_logs(*, follow: bool = True, n: int = 50, stderr: bool = False):
+    """Tail the brain's launchd / systemd log file. Ctrl+C to exit."""
+    from cli import daemon as _daemon
+    from cli.ui_kit import banner_line as _banner
+
+    if not _daemon.is_service_supported():
+        _banner("Service control is only available on macOS and Linux.", style="yellow")
+        return
+
+    stdout_log, stderr_log = _daemon.log_paths()
+    target = stderr_log if stderr else stdout_log
+
+    if not target.exists():
+        _banner(f"No log file yet at {target}. Run `feral start` first.", style="dim")
+        return
+
+    _banner(
+        f"Tailing {target} — Ctrl+C to exit.",
+        style="dim",
+    )
+    args = ["tail", "-n", str(n)]
+    if follow:
+        args.append("-F")
+    args.append(str(target))
+    try:
+        subprocess_proc = __import__("subprocess").Popen(args)
+        try:
+            subprocess_proc.wait()
+        except KeyboardInterrupt:
+            subprocess_proc.terminate()
+    except FileNotFoundError:
+        _banner("`tail` not found on PATH — print the file contents instead.", style="yellow")
+        sys.stdout.write(target.read_text())
+
+
 def cmd_status():
     data = _http_get("/api/dashboard")
     if "error" in data:
@@ -506,9 +614,23 @@ def cmd_serve(host: str | None = None, port: int | None = None, tls: bool = Fals
 
     scheme = "https" if ssl_kwargs else "http"
     public_base = os.getenv("FERAL_PUBLIC_BASE_URL", f"{scheme}://localhost:{port}")
-    print(f"\n  Starting FERAL Brain on {host}:{port} {'(TLS)' if ssl_kwargs else ''}...")
-    print(f"  Dashboard: {public_base}")
-    print(f"  API docs:  {public_base}/docs\n")
+
+    # Use the same brand chrome as `feral start` so the launchd
+    # foreground entrypoint renders consistently in `feral logs`.
+    from cli.ui_kit import (
+        get_console as _get_console,
+        print_start_banner as _print_start_banner,
+        banner_line as _banner_line,
+    )
+    _console = _get_console()
+    _print_start_banner(
+        port=port,
+        tls=bool(ssl_kwargs),
+        bind_host=host,
+        console=_console,
+    )
+    _banner_line(f"Dashboard: {public_base}", console=_console)
+    _banner_line(f"API docs:  {public_base}/docs", style="dim", console=_console)
 
     uvicorn.run("api.server:app", host=host, port=port, reload=False, log_level="info", **ssl_kwargs)
 
@@ -558,12 +680,26 @@ def _is_first_run() -> bool:
     return True
 
 
-def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = False):
+def cmd_start(
+    port: int | None = None,
+    no_browser: bool = False,
+    tls: bool = False,
+    foreground: bool = False,
+):
     """One command to rule them all.
 
-    Starts the brain in a non-daemon thread, waits for health, opens
-    the browser, drops into the interactive REPL — and *keeps the brain
-    alive when the REPL exits or crashes*.
+    Default behaviour on macOS / Linux: install + start the brain as a
+    user-level service (``com.feral.brain`` launchd LaunchAgent on
+    macOS, ``feral-brain.service`` user systemd unit on Linux) and
+    return immediately. ``feral stop`` / ``feral status`` / ``feral
+    logs`` / ``feral restart`` manage the running service.
+
+    ``foreground=True`` (``feral start --foreground``) keeps the
+    original interactive behaviour: the brain runs in a non-daemon
+    thread of this process, the operator gets the REPL, and Ctrl+C
+    shuts everything down. The launchd plist's ``ProgramArguments``
+    delegates to this path so the same banner chrome ends up in the
+    log file.
 
     Lifecycle invariant (the bug this docstring is here to prevent from
     ever shipping again): the brain is the long-lived service in this
@@ -592,6 +728,58 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
         print("  Missing dependencies. Run: pip install 'feral-ai[llm]'")
         sys.exit(1)
 
+    # Service-mode dispatch — when not asked for foreground, hand off
+    # to launchd / systemd and exit immediately. The launchd plist's
+    # ProgramArguments calls back into this function with --foreground
+    # so the boot path is exercised end-to-end inside the service.
+    from cli import daemon as _daemon
+    from cli.ui_kit import (
+        get_console as _get_console,
+        banner_line as _banner_line_service,
+        brand_panel as _brand_panel_service,
+    )
+
+    if not foreground and _daemon.is_service_supported():
+        # Propagate CLI flags into the env so the LaunchAgent plist
+        # captures them — operator's one-shot ``feral start --tls`` then
+        # survives reboots until ``feral start`` is rerun.
+        if port is not None:
+            os.environ["FERAL_PORT"] = str(port)
+        if tls:
+            os.environ["FERAL_TLS"] = "1"
+
+        _console_svc = _get_console()
+        _banner_line_service(
+            f"Installing {_daemon.SERVICE_LABEL} as a {('launchd' if sys.platform == 'darwin' else 'systemd --user')} service...",
+            console=_console_svc,
+        )
+        try:
+            status = _daemon.start_service()
+        except Exception as exc:  # pragma: no cover — surfaces platform issues to the operator
+            _banner_line_service(f"Service install failed: {exc}", style="red", console=_console_svc)
+            _banner_line_service(
+                "Falling back to foreground mode. Use --foreground next time to skip the service path.",
+                style="dim",
+                console=_console_svc,
+            )
+            foreground = True
+        else:
+            stdout_log, stderr_log = _daemon.log_paths()
+            body = (
+                f"[bold]Label:[/bold]   {_daemon.SERVICE_LABEL}\n"
+                f"[bold]PID:[/bold]     {status.get('pid') or '—'}\n"
+                f"[bold]State:[/bold]   {status.get('state') or 'starting'}\n"
+                f"[bold]Stdout:[/bold]  {stdout_log}\n"
+                f"[bold]Stderr:[/bold]  {stderr_log}"
+            )
+            _brand_panel_service("Brain service started", body, console=_console_svc)
+            _banner_line_service(
+                "Use `feral status` to check health, `feral logs` to tail, `feral stop` to stop.",
+                style="dim",
+                console=_console_svc,
+            )
+            return
+
     port = int(port or brain_port())
 
     ssl_kwargs: dict = {}
@@ -606,10 +794,9 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
 
     # First run detection — auto-launch setup
     if _is_first_run():
-        print()
-        print("  First time running FERAL? Let's set you up.\n")
+        from cli.ui_kit import banner_line as _firstrun_banner
+        _firstrun_banner("First time running FERAL? Let's set you up.")
         cmd_setup()
-        print()
 
     # Check if already running. In this branch there is no local server
     # for us to manage, so a clean REPL exit is enough.
@@ -619,7 +806,8 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
         if httpx:
             r = httpx.get(health_url, timeout=2, verify=False)
             if r.status_code == 200:
-                print(f"  FERAL is already running on port {port}")
+                from cli.ui_kit import banner_line as _alreadyup_banner
+                _alreadyup_banner(f"FERAL is already running on {scheme}://127.0.0.1:{port}")
                 if not no_browser:
                     _open_browser(port)
                 try:
@@ -630,13 +818,20 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
     except Exception:
         pass
 
-    tls_label = " (TLS)" if ssl_kwargs else ""
-    print(f"""
-  ╔══════════════════════════════════════╗
-  ║          F E R A L                    ║
-  ║   Starting agent on port {port}{tls_label:7s}  ║
-  ╚══════════════════════════════════════╝
-""")
+    from cli.ui_kit import (
+        get_console as _get_console,
+        print_start_banner as _print_start_banner,
+        print_ready_panel as _print_ready_panel,
+        banner_line as _banner_line,
+    )
+
+    _console = _get_console()
+    _print_start_banner(
+        port=port,
+        tls=bool(ssl_kwargs),
+        bind_host=brain_bind_host(),
+        console=_console,
+    )
 
     # Start server in a NON-daemon background thread so the brain can
     # outlive any REPL crash or clean exit. We keep a handle to the
@@ -669,47 +864,111 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
     # Cold-boot can easily take 30–60s on first run: LLM probe, embeddings
     # model download, mDNS discovery, channel start, Docker sandbox init...
     # FERAL_BOOT_TIMEOUT overrides for slow machines / CI.
-    print("  Starting brain...", end="", flush=True)
-    health_url = os.getenv("FERAL_HEALTH_URL", f"http://127.0.0.1:{port}/health")
-    boot_report_url = f"http://127.0.0.1:{port}/api/boot-report"
+    #
+    # Health-probe scheme tracks the actual server: when TLS is enabled
+    # we MUST use https:// against the self-signed cert or every probe
+    # 400s and the user sees a spurious "failed to start" message even
+    # though the brain is up. Pre-v2026.5.28 this line hardcoded http://
+    # which broke `feral start --tls` cold-boot detection.
+    _scheme = "https" if ssl_kwargs else "http"
+    health_url = os.getenv("FERAL_HEALTH_URL", f"{_scheme}://127.0.0.1:{port}/health")
+    boot_report_url = f"{_scheme}://127.0.0.1:{port}/api/boot-report"
     timeout_s = int(os.getenv("FERAL_BOOT_TIMEOUT", "90"))
-    last_subsystem: str | None = None
     healthy = False
-    for i in range(timeout_s):
-        time.sleep(1)
-        try:
-            if httpx:
-                r = httpx.get(health_url, timeout=2)
-                if r.status_code == 200:
+
+    try:
+        from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+        _RICH_PROGRESS = True
+    except Exception:
+        _RICH_PROGRESS = False
+
+    if _RICH_PROGRESS:
+        with Progress(
+            SpinnerColumn(style="cyan"),
+            TextColumn("[bold]Starting brain[/bold] · {task.description}"),
+            TimeElapsedColumn(),
+            transient=False,
+            console=_console,
+        ) as progress:
+            task = progress.add_task("warming up...", start=True)
+            last_subsystem: str | None = None
+            for i in range(timeout_s):
+                time.sleep(1)
+                try:
+                    if httpx:
+                        r = httpx.get(health_url, timeout=2, verify=False)
+                        if r.status_code == 200:
+                            healthy = True
+                            break
+                    else:
+                        import urllib.request
+                        urllib.request.urlopen(health_url, timeout=2)
+                        healthy = True
+                        break
+                except Exception:
+                    pass
+
+                subsystem = None
+                try:
+                    if httpx:
+                        rr = httpx.get(boot_report_url, timeout=1.5, verify=False)
+                        if rr.status_code == 200:
+                            body = rr.json() or {}
+                            subsystem = body.get("current") or (body.get("last") or {}).get("name")
+                except Exception:
+                    subsystem = None
+
+                if subsystem and subsystem != last_subsystem:
+                    progress.update(task, description=f"{subsystem}...")
+                    last_subsystem = subsystem
+    else:
+        # Plain stdout fallback when Rich isn't importable.
+        sys.stdout.write("  Starting brain...")
+        sys.stdout.flush()
+        last_subsystem = None
+        for i in range(timeout_s):
+            time.sleep(1)
+            try:
+                if httpx:
+                    r = httpx.get(health_url, timeout=2, verify=False)
+                    if r.status_code == 200:
+                        healthy = True
+                        break
+                else:
+                    import urllib.request
+                    urllib.request.urlopen(health_url, timeout=2)
                     healthy = True
                     break
-            else:
-                import urllib.request
-                urllib.request.urlopen(health_url, timeout=2)
-                healthy = True
-                break
-        except Exception:
-            pass
-
-        subsystem = None
-        try:
-            if httpx:
-                rr = httpx.get(boot_report_url, timeout=1.5)
-                if rr.status_code == 200:
-                    body = rr.json() or {}
-                    subsystem = body.get("current") or (body.get("last") or {}).get("name")
-        except Exception:
+            except Exception:
+                pass
             subsystem = None
-
-        if subsystem and subsystem != last_subsystem:
-            print(f"\n    [{i+1}s] {subsystem}...", end="", flush=True)
-            last_subsystem = subsystem
-        else:
-            print(".", end="", flush=True)
+            try:
+                if httpx:
+                    rr = httpx.get(boot_report_url, timeout=1.5, verify=False)
+                    if rr.status_code == 200:
+                        body = rr.json() or {}
+                        subsystem = body.get("current") or (body.get("last") or {}).get("name")
+            except Exception:
+                subsystem = None
+            if subsystem and subsystem != last_subsystem:
+                sys.stdout.write(f"\n    [{i+1}s] {subsystem}...")
+                last_subsystem = subsystem
+            else:
+                sys.stdout.write(".")
+            sys.stdout.flush()
+        sys.stdout.write("\n")
 
     if not healthy:
-        print(f"\n  Failed to start after {timeout_s}s. Check logs or run: feral doctor")
-        print("  Tip: FERAL_BOOT_TIMEOUT=180 feral start   # for slow first runs")
+        _banner_line(
+            f"Failed to start after {timeout_s}s. Check logs or run: feral doctor",
+            style="red",
+            console=_console,
+        )
+        _banner_line(
+            "Tip: FERAL_BOOT_TIMEOUT=180 feral start   # for slow first runs",
+            style="dim",
+            console=_console,
+        )
         # Try to stop the brain we spawned, then exit with non-zero so
         # the user sees the failure.
         srv = server_holder.get("server")
@@ -718,14 +977,18 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
         server_thread.join(timeout=5)
         sys.exit(1)
 
-    # Print status
+    # Render the post-boot panel using the same chrome as the wizard's
+    # finish screen.
     data = _http_get("/api/dashboard")
-    skills_count = data.get("skills_count", "?")
-    llm_ok = "ready" if data.get("llm_available") else "no key"
-    mem = data.get("memory", {})
-    print("\n  Brain ready!")
-    print(f"  LLM: {llm_ok} | Skills: {skills_count} | Memory: {mem.get('notes', 0)} notes")
-    print(f"  Dashboard: {os.getenv('FERAL_PUBLIC_BASE_URL', f'http://localhost:{port}')}")
+    _print_ready_panel(
+        port=port,
+        llm_ok=bool(data.get("llm_available")),
+        skills_count=data.get("skills_count", "?"),
+        memory_notes=(data.get("memory") or {}).get("notes", 0),
+        public_url=os.getenv("FERAL_PUBLIC_BASE_URL"),
+        tls=bool(ssl_kwargs),
+        console=_console,
+    )
 
     if not no_browser:
         _open_browser(port)
@@ -771,9 +1034,12 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
         print("  Brain is still running.")
 
     if not shutdown_requested.is_set():
-        print()
-        print(f"  REPL closed. Brain still running on http://localhost:{port}")
-        print("  Press Ctrl+C to stop the brain.")
+        _shutdown_scheme = "https" if ssl_kwargs else "http"
+        _banner_line(
+            f"REPL closed. Brain still running on {_shutdown_scheme}://localhost:{port}",
+            console=_console,
+        )
+        _banner_line("Press Ctrl+C to stop the brain.", style="dim", console=_console)
         try:
             while server_thread.is_alive() and not shutdown_requested.is_set():
                 server_thread.join(timeout=1.0)
@@ -781,12 +1047,12 @@ def cmd_start(port: int | None = None, no_browser: bool = False, tls: bool = Fal
             shutdown_requested.set()
 
     # Tell uvicorn to stop and wait for it to drain.
-    print("\n  Shutting down brain...")
+    _banner_line("Shutting down brain...", console=_console)
     srv = server_holder.get("server")
     if srv is not None:
         srv.should_exit = True
     server_thread.join(timeout=15)
-    print("  Goodbye!")
+    _banner_line("Goodbye!", console=_console)
 
 
 def _open_browser(port: int):
@@ -873,22 +1139,38 @@ def cmd_doctor():
     else:
         _fail("Config directory", f"{home} does not exist", "Run: feral setup")
 
-    # ── 4. Credentials — at least one LLM key or Ollama reachable ──
+    # ── 4. Credentials — at least one LLM key (vault or env) or Ollama ──
+    #
+    # Pre-v2026.5.28 this probe read the legacy plaintext
+    # ``credentials.json`` file directly, which silently diverged from
+    # the encrypted vault that the setup wizard + the brain runtime
+    # actually use. Operators on a vault-only install saw "No API key"
+    # from `feral doctor` despite their key being live in the brain.
+    # The fix queries ``BlindVault`` first (matching the runtime path)
+    # and never reads the plaintext file.
     llm_keys = [
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
         "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY",
     ]
-    creds_data: dict = {}
-    creds_path = home / "credentials.json"
-    if creds_path.exists():
-        try:
-            creds_data = json.loads(creds_path.read_text())
-        except Exception:
-            pass
+    vaulted_keys: list[str] = []
+    try:
+        from security.vault import BlindVault  # type: ignore
 
-    has_llm_key = any(
-        os.environ.get(k) or creds_data.get(k) for k in llm_keys
-    )
+        vault = BlindVault()
+        for k in llm_keys:
+            try:
+                if vault.get_credential(k):
+                    vaulted_keys.append(k)
+            except Exception:
+                # Vault may be locked / corrupt — fall through silently.
+                pass
+    except Exception:
+        # No vault available — env-only / Ollama paths still work.
+        pass
+
+    env_keys = [k for k in llm_keys if os.environ.get(k)]
+    available_keys = sorted(set(env_keys) | set(vaulted_keys))
+
     ollama_ok = False
     try:
         import urllib.request
@@ -898,14 +1180,22 @@ def cmd_doctor():
     except Exception:
         pass
 
-    if has_llm_key:
-        providers = [k.replace("_API_KEY", "").replace("_", " ").title()
-                     for k in llm_keys if os.environ.get(k) or creds_data.get(k)]
-        _pass("LLM credentials", ", ".join(providers))
+    if available_keys:
+        providers = [
+            k.replace("_API_KEY", "").replace("_", " ").title()
+            for k in available_keys
+        ]
+        source_bits = []
+        if env_keys:
+            source_bits.append(f"{len(env_keys)} from env")
+        if vaulted_keys:
+            source_bits.append(f"{len(vaulted_keys)} in vault")
+        detail = f"{', '.join(providers)}  ({'; '.join(source_bits)})"
+        _pass("LLM credentials", detail)
     elif ollama_ok:
         _pass("LLM credentials", "Ollama running locally")
     else:
-        _fail("LLM credentials", "No API key and Ollama not reachable",
+        _fail("LLM credentials", "No API key in vault or env, and Ollama not reachable",
               "Run: feral setup  (or start Ollama: ollama serve)")
 
     # ── 5. Identity files — USER.md ──
@@ -1172,15 +1462,29 @@ def cmd_doctor():
         )
 
     # voice doctor: realtime provider key set?
-    have_voice_key = any(
-        os.environ.get(k) or creds_data.get(k)
-        for k in ("OPENAI_API_KEY", "GOOGLE_API_KEY")
-    )
+    #
+    # Same vault-first probe shape as the LLM-credentials section
+    # above. The pre-v2026.5.28 code relied on a local ``creds_data``
+    # dict populated from the legacy plaintext ``credentials.json``;
+    # that dict was deleted when the LLM section moved to BlindVault,
+    # so we re-query the vault here directly.
+    def _key_available(key: str) -> bool:
+        if os.environ.get(key):
+            return True
+        try:
+            from security.vault import BlindVault  # type: ignore
+
+            return bool(BlindVault().get_credential(key))
+        except Exception:
+            return False
+
+    voice_keys = ("OPENAI_API_KEY", "GOOGLE_API_KEY")
+    have_voice_key = any(_key_available(k) for k in voice_keys)
     if have_voice_key:
         providers = []
-        if os.environ.get("OPENAI_API_KEY") or creds_data.get("OPENAI_API_KEY"):
+        if _key_available("OPENAI_API_KEY"):
             providers.append("OpenAI Realtime")
-        if os.environ.get("GOOGLE_API_KEY") or creds_data.get("GOOGLE_API_KEY"):
+        if _key_available("GOOGLE_API_KEY"):
             providers.append("Google Gemini Realtime")
         _pass("Voice runtime", "key set: " + ", ".join(providers))
     else:
@@ -1511,11 +1815,29 @@ def main():
     sub = parser.add_subparsers(dest="subcommand")
 
     # feral start (THE main command)
-    start_p = sub.add_parser("start", help="Start FERAL — brain + dashboard + chat in one command")
+    start_p = sub.add_parser("start", help="Start FERAL — installs + starts the brain as a background service")
     start_p.add_argument("--serve-port", default=str(brain_port()), help=f"Port (default {brain_port()})")
-    start_p.add_argument("--no-browser", action="store_true", help="Don't open browser")
+    start_p.add_argument("--no-browser", action="store_true", help="Don't open browser (foreground mode only)")
     start_p.add_argument("--tls", action="store_true", help="Enable TLS (auto-generates self-signed cert if needed)")
+    start_p.add_argument(
+        "--foreground",
+        action="store_true",
+        help=(
+            "Run the brain in this terminal with the interactive REPL "
+            "(legacy behaviour). Default is to detach into the launchd / "
+            "systemd service so the terminal can be closed."
+        ),
+    )
     start_p.add_argument("--demo", action="store_true", help=argparse.SUPPRESS)
+
+    # feral stop / status / logs / restart — service lifecycle
+    sub.add_parser("stop", help="Stop the FERAL Brain service")
+    sub.add_parser("restart", help="Restart the FERAL Brain service (re-renders the plist)")
+    sub.add_parser("service-status", help="Show launchd / systemd state for the FERAL Brain service")
+    logs_p = sub.add_parser("logs", help="Tail the brain's service log file (Ctrl+C to exit)")
+    logs_p.add_argument("--no-follow", action="store_true", help="Print last N lines and exit")
+    logs_p.add_argument("--lines", "-n", type=int, default=50, help="Number of lines to show (default 50)")
+    logs_p.add_argument("--stderr", action="store_true", help="Tail stderr instead of stdout")
 
     # feral demo (shortcut for start --demo)
     demo_p = sub.add_parser("demo", help=argparse.SUPPRESS)
@@ -1703,7 +2025,24 @@ def main():
     elif args.subcommand == "start":
         if getattr(args, "demo", False):
             os.environ["FERAL_DEV_DEMO"] = "1"
-        cmd_start(port=int(args.serve_port), no_browser=args.no_browser, tls=getattr(args, "tls", False))
+        cmd_start(
+            port=int(args.serve_port),
+            no_browser=args.no_browser,
+            tls=getattr(args, "tls", False),
+            foreground=getattr(args, "foreground", False),
+        )
+    elif args.subcommand == "stop":
+        cmd_stop()
+    elif args.subcommand == "restart":
+        cmd_restart()
+    elif args.subcommand == "service-status":
+        cmd_service_status()
+    elif args.subcommand == "logs":
+        cmd_logs(
+            follow=not getattr(args, "no_follow", False),
+            n=int(getattr(args, "lines", 50)),
+            stderr=getattr(args, "stderr", False),
+        )
     elif args.subcommand == "serve":
         cmd_serve(host=args.bind, port=int(args.serve_port), tls=getattr(args, "tls", False))
     elif args.subcommand == "setup":

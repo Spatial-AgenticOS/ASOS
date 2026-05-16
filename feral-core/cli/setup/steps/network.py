@@ -65,7 +65,10 @@ async def run(state: WizardState) -> None:
         default = "tailscale"
 
     try:
-        picked = ui_kit.select(
+        # v2026.5.28 — pick (enter-on-cursor-position) instead of select
+        # (mark-then-confirm). Network profile is a one-of-three choice
+        # and operators expect arrow-keys-then-enter.
+        picked = ui_kit.pick(
             "Pick the access profile",
             choices,
             default=default,

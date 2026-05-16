@@ -1500,6 +1500,25 @@ class LLMProvider:
                 try:
                     stream_cm = self.client.stream("POST", "/responses", json=body)
                     resp = await stream_cm.__aenter__()
+                    # v2026.5.28 — pull the body BEFORE raise_for_status so
+                    # ``_describe_http_status_error`` can read the OpenAI
+                    # error JSON (type / code / param / message) for
+                    # operator-visible diagnostics. In streaming mode the
+                    # body is lazy by default; without ``aread()`` the
+                    # subsequent ``response.json()`` call returns ``{}``
+                    # and the user sees only the bare httpx string
+                    # ("Client error '400 Bad Request' for url ..."),
+                    # which hides the actual cause of the 400.
+                    #
+                    # ``isinstance`` guard is for the unit-test fakes that
+                    # back ``resp`` with a ``MagicMock`` — comparing a
+                    # MagicMock to 400 raises ``TypeError``.
+                    _status = getattr(resp, "status_code", None)
+                    if isinstance(_status, int) and _status >= 400:
+                        try:
+                            await resp.aread()
+                        except Exception:
+                            pass
                     resp.raise_for_status()
                     break
                 except Exception as e:
@@ -1835,6 +1854,18 @@ class LLMProvider:
                 try:
                     stream_cm = self.client.stream("POST", "/chat/completions", json=body)
                     resp = await stream_cm.__aenter__()
+                    # v2026.5.28 — see ``_responses_stream`` for the
+                    # rationale: pull the body before raise_for_status
+                    # so the OpenAI / Anthropic / DeepSeek error JSON
+                    # survives into ``_describe_http_status_error``.
+                    # ``isinstance`` guard for MagicMock-backed unit
+                    # tests (``>= 400`` raises TypeError on MagicMock).
+                    _status = getattr(resp, "status_code", None)
+                    if isinstance(_status, int) and _status >= 400:
+                        try:
+                            await resp.aread()
+                        except Exception:
+                            pass
                     resp.raise_for_status()
                     break
                 except Exception as e:
