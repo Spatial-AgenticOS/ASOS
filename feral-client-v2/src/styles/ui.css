@@ -430,31 +430,88 @@
 }
 .v2-menubar-theme:hover { color: var(--v2-text-primary); background: var(--v2-surface-1); }
 
-/* Shell dims when voice is live so the overlay reads cleanly. */
-.v2-shell.is-voice-mode .v2-shell-main { filter: brightness(0.4) saturate(0.8); transition: filter var(--v2-dur-slow) var(--v2-ease-out); }
-.v2-shell.is-voice-mode .v2-dock { opacity: 0.35; transition: opacity var(--v2-dur-slow) var(--v2-ease-out); pointer-events: none; }
+/* v2026.5.30 — dim/disable shell only when the operator explicitly
+   expands voice to fullscreen. The docked variant is non-blocking
+   so the chat composer and dock stay interactive while voice runs. */
+.v2-shell.is-voice-mode:has(.v2-voice-overlay--fullscreen.is-visible) .v2-shell-main {
+  filter: brightness(0.4) saturate(0.8);
+  transition: filter var(--v2-dur-slow) var(--v2-ease-out);
+}
+.v2-shell.is-voice-mode:has(.v2-voice-overlay--fullscreen.is-visible) .v2-dock {
+  opacity: 0.35;
+  transition: opacity var(--v2-dur-slow) var(--v2-ease-out);
+  pointer-events: none;
+}
 .v2-shell .v2-shell-main { transition: filter var(--v2-dur-slow) var(--v2-ease-out); }
 
+/* Shared base for both variants. */
 .v2-voice-overlay {
   position: fixed;
-  inset: 0;
   z-index: 200;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 20px;
   pointer-events: none;
   opacity: 0;
-  transform: scale(0.96);
   transition:
     opacity var(--v2-dur-slow) var(--v2-ease-out),
     transform var(--v2-dur-slow) var(--v2-ease-out);
 }
 .v2-voice-overlay.is-visible {
   opacity: 1;
-  transform: scale(1);
   pointer-events: auto;
+}
+
+/* Docked variant — compact strip pinned bottom-right. No backdrop, no
+   inset:0, no focus trap. */
+.v2-voice-overlay--docked {
+  right: 20px;
+  bottom: 20px;
+  left: auto;
+  top: auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: var(--v2-surface-1, rgba(20, 20, 28, 0.85));
+  -webkit-backdrop-filter: var(--v2-blur-sm);
+  backdrop-filter: var(--v2-blur-sm);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  transform: translateY(8px) scale(0.98);
+  max-width: min(560px, calc(100vw - 40px));
+}
+.v2-voice-overlay--docked.is-visible {
+  transform: translateY(0) scale(1);
+}
+.v2-voice-overlay--docked .v2-voice-orb { flex: 0 0 auto; }
+.v2-voice-overlay--docked .v2-voice-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: flex-start;
+  text-align: left;
+  gap: 4px;
+}
+.v2-voice-overlay--docked .v2-voice-status {
+  font-size: var(--v2-size-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+.v2-voice-overlay--docked .v2-voice-endbar { gap: 6px; }
+.v2-voice-overlay--docked .v2-voice-endbar .v2-btn { padding: 6px 12px; font-size: var(--v2-size-xs); }
+
+/* Fullscreen variant — original immersive layout, only when the
+   operator clicks Expand. */
+.v2-voice-overlay--fullscreen {
+  inset: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  transform: scale(0.96);
+}
+.v2-voice-overlay--fullscreen.is-visible {
+  transform: scale(1);
   background:
     radial-gradient(ellipse at center, rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0.6) 80%);
   -webkit-backdrop-filter: var(--v2-blur-sm);
