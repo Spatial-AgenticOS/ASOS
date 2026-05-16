@@ -185,7 +185,15 @@ async def run_model_step(state: WizardState) -> None:
         choices: list[dict] = [{"name": m, "value": m} for m in models]
         choices.append({"name": "↳ type a custom model id…", "value": custom_sentinel})
         try:
-            picked = ui_kit.fuzzy_select(
+            # v2026.5.28 — fuzzy_pick (enter-on-cursor-position) instead
+            # of fuzzy_select (space-to-mark + enter-to-confirm). The
+            # mark-then-confirm UX confused every first-time operator
+            # who typed a filter, hit enter, and got "press space to
+            # mark exactly one option, then enter" — the operator's
+            # screenshot of the model picker showing exactly that. Model
+            # selection is the classic "I want this one, get me out of
+            # this menu" interaction, so direct-pick is the right UX.
+            picked = ui_kit.fuzzy_pick(
                 f"Which model for {desc.display_name}?",
                 choices,
                 default=default if default in models else None,

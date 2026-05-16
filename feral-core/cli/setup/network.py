@@ -354,6 +354,35 @@ def _persist_bind_host(host: str) -> None:
     _write_settings(data)
 
 
+def persist_port(port: int) -> None:
+    """Persist the brain's HTTP listen port to ``settings.json``.
+
+    Public (no underscore) so the network setup step + the CLI's
+    ``feral config network port`` surface can both write it. Read
+    back at boot by ``config.runtime.brain_port`` when neither
+    ``FERAL_PORT`` nor ``FERAL_BRAIN_PORT`` is set in the env.
+    """
+    if not (1 <= int(port) <= 65535):
+        raise ValueError(f"port {port} out of range (1-65535)")
+    data = _read_settings()
+    data.setdefault("network", {})["port"] = int(port)
+    _write_settings(data)
+
+
+def persist_tls(enabled: bool) -> None:
+    """Persist the brain's TLS-on flag to ``settings.json``.
+
+    Public for the same reasons as ``persist_port``. Read back at
+    boot by ``config.runtime.brain_tls_enabled`` when ``FERAL_TLS``
+    is unset in the env. The actual certs still live in
+    ``~/.feral/tls/`` (or the env-pointed locations); this setting
+    only toggles whether ``feral start`` looks for them.
+    """
+    data = _read_settings()
+    data.setdefault("network", {})["tls"] = bool(enabled)
+    _write_settings(data)
+
+
 def _persist_pairing_mode(mode: str) -> None:
     data = _read_settings()
     access = data.setdefault("access", {})

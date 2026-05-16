@@ -20,6 +20,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import VoiceOrb from './VoiceOrb';
+import { unlockSharedAudioContext } from '../../lib/audioContext';
 
 const VOICE_STATES = ['idle', 'listening', 'processing', 'speaking', 'error'];
 
@@ -88,21 +89,20 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
   }, [voiceState]);
 
   const ensurePlaybackContext = useCallback(async () => {
-    if (typeof window === 'undefined') return null;
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return null;
-    if (!playbackCtxRef.current || playbackCtxRef.current.state === 'closed') {
-      playbackCtxRef.current = new AudioCtx();
+    // v2026.5.28 — use the app-wide shared AudioContext that's been
+    // unlocked on the first user gesture (see ../../lib/audioContext.js
+    // and ../../bootstrap.js). Pre-fix, each VoiceFullscreen instance
+    // created its OWN AudioContext inside this async helper and the
+    // resume() call landed outside the gesture stack, so Chrome left
+    // the context `suspended` and every scheduled PCM source produced
+    // silence — exactly the symptom the operator reported on
+    // 2026-05-15: text reply arrives in the chat, voice never plays.
+    const ctx = await unlockSharedAudioContext();
+    if (ctx && playbackCtxRef.current !== ctx) {
+      playbackCtxRef.current = ctx;
       nextPlaybackTimeRef.current = 0;
     }
-    if (playbackCtxRef.current.state === 'suspended') {
-      try {
-        await playbackCtxRef.current.resume();
-      } catch {
-        // iOS Safari may reject resume outside a fresh gesture.
-      }
-    }
-    return playbackCtxRef.current;
+    return ctx || null;
   }, []);
 
   const queuePcm16Playback = useCallback(async (payload) => {
@@ -274,10 +274,11 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
     if (!open) {
       nextPlaybackTimeRef.current = 0;
       playbackQueueRef.current = Promise.resolve();
-      if (playbackCtxRef.current) {
-        playbackCtxRef.current.close().catch(() => {});
-        playbackCtxRef.current = null;
-      }
+      // v2026.5.28 — do NOT close the AudioContext here. It is now
+      // the app-wide shared context (see getSharedAudioContext) and
+      // closing it would break any future playback site. Just drop
+      // our reference; the shared singleton stays alive.
+      playbackCtxRef.current = null;
       return;
     }
     ensurePlaybackContext().catch(() => {});

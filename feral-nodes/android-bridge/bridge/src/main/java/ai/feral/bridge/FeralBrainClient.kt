@@ -12,8 +12,18 @@ import java.util.concurrent.TimeUnit
  * Connects to ws://host:9090/v1/node?api_key=...
  * Registers as node_type: "phone", platform: "android"
  */
+/**
+ * Confirmation callback handed to delegates when the brain requests
+ * approval for a tool/skill action. The delegate decides interactively
+ * (e.g. user prompt) and calls back with `true`/`false`. The client
+ * relays the answer back to the brain as a `confirmation_response`
+ * frame mirroring iOS `FeralBrainClient.swift:482-494`.
+ */
+typealias ConfirmationResponder = (approved: Boolean) -> Unit
+
 interface FeralBrainDelegate {
     fun brainDidConnect()
+    fun brainDidRegister(sessionId: String) {}
     fun brainDidDisconnect(reason: String)
     fun brainDidReceiveText(text: String)
     fun brainDidReceiveSDUI(json: JsonObject)
@@ -21,6 +31,8 @@ interface FeralBrainDelegate {
     fun brainDidRequestStopPlayback()
     fun brainDidReceiveTranscript(text: String, isPartial: Boolean)
     fun brainDidReceiveExecute(executor: String, action: String, args: JsonObject)
+    fun brainDidProposeSkill(manifest: JsonObject, reason: String) {}
+    fun brainRequestsConfirmation(action: String, tier: String, respond: ConfirmationResponder) {}
 }
 
 class FeralBrainClient(
@@ -179,6 +191,99 @@ class FeralBrainClient(
         sendJson(msg)
     }
 
+    /**
+     * Batched sensor frame — mirrors iOS `sendBatchSensorData(_:)` at
+     * `feral-nodes/ios-bridge/FeralBrainClient.swift:241-253`. Use when
+     * multiple readings are produced in the same tick (e.g. glasses
+     * sync flushing N samples at once) to avoid the per-reading round
+     * trip cost of `sendSensorTelemetry`.
+     *
+     * `readings` is the per-sensor map keyed by sensor id; the values
+     * are arbitrary JSON dictionaries (heart_rate, spo2, temperature,
+     * etc.) the brain ingests verbatim.
+     */
+    fun sendBatchSensorData(
+        readings: Map<String, JsonObject>,
+        source: String = "feral_glasses",
+    ) {
+        val msg = buildJsonObject {
+            put("type", "sensor_batch")
+            put("hop", "node")
+            putJsonObject("payload") {
+                put("node_id", nodeId)
+                putJsonObject("readings") {
+                    readings.forEach { (key, value) -> put(key, value) }
+                }
+                put("timestamp", isoNow())
+                put("source", source)
+            }
+        }
+        sendJson(msg)
+    }
+
+    /**
+     * Camera frame — mirrors iOS `sendCameraFrame(base64:source:)` at
+     * `feral-nodes/ios-bridge/FeralBrainClient.swift:309-321`. The
+     * payload uses `image_b64` (base64-encoded JPEG/PNG) and a `source`
+     * label (`rear`, `front`, `glasses`, etc.) the brain uses for
+     * spatial reasoning.
+     */
+    fun sendCameraFrame(imageB64: String, source: String = "rear") {
+        val msg = buildJsonObject {
+            put("type", "frame")
+            put("hop", "node")
+            putJsonObject("payload") {
+                put("node_id", nodeId)
+                put("image_b64", imageB64)
+                put("source", source)
+                put("timestamp", isoNow())
+            }
+        }
+        sendJson(msg)
+    }
+
+    /**
+     * Skill approval — mirrors iOS `approveSkill(skillId:)` /
+     * `rejectSkill(skillId:)` at
+     * `feral-nodes/ios-bridge/FeralBrainClient.swift:395-417`. Sent in
+     * response to a `skill_proposal` frame the brain pushed when the
+     * orchestrator wanted to install a new skill mid-conversation.
+     */
+    fun sendSkillApproval(skillId: String, approved: Boolean) {
+        val msg = buildJsonObject {
+            put("type", "skill_approval")
+            put("hop", "node")
+            putJsonObject("payload") {
+                put("skill_id", skillId)
+                put("approved", approved)
+            }
+        }
+        sendJson(msg)
+    }
+
+    fun approveSkill(skillId: String) = sendSkillApproval(skillId, true)
+
+    fun rejectSkill(skillId: String) = sendSkillApproval(skillId, false)
+
+    /**
+     * Confirmation response — mirrors the inline response emitted by
+     * iOS at `feral-nodes/ios-bridge/FeralBrainClient.swift:482-494`
+     * when the user resolves a `confirmation_required` prompt. Public
+     * here too so callers without a `ConfirmationResponder` (e.g.
+     * deferred UI flows) can reply asynchronously.
+     */
+    fun sendConfirmationResponse(action: String, approved: Boolean) {
+        val msg = buildJsonObject {
+            put("type", "confirmation_response")
+            put("hop", "node")
+            putJsonObject("payload") {
+                put("action", action)
+                put("approved", approved)
+            }
+        }
+        sendJson(msg)
+    }
+
     private fun handleMessage(text: String) {
         try {
             val obj = json.parseToJsonElement(text).jsonObject
@@ -186,11 +291,28 @@ class FeralBrainClient(
             val payload = obj["payload"]?.jsonObject ?: JsonObject(emptyMap())
 
             when (type) {
+                "registered" -> {
+                    // Top-level session_id, matching iOS at FeralBrainClient.swift:455-463.
+                    val sessionId = obj["session_id"]?.jsonPrimitive?.contentOrNull ?: ""
+                    delegate?.brainDidRegister(sessionId)
+                }
                 "text_response" -> {
                     val msg = payload["text"]?.jsonPrimitive?.contentOrNull ?: ""
                     delegate?.brainDidReceiveText(msg)
                 }
                 "sdui" -> delegate?.brainDidReceiveSDUI(payload)
+                "skill_proposal" -> {
+                    val manifest = payload["manifest"]?.jsonObject ?: JsonObject(emptyMap())
+                    val reason = payload["reason"]?.jsonPrimitive?.contentOrNull ?: ""
+                    delegate?.brainDidProposeSkill(manifest, reason)
+                }
+                "confirmation_required" -> {
+                    val action = payload["action"]?.jsonPrimitive?.contentOrNull ?: ""
+                    val tier = payload["tier"]?.jsonPrimitive?.contentOrNull ?: ""
+                    delegate?.brainRequestsConfirmation(action, tier) { approved ->
+                        sendConfirmationResponse(action, approved)
+                    }
+                }
                 "audio_response" -> {
                     val dataB64 = payload["data_b64"]?.jsonPrimitive?.contentOrNull ?: return
                     val encoding = payload["encoding"]?.jsonPrimitive?.contentOrNull ?: "pcm16"
@@ -236,5 +358,16 @@ class FeralBrainClient(
     fun destroy() {
         disconnect()
         scope.cancel()
+    }
+
+    /**
+     * ISO-8601 timestamp matching the iOS `ISO8601DateFormatter()`
+     * output used by `sensor_batch` / `frame` payloads. Kept private
+     * + side-effect-free so the same format ends up on both wires.
+     */
+    private fun isoNow(): String {
+        return java.time.OffsetDateTime
+            .now(java.time.ZoneOffset.UTC)
+            .format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME)
     }
 }

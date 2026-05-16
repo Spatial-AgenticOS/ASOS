@@ -2973,6 +2973,23 @@ async def setup_legacy_redirect():
     return RedirectResponse(url="/setup", status_code=301)
 
 
+# v2026.5.28 — PWA bundle files that MUST be served from the bundle
+# root regardless of the requested subpath. The built `webui_v2/index.html`
+# uses a relative href (`./manifest.webmanifest`) because Vite is
+# configured with `base: './'` to keep the `/v2/` alias compatible
+# with the canonical mount at `/`. When the SPA is on a deep route
+# like `/chat/`, the browser resolves `./manifest.webmanifest` to
+# `/chat/manifest.webmanifest`. Without this special-case the catch-all
+# fell through to `index.html`, the browser tried to parse HTML as
+# JSON, and the console showed `Manifest: Line: 1, column: 1, Syntax
+# error.` The same trap exists for `sw.js` (service-worker registration).
+_PWA_BUNDLE_BASENAMES = {"manifest.webmanifest", "sw.js"}
+_PWA_BUNDLE_CONTENT_TYPES = {
+    "manifest.webmanifest": "application/manifest+json",
+    "sw.js": "application/javascript",
+}
+
+
 @app.get("/{full_path:path}")
 async def serve_webui_or_fallback(full_path: str = ""):
     # Honest 404 for unknown API and protocol paths. Until this guard
@@ -2989,6 +3006,20 @@ async def serve_webui_or_fallback(full_path: str = ""):
             detail={"code": "no_such_route", "path": "/" + full_path},
         )
     if _webui_ready:
+        # Serve PWA bundle files (manifest.webmanifest / sw.js) from
+        # the bundle root regardless of the requested subpath, with
+        # the right content-type so the browser parses them as JSON /
+        # JS instead of throwing the "Line 1 col 1 syntax error" the
+        # operator saw on deep SPA routes.
+        basename = full_path.rsplit("/", 1)[-1] if full_path else ""
+        if basename in _PWA_BUNDLE_BASENAMES:
+            canonical = _webui_dir / basename
+            if canonical.is_file():
+                return FileResponse(
+                    canonical,
+                    media_type=_PWA_BUNDLE_CONTENT_TYPES.get(basename),
+                )
+
         file_path = (_webui_dir / full_path).resolve()
         if not file_path.is_relative_to(_webui_dir.resolve()):
             return HTMLResponse("Forbidden", status_code=403)

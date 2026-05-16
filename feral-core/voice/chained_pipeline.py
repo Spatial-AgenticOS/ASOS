@@ -231,21 +231,48 @@ class ChainedVoicePipeline:
         return ""
 
     async def _run_tts(self, session: ChainedSession, text: str) -> None:
-        """Synthesize speech and stream audio chunks to the phone."""
-        chunk_index = 0
+        """Synthesize speech and emit a complete TTS audio frame.
+
+        v2026.5.28 — pre-fix this emitted one ``audio_chunk`` frame per
+        TTS transport slice (4096-byte chunks). Each slice was labelled
+        ``encoding: "mp3"`` but a slice is **not** a self-contained MP3
+        file — it is one piece of one. The browser called
+        ``decodeAudioData`` on each slice; every call failed
+        ``EncodingError`` and the .catch on the playback queue
+        swallowed the failure → the chat showed the assistant's text
+        reply, the speaker stayed silent (operator's 2026-05-15
+        report).
+
+        Fix: accumulate the full TTS output into a single buffer and
+        emit ONE complete MP3 frame. The browser's ``decodeAudioData``
+        decodes it cleanly and the PCM source plays through. This
+        loses incremental playback (the first audio arrives after the
+        last byte) but matches the working ``perception/audio_pipeline.py``
+        path that already buffers full bytes before slicing
+        (``_synthesize_cloud`` ~434-447). A future PR can restore
+        streaming by switching the TTS provider output to PCM, which
+        the client's ``queuePcm16Playback`` path plays incrementally
+        without per-chunk decoding.
+        """
         try:
+            buffer = bytearray()
             async for audio_chunk in session.tts_provider.synthesize(text):
-                b64_chunk = base64.b64encode(audio_chunk).decode("ascii")
+                buffer.extend(audio_chunk)
+
+            if buffer:
+                b64_full = base64.b64encode(bytes(buffer)).decode("ascii")
                 await self._emit_audio_chunk(
                     session,
-                    b64_chunk,
-                    chunk_index=chunk_index,
+                    b64_full,
+                    chunk_index=0,
                     is_final=False,
                 )
-                chunk_index += 1
 
+            # Sentinel close frame so the client knows the TTS turn
+            # is complete. data_b64="" matches the existing wire
+            # protocol (`queueAudioPlayback` no-ops on empty / final).
             await self._emit_audio_chunk(
-                session, "", chunk_index=chunk_index, is_final=True
+                session, "", chunk_index=1, is_final=True
             )
         except Exception:
             logger.exception("TTS failed for session %s", session.session_id[:8])

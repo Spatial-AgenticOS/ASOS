@@ -38,25 +38,60 @@ def brain_bind_host() -> str:
     env = os.getenv("FERAL_HOST") or os.getenv("FERAL_BIND_HOST")
     if env:
         return env
-    try:
-        from config.loader import feral_home
-
-        import json as _json
-
-        path = feral_home() / "settings.json"
-        if path.exists():
-            data = _json.loads(path.read_text())
-            persisted = (data.get("network") or {}).get("bind_host")
-            if isinstance(persisted, str) and persisted:
-                return persisted
-    except Exception:
-        # Truthful fallback — never crash boot on a malformed config.
-        pass
+    persisted = _settings_get("network", "bind_host")
+    if isinstance(persisted, str) and persisted:
+        return persisted
     return "127.0.0.1"
 
 
+def _settings_get(*path: str) -> object | None:
+    """Best-effort read of a nested value from ``~/.feral/settings.json``.
+
+    Returns ``None`` on any failure (file missing, bad JSON, key absent).
+    Never raises — callers fall through to defaults. Centralised here so
+    ``brain_port`` / ``brain_tls_enabled`` / ``brain_bind_host`` use the
+    same parse code path.
+    """
+    try:
+        from config.loader import feral_home  # local import to avoid cycle at module load
+        import json as _json
+
+        path_to_settings = feral_home() / "settings.json"
+        if not path_to_settings.exists():
+            return None
+        data = _json.loads(path_to_settings.read_text())
+        cursor: object = data
+        for key in path:
+            if not isinstance(cursor, dict):
+                return None
+            cursor = cursor.get(key)
+            if cursor is None:
+                return None
+        return cursor
+    except Exception:
+        return None
+
+
 def brain_port() -> int:
-    return _int_env("FERAL_PORT", "FERAL_BRAIN_PORT", default=9090)
+    """Resolve the brain HTTP listen port.
+
+    Precedence: ``FERAL_PORT`` env > ``FERAL_BRAIN_PORT`` env >
+    persisted ``network.port`` in ``~/.feral/settings.json`` (written
+    by the setup wizard's network step) > ``9090``. Env still wins so
+    ops with the brain inside docker / systemd can pin the port
+    without touching the wizard.
+    """
+    env = _int_env("FERAL_PORT", "FERAL_BRAIN_PORT", default=-1)
+    if env != -1:
+        return env
+    persisted = _settings_get("network", "port")
+    if isinstance(persisted, int) and 1 <= persisted <= 65535:
+        return persisted
+    if isinstance(persisted, str) and persisted.isdigit():
+        n = int(persisted)
+        if 1 <= n <= 65535:
+            return n
+    return 9090
 
 
 def brain_public_scheme() -> str:
@@ -107,7 +142,23 @@ def market_registry_url() -> str:
 
 
 def brain_tls_enabled() -> bool:
-    return os.getenv("FERAL_TLS", "").lower() in ("1", "true", "yes")
+    """Resolve whether the brain should serve over TLS.
+
+    Precedence: ``FERAL_TLS`` env > persisted ``network.tls`` in
+    ``~/.feral/settings.json`` > ``False``. The env path keeps ops
+    in charge for systemd / docker deployments; the wizard path
+    lets a user enable TLS once and have every subsequent
+    ``feral start`` honour it without re-typing the flag.
+    """
+    raw = os.getenv("FERAL_TLS")
+    if raw is not None and raw != "":
+        return raw.lower() in ("1", "true", "yes")
+    persisted = _settings_get("network", "tls")
+    if isinstance(persisted, bool):
+        return persisted
+    if isinstance(persisted, str):
+        return persisted.lower() in ("1", "true", "yes")
+    return False
 
 
 def brain_tls_cert() -> str:
