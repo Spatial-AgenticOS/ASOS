@@ -130,6 +130,18 @@ def boot_subsystem(report: BootReport, name: str, optional: bool = True):
         elapsed = (time.time() - start) * 1000
         report.record(name, SubsystemStatus.FAILED,
                       message=str(e)[:200], elapsed_ms=elapsed, optional=optional)
+        # v2026.5.29 — emit an immediate WARN with the exception so
+        # operators can correlate "feature X doesn't work" with its
+        # boot-time root cause without waiting for the end-of-boot
+        # summary. Without this an optional subsystem (e.g. DigitalTwin)
+        # could silently stay None and the only signal would be a 200
+        # response with `answer: ""` from /api/digital-twin/ask.
+        logger.warning(
+            "[boot] %s init failed (%s): %s",
+            name,
+            "required" if not optional else "optional",
+            str(e)[:200],
+        )
         if not optional:
             raise
     finally:

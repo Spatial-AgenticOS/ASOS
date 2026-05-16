@@ -82,9 +82,38 @@ export default function Home() {
   const [snapshot, setSnapshot] = useState(null);
   const [pinned, setPinned] = useState(readPinned());
   const [launcherOpen, setLauncherOpen] = useState(false);
-  const [twinQ, setTwinQ] = useState('');
-  const [twinA, setTwinA] = useState(null);
+  // v2026.5.29 — persist twin Q/A across route navigation. The tile
+  // previously stored everything in component-local useState, so
+  // tapping any nav link wiped both the question the operator was
+  // composing and the last answer. sessionStorage survives unmount
+  // (and tab-switches) while clearing on browser-quit.
+  const [twinQ, setTwinQ] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try { return window.sessionStorage.getItem('feral.twin.draft') || ''; }
+    catch { return ''; }
+  });
+  const [twinA, setTwinA] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const stored = window.sessionStorage.getItem('feral.twin.answer');
+      return stored || null;
+    } catch { return null; }
+  });
   const [twinBusy, setTwinBusy] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { window.sessionStorage.setItem('feral.twin.draft', twinQ); }
+    catch { /* quota / privacy mode — ignore */ }
+  }, [twinQ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (twinA == null) window.sessionStorage.removeItem('feral.twin.answer');
+      else window.sessionStorage.setItem('feral.twin.answer', twinA);
+    } catch { /* ignore */ }
+  }, [twinA]);
 
   const proactive = useBrainEvents({
     types: [EVENT_TYPES.PROACTIVE, EVENT_TYPES.STATE_PUSH],
@@ -254,17 +283,42 @@ export default function Home() {
     if (!twinQ.trim()) return;
     setTwinBusy(true);
     setTwinA(null);
+    // v2026.5.29 — 30 s client timeout so a hung LLM (or an
+    // uninitialised digital_twin in the brain) doesn't make the tile
+    // look like a dead button.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30_000);
     try {
-      const r = await apiFetch(`/api/digital-twin/ask?question=${encodeURIComponent(twinQ)}`);
+      const r = await apiFetch(
+        `/api/digital-twin/ask?question=${encodeURIComponent(twinQ)}`,
+        { signal: controller.signal },
+      );
       if (r.ok) {
         const data = await r.json();
-        setTwinA(data.answer || data.response || data.reply || JSON.stringify(data));
+        // v2026.5.29 — when the brain returns `{answer:"", error:"..."}`
+        // (e.g. DigitalTwin not initialised, optional boot failure),
+        // the previous code rendered nothing because `{twinA && ...}`
+        // hides empty strings. Surface the error so the operator sees
+        // *why* the twin didn't answer.
+        const answer = data.answer || data.response || data.reply || '';
+        if (answer) {
+          setTwinA(answer);
+        } else if (data.error) {
+          setTwinA(`Twin unavailable: ${data.error}`);
+        } else {
+          setTwinA('No response.');
+        }
       } else {
         setTwinA(`Brain returned ${r.status}.`);
       }
     } catch (err) {
-      setTwinA(err.message);
+      if (err && err.name === 'AbortError') {
+        setTwinA('Timed out waiting for the digital twin. Try again.');
+      } else {
+        setTwinA(err.message || 'Network error.');
+      }
     } finally {
+      clearTimeout(timeoutId);
       setTwinBusy(false);
     }
   };

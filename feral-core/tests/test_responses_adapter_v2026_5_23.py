@@ -220,6 +220,43 @@ class TestResponsesMessageTranslation:
         assert items[0]["content"] == "appendix"
 
     def test_tool_role_becomes_function_call_output(self):
+        """v2026.5.29 — a ``role:"tool"`` row is emitted as
+        ``function_call_output`` only when its announcing assistant
+        ``tool_calls`` turn is in the same request. The pairing guard
+        drops orphans because OpenAI's Responses API rejects them with
+        ``400 No tool call found for function call output``.
+        """
+        from agents.llm_provider import LLMProvider
+
+        msgs = [
+            {"role": "user", "content": "do it"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "do_thing", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_abc", "content": '{"ok":true}'},
+        ]
+        _, items = LLMProvider._messages_to_responses_input(msgs)
+        outputs = [i for i in items if i.get("type") == "function_call_output"]
+        assert outputs == [
+            {
+                "type": "function_call_output",
+                "call_id": "call_abc",
+                "output": '{"ok":true}',
+            }
+        ]
+
+    def test_orphan_tool_role_is_dropped(self):
+        """v2026.5.29 pairing guard: a tool result with no preceding
+        assistant ``tool_calls`` is silently dropped to avoid the
+        Responses-API 400."""
         from agents.llm_provider import LLMProvider
 
         msgs = [
@@ -227,11 +264,7 @@ class TestResponsesMessageTranslation:
             {"role": "tool", "tool_call_id": "call_abc", "content": '{"ok":true}'},
         ]
         _, items = LLMProvider._messages_to_responses_input(msgs)
-        assert items[1] == {
-            "type": "function_call_output",
-            "call_id": "call_abc",
-            "output": '{"ok":true}',
-        }
+        assert not any(i.get("type") == "function_call_output" for i in items)
 
     def test_assistant_tool_calls_become_function_call_items(self):
         from agents.llm_provider import LLMProvider
@@ -699,15 +732,30 @@ class TestContentPartTranslation:
         # Tool results may arrive as a string OR as a parts list
         # (some callers wrap before reaching the adapter). Either
         # way we want a plain `output: <string>` on the wire.
+        #
+        # v2026.5.29 — must include the announcing assistant turn or
+        # the pairing guard drops the tool row as an orphan.
         from agents.llm_provider import LLMProvider
 
         _, items = LLMProvider._messages_to_responses_input([
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "n", "arguments": "{}"},
+                    }
+                ],
+            },
             {"role": "tool", "tool_call_id": "c1", "content": [
                 {"type": "text", "text": '{"ok":'},
                 {"type": "text", "text": "true}"},
             ]},
         ])
-        assert items == [
+        outputs = [it for it in items if it.get("type") == "function_call_output"]
+        assert outputs == [
             {"type": "function_call_output", "call_id": "c1", "output": '{"ok":true}'},
         ]
 

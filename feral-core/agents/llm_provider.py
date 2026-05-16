@@ -1156,7 +1156,31 @@ class LLMProvider:
 
         Returns ``(instructions, input_items)``. ``instructions`` may
         be the empty string when no system role was present.
+
+        v2026.5.29 — defensive pairing guard. The Responses API rejects
+        a request with ``400 No tool call found for function call output``
+        whenever a ``function_call_output`` references a ``call_id``
+        that has no preceding ``function_call`` in the same ``input``
+        list. That can happen if upstream tail-truncation drops the
+        assistant turn that announced a tool but keeps the following
+        ``role:"tool"`` row, or if a stale snapshot replays orphan
+        tool rows. We pre-scan the message list, collect every
+        ``call_id`` that *will* be emitted (from assistant
+        ``tool_calls``), and skip any ``tool`` row whose
+        ``tool_call_id`` isn't in that set. This makes the translator
+        the last line of defence regardless of how the history was
+        produced.
         """
+        announced_call_ids: set[str] = set()
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    if not isinstance(tc, dict):
+                        continue
+                    cid = tc.get("id")
+                    if isinstance(cid, str) and cid:
+                        announced_call_ids.add(cid)
+
         instructions = ""
         input_items: list[dict] = []
         for msg in messages:
@@ -1191,6 +1215,22 @@ class LLMProvider:
                 continue
             if role == "tool":
                 call_id = msg.get("tool_call_id") or msg.get("call_id") or ""
+                # Pairing guard (v2026.5.29): drop tool results whose
+                # matching assistant function_call is missing from this
+                # request. OpenAI's Responses API returns
+                # ``400 No tool call found for function call output``
+                # the moment we send an orphan, so skip silently with a
+                # single WARN per drop. The orphan can only come from
+                # upstream history corruption (tail-slice truncation,
+                # stale snapshot, branch/restore) — we never legitimately
+                # want to send one.
+                if not call_id or call_id not in announced_call_ids:
+                    logger.warning(
+                        "llm: dropping orphan tool result with call_id=%r "
+                        "(no matching function_call in request input)",
+                        call_id,
+                    )
+                    continue
                 # `function_call_output.output` accepts a plain string
                 # per OpenAI's Responses API. Tool results from FERAL's
                 # tool_runner are already stringified before reaching

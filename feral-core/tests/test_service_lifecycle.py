@@ -117,12 +117,22 @@ def test_logs_dir_resolves_under_feral_home(monkeypatch, tmp_path):
 def test_resolve_program_arguments_uses_foreground_no_browser(monkeypatch, tmp_path):
     daemon = _reload_daemon(monkeypatch, fake_home=tmp_path)
     args = daemon._resolve_program_arguments()
-    # Either the `feral` shim path with start --foreground --no-browser,
-    # or the python-fallback shape `python -m cli.main serve`.
+    # v2026.5.29 — both the `feral` shim path and the python-fallback
+    # path must invoke ``start --foreground --no-browser`` so the
+    # service-mode child runs the same first-run / readiness boot path
+    # as an interactive ``feral start``. The older ``-m cli.main serve``
+    # fallback skipped that and could leave new operators with a
+    # silently-misconfigured brain.
     if args[0].endswith("feral") and len(args) == 4:
         assert args[1:] == ["start", "--foreground", "--no-browser"]
     else:
-        assert args[1:] == ["-m", "cli.main", "serve"]
+        assert args[1:] == [
+            "-m",
+            "cli.main",
+            "start",
+            "--foreground",
+            "--no-browser",
+        ]
 
 
 def test_install_service_back_compat_returns_bool(monkeypatch, tmp_path):

@@ -1,10 +1,81 @@
 # Changelog
 
-<!-- feral-version: 2026.5.28 -->
+<!-- feral-version: 2026.5.29 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.29] — Demo blockers: chat 400 orphan tool, silent voice unlock, docked mic, digital-twin honesty, manifest packaging
+
+### Fixed — `Stream error: HTTP 400 — No tool call found for function call output`
+
+Operator reported on 2026-05-15: WebUI chat returns `HTTP 400 invalid_request_error, param=input: No tool call found for function call output with call_id ...` on a plain `hi`, after the v2026.5.28 error-surfacing fix made the real OpenAI message visible.
+
+Root cause was upstream history corruption, not the translator itself. `ContextManager.compact(max_messages=15)` (`feral-core/agents/context_manager.py`) used a naive `history[-15:]` slice. When the tail began inside an assistant `tool_calls` round-trip (one assistant + many `role:"tool"` rows + new user), the slice could drop the announcing assistant turn while keeping the trailing `tool` rows. `_messages_to_responses_input` then emitted `function_call_output` items with no matching `function_call` in the request `input` array, and OpenAI's Responses API rejected them. The same hazard existed for `SessionSnapshotStore._truncate` (which caps the on-disk primary thread at 50 rows), and on rehydrate the rehydrator copied a corrupt tail verbatim — so a single bad turn from a prior session kept reproducing across `feral start` restarts.
+
+Three layers, defence in depth:
+
+- **Translator pairing guard** (`feral-core/agents/llm_provider.py:_messages_to_responses_input`): pre-scan the message list, collect every `call_id` that will be emitted as `function_call`, and silently drop any `role:"tool"` row whose `tool_call_id` is missing from that set with a single WARN per drop. Makes the bug unreproducible regardless of upstream state.
+- **Tool-aware compaction** (`feral-core/agents/context_manager.py:compact`): expand the window backwards through any `tool` row whose preceding row is also part of the same round-trip, so the cut never lands inside a tool call. Strip any leading orphan tool rows that survive (e.g. the assistant turn is older than `max_messages` allows).
+- **Snapshot save/load sanitiser** (`feral-core/memory/session_snapshot.py:_truncate` + `feral-core/api/state.py:_sanitize_orphan_tool_rows`): identical invariants on persist and on rehydrate, so an existing on-disk snapshot written by an older brain can never leak orphan tool rows into RAM on next boot.
+
+Tests: `feral-core/tests/test_responses_input_pairing.py` (12 cases across the three layers + snapshot truncate).
+
+### Fixed — silent voice playback in WebUI despite brain emitting `audio_response`
+
+Operator reported on 2026-05-15: even after v2026.5.28, the OpenAI Realtime voice mode in the WebUI shows assistant text but plays no audio.
+
+The v2026.5.28 fix unlocked the shared `AudioContext` on `click`/`touchstart`/`keydown`, but the phone chat composer arms a 400 ms long-press timer on `pointerdown` and starts the voice session inside the timer callback. By the time `VoiceFullscreen` mounts and its `useEffect` calls `ensurePlaybackContext()`, the synchronous user-gesture frame is gone; Chrome silently leaves the shared `AudioContext` in `suspended` and every later `BufferSource.start()` plays silence.
+
+Fixes:
+
+- Extended `feral-client-v2/src/lib/audioContext.js:installAudioUnlock` to also listen for `pointerdown` in capture phase, so the long-press's first touch always counts as the unlock gesture even when no later `click` fires.
+- Added an explicit synchronous `unlockSharedAudioContext()` call at the top of `ChatPanel.jsx:handleMicPointerDown`, `VoicePanel.jsx:handleOpen`, and `Chat.jsx:onMicClick`, all inside the user-gesture handler so `AudioContext.resume()` is dispatched before any `await`.
+- One-shot DevTools diagnostic in `VoiceFullscreen.jsx:queuePcm16Playback` that logs `ctx.state` on the first audio chunk per session — makes "silent voice" failures observable in production until the demo cycle is over.
+
+Tests: `feral-client-v2/src/__tests__/lib/audioContext.test.js` (7 cases — singleton, unlock on suspended/running, all four gesture types, idempotent install).
+
+### Fixed — mic button opens fullscreen modal that blocks chat composer
+
+Operator reported on 2026-05-15: long-pressing the mic in the phone chat tab takes over the entire viewport — the chat composer, dashboard, and navigation become unreachable until they close the modal.
+
+`feral-client-v2/src/pages/phone/VoiceFullscreen.jsx` was a `createPortal(document.body)` with `position:fixed; inset:0; z-index:1000; aria-modal="true"` by design.
+
+Added a `variant: 'fullscreen' | 'docked'` prop. The new docked variant renders as a compact bar pinned 12 px from the bottom edge with the voice orb, status text, mute, expand, and end controls. No backdrop, `pointer-events` only on the bar, no `aria-modal` — the rest of `PairShell` and the dashboard stay interactive. `ChatPanel.jsx` opens voice in `docked` mode (composer-initiated voice should never block the composer); `VoicePanel.jsx`'s standalone "Start voice" tab keeps the fullscreen takeover. Expand → fullscreen and minimize → docked transitions are available on both, never call `stopMic`, so the session survives.
+
+Tests: 3 new cases in `VoiceFullscreen.test.jsx` covering docked geometry, expand, and minimize.
+
+### Fixed — Digital Twin tile silently shows nothing + state fades on navigation
+
+Operator reported on 2026-05-15: clicking "Ask" on the Home dashboard's Digital Twin tile shows no response, and the typed question disappears when they navigate away.
+
+Two real defects: (a) when `state.digital_twin` failed to initialise (under `boot_subsystem(..., optional=True)`), the route returned `{"answer": "", "error": "..."}`. `Home.jsx`'s `{twinA && <div ...>}` then hid the empty-string answer and the operator saw nothing. (b) `twinQ` / `twinA` were `useState` on `Home`; React Router unmounts `Home` on any nav, wiping both.
+
+Fixes in `feral-client-v2/src/pages/Home.jsx`:
+- Surface the brain's error string when `answer` is empty: `setTwinA(answer || error || 'No response.')`.
+- 30-second `AbortController` so a hung LLM doesn't look like a dead button — show "Timed out…" instead.
+- `sessionStorage` write-through for `twinQ` (key `feral.twin.draft`) and `twinA` (key `feral.twin.answer`), so navigating Home → Settings → Home restores both. `sessionStorage` rather than `localStorage` so a fresh tab still starts clean.
+
+Fix in `feral-core/api/boot_report.py:boot_subsystem`: emit a `WARN` line the moment any subsystem (DigitalTwin or otherwise) hits `SubsystemStatus.FAILED`, instead of only surfacing it in the end-of-boot summary. Without this, "feature X is silently None" had no immediate signal in the logs.
+
+### Fixed — `/v2/manifest.webmanifest` 404 on installed wheels
+
+Two issues compounded the v2026.5.28 fix:
+- `feral-core/pyproject.toml` `[tool.setuptools.package-data]` for `webui_v2` listed `*.html *.css *.js *.svg *.png *.ico *.json` but omitted `*.webmanifest`, so the wheel never shipped the file even though the dev tree had it. Added `*.webmanifest` and `*.txt` to both `webui` and `webui_v2` globs.
+- Starlette's `app.mount("/v2", StaticFiles(html=True))` answers 404 for missing files inside the mount and does NOT fall through to the root catch-all. The v2026.5.28 PWA-basename special-case was therefore unreachable for `/v2/...` URLs. Added four explicit routes (`/v2/manifest.webmanifest`, `/v2/{subpath}/manifest.webmanifest`, `/v2/sw.js`, `/v2/{subpath}/sw.js`) before the mount registration so deep `/v2/chat/manifest.webmanifest` requests resolve to the bundle-root copy.
+
+Also bumped `webui_v2/sw.js` `VERSION` from `feral-sw-v1` → `feral-sw-v2` so the old cache (which precached a path that may have 404'd) is pruned on next activation, and the synthetic `503 Offline` for stale-cache misses stops.
+
+### Fixed — chat history fades after a hard refresh
+
+Phase 9's `GET /api/sessions/primary/transcript` endpoint exists but the WebUI never called it; `Shell.jsx` only hydrated through `/api/conversations/active/thread`, which is a separate store from the orchestrator's in-RAM history. WebSocket-only turns appended to `orchestrator.conversation_history[primary_session_id]` were therefore invisible after a hard refresh.
+
+`Shell.jsx` now merges `/api/sessions/primary/transcript` on first mount, deduplicating against whatever the conversations store already loaded (role+text signature), and is fault-tolerant: any failure on the Phase 9 endpoint silently skips the merge so the conversations-store baseline still works.
+
+### Fixed — launchd service fallback skipped first-run bootstrap
+
+`feral-core/cli/daemon.py:_resolve_program_arguments` fell back to `python -m cli.main serve` when the `feral` shim isn't on PATH. `cmd_serve` does not run `_is_first_run()` / setup wizard / readiness Progress / ready panel, so a fresh operator running `feral start` from a dev checkout could end up with a silently-misconfigured brain. Fallback now invokes `python -m cli.main start --foreground --no-browser` to keep the service-mode child on the same boot path as the interactive REPL.
 
 ## [2026.5.28] — CLI service mode + Android HUP parity + setup/start config parity + voice playback + manifest
 

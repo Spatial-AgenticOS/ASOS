@@ -8,6 +8,7 @@ import SduiRenderer, { applySduiPatches } from '../ui/SduiRenderer';
 import { useFeralSocket, sendUiEvent } from '../hooks/useFeralSocket';
 import { useConnectionStatus } from '../hooks/useConnectionStatus';
 import { apiJson, apiFetch } from '../lib/api';
+import { unlockSharedAudioContext } from '../lib/audioContext';
 import { friendlyToolLabel } from '../lib/toolDisplay';
 import { useChatThread } from '../shell/Shell';
 import { useVoice } from '../shell/VoiceContext';
@@ -404,6 +405,12 @@ export default function Chat() {
 
   // ── PR 9: voice toggle ────────────────────────────────────────
   const onMicClick = useCallback(() => {
+    // v2026.5.29 — unlock the shared AudioContext inside the click
+    // gesture so VoiceOverlay / VoiceContext's assistant audio
+    // actually plays. Chrome's autoplay policy keeps new contexts
+    // suspended until a user gesture resumes them; an async resume
+    // later silently no-ops.
+    void unlockSharedAudioContext();
     if (!voice || !voice.toggle) return;
     voice.toggle();
   }, [voice]);

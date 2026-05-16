@@ -80,11 +80,20 @@ export function installAudioUnlock() {
     // than touchstart, etc.) we leave the handler attached so the
     // next gesture has another chance.
     if (_sharedCtx && _sharedCtx.state === 'running') {
+      document.removeEventListener('pointerdown', handler, true);
       document.removeEventListener('click', handler, true);
       document.removeEventListener('touchstart', handler, true);
       document.removeEventListener('keydown', handler, true);
     }
   };
+  // v2026.5.29 — listen to `pointerdown` as well. The phone chat mic
+  // arms a 400 ms long-press timer on `pointerdown`; by the time it
+  // fires `startVoiceSession()` and `VoiceFullscreen` mounts, the
+  // synchronous user-gesture stack is gone and a later `click` may
+  // never fire (operator releases off-target). Capturing `pointerdown`
+  // lets the very first touch unlock playback for the upcoming
+  // assistant audio.
+  document.addEventListener('pointerdown', handler, true);
   document.addEventListener('click', handler, true);
   document.addEventListener('touchstart', handler, true);
   document.addEventListener('keydown', handler, true);
