@@ -56,7 +56,7 @@ async def test_step_chooses_localhost(monkeypatch, tmp_path):
     monkeypatch.setattr(network, "get_snapshot", fake_get_snapshot)
     monkeypatch.setattr(network_step.network, "get_snapshot", fake_get_snapshot)
     monkeypatch.setattr(network_step.network, "apply_localhost", fake_apply_localhost)
-    monkeypatch.setattr(ui_kit, "select", lambda *a, **kw: "localhost")
+    monkeypatch.setattr(ui_kit, "pick", lambda *a, **kw: "localhost")
 
     await network_step.run(state)
     assert state.get_setting("network", "bind_host") == "127.0.0.1"
@@ -75,7 +75,7 @@ async def test_step_chooses_lan_with_confirmation(monkeypatch, tmp_path):
 
     monkeypatch.setattr(network_step.network, "get_snapshot", fake_get_snapshot)
     monkeypatch.setattr(network_step.network, "apply_lan", fake_apply_lan)
-    monkeypatch.setattr(ui_kit, "select", lambda *a, **kw: "lan")
+    monkeypatch.setattr(ui_kit, "pick", lambda *a, **kw: "lan")
     monkeypatch.setattr(ui_kit, "confirm", lambda *a, **kw: True)
 
     await network_step.run(state)
@@ -98,7 +98,7 @@ async def test_lan_skipped_when_user_declines_warning(monkeypatch, tmp_path):
 
     monkeypatch.setattr(network_step.network, "get_snapshot", fake_get_snapshot)
     monkeypatch.setattr(network_step.network, "apply_lan", fake_apply_lan)
-    monkeypatch.setattr(ui_kit, "select", lambda *a, **kw: "lan")
+    monkeypatch.setattr(ui_kit, "pick", lambda *a, **kw: "lan")
     monkeypatch.setattr(ui_kit, "confirm", lambda *a, **kw: False)
 
     await network_step.run(state)
@@ -125,7 +125,7 @@ async def test_step_tailscale_success(monkeypatch, tmp_path):
     monkeypatch.setattr(
         network_step.network, "apply_tailscale_funnel", fake_apply_tailscale_funnel
     )
-    monkeypatch.setattr(ui_kit, "select", lambda *a, **kw: "tailscale")
+    monkeypatch.setattr(ui_kit, "pick", lambda *a, **kw: "tailscale")
 
     await network_step.run(state)
     assert state.get_setting("network", "mode") == "remote"
@@ -147,7 +147,7 @@ async def test_step_tailscale_failure_shows_remediation(monkeypatch, tmp_path, c
 
     monkeypatch.setattr(network_step.network, "get_snapshot", fake_get_snapshot)
     monkeypatch.setattr(network_step.network, "apply_tailscale_funnel", failing_apply)
-    monkeypatch.setattr(ui_kit, "select", lambda *a, **kw: "tailscale")
+    monkeypatch.setattr(ui_kit, "pick", lambda *a, **kw: "tailscale")
     # Decline the LAN fallback so the test stays in the failure branch.
     monkeypatch.setattr(ui_kit, "confirm", lambda *a, **kw: False)
 
