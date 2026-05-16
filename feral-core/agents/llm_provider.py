@@ -1509,7 +1509,12 @@ class LLMProvider:
                     # and the user sees only the bare httpx string
                     # ("Client error '400 Bad Request' for url ..."),
                     # which hides the actual cause of the 400.
-                    if resp.status_code >= 400:
+                    #
+                    # ``isinstance`` guard is for the unit-test fakes that
+                    # back ``resp`` with a ``MagicMock`` — comparing a
+                    # MagicMock to 400 raises ``TypeError``.
+                    _status = getattr(resp, "status_code", None)
+                    if isinstance(_status, int) and _status >= 400:
                         try:
                             await resp.aread()
                         except Exception:
@@ -1853,7 +1858,10 @@ class LLMProvider:
                     # rationale: pull the body before raise_for_status
                     # so the OpenAI / Anthropic / DeepSeek error JSON
                     # survives into ``_describe_http_status_error``.
-                    if resp.status_code >= 400:
+                    # ``isinstance`` guard for MagicMock-backed unit
+                    # tests (``>= 400`` raises TypeError on MagicMock).
+                    _status = getattr(resp, "status_code", None)
+                    if isinstance(_status, int) and _status >= 400:
                         try:
                             await resp.aread()
                         except Exception:
