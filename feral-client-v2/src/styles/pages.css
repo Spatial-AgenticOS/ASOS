@@ -183,14 +183,37 @@
   gap: 16px;
   padding: 8px 0;
   overflow-y: auto;
+  /* v2026.5.30 — never bleed sideways. Pre-fix, a long assistant turn
+     (e.g. a code-style line with no break-points, or a foreign-script
+     URL the user pasted) forced a horizontal scrollbar at the bottom
+     of the conversation pane because grid `1fr` children default to
+     `min-width: auto` and refuse to shrink below their content width.
+     We clamp the log + bubble below so messages always wrap. */
+  overflow-x: hidden;
 }
 .v2-chat-composer { flex-shrink: 0; }
-.v2-chat-row { display: grid; grid-template-columns: 32px 1fr; gap: 12px; align-items: flex-start; }
-.v2-chat-row--user { grid-template-columns: 1fr 32px; }
+.v2-chat-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  align-items: flex-start;
+}
+.v2-chat-row--user { grid-template-columns: minmax(0, 1fr) 32px; }
 .v2-chat-row--user .v2-chat-role { order: 2; justify-self: end; }
 .v2-chat-row--user .v2-chat-body { order: 1; text-align: right; color: var(--v2-text-primary); }
 .v2-chat-role { display: flex; align-items: center; justify-content: center; }
-.v2-chat-body { font-size: var(--v2-size-md); line-height: 1.55; color: var(--v2-text-primary); padding: 2px 0; white-space: pre-wrap; }
+.v2-chat-body {
+  font-size: var(--v2-size-md);
+  line-height: 1.55;
+  color: var(--v2-text-primary);
+  padding: 2px 0;
+  white-space: pre-wrap;
+  /* Allow grid track to shrink below content width and break inside
+     unbroken tokens (long URLs, hashes, code with no spaces). */
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .v2-chat-body--thinking { color: var(--v2-text-tertiary); font-style: italic; }
 .v2-chat-trace {
   margin-top: 10px;

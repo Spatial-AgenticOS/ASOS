@@ -1,10 +1,37 @@
 # Changelog
 
-<!-- feral-version: 2026.5.29 -->
+<!-- feral-version: 2026.5.30 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.30] — Desktop voice no longer hijacks the WebUI + chat bubble overflow fix
+
+### Fixed — desktop voice overlay covered the entire viewport and blocked all interaction
+
+Operator reported on 2026-05-16: starting voice from the desktop WebUI (`localhost:9090/v2/chat`) immediately took over the entire screen, dimmed the main content to 40% brightness, disabled the dock, and there was no way to keep typing in the chat or look at the dashboard.
+
+The v2026.5.29 mic-modal fix introduced a docked variant on `VoiceFullscreen.jsx` (the **phone** voice surface), but the desktop WebUI uses an entirely different stack: `Shell.jsx → VoiceProvider → VoiceOverlay`. `VoiceOverlay` was `position:fixed; inset:0; pointer-events:auto`, and `.v2-shell.is-voice-mode` in `styles/ui.css` dimmed the main content + disabled the dock whenever `voice.active` was true. Starting voice from the menubar therefore locked the entire WebUI.
+
+Fixes in `feral-client-v2/src/shell/VoiceOverlay.jsx` + `feral-client-v2/src/styles/ui.css`:
+
+- `VoiceOverlay` now ships two variants: `docked` (default) and `fullscreen`. Docked renders as a compact strip pinned to the bottom-right with the orb, provider badge, status, Expand, and End — no backdrop, no `aria-modal`, no focus trap.
+- Each new voice session resets to `docked`, so an operator who expanded once doesn't keep getting the takeover.
+- An explicit Expand control flips to the original immersive fullscreen layout for screen-share / presentation use; Minimize flips it back. Neither transition ends the session.
+- `.v2-shell.is-voice-mode` no longer unconditionally dims the main content. The `:has(.v2-voice-overlay--fullscreen.is-visible)` selector restricts the dimming to the fullscreen variant only. Docked voice = no visual side-effects on the rest of the page.
+
+Tests: `feral-client-v2/src/__tests__/shell/VoiceOverlay.test.jsx` (6 cases — default variant, Expand, Minimize, End voice, provider label, hidden when inactive).
+
+### Fixed — chat bubble horizontal overflow + bottom scrollbar on `/v2/chat`
+
+Operator reported: chat messages don't fit in the conversation pane and there's a horizontal scrollbar at the bottom. Caused by the classic CSS grid `1fr` overflow bug — `.v2-chat-row` used `grid-template-columns: 32px 1fr` but grid items default to `min-width: auto`, so a long unbroken token (URL, hash, foreign script) forced the column wider than its track and the chat log overflowed sideways.
+
+Fix in `feral-client-v2/src/styles/pages.css`:
+
+- Replaced `1fr` with `minmax(0, 1fr)` on both `.v2-chat-row` and `.v2-chat-row--user` so the column can shrink below content width.
+- Added `min-width: 0; overflow-wrap: anywhere; word-break: break-word` to `.v2-chat-body` so long tokens wrap inside the bubble.
+- Defensive `overflow-x: hidden` on `.v2-chat-log` so a future regression can never produce a sideways scrollbar again.
 
 ## [2026.5.29] — Demo blockers: chat 400 orphan tool, silent voice unlock, docked mic, digital-twin honesty, manifest packaging
 
