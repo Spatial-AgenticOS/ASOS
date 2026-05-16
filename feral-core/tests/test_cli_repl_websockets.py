@@ -15,9 +15,12 @@ The tests in this module pin three contracts:
      API mismatch), ``repl`` prints a friendly message and ``return``s.
      It MUST NOT raise ``SystemExit``; doing so would kill any
      colocated brain thread.
-  3. ``cli.main.cmd_start`` runs the brain in a NON-daemon thread and,
-     when the REPL returns, sets ``server.should_exit`` + joins
-     instead of relying on interpreter teardown.
+  3. ``cli.main.cmd_start(foreground=True)`` runs the brain in a
+     NON-daemon thread and, when the REPL returns, sets
+     ``server.should_exit`` + joins instead of relying on interpreter
+     teardown. v2026.5.28 made ``foreground=False`` the default
+     (service mode via launchd / systemd); these tests exercise the
+     legacy interactive path explicitly with ``foreground=True``.
 """
 
 from __future__ import annotations
@@ -333,7 +336,7 @@ def test_cmd_start_brain_shuts_down_cleanly_on_keyboard_interrupt(monkeypatch):
 
     def run_cmd():
         try:
-            cli_main.cmd_start(port=51777, no_browser=True)
+            cli_main.cmd_start(port=51777, no_browser=True, foreground=True)
         except SystemExit:
             pass
         except Exception as exc:
@@ -395,7 +398,7 @@ def test_cmd_start_keeps_brain_alive_when_repl_returns_cleanly(monkeypatch):
 
     def run_cmd():
         try:
-            cli_main.cmd_start(port=51779, no_browser=True)
+            cli_main.cmd_start(port=51779, no_browser=True, foreground=True)
         finally:
             done.set()
 
@@ -466,7 +469,7 @@ def test_cmd_start_brain_thread_is_not_daemon(monkeypatch):
 
     def run_cmd():
         try:
-            cli_main.cmd_start(port=51778, no_browser=True)
+            cli_main.cmd_start(port=51778, no_browser=True, foreground=True)
         finally:
             done.set()
 
