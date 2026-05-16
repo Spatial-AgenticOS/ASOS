@@ -83,8 +83,15 @@ def _resolve_program_arguments() -> list[str]:
     """
     feral_bin = _resolve_feral_bin()
     if Path(feral_bin).name == Path(sys.executable).name:
-        # Falling back to the python interpreter — drive cli.main directly.
-        return [feral_bin, "-m", "cli.main", "serve"]
+        # v2026.5.29 — fall back to ``cli.main start --foreground``,
+        # NOT ``cli.main serve``. ``serve`` skips the first-run check
+        # and the readiness Progress / ready panel; if a brand-new
+        # operator has never run ``feral setup`` interactively, the
+        # service would happily come up with no credentials and the
+        # WebUI would error on every LLM call. Routing back through
+        # ``start --foreground`` keeps the service-mode child on the
+        # same boot path as the interactive REPL.
+        return [feral_bin, "-m", "cli.main", "start", "--foreground", "--no-browser"]
     return [feral_bin, "start", "--foreground", "--no-browser"]
 
 

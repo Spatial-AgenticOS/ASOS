@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, fireEvent, act } from '@testing-library/react';
 import { VoiceFullscreen } from '../../../pages/phone/VoiceFullscreen';
+import { __resetAudioContextForTests } from '../../../lib/audioContext';
 
 let frameListeners = [];
 
@@ -27,6 +28,7 @@ function pushFrame(type, payload = {}) {
 
 beforeEach(() => {
   frameListeners = [];
+  __resetAudioContextForTests();
 
   vi.stubGlobal('requestAnimationFrame', vi.fn((cb) => setTimeout(cb, 0)));
   vi.stubGlobal('cancelAnimationFrame', vi.fn((id) => clearTimeout(id)));
@@ -79,6 +81,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   frameListeners = [];
+  __resetAudioContextForTests();
 });
 
 describe('VoiceFullscreen', () => {
@@ -271,5 +274,41 @@ describe('VoiceFullscreen', () => {
     const dialog = getByTestId('voice-fullscreen');
     expect(dialog.getAttribute('aria-modal')).toBe('true');
     expect(dialog.tabIndex).toBe(-1);
+  });
+
+  // v2026.5.29 — docked variant lets the operator keep using the
+  // chat composer + dashboard while voice is active.
+  describe('docked variant', () => {
+    it('renders as a non-blocking strip when variant="docked"', () => {
+      const { getByTestId } = render(
+        <VoiceFullscreen open={true} onClose={vi.fn()} shell={makeShell()} variant="docked" />,
+      );
+      const dialog = getByTestId('voice-fullscreen');
+      expect(dialog.getAttribute('data-variant')).toBe('docked');
+      // No aria-modal in docked mode — the rest of the page stays
+      // interactive for screen readers and keyboard.
+      expect(dialog.getAttribute('aria-modal')).toBeNull();
+      // Expand button is available.
+      expect(getByTestId('expand-button')).toBeInTheDocument();
+    });
+
+    it('expand button flips docked → fullscreen', () => {
+      const { getByTestId } = render(
+        <VoiceFullscreen open={true} onClose={vi.fn()} shell={makeShell()} variant="docked" />,
+      );
+      fireEvent.click(getByTestId('expand-button'));
+      const dialog = getByTestId('voice-fullscreen');
+      expect(dialog.getAttribute('data-variant')).toBe('fullscreen');
+      expect(dialog.getAttribute('aria-modal')).toBe('true');
+    });
+
+    it('minimize button on fullscreen flips → docked', () => {
+      const { getByTestId } = render(
+        <VoiceFullscreen open={true} onClose={vi.fn()} shell={makeShell()} variant="fullscreen" />,
+      );
+      fireEvent.click(getByTestId('minimize-button'));
+      const dialog = getByTestId('voice-fullscreen');
+      expect(dialog.getAttribute('data-variant')).toBe('docked');
+    });
   });
 });

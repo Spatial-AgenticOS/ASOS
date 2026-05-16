@@ -120,6 +120,47 @@ def _feature_flag_enabled(env_key: str) -> bool:
     return isinstance(val, str) and val.strip().lower() in ("true", "1", "yes", "on")
 
 
+def _sanitize_orphan_tool_rows(rows: list[dict]) -> list[dict]:
+    """Drop ``role:"tool"`` rows whose announcing assistant turn is
+    missing from this list.
+
+    Used by primary-thread rehydrate to scrub stale snapshots that
+    were written by older brain builds with naive tail-truncation.
+    A single orphan ``function_call_output`` in the input causes the
+    Responses API to 400 on the very next request, so we strip them
+    once at boot and leave clean history in RAM.
+    """
+    if not rows:
+        return rows
+    announced: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("role") == "assistant" and row.get("tool_calls"):
+            for tc in row["tool_calls"]:
+                if isinstance(tc, dict):
+                    cid = tc.get("id")
+                    if isinstance(cid, str) and cid:
+                        announced.add(cid)
+    cleaned: list[dict] = []
+    dropped = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("role") == "tool":
+            cid = row.get("tool_call_id") or row.get("call_id") or ""
+            if not cid or cid not in announced:
+                dropped += 1
+                continue
+        cleaned.append(row)
+    if dropped:
+        logger.warning(
+            "primary-thread rehydrate: dropped %d orphan tool row(s) from snapshot",
+            dropped,
+        )
+    return cleaned
+
+
 class VisionBuffer:
     """Stores the latest N frames per hardware node in a memory-bounded ring buffer."""
 
@@ -1340,7 +1381,16 @@ class BrainState:
             if isinstance(ch_attr, dict):
                 # Defensive deep-copy so future mutations don't bleed
                 # back into the snapshot in-memory.
-                ch_attr[sid] = [dict(x) for x in ch_rows if isinstance(x, dict)]
+                rehydrated = [dict(x) for x in ch_rows if isinstance(x, dict)]
+                # v2026.5.29 — scrub orphan tool results before they
+                # ever reach the orchestrator's history. Older brain
+                # builds (pre tool-aware compaction) could persist a
+                # snapshot whose tail begins inside a tool round-trip
+                # with no announcing assistant turn. Reloading that
+                # verbatim leaks an orphan ``function_call_output``
+                # into the next LLM request and triggers
+                # ``400 No tool call found for function call output``.
+                ch_attr[sid] = _sanitize_orphan_tool_rows(rehydrated)
         # Working-memory deque (LLM-context format).
         wm_rows = snapshot.get("working_memory") or []
         if isinstance(wm_rows, list) and wm_rows and self.memory is not None:

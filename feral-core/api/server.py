@@ -2931,6 +2931,46 @@ else:
 # bundle because feral-client-v2 uses relative asset URLs.
 if _webui_v2_ready:
     from starlette.staticfiles import StaticFiles
+
+    # v2026.5.29 — Starlette's StaticFiles mount answers 404 on missing
+    # files inside the mount and does NOT fall through to the root
+    # catch-all's PWA basename special-case. So deep SPA URLs that
+    # resolve `./manifest.webmanifest` to `/v2/chat/manifest.webmanifest`
+    # would 404 even after the v2026.5.28 catch-all fix. Register
+    # explicit routes for the PWA bundle names BEFORE the mount so they
+    # match first regardless of subpath.
+    def _v2_manifest_response():
+        canonical = _webui_v2_dir / "manifest.webmanifest"
+        if canonical.is_file():
+            return FileResponse(canonical, media_type="application/manifest+json")
+        # Fall back to the shared /webui bundle copy when missing.
+        shared = _webui_dir / "manifest.webmanifest"
+        if shared.is_file():
+            return FileResponse(shared, media_type="application/manifest+json")
+        raise HTTPException(status_code=404, detail="manifest.webmanifest not bundled")
+
+    def _v2_sw_response():
+        canonical = _webui_v2_dir / "sw.js"
+        if canonical.is_file():
+            return FileResponse(canonical, media_type="application/javascript")
+        raise HTTPException(status_code=404, detail="sw.js not bundled")
+
+    @app.get("/v2/manifest.webmanifest")
+    async def _v2_manifest_root():
+        return _v2_manifest_response()
+
+    @app.get("/v2/{subpath:path}/manifest.webmanifest")
+    async def _v2_manifest_deep(subpath: str):  # noqa: ARG001
+        return _v2_manifest_response()
+
+    @app.get("/v2/sw.js")
+    async def _v2_sw_root():
+        return _v2_sw_response()
+
+    @app.get("/v2/{subpath:path}/sw.js")
+    async def _v2_sw_deep(subpath: str):  # noqa: ARG001
+        return _v2_sw_response()
+
     app.mount("/v2", StaticFiles(directory=str(_webui_v2_dir), html=True), name="webui-v2")
     logger.info(f"Web UI v2 alias also available at {brain_public_base_url()}/v2/")
 

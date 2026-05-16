@@ -45,7 +45,21 @@ function base64ToArrayBuffer(dataB64) {
   return bytes.buffer;
 }
 
-export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) {
+export function VoiceFullscreen({
+  open,
+  onClose,
+  initialMode = 'idle',
+  shell,
+  // v2026.5.29 — ``docked`` renders a compact bar pinned to the
+  // bottom of the viewport instead of a full-viewport modal so the
+  // operator can keep typing in the chat composer or interacting
+  // with the dashboard while voice is active. Default stays
+  // ``fullscreen`` to preserve existing call sites (VoicePanel).
+  variant: variantProp = 'fullscreen',
+}) {
+  const [variant, setVariant] = useState(variantProp);
+  useEffect(() => { setVariant(variantProp); }, [variantProp]);
+  const isDocked = variant === 'docked';
   const [voiceState, setVoiceState] = useState(initialMode);
   const [transcript, setTranscript] = useState('');
   const [partialTranscript, setPartialTranscript] = useState('');
@@ -108,6 +122,24 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
   const queuePcm16Playback = useCallback(async (payload) => {
     const ctx = await ensurePlaybackContext();
     if (!ctx || !payload?.data_b64) return;
+    // v2026.5.29 — one-shot diagnostic on the first chunk per
+    // session so we can see in DevTools whether the shared
+    // AudioContext was actually unlocked when assistant audio
+    // started arriving. Silent voice with `state === 'suspended'`
+    // means the user-gesture unlock missed; with `state === 'running'`
+    // it means the audio is reaching the graph but inaudible for
+    // another reason (volume, output device, etc.).
+    if (nextPlaybackTimeRef.current === 0) {
+      try {
+        // eslint-disable-next-line no-console
+        console.debug(
+          '[voice] first audio chunk:',
+          'ctx.state=', ctx.state,
+          'sample_rate=', payload.sample_rate,
+          'b64_len=', payload.data_b64.length,
+        );
+      } catch (_err) { /* ignore */ }
+    }
     const pcm16 = new Int16Array(base64ToArrayBuffer(payload.data_b64));
     const float32 = new Float32Array(pcm16.length);
     for (let i = 0; i < pcm16.length; i++) {
@@ -360,6 +392,112 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
   // rectangle inside the tab area instead of a fullscreen takeover.
   if (typeof document === 'undefined') return null;
 
+  // v2026.5.29 — docked variant: a compact bar pinned to the bottom
+  // of the viewport with the orb + status + minimal controls. The
+  // rest of the page stays interactive because:
+  //   - no full-viewport backdrop
+  //   - pointer-events live only on the bar itself
+  //   - aria-modal is dropped so screen-reader focus is not trapped
+  if (isDocked) {
+    return createPortal((
+      <div
+        ref={containerRef}
+        role="region"
+        aria-label="Voice session"
+        tabIndex={-1}
+        data-testid="voice-fullscreen"
+        data-variant="docked"
+        style={{
+          position: 'fixed',
+          left: 12,
+          right: 12,
+          bottom: 12,
+          zIndex: 1000,
+          background: 'rgba(10,10,15,0.94)',
+          color: '#fff',
+          borderRadius: 18,
+          boxShadow: '0 10px 30px rgba(0,0,0,0.45)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '10px 12px',
+          pointerEvents: 'auto',
+          fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+        }}
+      >
+        <div
+          data-testid="orb-container"
+          onClick={handleInterrupt}
+          style={{
+            width: 56,
+            height: 56,
+            flex: '0 0 auto',
+            cursor: voiceState === 'speaking' ? 'pointer' : 'default',
+            opacity: isMuted ? 0.5 : 1,
+          }}
+        >
+          <VoiceOrb state={voiceState} audioLevel={audioLevel} />
+        </div>
+        <div style={{ flex: '1 1 auto', minWidth: 0, fontSize: 13 }}>
+          {voiceMode && (
+            <div
+              data-testid="provider-badge"
+              style={{ opacity: 0.55, fontSize: 11, marginBottom: 2 }}
+            >
+              {providerLabel(voiceMode)}
+            </div>
+          )}
+          <div style={{ opacity: 0.9, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {voiceState === 'speaking' ? (brainText || 'Speaking…') :
+              voiceState === 'processing' ? 'Thinking…' :
+              voiceState === 'listening' ? (partialTranscript || transcript || 'Listening…') :
+              voiceState === 'error' ? (errorMessage || 'Voice error') :
+              'Tap orb to interrupt · ⤢ to expand'}
+          </div>
+        </div>
+        <button
+          data-testid="mute-button"
+          onClick={handleMuteToggle}
+          aria-label={isMuted ? 'Unmute microphone' : 'Mute microphone'}
+          aria-pressed={isMuted}
+          style={{
+            background: isMuted ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.1)',
+            color: '#fff', border: 'none', borderRadius: '50%',
+            width: 40, height: 40, fontSize: 16, cursor: 'pointer', flex: '0 0 auto',
+          }}
+        >
+          {isMuted ? '🔇' : '🎤'}
+        </button>
+        <button
+          data-testid="expand-button"
+          onClick={() => setVariant('fullscreen')}
+          aria-label="Expand voice session"
+          style={{
+            background: 'rgba(255,255,255,0.1)',
+            color: '#fff', border: 'none', borderRadius: '50%',
+            width: 40, height: 40, fontSize: 16, cursor: 'pointer', flex: '0 0 auto',
+          }}
+        >
+          ⤢
+        </button>
+        <button
+          data-testid="close-button"
+          onClick={handleClose}
+          aria-label="End voice session"
+          style={{
+            background: 'rgba(239,68,68,0.25)',
+            color: '#fff', border: 'none', borderRadius: '50%',
+            width: 40, height: 40, fontSize: 16, cursor: 'pointer', flex: '0 0 auto',
+          }}
+        >
+          ✕
+        </button>
+      </div>
+    ), document.body);
+  }
+
   return createPortal((
     <div
       ref={containerRef}
@@ -368,6 +506,7 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
       aria-modal="true"
       tabIndex={-1}
       data-testid="voice-fullscreen"
+      data-variant="fullscreen"
       style={{
         position: 'fixed',
         inset: 0,
@@ -400,6 +539,28 @@ export function VoiceFullscreen({ open, onClose, initialMode = 'idle', shell }) 
           {providerLabel(voiceMode)}
         </div>
       )}
+      {/* v2026.5.29 — Minimize affordance returns to docked variant
+          without ending the voice session. */}
+      <button
+        data-testid="minimize-button"
+        onClick={() => setVariant('docked')}
+        aria-label="Minimize voice session"
+        style={{
+          position: 'absolute',
+          top: 12,
+          right: 12,
+          background: 'rgba(255,255,255,0.1)',
+          color: '#fff',
+          border: 'none',
+          borderRadius: 14,
+          width: 36,
+          height: 28,
+          fontSize: 14,
+          cursor: 'pointer',
+        }}
+      >
+        ⤡
+      </button>
 
       {/* Transcript area */}
       <div

@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import { unlockSharedAudioContext } from '../../lib/audioContext';
 import { VoiceFullscreen } from './VoiceFullscreen';
 
 // Same module-level cache pattern as ChatPanel — preserves voice
@@ -60,6 +61,13 @@ export default function VoicePanel({ shell: shellProp }) {
   }, [shell]);
 
   const handleOpen = useCallback(async () => {
+    // v2026.5.29 — kick the shared AudioContext to `running` inside
+    // the click gesture so the upcoming `audio_response` PCM16
+    // playback (which arrives async from the brain) actually plays.
+    // Chrome leaves new AudioContexts `suspended` and a later
+    // `resume()` outside a gesture stack silently no-ops.
+    void unlockSharedAudioContext();
+
     // 1. Send voice_session_start envelope via the CORRECT shell API
     //    (sendFrame, not send). Brain allocates a voice session id and
     //    routes audio frames through voice_router.open_session(mode).

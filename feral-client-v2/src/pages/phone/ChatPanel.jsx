@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { Mic, Send } from 'lucide-react';
 import { useWebSpeech } from '../../hooks/useWebSpeech';
+import { unlockSharedAudioContext } from '../../lib/audioContext';
 import { VoiceFullscreen } from './VoiceFullscreen';
 
 const LONG_PRESS_MS = 400;
@@ -158,6 +159,15 @@ export default function ChatPanel({ shell: shellProp }) {
   }, [speech]);
 
   const handleMicPointerDown = useCallback(() => {
+    // v2026.5.29 — kick the shared AudioContext to `running` from
+    // inside the synchronous pointer-down gesture. By the time the
+    // long-press timer fires `startVoiceSession()` (and the brain
+    // streams `audio_response` PCM back), the gesture stack is gone
+    // and `AudioContext.resume()` would silently no-op on Chrome,
+    // making every later `BufferSource.start()` play silence. Fire-
+    // and-forget — the unlock is best-effort and we don't gate the
+    // long-press behaviour on it.
+    void unlockSharedAudioContext();
     if (!speech.supported) return;
     longPressTriggeredRef.current = false;
     longPressTimerRef.current = setTimeout(() => {
@@ -277,6 +287,11 @@ export default function ChatPanel({ shell: shellProp }) {
           onClose={handleVoiceFullscreenClose}
           initialMode="listening"
           shell={shell}
+          // v2026.5.29 — long-press in the chat composer opens voice
+          // in a docked strip pinned to the viewport bottom; the chat
+          // composer and the rest of the dashboard stay interactive
+          // (the previous full-viewport modal blocked everything).
+          variant="docked"
         />
       )}
     </div>

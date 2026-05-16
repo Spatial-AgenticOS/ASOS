@@ -192,12 +192,56 @@ class SessionSnapshotStore:
 
 
 def _truncate(items: Optional[list[dict]], cap: int) -> list[dict]:
+    """v2026.5.29 — tool-aware tail that never persists orphan
+    ``function_call_output`` rows.
+
+    Two passes:
+
+    1. Tail to the most recent ``cap`` rows, expanding backwards
+       through any ``role:"tool"`` rows so the cut never lands inside
+       an assistant ``tool_calls`` round-trip.
+    2. Drop any leading orphan ``tool`` rows whose announcing assistant
+       turn is absent from the tail (covers stale snapshots written
+       by older brain builds).
+    """
     if not items:
         return []
-    if len(items) <= cap:
-        # Defensive copy — caller may mutate the deque after we return.
-        return [dict(x) for x in items if isinstance(x, dict)]
-    return [dict(x) for x in items[-cap:] if isinstance(x, dict)]
+    cleaned = [dict(x) for x in items if isinstance(x, dict)]
+    if len(cleaned) > cap:
+        start = len(cleaned) - cap
+        while start > 0:
+            row = cleaned[start]
+            if row.get("role") != "tool":
+                break
+            prev = cleaned[start - 1]
+            prev_role = prev.get("role")
+            if prev_role == "tool":
+                start -= 1
+                continue
+            if prev_role == "assistant" and prev.get("tool_calls"):
+                start -= 1
+                continue
+            break
+        cleaned = cleaned[start:]
+    announced: set[str] = set()
+    for row in cleaned:
+        if row.get("role") == "assistant" and row.get("tool_calls"):
+            for tc in row["tool_calls"]:
+                if isinstance(tc, dict):
+                    cid = tc.get("id")
+                    if isinstance(cid, str) and cid:
+                        announced.add(cid)
+    drop_until = 0
+    for i, row in enumerate(cleaned):
+        if row.get("role") != "tool":
+            break
+        cid = row.get("tool_call_id") or row.get("call_id") or ""
+        if cid and cid in announced:
+            break
+        drop_until = i + 1
+    if drop_until:
+        cleaned = cleaned[drop_until:]
+    return cleaned
 
 
 __all__ = ["SessionSnapshotStore"]

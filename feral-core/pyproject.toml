@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "feral-ai"
-version = "2026.5.28"
+version = "2026.5.29"
 description = "FERAL — Open-source AI agent with computer use, GenUI, voice, hardware control, and persistent memory."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -244,11 +244,16 @@ exclude = ["tests*"]
 # made it into the published wheel.
 "agents.personas" = ["*.json", "*.md"]
 "workflows" = ["*.json", "*.md"]
-"webui" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json"]
+# v2026.5.29 — `*.webmanifest` and `*.txt` must be globbed in too.
+# Pre-fix the wheel shipped `manifest.webmanifest` only when its name
+# matched another glob (it didn't), so `pip install feral-ai` left the
+# brain returning 404 on `/v2/manifest.webmanifest` while local dev
+# checkouts had the file and looked fine.
+"webui" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json", "*.webmanifest", "*.txt"]
 "webui.assets" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json", "*.map"]
 # v2 ambient-OS bundle — the wheel MUST carry these or pip-installed
 # users fall back to the v1 UI. See feral-core/api/server.py::_webui_v2_dir.
-"webui_v2" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json"]
+"webui_v2" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json", "*.webmanifest", "*.txt"]
 "webui_v2.assets" = ["*.html", "*.css", "*.js", "*.svg", "*.png", "*.ico", "*.json", "*.map"]
 
 [tool.pytest.ini_options]

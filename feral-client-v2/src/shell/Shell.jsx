@@ -200,24 +200,64 @@ function ShellFrame() {
 
     (async () => {
       const stored = readActiveConversationId();
+      let hydratedFromConversations = false;
       try {
         const query = stored ? `?conversation_id=${encodeURIComponent(stored)}` : '';
         const active = await apiJson(`/api/conversations/active/thread${query}`);
         if (!active?.error && active?.id) {
           setConversation(active.id, active.messages || []);
-          if (!cancelled) setReady(true);
-          return;
+          hydratedFromConversations = true;
         }
       } catch {
         // fall through to explicit create
       }
 
-      await startNewConversation();
+      // v2026.5.29 — also fetch the canonical primary-thread transcript
+      // (Phase 9) from the orchestrator and merge any turns the
+      // conversations store doesn't yet carry. This makes WebSocket-
+      // only chat turns survive a hard refresh: previously the brain
+      // appended them to the orchestrator's in-RAM history but the
+      // WebUI only rehydrated through /api/conversations/* which is a
+      // separate store. If anything goes wrong we just keep the
+      // conversation-store thread we already loaded.
+      try {
+        const transcript = await apiJson('/api/sessions/primary/transcript');
+        const wsMessages = Array.isArray(transcript?.messages) ? transcript.messages : [];
+        if (wsMessages.length) {
+          // Use the functional updater so we see the current messages
+          // (whether they came from the conversations store above or
+          // are empty) and dedupe by role+text signature.
+          setMessages((prev) => {
+            const seen = new Set(prev.map((m) => `${m.role}|${(m.text || '').trim()}`));
+            const additions = [];
+            for (const m of wsMessages) {
+              const role = m?.role;
+              const text = (m?.text || '').trim();
+              if (!role || !text) continue;
+              const sig = `${role}|${text}`;
+              if (seen.has(sig)) continue;
+              seen.add(sig);
+              additions.push({
+                id: `pt_${m.ts_ms || Math.random().toString(36).slice(2, 8)}`,
+                role,
+                text,
+              });
+            }
+            return additions.length ? [...prev, ...additions] : prev;
+          });
+        }
+      } catch {
+        // Phase 9 endpoint optional — never block hydration on it.
+      }
+
+      if (!hydratedFromConversations) {
+        await startNewConversation();
+      }
       if (!cancelled) setReady(true);
     })();
 
     return () => { cancelled = true; };
-  }, [setConversation, startNewConversation]);
+  }, [setConversation, setMessages, startNewConversation]);
 
   useEffect(() => {
     if (!ready || !conversationId) return;

@@ -17,7 +17,12 @@
  *     a stale token doesn't trap the user.
  */
 
-const VERSION = 'feral-sw-v1';
+// v2026.5.29 — bumped from v1 → v2 so the old cache (which precached a
+// manifest.webmanifest path that may have 404'd on installed wheels) is
+// pruned on next activation. Without the bump, operators upgrading would
+// keep seeing the synthetic ``503 Offline`` for cached-miss fetches that
+// initiated from the old service worker.
+const VERSION = 'feral-sw-v2';
 const STATIC_CACHE = `feral-static-${VERSION}`;
 const RUNTIME_CACHE = `feral-runtime-${VERSION}`;
 
