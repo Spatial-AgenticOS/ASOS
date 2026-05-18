@@ -95,4 +95,45 @@ describe('VoiceOverlay', () => {
     expect(overlay.classList.contains('is-visible')).toBe(false);
     expect(overlay.getAttribute('aria-hidden')).toBe('true');
   });
+
+  // Audit-r11 — Bug 3 (silent voice). When the brain emits
+  // `voice_status state=degraded reason=openai_realtime_quota` the
+  // overlay must render a banner explaining the failure so users
+  // don't blame the app for going silent.
+  it('renders voice_status banner when brain reports degraded state', () => {
+    setVoice({
+      active: true,
+      voiceStatus: {
+        state: 'degraded',
+        reason: 'openai_realtime_quota',
+        provider: 'openai',
+        fallbackProvider: 'whisper',
+        detail: '',
+      },
+    });
+    const { getByText } = render(<VoiceOverlay />);
+    expect(getByText(/Voice degraded — using fallback TTS/)).toBeInTheDocument();
+    expect(getByText(/out of credit/i)).toBeInTheDocument();
+  });
+
+  it('renders Voice unavailable banner on state=unavailable', () => {
+    setVoice({
+      active: true,
+      voiceStatus: {
+        state: 'unavailable',
+        reason: 'fallback_tts_failed',
+        provider: 'openai',
+        fallbackProvider: '',
+        detail: '',
+      },
+    });
+    const { getByText } = render(<VoiceOverlay />);
+    expect(getByText(/Voice unavailable/i)).toBeInTheDocument();
+  });
+
+  it('does not render banner when voiceStatus is null', () => {
+    setVoice({ active: true, voiceStatus: null });
+    const { container } = render(<VoiceOverlay />);
+    expect(container.querySelector('.v2-voice-status-banner')).toBeNull();
+  });
 });

@@ -49,6 +49,24 @@ DEFAULT_SETTINGS = {
         "tts_provider": "openai",
         "tts_model": "tts-1",
         "tts_voice": "nova",
+        # Ordered list of voice realtime providers the router tries
+        # before flipping to chunked TTS. ``openai`` resolves to
+        # ``RealtimeProxy`` (OpenAI Realtime API), ``gemini`` to
+        # ``GeminiRealtimeProxy``. Override per install via
+        # ``~/.feral/settings.json``.
+        "realtime_providers": ["openai", "gemini"],
+        # Ordered list of fallback TTS providers consulted when the
+        # primary realtime provider fails (OpenAI 1013
+        # insufficient_quota, 429, invalid_api_key). The router walks
+        # the list and emits a ``voice_status state=degraded`` frame
+        # so clients can show a "Voice degraded — using fallback TTS"
+        # banner. Empty list -> ``voice_status state=unavailable`` and
+        # the surface goes quiet but with a banner instead of silent
+        # failure. ``whisper`` is the OpenAI ``/audio/speech`` REST
+        # endpoint (cheap mp3) which most installs already have a key
+        # for; ``elevenlabs`` / ``cartesia`` / ``azure`` activate when
+        # the matching credential is stored in the vault.
+        "fallback_tts_providers": ["whisper"],
     },
     "vision": {
         "enabled": False,
@@ -124,6 +142,24 @@ def feral_data_home() -> Path:
     if xdg_data:
         return Path(xdg_data) / "feral"
     return Path.home() / ".feral"
+
+
+def load_settings() -> dict:
+    """Lightweight module-level helper that returns the merged settings
+    dict from ``~/.feral/settings.json`` (+ project + env overrides).
+
+    Built for callers that just need to *read* a single value without
+    pulling in the full ``ConfigLoader`` lifecycle (which also touches
+    the encrypted vault, derives fallback providers, mirrors env
+    overrides, etc.). The router's whisper-TTS fallback consults this
+    to pick an alternate provider; missing settings degrade silently.
+    """
+    try:
+        loader = ConfigLoader()
+        return loader.discover() or {}
+    except Exception:
+        logger.debug("load_settings fallback to defaults", exc_info=True)
+        return copy.deepcopy(DEFAULT_SETTINGS)
 
 
 class ConfigLoader:

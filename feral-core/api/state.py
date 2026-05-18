@@ -919,6 +919,23 @@ class BrainState:
                 send_to_session=self.send_to_session,
                 send_to_node=self._send_dict_to_node,
             )
+            # Wire the realtime proxy back into the router so OpenAI
+            # Realtime failures (WS 1013 insufficient_quota, 429,
+            # invalid_api_key, etc.) trigger
+            # ``VoiceRouter.handle_realtime_failure`` which emits the
+            # ``voice_status`` frame + flips the session into whisper
+            # TTS fallback mode. Without this, the receive loop just
+            # logs and dies silent. Pinned by
+            # ``tests/test_voice_realtime_quota_fallback.py``.
+            if self.realtime_proxy:
+                self.realtime_proxy.attach_fallback_router(self.voice_router)
+            # Hand the router to the orchestrator so
+            # ``response_delivery.send_text`` can synthesise mp3
+            # ``tts_chunk`` fallback audio on degraded sessions
+            # (operator report 2026-05-18: voice silent on every
+            # surface after OpenAI Realtime credit drained).
+            if self.orchestrator:
+                self.orchestrator.voice_router = self.voice_router
 
         with boot_subsystem(self._boot_report, "GeminiRealtimeProxy"):
             self.gemini_proxy = GeminiRealtimeProxy(

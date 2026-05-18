@@ -244,6 +244,17 @@ export class RealtimeVoiceEngine {
     this._source.connect(this._workletNode);
 
     this._playbackCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    // Audit-r11 — Bug 3 (silent voice on WebUI desktop). Safari +
+    // Chrome both create new AudioContexts in the `suspended` state
+    // until the page receives a user gesture. The voice button click
+    // counts but the click handler is upstream of this constructor
+    // (useVoiceMode.start) so the gesture chain can be lost on rapid
+    // remount. Force a resume here so the very first `audio_response`
+    // chunk fires through a `running` context and the user actually
+    // hears the assistant.
+    if (this._playbackCtx.state === 'suspended') {
+      this._playbackCtx.resume().catch(() => {});
+    }
     this._nextPlayTime = 0;
   }
 
@@ -342,9 +353,65 @@ export class RealtimeVoiceEngine {
     if (this._playbackCtx) {
       this._playbackCtx.close().catch(() => {});
       this._playbackCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+      // Same gesture-handoff issue described in `start()`; the
+      // freshly re-created context must be resumed before the next
+      // `audio_response` arrives.
+      if (this._playbackCtx.state === 'suspended') {
+        this._playbackCtx.resume().catch(() => {});
+      }
     }
     if (this.onSpeechStarted) {
       this.onSpeechStarted();
+    }
+  }
+
+  /**
+   * Audit-r11 — Bug 3 (silent voice on whisper fallback). When the
+   * brain falls back to OpenAI `/audio/speech` it emits `tts_chunk`
+   * frames carrying base64-encoded mp3 (or wav for the local Piper
+   * provider). The realtime PCM path above only handles `audio_response`;
+   * without this method the WebUI dropped every fallback chunk and the
+   * assistant went silent whenever Realtime was unavailable (operator
+   * report 2026-05-18). Decodes the audio blob through
+   * `AudioContext.decodeAudioData` and schedules it on the same
+   * playback timeline `audio_response` uses, so a single utterance can
+   * mix realtime + fallback frames cleanly.
+   */
+  async handleTtsChunk(payload) {
+    if (!payload || !payload.data_b64) return;
+    if (!this._playbackCtx) {
+      this._playbackCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+      if (this._playbackCtx.state === 'suspended') {
+        try { await this._playbackCtx.resume(); } catch { /* ignore */ }
+      }
+    }
+    try {
+      const binStr = atob(payload.data_b64);
+      const bytes = new Uint8Array(binStr.length);
+      for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+
+      // `decodeAudioData` handles mp3 + wav natively across modern
+      // browsers. Wrap in a Promise so the await actually waits.
+      const audioBuffer = await new Promise((resolve, reject) => {
+        try {
+          this._playbackCtx.decodeAudioData(
+            bytes.buffer.slice(0),
+            (buf) => resolve(buf),
+            (err) => reject(err || new Error('decodeAudioData failed')),
+          );
+        } catch (e) { reject(e); }
+      });
+
+      const source = this._playbackCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this._playbackCtx.destination);
+
+      const now = this._playbackCtx.currentTime;
+      const startTime = Math.max(now, this._nextPlayTime);
+      source.start(startTime);
+      this._nextPlayTime = startTime + audioBuffer.duration;
+    } catch (e) {
+      if (this.onError) this.onError('playback', e?.message || String(e));
     }
   }
 

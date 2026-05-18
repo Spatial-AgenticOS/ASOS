@@ -1828,6 +1828,17 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                     context["reply_to"] = reply_to
 
                 response_text = ""
+                # Audit-r11 fix — Bug 1: iOS double assistant bubble.
+                # The orchestrator's broadcast ``text_response`` AND
+                # the synchronous ``chat_response`` below both reach
+                # the phone WS when the phone is the only client on
+                # this session. Set a per-session suppression flag for
+                # the duration of this turn; ``response_delivery.send_text``
+                # consults it and skips the broadcast frame. The
+                # ``try/finally`` guarantees we always clear the flag
+                # so a desktop client joining the session later still
+                # gets ``text_response`` on its OWN turns.
+                state.orchestrator._text_response_suppressed[target_sid] = True
                 try:
                     if reply_mode == "stream":
                         result = await state.orchestrator.handle_command_stream(
@@ -1872,6 +1883,8 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         payload_for_hash=payload_dict,
                     )
                     response_text = ""
+                finally:
+                    state.orchestrator._text_response_suppressed.pop(target_sid, None)
 
                 # Phase-1 validation pass (Item 2): the brain emits
                 # an explicit HUP `error` frame on the failure branch

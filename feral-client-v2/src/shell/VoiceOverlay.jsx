@@ -26,6 +26,38 @@ const PROVIDER_LABEL = {
  * presentation mode. Voice can be running and the chat / dock /
  * dashboard stay fully interactive.
  */
+/**
+ * Audit-r11 — Bug 3 banner. Brain emits `voice_status` (degraded /
+ * unavailable + reason) when the realtime provider fails. The
+ * overlay renders this above the controls so the user knows why TTS
+ * is silent (and which next action — top up OpenAI credit, switch
+ * provider, etc.) instead of guessing.
+ */
+function VoiceStatusBanner({ status }) {
+  if (!status) return null;
+  const headline =
+    status.state === 'unavailable'
+      ? 'Voice unavailable'
+      : 'Voice degraded — using fallback TTS';
+  const subline =
+    {
+      openai_realtime_quota: 'OpenAI Realtime is out of credit. Top up at platform.openai.com/usage.',
+      openai_realtime_auth: 'OpenAI API key is invalid or expired.',
+      openai_realtime_rate_limit: 'OpenAI Realtime is rate-limited; retrying via fallback TTS.',
+      fallback_tts_failed: 'No fallback TTS provider is configured.',
+      no_tts_provider: 'No TTS provider configured in settings.',
+    }[status.reason] || status.detail || '';
+  return (
+    <div className="v2-voice-status-banner__row" role="status">
+      <span className="v2-voice-status-banner__icon" aria-hidden="true">!</span>
+      <div className="v2-voice-status-banner__text">
+        <strong>{headline}</strong>
+        {subline && <span>{subline}</span>}
+      </div>
+    </div>
+  );
+}
+
 export default function VoiceOverlay() {
   const voice = useVoice();
   const visible = voice.active;
@@ -81,6 +113,11 @@ export default function VoiceOverlay() {
           <div className="v2-voice-status">{statusText}</div>
         )}
       </div>
+      {voice.voiceStatus && (
+        <Glass level={1} radius="md" padding="sm" className="v2-voice-status-banner">
+          <VoiceStatusBanner status={voice.voiceStatus} />
+        </Glass>
+      )}
       {voice.transcript && isFullscreen && (
         <Glass level={1} radius="md" padding="md" className="v2-voice-transcript">
           <span>{voice.transcript}</span>
