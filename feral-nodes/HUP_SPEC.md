@@ -36,6 +36,7 @@ If you can terminate TLS and speak JSON over WebSocket, you can speak HUP.
 
 | Version | Status | Additions |
 |---|---|---|
+| `v1.3.1` | Stable | Patch: strict Pydantic-v2 schema enforcement on phone-as-peer envelopes — literal-typed `chat_request.reply_mode` + `chat_request.channel`, required `session_id` on `voice_session_start`, required `stream_id` + `channels` on `audio_chunk`. Non-normative tightening; v1.3.0 daemons stay conformant. |
 | `v1.3.0` | Stable | Phone-as-peer envelopes: `chat_request`, `chat_response`, `voice_session_start`, `voice_interrupt`, `genui_push`, `genui_event`, `peripheral_bridge_register`, `backchannel_request` (§5.9). |
 | `v1.2.0` | Stable | Canonical `node_ack`, `node_heartbeat`, `hup_action_request`, `hup_action_response`, and `node_bye` handling (§5.2-§5.8). |
 
@@ -850,6 +851,31 @@ Deltas from the current `/v1/node` handler are tracked in
 ---
 
 ## Appendix B — Version Changelog
+
+### v1.3.1 (2026-05-19)
+
+- **Patch** — strict Pydantic-v2 schema enforcement on the v1.3.0
+  phone-as-peer envelopes. No new wire types, no new fields; existing
+  fields are now `Literal`-typed where they previously accepted free
+  strings:
+  - `chat_request.reply_mode` ∈ `{"final", "stream"}`.
+  - `chat_request.channel` ∈ `{"chat", "vision_ask"}`.
+  - `voice_session_start.session_id` is now required (was implicitly
+    optional; daemons that omitted it were silently accepted with an
+    empty value, which surfaced downstream as a corrupted session
+    binding).
+  - `audio_chunk.stream_id` and `audio_chunk.channels` are now
+    required.
+- **Coherence** — the brain's hardcoded ``hup_version: "1.2.0"`` in
+  the `node_ack` and `error` envelopes (`feral-core/api/server.py`)
+  was replaced with the canonical `HUP_VERSION` constant from
+  `models.protocol`. The brain now advertises exactly one version
+  on every frame, sourced from one place.
+- **Backward-compat:** strictly clarifying. v1.3.0 daemons that
+  already populated these fields with valid values remain
+  conformant. Daemons that relied on the loose-typed acceptance get
+  a clean `error` frame (code `1002 bad_schema`) instead of silent
+  downstream corruption.
 
 ### v1.3.0 (2026-04-29)
 

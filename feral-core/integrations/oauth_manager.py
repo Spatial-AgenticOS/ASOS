@@ -19,7 +19,6 @@ import logging
 import os
 import secrets
 import time
-from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -157,6 +156,77 @@ BUILTIN_PROVIDERS = {
         "pkce": True,
         "auth_type": "oauth2",
     },
+    # ──────────────────────────────────────────────────────────────────
+    # audit-r12 D9: Whoop + Oura built-ins.
+    #
+    # ``integrations/health_platforms.py`` calls
+    # ``OAuthManager.get_token("whoop")`` /
+    # ``get_token("oura")`` but neither id was registered, so the
+    # call returned ``None`` and ``WhoopClient.connected`` /
+    # ``OuraClient.connected`` were silently False forever. Same
+    # silent-degrade pattern as the Google/Microsoft gap PR 11
+    # closed; this entry registers the two so the health platforms
+    # actually authenticate.
+    #
+    # Endpoints + scopes verified against the live vendor docs on
+    # 2026-05-19 — do not regress these without re-verifying:
+    #
+    # Whoop:
+    #   https://developer.whoop.com/docs/developing/oauth
+    #   - Auth URL: https://api.prod.whoop.com/oauth/oauth2/auth
+    #   - Token URL: https://api.prod.whoop.com/oauth/oauth2/token
+    #   - Access tokens ~1h; refresh tokens require ``offline`` scope.
+    #
+    # Oura (Cloud API v2):
+    #   https://cloud.ouraring.com/v2/docs
+    #   - Auth URL: https://cloud.ouraring.com/oauth/authorize
+    #   - Token URL: https://api.ouraring.com/oauth/token
+    #   - Access tokens long-lived; refresh tokens issued under the
+    #     ``offline_access`` scope.
+    "whoop": {
+        "id": "whoop",
+        "name": "Whoop",
+        "auth_url": "https://api.prod.whoop.com/oauth/oauth2/auth",
+        "token_url": "https://api.prod.whoop.com/oauth/oauth2/token",
+        "client_id": "",
+        "scopes": [
+            # MUST include ``offline`` to receive a refresh_token per
+            # the Whoop OAuth docs (Receiving a Refresh Token).
+            "offline",
+            # Match the surfaces ``WhoopClient`` actually queries:
+            # recovery, sleep, cycles, workouts, body_measurement, and
+            # profile (for the connected member's id).
+            "read:recovery",
+            "read:sleep",
+            "read:cycles",
+            "read:workout",
+            "read:body_measurement",
+            "read:profile",
+        ],
+        "pkce": True,
+        "auth_type": "oauth2",
+    },
+    "oura": {
+        "id": "oura",
+        "name": "Oura Ring",
+        "auth_url": "https://cloud.ouraring.com/oauth/authorize",
+        "token_url": "https://api.ouraring.com/oauth/token",
+        "client_id": "",
+        "scopes": [
+            "email",
+            "personal",
+            # Match the v2 endpoints ``OuraClient`` queries:
+            # ``daily_sleep``, ``daily_readiness``, ``daily_activity``,
+            # and the heartrate time series.
+            "daily",
+            "heartrate",
+            "workout",
+            "session",
+            "tag",
+        ],
+        "pkce": True,
+        "auth_type": "oauth2",
+    },
 }
 
 
@@ -214,6 +284,22 @@ class OAuthManager:
             self._providers["microsoft"].client_id = env_ms_id
             self._providers["microsoft"].client_secret = os.getenv(
                 "MICROSOFT_OAUTH_CLIENT_SECRET", ""
+            )
+
+        # audit-r12 D9: Whoop + Oura credentials. Whoop requires both
+        # client_id and client_secret on the refresh request per the
+        # vendor docs; Oura same.
+        env_whoop_id = os.getenv("WHOOP_OAUTH_CLIENT_ID", "")
+        if env_whoop_id and "whoop" in self._providers:
+            self._providers["whoop"].client_id = env_whoop_id
+            self._providers["whoop"].client_secret = os.getenv(
+                "WHOOP_OAUTH_CLIENT_SECRET", ""
+            )
+        env_oura_id = os.getenv("OURA_OAUTH_CLIENT_ID", "")
+        if env_oura_id and "oura" in self._providers:
+            self._providers["oura"].client_id = env_oura_id
+            self._providers["oura"].client_secret = os.getenv(
+                "OURA_OAUTH_CLIENT_SECRET", ""
             )
 
     def _load_tokens(self):

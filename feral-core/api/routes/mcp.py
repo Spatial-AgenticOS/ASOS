@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from api.state import state, _log_activity
-from mcp.client import MCPServerConnection
+from mcp.client import MCPServerConfig
 
 router = APIRouter()
 
@@ -79,14 +79,26 @@ async def mcp_registry():
 
 @router.post("/api/mcp/connect")
 async def mcp_connect(body: dict):
-    """Connect to a new MCP server at runtime."""
+    """Connect to a new MCP server at runtime.
+
+    audit-r12 D7: previously this validated nothing, reached into
+    ``state.mcp_client._servers[name] = conn`` directly, and bypassed
+    the manager's connect/retry/degrade bookkeeping. Now it validates
+    the request body against :class:`MCPServerConfig` and routes
+    through :meth:`MCPClientManager.connect_server` so the connection
+    is tracked, retried, and surfaceable via ``GET /api/mcp/status``
+    the same as a server loaded from ``mcp_servers.json``.
+    """
     if not state.mcp_client:
         return {"error": "MCP client not initialized"}
-    name = body.get("name", "unnamed")
-    conn = MCPServerConnection(name, body)
-    success = await conn.connect()
+    try:
+        config = MCPServerConfig(**body)
+    except Exception as exc:
+        return {"success": False, "error": f"Invalid MCP server config: {exc}"}
+    success = await state.mcp_client.connect_server(config)
     if success:
-        state.mcp_client._servers[name] = conn
-        _log_activity("mcp_connected", f"MCP server '{name}' connected ({len(conn.tools)} tools)")
-        return {"success": True, "tools": len(conn.tools)}
-    return {"success": False, "error": f"Failed to connect to MCP server '{name}'"}
+        conn = state.mcp_client.get_server(config.name)
+        tools = len(conn.tools) if conn else 0
+        _log_activity("mcp_connected", f"MCP server '{config.name}' connected ({tools} tools)")
+        return {"success": True, "tools": tools}
+    return {"success": False, "error": f"Failed to connect to MCP server '{config.name}'"}

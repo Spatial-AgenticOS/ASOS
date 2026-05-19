@@ -59,7 +59,7 @@ import os
 import sqlite3
 import struct
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -363,7 +363,20 @@ class EmbedQueue:
     condition, not one per cycle.
     """
 
-    def __init__(self, embedder: "EmbeddingProvider", vector_index: Optional[VectorIndex] = None):
+    def __init__(
+        self,
+        embedder: "EmbeddingProvider",
+        vector_index: Optional[Any] = None,  # VectorIndexBackend Protocol
+    ):
+        """Construct the embed queue.
+
+        ``vector_index`` may be any object exposing the
+        ``upsert(chunk_id, embedding)`` signature (the
+        :class:`memory.vector_index_backends.VectorIndexBackend`
+        Protocol). The legacy :class:`VectorIndex` satisfies it; the
+        sync Chroma / Qdrant adapters added in audit-r12 D4 do too. The
+        queue is intentionally permissive on the type so the selector
+        can swap backends without touching this module."""
         self._embedder = embedder
         self._vector_index = vector_index
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
