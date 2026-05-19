@@ -32,20 +32,100 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Union
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from config.loader import feral_home
 
 logger = logging.getLogger("feral.mcp.client")
 
 
+# audit-r12 D7: ONE canonical config shape for MCP servers.
+#
+# Pre-r12 each layer invented its own keys:
+#
+# * ``MCPServerRegistry.connect_server`` passed ``server_id, command,
+#   args, env`` as flat kwargs to a non-existent
+#   ``MCPClientManager.connect(...)`` method.
+# * ``MCPServerConnection.__init__`` expected ``{transport, command,
+#   args, env}`` inside a dict.
+# * ``api/routes/mcp.py:mcp_connect`` constructed the
+#   ``MCPServerConnection`` directly from request JSON (no validation).
+# * ``mcp_servers.json`` adds ``name`` and ``enabled`` on top.
+#
+# All five layers now go through this model. The Pydantic schema
+# is the contract; everything else is a thin alias or a back-
+# compat shim.
+class MCPServerConfig(BaseModel):
+    """Canonical MCP server configuration.
+
+    The :func:`mcp_connect` HTTP endpoint validates against this; the
+    registry constructs it; the client manager stores it. Adding a
+    field here is the *only* place to add MCP config; do not invent
+    parallel shapes in callers.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    name: str = Field(..., description="Stable server id used to address the connection")
+    transport: str = Field(
+        "stdio",
+        description="Transport protocol — currently ``stdio`` or ``http``",
+    )
+    command: str = Field(
+        "",
+        description="Executable to launch (stdio transport only)",
+    )
+    args: list[str] = Field(
+        default_factory=list,
+        description="Argument vector for ``command``",
+    )
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment overlay merged on top of ``os.environ``",
+    )
+    enabled: bool = Field(
+        True,
+        description="Set to ``False`` in ``mcp_servers.json`` to keep the entry but skip auto-connect",
+    )
+
+    def to_connection_kwargs(self) -> dict[str, Any]:
+        """Project to the dict shape :class:`MCPServerConnection`'s
+        ``connect()`` reads from ``self.config`` so the connection can
+        keep its existing introspection surface during the migration."""
+        return {
+            "transport": self.transport,
+            "command": self.command,
+            "args": list(self.args),
+            "env": dict(self.env),
+            "enabled": self.enabled,
+        }
+
+
 class MCPServerConnection:
     """A connection to a single external MCP server."""
 
-    def __init__(self, name: str, config: dict):
+    def __init__(self, name: str, config: Union[MCPServerConfig, dict, None] = None):
+        # audit-r12 D7: accept either the canonical model or the
+        # legacy dict shape. New callers pass MCPServerConfig; old
+        # callers (config files, tests) keep working unchanged.
+        if isinstance(config, MCPServerConfig):
+            self._config_model: Optional[MCPServerConfig] = config
+            config_dict: dict[str, Any] = {"name": name, **config.to_connection_kwargs()}
+        else:
+            raw = dict(config or {})
+            # Be lenient — coerce only on the fields we read below.
+            raw.setdefault("name", name)
+            try:
+                self._config_model = MCPServerConfig(**raw)
+                config_dict = raw
+            except Exception:
+                self._config_model = None
+                config_dict = raw
         self.name = name
-        self.config = config
-        self.transport = config.get("transport", "stdio")
+        self.config = config_dict
+        self.transport = config_dict.get("transport", "stdio")
         self._process: Optional[asyncio.subprocess.Process] = None
         self._tools: list[dict] = []
         self._resources: list[dict] = []
@@ -336,6 +416,82 @@ class MCPClientManager:
         self._server_configs.clear()
         self._degraded_servers.clear()
         self._reconnect_not_before.clear()
+
+    # ─────────────────────────────────────────────
+    # audit-r12 D7: canonical per-server connect/disconnect API.
+    # ─────────────────────────────────────────────
+    #
+    # Pre-r12 there was no per-server connect path on the manager —
+    # ``MCPServerRegistry.connect_server`` was calling a method that
+    # didn't exist (``self._mcp_client.connect(...)``), and
+    # ``api/routes/mcp.py:mcp_connect`` reached straight into
+    # ``state.mcp_client._servers[name] = conn``. Both paths now go
+    # through these two methods.
+
+    async def connect_server(self, config: Union[MCPServerConfig, dict]) -> bool:
+        """Start a single MCP server using the canonical
+        :class:`MCPServerConfig`.
+
+        Idempotent on ``config.name``: if a connection already exists
+        we disconnect it first so configuration changes (e.g. updated
+        env vars) take effect.
+        """
+        if not isinstance(config, MCPServerConfig):
+            config = MCPServerConfig(**config)
+        name = config.name
+        if name in self._servers:
+            try:
+                await self._servers[name].disconnect()
+            except Exception as exc:
+                logger.debug("MCP disconnect during replace failed: %s", exc)
+            del self._servers[name]
+        self._server_configs[name] = {"name": name, **config.to_connection_kwargs()}
+        conn = MCPServerConnection(name, config)
+        ok = await self._connect_with_retries(conn)
+        if ok:
+            self._servers[name] = conn
+        return ok
+
+    async def disconnect_server(self, name: str) -> bool:
+        """Disconnect a single MCP server by name. Returns True if a
+        connection was actually torn down, False if the name was
+        unknown."""
+        conn = self._servers.pop(name, None)
+        self._server_configs.pop(name, None)
+        self._clear_degraded(name)
+        if conn is None:
+            return False
+        try:
+            await conn.disconnect()
+        except Exception as exc:
+            logger.debug("MCP disconnect_server failed for %s: %s", name, exc)
+        return True
+
+    # Back-compat aliases that match what ``MCPServerRegistry`` used to
+    # try to call. Kept narrow on purpose — new code should call
+    # ``connect_server`` / ``disconnect_server``.
+    async def connect(self, **kwargs: Any) -> bool:
+        """Deprecated kwargs-only alias for :meth:`connect_server`. The
+        old (broken) :class:`MCPServerRegistry` code path called
+        ``manager.connect(server_id=..., command=..., args=...,
+        env=...)``; we accept that shape here so the in-flight migration
+        of older operator scripts doesn't break. New code MUST use
+        :meth:`connect_server` with a :class:`MCPServerConfig`."""
+        # Translate the legacy kwargs shape to the canonical model.
+        name = kwargs.pop("server_id", None) or kwargs.pop("name", None)
+        if not name:
+            raise TypeError(
+                "MCPClientManager.connect() requires server_id= (or name=) "
+                "— pre-r12 this method didn't exist; use connect_server() "
+                "with an MCPServerConfig instead."
+            )
+        # `kwargs` carries command/args/env/transport at this point.
+        return await self.connect_server(MCPServerConfig(name=name, **kwargs))
+
+    async def disconnect(self, name: str) -> bool:
+        """Deprecated alias for :meth:`disconnect_server` to match the
+        symmetry of :meth:`connect`."""
+        return await self.disconnect_server(name)
 
     def get_server(self, name: str) -> Optional[MCPServerConnection]:
         return self._servers.get(name)

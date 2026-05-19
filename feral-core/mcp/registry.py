@@ -183,7 +183,19 @@ class MCPServerRegistry:
         logger.info(f"MCP server configured: {server_id}")
 
     async def connect_server(self, server_id: str) -> dict:
-        """Start and connect to an MCP server."""
+        """Start and connect to an MCP server.
+
+        audit-r12 D7: pre-r12 this called
+        ``self._mcp_client.connect(server_id=, command=, args=, env=)``
+        — a method that didn't exist on
+        :class:`mcp.client.MCPClientManager`. Phone clients and the
+        Settings UI both routed through here, so every "Connect server"
+        action silently 404'd into an ``AttributeError`` and the
+        registry returned ``{error: ...}`` with no real diagnostic.
+
+        Now: build a canonical :class:`MCPServerConfig` and hand it to
+        :meth:`MCPClientManager.connect_server`.
+        """
         config = self.get_server_config(server_id)
         if not config:
             return {"error": f"Unknown server: {server_id}"}
@@ -192,12 +204,18 @@ class MCPServerRegistry:
             return {"error": "MCP client not available"}
 
         try:
-            await self._mcp_client.connect(
-                server_id=server_id,
+            from mcp.client import MCPServerConfig
+            model = MCPServerConfig(
+                name=server_id,
+                transport=config.get("transport", "stdio"),
                 command=config.get("command", ""),
-                args=config.get("args", []),
-                env=config.get("env", {}),
+                args=list(config.get("args", []) or []),
+                env=dict(config.get("env", {}) or {}),
+                enabled=bool(config.get("enabled", True)),
             )
+            ok = await self._mcp_client.connect_server(model)
+            if not ok:
+                return {"error": f"Failed to connect to MCP server '{server_id}'"}
             return {"ok": True, "server": server_id}
         except Exception as e:
             return {"error": str(e)}
@@ -206,7 +224,9 @@ class MCPServerRegistry:
         if not self._mcp_client:
             return {"error": "MCP client not available"}
         try:
-            await self._mcp_client.disconnect(server_id)
+            torn_down = await self._mcp_client.disconnect_server(server_id)
+            if not torn_down:
+                return {"error": f"MCP server '{server_id}' was not connected"}
             return {"ok": True, "server": server_id}
         except Exception as e:
             return {"error": str(e)}
