@@ -13,6 +13,19 @@ multi-stage compaction, and knowledge graph integration.
 
 Hybrid search: FTS5 text (weight 0.3) + vector similarity (weight 0.7)
 with MMR diversity reranking and temporal decay.
+
+v2026.5.33 (Option C async-native rewrite)
+------------------------------------------
+Every method that touches SQLite is async via aiosqlite. The asyncio
+event loop never blocks on a memory call — concurrent searches /
+upserts parallelise through aiosqlite's per-connection worker threads.
+``__init__`` stays sync (one-shot boot DDL); ``start_background_tasks``
+must be called from inside a running event loop after construction.
+
+Working-memory operations (in-RAM deques) stay sync — they don't hit
+I/O and don't benefit from async. Pure helpers (``_episode_row_to_dict``,
+``_mmr_rerank_episodes``, ``_wiki_slug``, ``_heuristic_summarize``)
+stay sync for the same reason.
 """
 
 from __future__ import annotations
@@ -25,9 +38,10 @@ from collections import deque
 from typing import Optional
 from uuid import uuid4
 
+import aiosqlite
+
 from config.loader import feral_data_home
 from memory.context_builder import (
-    build_context_for_llm as context_build_context_for_llm,
     build_context_for_llm_async as context_build_context_for_llm_async,
     compact_session as context_compact_session,
     heuristic_summarize as context_heuristic_summarize,
@@ -71,6 +85,10 @@ class MemoryStore:
     """
     The full FERAL memory layer with vector search, hybrid ranking,
     temporal decay, and multi-stage compaction.
+
+    Async-native (v2026.5.33). All I/O methods are coroutines; call
+    sites use ``await store.X(...)`` directly. Construction stays
+    sync (boot DDL is one-shot).
     """
 
     def __init__(
@@ -86,17 +104,18 @@ class MemoryStore:
         db_path :
             SQLite DB path. Defaults to ``~/.feral/memory.db``.
         vec_index :
-            Pluggable vector index backend conforming to
+            Pluggable async vector index backend conforming to
             :class:`memory.vector_index_backends.VectorIndexBackend`.
-            If ``None``, defaults to the sqlite-vec backend (which is
-            what FERAL has always shipped). ``BrainState.__init__``
-            reads ``settings.memory.backend`` and injects the
-            configured backend here — selecting ``chroma`` or
-            ``qdrant`` in settings.yaml swaps this end-to-end.
+            If ``None``, defaults to the sqlite-vec backend.
+            ``BrainState.__init__`` reads ``settings.memory.backend``
+            and injects the configured backend here — selecting
+            ``chroma`` or ``qdrant`` in settings.yaml swaps this
+            end-to-end.
 
-            audit-r12 D4: pre-r12 this was hardwired to ``VectorIndex``
-            (sqlite-vec only); ``settings.memory.backend`` was defined
-            but read nowhere. The injection point closes that loop.
+        Boot-time SQL (CREATE TABLE / CREATE INDEX) runs synchronously
+        through stdlib ``sqlite3``. This is intentional: ``__init__``
+        is not async and the brain's boot wiring is sync. The async
+        surface kicks in for every operation after construction.
         """
         if db_path is None:
             data_dir = feral_data_home()
@@ -115,10 +134,6 @@ class MemoryStore:
         self._init_db()
 
         if vec_index is None:
-            # Default sqlite-vec backend — same behaviour as pre-r12,
-            # just routed through the Protocol-typed selector. Other
-            # backends (Chroma, Qdrant) are injected from BrainState
-            # based on settings.memory.backend.
             from memory.vector_index_backends.sqlite_vec import SQLiteVecIndex
             vec_index = SQLiteVecIndex(
                 dim=self._embedder.dimension,
@@ -126,29 +141,19 @@ class MemoryStore:
                 table_name="vec_chunks",
             )
         self._vec_index: VectorIndexBackend = vec_index
-        # EmbedQueue writes vectors via the same ``upsert(chunk_id, vec)``
-        # surface every VectorIndexBackend satisfies — so it works
-        # uniformly with sqlite-vec, Chroma, or Qdrant. The queue's
-        # other job (writing chunk text to the FTS5 ``memory_chunks``
-        # table for keyword search) stays SQLite-specific and is
-        # independent of the chosen vector backend.
         self._embed_queue = EmbedQueue(self._embedder, vec_index)
-        # Remember the backend id for stats / logging — useful when the
-        # operator is debugging "where did my vectors go".
         self._backend_id = getattr(vec_index, "backend_id", "unknown")
 
         self._init_knowledge_graph()
-        if self._backend_id == "sqlite_vec":
-            index_mode = "sqlite-vec (vec0)" if vec_index.indexed else "numpy fallback"
-        else:
-            index_mode = f"{self._backend_id} (indexed={vec_index.indexed}, count={vec_index.count})"
         logger.info(
-            "Memory store v%d at %s | embeddings: %s | index: %s",
-            _SCHEMA_VERSION, self.db_path, self._embedder.provider_name, index_mode,
+            "Memory store v%d at %s | embeddings: %s | backend: %s (indexed=%s)",
+            _SCHEMA_VERSION, self.db_path, self._embedder.provider_name,
+            self._backend_id, vec_index.indexed,
         )
 
-    def start_background_tasks(self):
-        """Start the embed queue processor. Call after event loop is running."""
+    def start_background_tasks(self) -> None:
+        """Start the embed queue processor. Must be called from within
+        a running event loop after construction."""
         self._embed_queue.start()
         logger.info("Embed queue started")
 
@@ -157,9 +162,12 @@ class MemoryStore:
             from memory.knowledge_graph import KnowledgeGraph
             self._kg = KnowledgeGraph(self.db_path, self._embedder)
             kg_stats = self._kg.stats()
-            logger.info(f"Knowledge graph: {kg_stats['entities']} entities, {kg_stats['relations']} relations")
+            logger.info(
+                "Knowledge graph: %d entities, %d relations",
+                kg_stats.get("entities", 0), kg_stats.get("relations", 0),
+            )
         except Exception as e:
-            logger.warning(f"Knowledge graph init failed: {e}")
+            logger.warning("Knowledge graph init failed: %s", e)
 
     @property
     def kg(self):
@@ -185,24 +193,34 @@ class MemoryStore:
         if self._sync_engine:
             self._sync_engine.log_operation(table, op_type, row_id, data)
 
-    def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
+    async def _conn(self) -> aiosqlite.Connection:
+        """Open an aiosqlite connection with WAL + a 5s busy timeout.
+
+        Connections are short-lived per call (matches the legacy
+        sync pattern). aiosqlite runs each connection on a dedicated
+        worker thread, so the asyncio event loop never blocks on a
+        SQLite syscall. The cost is one thread-wakeup per call; this
+        is negligible compared to the FTS5 / vector lookup cost on
+        the methods that actually do work.
+        """
+        conn = await aiosqlite.connect(self.db_path)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     # ─────────────────────────────────────────────
     # Schema
     # ─────────────────────────────────────────────
 
-    def close(self):
+    def close(self) -> None:
         """Shut down background tasks and release resources."""
         try:
             self._embed_queue.stop()
         except Exception:
             pass
 
-    def refresh(self) -> dict:
+    async def refresh(self) -> dict:
         """Re-validate the on-disk memory + sync WAL after suspected corruption.
 
         Returns a dict shaped like:
@@ -216,18 +234,17 @@ class MemoryStore:
         """
         result: dict = {"ok": True}
 
-        # Memory DB integrity check. We open a dedicated connection so a
-        # corruption error doesn't poison the long-lived store connections.
         memory_status = "ok"
         memory_detail = ""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = await aiosqlite.connect(self.db_path)
         except sqlite3.Error as exc:
             memory_status = "open_failed"
             memory_detail = str(exc)
         else:
             try:
-                rows = conn.execute("PRAGMA integrity_check").fetchall()
+                async with conn.execute("PRAGMA integrity_check") as cur:
+                    rows = await cur.fetchall()
                 statuses = [r[0] for r in rows] if rows else []
                 if statuses != ["ok"]:
                     memory_status = "corruption"
@@ -236,14 +253,13 @@ class MemoryStore:
                 memory_status = "corruption"
                 memory_detail = str(exc)
             finally:
-                conn.close()
+                await conn.close()
         result["memory_db"] = memory_status
         if memory_status != "ok":
             result["memory_db_detail"] = memory_detail
             result["ok"] = False
             result["error"] = "memory_db_corruption"
 
-        # Sync WAL integrity check, only if a SyncEngine is attached.
         if self._sync_engine is not None:
             try:
                 wal_check = self._sync_engine._wal.integrity_check()
@@ -260,6 +276,8 @@ class MemoryStore:
         return result
 
     def _init_db(self):
+        """Create / migrate the schema. Sync sqlite3 because this runs
+        once at construction time, before the event loop is even up."""
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute("""
@@ -462,7 +480,7 @@ class MemoryStore:
             conn.close()
 
     # ─────────────────────────────────────────────
-    # Tier 1: Working Memory (in-RAM)
+    # Tier 1: Working Memory (in-RAM, sync)
     # ─────────────────────────────────────────────
 
     def working_push(self, session_id: str, entry: dict):
@@ -504,7 +522,7 @@ class MemoryStore:
     # Conversation Threads (persistent chat history)
     # ─────────────────────────────────────────────
 
-    def conversation_save(self, conversation_id: str, messages: list[dict], title: str = "") -> dict:
+    async def conversation_save(self, conversation_id: str, messages: list[dict], title: str = "") -> dict:
         """Save/update a conversation thread."""
         now = time.time()
         preview = ""
@@ -519,9 +537,9 @@ class MemoryStore:
                     break
         title = title or "New conversation"
 
-        conn = self._conn()
+        conn = await self._conn()
         try:
-            conn.execute("""
+            await conn.execute("""
                 INSERT INTO conversations (id, title, preview, messages_json, message_count, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
@@ -531,12 +549,12 @@ class MemoryStore:
                     message_count = excluded.message_count,
                     updated_at = excluded.updated_at
             """, (conversation_id, title, preview, json.dumps(messages[-500:]), len(messages), now, now))
-            conn.commit()
+            await conn.commit()
         finally:
-            conn.close()
+            await conn.close()
         return {"id": conversation_id, "title": title, "message_count": len(messages), "updated_at": now}
 
-    def conversation_append(
+    async def conversation_append(
         self,
         conversation_id: str,
         role: str,
@@ -555,7 +573,7 @@ class MemoryStore:
         (``voice_realtime_openai``, ``voice_realtime_gemini``) so the
         UI can render a small badge on voice threads.
         """
-        existing = self.conversation_get(conversation_id) or {}
+        existing = await self.conversation_get(conversation_id) or {}
         messages = list(existing.get("messages", []) or [])
         messages.append({
             "id": f"m_{int(time.time() * 1000)}_{len(messages)}",
@@ -564,35 +582,37 @@ class MemoryStore:
             "source": source,
             "ts": time.time(),
         })
-        return self.conversation_save(
+        return await self.conversation_save(
             conversation_id, messages, title=title or existing.get("title", ""),
         )
 
-    def conversation_list(self, limit: int = 50) -> list[dict]:
+    async def conversation_list(self, limit: int = 50) -> list[dict]:
         """List recent conversations (metadata only)."""
-        conn = self._conn()
+        conn = await self._conn()
         try:
-            rows = conn.execute(
+            async with conn.execute(
                 "SELECT id, title, preview, message_count, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
                 (min(limit, 200),),
-            ).fetchall()
+            ) as cur:
+                rows = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
         return [
             {"id": r[0], "title": r[1], "preview": r[2], "message_count": r[3], "created_at": r[4], "updated_at": r[5]}
             for r in rows
         ]
 
-    def conversation_get(self, conversation_id: str) -> dict | None:
+    async def conversation_get(self, conversation_id: str) -> dict | None:
         """Load a full conversation with messages."""
-        conn = self._conn()
+        conn = await self._conn()
         try:
-            row = conn.execute(
+            async with conn.execute(
                 "SELECT id, title, preview, messages_json, message_count, created_at, updated_at FROM conversations WHERE id = ?",
                 (conversation_id,),
-            ).fetchone()
+            ) as cur:
+                row = await cur.fetchone()
         finally:
-            conn.close()
+            await conn.close()
         if not row:
             return None
         return {
@@ -601,16 +621,16 @@ class MemoryStore:
             "message_count": row[4], "created_at": row[5], "updated_at": row[6],
         }
 
-    def conversation_delete(self, conversation_id: str) -> bool:
-        conn = self._conn()
+    async def conversation_delete(self, conversation_id: str) -> bool:
+        conn = await self._conn()
         try:
-            conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
-            conn.commit()
+            await conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+            await conn.commit()
         finally:
-            conn.close()
+            await conn.close()
         return True
 
-    def snapshot_session(
+    async def snapshot_session(
         self,
         *,
         session_id: str,
@@ -622,9 +642,9 @@ class MemoryStore:
         snapshot_id = str(uuid4())[:12]
         now = time.time()
         working = list(self._working.get(session_id, deque()))
-        conn = sqlite3.connect(self.db_path)
+        conn = await self._conn()
         try:
-            conn.execute(
+            await conn.execute(
                 """
                 INSERT INTO session_snapshots
                 (id, session_id, branch_name, label, working_json, history_json, source_snapshot_id, created_at)
@@ -641,9 +661,9 @@ class MemoryStore:
                     now,
                 ),
             )
-            conn.commit()
+            await conn.commit()
         finally:
-            conn.close()
+            await conn.close()
         return {
             "snapshot_id": snapshot_id,
             "session_id": session_id,
@@ -655,7 +675,7 @@ class MemoryStore:
             "source_snapshot_id": source_snapshot_id or None,
         }
 
-    def list_snapshots(
+    async def list_snapshots(
         self,
         *,
         session_id: str = "",
@@ -663,53 +683,47 @@ class MemoryStore:
         limit: int = 50,
     ) -> list[dict]:
         lim = max(1, min(limit, 200))
-        conn = self._conn()
+        conn = await self._conn()
         try:
             if session_id and branch_name:
-                rows = conn.execute(
-                    """
+                sql = """
                     SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
                     FROM session_snapshots
                     WHERE session_id = ? AND branch_name = ?
                     ORDER BY created_at DESC
                     LIMIT ?
-                    """,
-                    (session_id, branch_name, lim),
-                ).fetchall()
+                """
+                params = (session_id, branch_name, lim)
             elif session_id:
-                rows = conn.execute(
-                    """
+                sql = """
                     SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
                     FROM session_snapshots
                     WHERE session_id = ?
                     ORDER BY created_at DESC
                     LIMIT ?
-                    """,
-                    (session_id, lim),
-                ).fetchall()
+                """
+                params = (session_id, lim)
             elif branch_name:
-                rows = conn.execute(
-                    """
+                sql = """
                     SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
                     FROM session_snapshots
                     WHERE branch_name = ?
                     ORDER BY created_at DESC
                     LIMIT ?
-                    """,
-                    (branch_name, lim),
-                ).fetchall()
+                """
+                params = (branch_name, lim)
             else:
-                rows = conn.execute(
-                    """
+                sql = """
                     SELECT id, session_id, branch_name, label, source_snapshot_id, created_at
                     FROM session_snapshots
                     ORDER BY created_at DESC
                     LIMIT ?
-                    """,
-                    (lim,),
-                ).fetchall()
+                """
+                params = (lim,)
+            async with conn.execute(sql, params) as cur:
+                rows = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
         return [
             {
                 "snapshot_id": r["id"],
@@ -722,19 +736,20 @@ class MemoryStore:
             for r in rows
         ]
 
-    def get_snapshot(self, snapshot_id: str) -> Optional[dict]:
-        conn = self._conn()
+    async def get_snapshot(self, snapshot_id: str) -> Optional[dict]:
+        conn = await self._conn()
         try:
-            row = conn.execute(
+            async with conn.execute(
                 """
                 SELECT id, session_id, branch_name, label, working_json, history_json, source_snapshot_id, created_at
                 FROM session_snapshots
                 WHERE id = ?
                 """,
                 (snapshot_id,),
-            ).fetchone()
+            ) as cur:
+                row = await cur.fetchone()
         finally:
-            conn.close()
+            await conn.close()
         if not row:
             return None
         return {
@@ -752,7 +767,7 @@ class MemoryStore:
     # Tier 2: Episodic Memory (with embeddings)
     # ─────────────────────────────────────────────
 
-    def episode_save(
+    async def episode_save(
         self,
         session_id: str,
         event_type: str,
@@ -768,20 +783,19 @@ class MemoryStore:
         emotions = emotions or []
         participants = participants or []
 
-        conn = sqlite3.connect(self.db_path)
+        conn = await self._conn()
         try:
-            conn.execute(
+            await conn.execute(
                 """INSERT INTO episodes
                    (id, session_id, event_type, summary, detail, emotions, location, participants, importance, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (eid, session_id, event_type, summary, detail,
                  json.dumps(emotions), location, json.dumps(participants), importance, now),
             )
-            conn.commit()
+            await conn.commit()
         finally:
-            conn.close()
+            await conn.close()
 
-        # Queue embedding reliably (retries on failure, updates vec index)
         text = f"{summary}\n{detail}".strip()
         chunks = chunk_text(text)
         for i, chunk in enumerate(chunks):
@@ -796,9 +810,6 @@ class MemoryStore:
             "summary": summary, "detail": detail, "importance": importance, "created_at": now,
         })
 
-        # Auto-suggest About Me facts from regex patterns in the episode text.
-        # Every hit lands at confidence 0.5 / source=inferred_from_chat so
-        # the user can confirm/reject via Settings → Self → About Me.
         if self._about_me_store is not None and text:
             try:
                 self._about_me_store.extract_from_text(text)
@@ -812,18 +823,18 @@ class MemoryStore:
         Hybrid search: FTS5 text (0.3) + vector similarity (0.7) with temporal decay.
         Uses sqlite-vec indexed search when available, numpy fallback otherwise.
         """
-        conn = self._conn()
+        conn = await self._conn()
         try:
-            # Phase 1: FTS5 text search
             fts_results = {}
             try:
-                rows = conn.execute(
+                async with conn.execute(
                     """SELECT e.id, e.session_id, e.event_type, e.summary, e.detail,
                               e.emotions, e.location, e.importance, e.created_at, e.decay_factor, rank
                        FROM episodes_fts f JOIN episodes e ON f.rowid = e.rowid
                        WHERE episodes_fts MATCH ? ORDER BY rank LIMIT ?""",
                     (query, limit * 3),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
                 for r in rows:
                     fts_results[r["id"]] = {
                         **self._episode_row_to_dict(r),
@@ -832,14 +843,12 @@ class MemoryStore:
             except Exception:
                 pass
 
-            # Phase 2: Vector search (indexed or fallback)
             vec_results = {}
             try:
                 query_vec = await self._embedder.embed(query)
 
                 if self._vec_index.indexed:
-                    # O(log n) indexed search via sqlite-vec
-                    hits = self._vec_index.search_cosine(query_vec, limit=limit * 3)
+                    hits = await self._vec_index.search_cosine(query_vec, limit=limit * 3)
                     for chunk_id, sim in hits:
                         if sim < 0.25:
                             continue
@@ -847,11 +856,11 @@ class MemoryStore:
                         if eid not in vec_results or sim > vec_results[eid]["vec_score"]:
                             vec_results[eid] = {"id": eid, "vec_score": sim}
                 else:
-                    # O(n) brute-force fallback
-                    chunks = conn.execute(
+                    async with conn.execute(
                         "SELECT source_id, embedding FROM memory_chunks "
                         "WHERE source_table = 'episodes' AND embedding IS NOT NULL"
-                    ).fetchall()
+                    ) as cur:
+                        chunks = await cur.fetchall()
                     for c in chunks:
                         evec = blob_to_vec(c["embedding"])
                         sim = cosine_similarity(query_vec, evec)
@@ -859,21 +868,21 @@ class MemoryStore:
                         if sim > 0.25 and (eid not in vec_results or sim > vec_results[eid]["vec_score"]):
                             vec_results[eid] = {"id": eid, "vec_score": sim}
             except Exception as e:
-                logger.debug(f"Vector search failed: {e}")
+                logger.debug("Vector search failed: %s", e)
 
-            # Phase 3: Merge + temporal decay + rank
             all_ids = set(fts_results.keys()) | set(vec_results.keys())
             episode_cache = {}
             if all_ids - set(fts_results.keys()):
                 missing = all_ids - set(fts_results.keys())
                 placeholders = ",".join("?" for _ in missing)
-                rows = conn.execute(
+                async with conn.execute(
                     f"SELECT * FROM episodes WHERE id IN ({placeholders})", list(missing),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
                 for r in rows:
                     episode_cache[r["id"]] = self._episode_row_to_dict(r)
         finally:
-            conn.close()
+            await conn.close()
         now = time.time()
         merged = []
         for eid in all_ids:
@@ -896,41 +905,45 @@ class MemoryStore:
         merged.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
         return self._mmr_rerank_episodes(merged, limit)
 
-    def episode_search(self, query: str, limit: int = 10) -> list[dict]:
-        """Synchronous FTS-only search (backward compat)."""
-        conn = self._conn()
+    async def episode_search(self, query: str, limit: int = 10) -> list[dict]:
+        """FTS-only episode search (backward compat)."""
+        conn = await self._conn()
         try:
             try:
-                rows = conn.execute(
+                async with conn.execute(
                     """SELECT e.* FROM episodes_fts f
                        JOIN episodes e ON f.rowid = e.rowid
                        WHERE episodes_fts MATCH ? ORDER BY rank LIMIT ?""",
                     (query, limit),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
             except Exception:
-                rows = conn.execute(
+                async with conn.execute(
                     """SELECT * FROM episodes WHERE summary LIKE ? OR detail LIKE ?
                        ORDER BY created_at DESC LIMIT ?""",
                     (f"%{query}%", f"%{query}%", limit),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
         return [self._episode_row_to_dict(r) for r in rows]
 
-    def episode_recent(self, limit: int = 10, session_id: str = None) -> list[dict]:
-        conn = self._conn()
+    async def episode_recent(self, limit: int = 10, session_id: str = None) -> list[dict]:
+        conn = await self._conn()
         try:
             if session_id:
-                rows = conn.execute(
+                async with conn.execute(
                     "SELECT * FROM episodes WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
                     (session_id, limit),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
             else:
-                rows = conn.execute(
+                async with conn.execute(
                     "SELECT * FROM episodes ORDER BY created_at DESC LIMIT ?", (limit,),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
         return [self._episode_row_to_dict(r) for r in rows]
 
     @staticmethod
@@ -974,7 +987,7 @@ class MemoryStore:
     # Tier 3: Semantic Memory (Knowledge Graph + Legacy Triples)
     # ─────────────────────────────────────────────
 
-    def knowledge_store(
+    async def knowledge_store(
         self,
         subject: str,
         predicate: str,
@@ -982,39 +995,40 @@ class MemoryStore:
         confidence: float = 1.0,
         source: str = "user",
     ) -> dict:
-        conn = sqlite3.connect(self.db_path)
+        conn = await self._conn()
         now = time.time()
         try:
-            existing = conn.execute(
+            async with conn.execute(
                 "SELECT id FROM knowledge WHERE subject = ? AND predicate = ?",
                 (subject, predicate),
-            ).fetchone()
+            ) as cur:
+                existing = await cur.fetchone()
 
             if existing:
                 kid = existing[0]
-                conn.execute(
+                await conn.execute(
                     "UPDATE knowledge SET object = ?, confidence = ?, source = ?, updated_at = ? WHERE id = ?",
                     (obj, confidence, source, now, kid),
                 )
             else:
                 kid = str(uuid4())[:12]
-                conn.execute(
+                await conn.execute(
                     """INSERT INTO knowledge (id, subject, predicate, object, confidence, source, created_at, updated_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (kid, subject, predicate, obj, confidence, source, now, now),
                 )
 
-            conn.commit()
+            await conn.commit()
         finally:
-            conn.close()
+            await conn.close()
         self._log_sync("knowledge", "insert", kid, {
             "id": kid, "subject": subject, "predicate": predicate, "object": obj,
             "confidence": confidence, "source": source, "created_at": now,
         })
         return {"id": kid, "subject": subject, "predicate": predicate, "object": obj}
 
-    def knowledge_query(self, subject: str = "", predicate: str = "", limit: int = 20) -> list[dict]:
-        conn = self._conn()
+    async def knowledge_query(self, subject: str = "", predicate: str = "", limit: int = 20) -> list[dict]:
+        conn = await self._conn()
         try:
             conditions, params = [], []
             if subject:
@@ -1024,12 +1038,13 @@ class MemoryStore:
                 conditions.append("predicate = ?")
                 params.append(predicate)
             where = "WHERE " + " AND ".join(conditions) if conditions else ""
-            rows = conn.execute(
+            async with conn.execute(
                 f"SELECT * FROM knowledge {where} ORDER BY updated_at DESC LIMIT ?",
                 (*params, limit),
-            ).fetchall()
+            ) as cur:
+                rows = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
         return [
             {"id": r["id"], "subject": r["subject"], "predicate": r["predicate"],
              "object": r["object"], "confidence": r["confidence"], "source": r["source"],
@@ -1037,40 +1052,43 @@ class MemoryStore:
             for r in rows
         ]
 
-    def knowledge_search(self, query: str, limit: int = 10) -> list[dict]:
-        conn = self._conn()
+    async def knowledge_search(self, query: str, limit: int = 10) -> list[dict]:
+        conn = await self._conn()
         try:
             try:
-                rows = conn.execute(
+                async with conn.execute(
                     """SELECT k.* FROM knowledge_fts f
                        JOIN knowledge k ON f.rowid = k.rowid
                        WHERE knowledge_fts MATCH ? ORDER BY rank LIMIT ?""",
                     (query, limit),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
             except Exception:
-                rows = conn.execute(
+                async with conn.execute(
                     """SELECT * FROM knowledge WHERE subject LIKE ? OR object LIKE ?
                        ORDER BY updated_at DESC LIMIT ?""",
                     (f"%{query}%", f"%{query}%", limit),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
         return [
             {"id": r["id"], "subject": r["subject"], "predicate": r["predicate"],
              "object": r["object"], "confidence": r["confidence"]}
             for r in rows
         ]
 
-    def knowledge_about(self, entity: str, limit: int = 20) -> list[dict]:
-        conn = self._conn()
+    async def knowledge_about(self, entity: str, limit: int = 20) -> list[dict]:
+        conn = await self._conn()
         try:
-            rows = conn.execute(
+            async with conn.execute(
                 """SELECT * FROM knowledge WHERE subject = ? OR object = ?
                    ORDER BY confidence DESC, updated_at DESC LIMIT ?""",
                 (entity, entity, limit),
-            ).fetchall()
+            ) as cur:
+                rows = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
         return [
             {"subject": r["subject"], "predicate": r["predicate"], "object": r["object"],
              "confidence": r["confidence"]}
@@ -1081,60 +1099,69 @@ class MemoryStore:
     # Tier 4: Execution Log
     # ─────────────────────────────────────────────
 
-    def log_execution(
+    async def log_execution(
         self, session_id: str, skill_id: str, endpoint_id: str, args: dict,
         result_status: str, result_summary: str = "", latency_ms: float = 0,
     ) -> str:
         eid = str(uuid4())[:12]
         now = time.time()
-        conn = sqlite3.connect(self.db_path)
+        conn = await self._conn()
         try:
-            conn.execute(
+            await conn.execute(
                 """INSERT INTO execution_log
                    (id, session_id, skill_id, endpoint_id, args, result_status, result_summary, latency_ms, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (eid, session_id, skill_id, endpoint_id, json.dumps(args)[:2000],
                  result_status, result_summary[:500], latency_ms, now),
             )
-            conn.commit()
+            await conn.commit()
         finally:
-            conn.close()
+            await conn.close()
         return eid
 
-    def log_feedback(self, execution_id: str, feedback: str):
-        conn = sqlite3.connect(self.db_path)
+    async def log_feedback(self, execution_id: str, feedback: str):
+        conn = await self._conn()
         try:
-            conn.execute("UPDATE execution_log SET user_feedback = ? WHERE id = ?", (feedback[:500], execution_id))
-            conn.commit()
+            await conn.execute(
+                "UPDATE execution_log SET user_feedback = ? WHERE id = ?",
+                (feedback[:500], execution_id),
+            )
+            await conn.commit()
         finally:
-            conn.close()
+            await conn.close()
 
-    def log_recent(self, skill_id: str = "", limit: int = 20) -> list[dict]:
-        conn = self._conn()
+    async def log_recent(self, skill_id: str = "", limit: int = 20) -> list[dict]:
+        conn = await self._conn()
         try:
             if skill_id:
-                rows = conn.execute(
+                async with conn.execute(
                     "SELECT * FROM execution_log WHERE skill_id = ? ORDER BY created_at DESC LIMIT ?",
                     (skill_id, limit),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
             else:
-                rows = conn.execute(
+                async with conn.execute(
                     "SELECT * FROM execution_log ORDER BY created_at DESC LIMIT ?", (limit,),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
         return [dict(r) for r in rows]
 
-    def log_success_rate(self, skill_id: str) -> dict:
-        conn = sqlite3.connect(self.db_path)
+    async def log_success_rate(self, skill_id: str) -> dict:
+        conn = await self._conn()
         try:
-            total = conn.execute("SELECT COUNT(*) FROM execution_log WHERE skill_id = ?", (skill_id,)).fetchone()[0]
-            successes = conn.execute(
+            async with conn.execute(
+                "SELECT COUNT(*) FROM execution_log WHERE skill_id = ?", (skill_id,),
+            ) as cur:
+                total = (await cur.fetchone())[0]
+            async with conn.execute(
                 "SELECT COUNT(*) FROM execution_log WHERE skill_id = ? AND result_status = 'success'",
                 (skill_id,),
-            ).fetchone()[0]
+            ) as cur:
+                successes = (await cur.fetchone())[0]
         finally:
-            conn.close()
+            await conn.close()
         return {"skill_id": skill_id, "total_executions": total, "successes": successes,
                 "rate": successes / total if total > 0 else 0.0}
 
@@ -1142,7 +1169,7 @@ class MemoryStore:
     # Unified Context Builder (for LLM injection)
     # ─────────────────────────────────────────────
 
-    async def build_context_for_llm_async(
+    async def build_context_for_llm(
         self,
         session_id: str,
         query: str = "",
@@ -1157,19 +1184,18 @@ class MemoryStore:
             memory_filter=memory_filter,
         )
 
-    def build_context_for_llm(
+    async def build_context_for_llm_async(
         self,
         session_id: str,
         query: str = "",
         max_tokens_budget: int = 2000,
         memory_filter: str = "",
     ) -> str:
-        return context_build_context_for_llm(
-            self,
-            session_id=session_id,
-            query=query,
-            max_tokens_budget=max_tokens_budget,
-            memory_filter=memory_filter,
+        """Back-compat alias for :meth:`build_context_for_llm`. Pre-r12
+        deployments call ``build_context_for_llm_async`` explicitly; now
+        both names are async and route to the same implementation."""
+        return await self.build_context_for_llm(
+            session_id, query=query, max_tokens_budget=max_tokens_budget, memory_filter=memory_filter,
         )
 
     # ─────────────────────────────────────────────
@@ -1209,7 +1235,7 @@ class MemoryStore:
     def _wiki_slug(value: str) -> str:
         return helper_wiki_slug(value)
 
-    def wiki_upsert_page(
+    async def wiki_upsert_page(
         self,
         *,
         page_id: str,
@@ -1218,7 +1244,7 @@ class MemoryStore:
         body_markdown: str,
         source_refs: list[dict] | None = None,
     ) -> dict:
-        return helper_wiki_upsert_page(
+        return await helper_wiki_upsert_page(
             self,
             page_id=page_id,
             title=title,
@@ -1227,23 +1253,23 @@ class MemoryStore:
             source_refs=source_refs,
         )
 
-    def wiki_get_page(self, page_id: str) -> Optional[dict]:
-        return helper_wiki_get_page(self, page_id=page_id)
+    async def wiki_get_page(self, page_id: str) -> Optional[dict]:
+        return await helper_wiki_get_page(self, page_id=page_id)
 
-    def wiki_list_pages(self, *, query: str = "", kind: str = "", limit: int = 50) -> list[dict]:
-        return helper_wiki_list_pages(self, query=query, kind=kind, limit=limit)
+    async def wiki_list_pages(self, *, query: str = "", kind: str = "", limit: int = 50) -> list[dict]:
+        return await helper_wiki_list_pages(self, query=query, kind=kind, limit=limit)
 
-    def wiki_stats(self) -> dict:
-        return helper_wiki_stats(self)
+    async def wiki_stats(self) -> dict:
+        return await helper_wiki_stats(self)
 
-    def wiki_compile(
+    async def wiki_compile(
         self,
         *,
         notes_limit: int = 200,
         episodes_limit: int = 200,
         knowledge_limit: int = 400,
     ) -> dict:
-        return helper_wiki_compile(
+        return await helper_wiki_compile(
             self,
             notes_limit=notes_limit,
             episodes_limit=episodes_limit,
@@ -1254,39 +1280,52 @@ class MemoryStore:
     # Legacy Notes API (backward compat)
     # ─────────────────────────────────────────────
 
-    def save(self, content: str, tags: list[str] = None, importance: str = "normal", source: str = "user") -> dict:
-        return save_note(self, content=content, tags=tags, importance=importance, source=source)
+    async def save(self, content: str, tags: list[str] = None, importance: str = "normal", source: str = "user") -> dict:
+        return await save_note(self, content=content, tags=tags, importance=importance, source=source)
 
-    def search(self, query: str, limit: int = 10) -> list[dict]:
-        return search_notes(self, query=query, limit=limit)
+    async def search(self, query: str, limit: int = 10) -> list[dict]:
+        return await search_notes(self, query=query, limit=limit)
 
-    def list_recent(self, limit: int = 10) -> list[dict]:
-        return list_recent_notes(self, limit=limit)
+    async def list_recent(self, limit: int = 10) -> list[dict]:
+        return await list_recent_notes(self, limit=limit)
 
-    def delete(self, note_id: str) -> bool:
-        return delete_note(self, note_id=note_id)
+    async def delete(self, note_id: str) -> bool:
+        return await delete_note(self, note_id=note_id)
 
-    def count(self) -> int:
-        return count_notes(self)
+    async def count(self) -> int:
+        return await count_notes(self)
 
-    def stats(self) -> dict:
-        conn = sqlite3.connect(self.db_path)
+    async def stats(self) -> dict:
+        conn = await self._conn()
         try:
-            notes_count = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
-            episodes_count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
-            knowledge_count = conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0]
-            exec_count = conn.execute("SELECT COUNT(*) FROM execution_log").fetchone()[0]
-            wiki_count = conn.execute("SELECT COUNT(*) FROM wiki_pages").fetchone()[0]
-            snapshot_count = conn.execute("SELECT COUNT(*) FROM session_snapshots").fetchone()[0]
+            async with conn.execute("SELECT COUNT(*) FROM notes") as cur:
+                notes_count = (await cur.fetchone())[0]
+            async with conn.execute("SELECT COUNT(*) FROM episodes") as cur:
+                episodes_count = (await cur.fetchone())[0]
+            async with conn.execute("SELECT COUNT(*) FROM knowledge") as cur:
+                knowledge_count = (await cur.fetchone())[0]
+            async with conn.execute("SELECT COUNT(*) FROM execution_log") as cur:
+                exec_count = (await cur.fetchone())[0]
+            async with conn.execute("SELECT COUNT(*) FROM wiki_pages") as cur:
+                wiki_count = (await cur.fetchone())[0]
+            async with conn.execute("SELECT COUNT(*) FROM session_snapshots") as cur:
+                snapshot_count = (await cur.fetchone())[0]
             try:
-                chunk_count = conn.execute("SELECT COUNT(*) FROM memory_chunks").fetchone()[0]
+                async with conn.execute("SELECT COUNT(*) FROM memory_chunks") as cur:
+                    chunk_count = (await cur.fetchone())[0]
             except Exception:
                 chunk_count = 0
         finally:
-            conn.close()
+            await conn.close()
         working_sessions = len(self._working)
 
         kg_stats = self._kg.stats() if self._kg else {"entities": 0, "relations": 0}
+
+        vec_count = 0
+        try:
+            vec_count = await self._vec_index.count()
+        except Exception as exc:
+            logger.debug("vec_index.count() failed: %s", exc)
 
         return {
             "notes": notes_count,
@@ -1297,8 +1336,8 @@ class MemoryStore:
             "session_snapshots": snapshot_count,
             "active_working_sessions": working_sessions,
             "embedded_chunks": chunk_count,
-            "vec_index_count": self._vec_index.count,
-            "vec_index_mode": "sqlite-vec" if self._vec_index.indexed else "numpy_fallback",
+            "vec_index_count": vec_count,
+            "vec_index_mode": self._backend_id + (" (indexed)" if self._vec_index.indexed else " (degraded)"),
             "embedding_provider": self._embedder.provider_name,
             "embed_queue_pending": self._embed_queue.pending,
             "knowledge_graph": kg_stats,
