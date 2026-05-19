@@ -22,7 +22,7 @@
 // pruned on next activation. Without the bump, operators upgrading would
 // keep seeing the synthetic ``503 Offline`` for cached-miss fetches that
 // initiated from the old service worker.
-const VERSION = 'feral-sw-v2';
+const VERSION = 'feral-sw-v3';
 const STATIC_CACHE = `feral-static-${VERSION}`;
 const RUNTIME_CACHE = `feral-runtime-${VERSION}`;
 

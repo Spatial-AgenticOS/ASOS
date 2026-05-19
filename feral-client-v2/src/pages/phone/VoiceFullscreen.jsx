@@ -38,6 +38,45 @@ function providerLabel(mode) {
   return mode;
 }
 
+/** Audit-r11 — Bug 3 banner. Renders a single-line warning whenever
+ * the brain reports a degraded or unavailable voice subsystem. Same
+ * messaging copy as the iOS ChatView banner so cross-surface help
+ * docs stay accurate. */
+function VoiceStatusBanner({ status, layout = 'overlay' }) {
+  if (!status) return null;
+  const headline =
+    status.state === 'unavailable'
+      ? 'Voice unavailable'
+      : 'Voice degraded — using fallback TTS';
+  const reasonCopy = {
+    openai_realtime_quota: 'OpenAI Realtime is out of credit. Top up at platform.openai.com/usage.',
+    openai_realtime_auth: 'OpenAI API key is invalid or expired.',
+    openai_realtime_rate_limit: 'OpenAI Realtime is rate-limited; retrying via fallback TTS.',
+    fallback_tts_failed: 'No fallback TTS provider is configured.',
+    no_tts_provider: 'No TTS provider configured in settings.',
+  };
+  const subline = reasonCopy[status.reason] || status.detail || '';
+  const baseStyle = {
+    background: 'rgba(239,68,68,0.18)',
+    border: '1px solid rgba(239,68,68,0.5)',
+    color: '#fff',
+    borderRadius: 12,
+    padding: '8px 12px',
+    fontSize: 12,
+    lineHeight: 1.35,
+    pointerEvents: 'auto',
+  };
+  const positioned = layout === 'overlay'
+    ? { position: 'fixed', left: 12, right: 12, top: 12, zIndex: 1001, ...baseStyle }
+    : { width: '100%', marginBottom: 12, ...baseStyle };
+  return (
+    <div role="status" data-testid="voice-status-banner" style={positioned}>
+      <div style={{ fontWeight: 600 }}>{headline}</div>
+      {subline && <div style={{ opacity: 0.85, marginTop: 2 }}>{subline}</div>}
+    </div>
+  );
+}
+
 function base64ToArrayBuffer(dataB64) {
   const binary = atob(dataB64 || '');
   const bytes = new Uint8Array(binary.length);
@@ -68,6 +107,11 @@ export function VoiceFullscreen({
   const [isMuted, setIsMuted] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [history, setHistory] = useState([]);
+  // Audit-r11 — Bug 3 (silent voice on phone). Mirror of the brain's
+  // `voice_status` frame so the UI can render a banner explaining the
+  // realtime failure instead of going mute. Cleared when the brain
+  // emits `state=available`.
+  const [voiceStatus, setVoiceStatus] = useState(null);
 
   const containerRef = useRef(null);
   const prevStateRef = useRef(voiceState);
@@ -237,6 +281,25 @@ export function VoiceFullscreen({
       } else if (type === 'voice_error') {
         setVoiceState('error');
         setErrorMessage(payload.message || 'Voice session failed');
+      } else if (type === 'voice_status') {
+        // Audit-r11 — Bug 3 banner contract. Brain emits this when
+        // the realtime provider died (`state=degraded`,
+        // `reason=openai_realtime_quota`/`openai_realtime_auth`/etc)
+        // or even the fallback failed (`state=unavailable`). Render
+        // a banner above the orb so the user knows why audio is
+        // muted instead of guessing at a connection issue.
+        const st = (payload.state || 'available');
+        if (st === 'available') {
+          setVoiceStatus(null);
+        } else {
+          setVoiceStatus({
+            state: st,
+            reason: payload.reason || '',
+            provider: payload.provider || '',
+            fallbackProvider: payload.fallback_provider || '',
+            detail: payload.detail || '',
+          });
+        }
       }
     });
 
@@ -400,6 +463,8 @@ export function VoiceFullscreen({
   //   - aria-modal is dropped so screen-reader focus is not trapped
   if (isDocked) {
     return createPortal((
+      <>
+      <VoiceStatusBanner status={voiceStatus} layout="overlay" />
       <div
         ref={containerRef}
         role="region"
@@ -495,10 +560,13 @@ export function VoiceFullscreen({
           ✕
         </button>
       </div>
+      </>
     ), document.body);
   }
 
   return createPortal((
+    <>
+    <VoiceStatusBanner status={voiceStatus} layout="overlay" />
     <div
       ref={containerRef}
       role="dialog"
@@ -731,6 +799,7 @@ export function VoiceFullscreen({
         </button>
       </div>
     </div>
+    </>
   ), document.body);
 }
 

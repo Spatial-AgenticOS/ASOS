@@ -109,6 +109,66 @@ async def run(state: WizardState) -> None:
 
     _configure_provider(state, "stt", _STT_PROVIDERS, has_local_stt, has_openai_key, caps, console)
     _configure_provider(state, "tts", _TTS_PROVIDERS, has_local_tts, has_openai_key, caps, console)
+    _configure_fallback_tts(state, console, has_openai_key, has_local_tts)
+
+
+def _configure_fallback_tts(
+    state: WizardState,
+    console,
+    has_openai_key: bool,
+    has_local_tts: bool,
+) -> None:
+    """Audit-r11: prompt for the fallback TTS provider chain.
+
+    When the primary realtime provider (OpenAI Realtime) closes a
+    session with insufficient_quota / 429 / invalid_api_key, the
+    voice router walks this list and synthesises chunked TTS so the
+    assistant keeps speaking. Empty list -> ``voice_status
+    state=unavailable`` and clients render a banner instead of
+    silent failure.
+    """
+    if _RICH_AVAILABLE:
+        console.print()
+        console.print("[bold]Fallback voice (when realtime fails)[/]")
+        console.print(
+            "If OpenAI Realtime runs out of credit or hits a rate limit, "
+            "FERAL can keep speaking via a chunked TTS fallback so iOS / "
+            "web don't go silent."
+        )
+
+    options: list[Option] = []
+    if has_openai_key:
+        options.append(Option(
+            id="whisper", label="OpenAI /audio/speech (cheap mp3)",
+            aliases=("whisper", "openai", "openai-tts"),
+            status=STATUS_READY, hint="reuses OPENAI_API_KEY",
+        ))
+    else:
+        options.append(Option(
+            id="whisper", label="OpenAI /audio/speech (cheap mp3)",
+            aliases=("whisper", "openai", "openai-tts"),
+            status=STATUS_NEEDS_KEY, hint="OPENAI_API_KEY",
+        ))
+    if has_local_tts:
+        options.append(Option(
+            id="piper", label="Piper (local, no quota)",
+            aliases=("piper", "local"), status=STATUS_READY,
+            hint="ready",
+        ))
+    options.append(Option(
+        id="none", label="None — go silent (still shows banner)",
+        aliases=("none", "off"), status=STATUS_READY, hint="last resort",
+    ))
+
+    title = "Fallback TTS provider"
+    render_provider_table(title, options)
+    default_list = state.get_setting("audio", "fallback_tts_providers", ["whisper"]) or ["whisper"]
+    default = default_list[0] if default_list else "whisper"
+    chosen = ask_choice(f"Choose {title}", options, default=default)
+    if chosen.id == "none":
+        state.set_setting("audio", "fallback_tts_providers", [])
+    else:
+        state.set_setting("audio", "fallback_tts_providers", [chosen.id])
 
 
 def _configure_local(state: WizardState, has_stt: bool, has_tts: bool, console) -> None:

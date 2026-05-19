@@ -293,10 +293,13 @@ class TestAudioStep:
         # configure voice? yes. prefer fully local? no.
         answers = iter([True, False])
         monkeypatch.setattr(audio_step, "confirm", lambda *a, **kw: next(answers))
-        # ask_choice first picks OpenAI STT, then OpenAI TTS.
+        # ask_choice first picks OpenAI STT, then OpenAI TTS, then
+        # the audit-r11 fallback step asks for the whisper fallback
+        # provider — supply the OpenAI /audio/speech option ("whisper").
         choices = iter([
             Option(id="openai", label="OpenAI Whisper (cloud)"),
             Option(id="openai", label="OpenAI TTS (cloud)"),
+            Option(id="whisper", label="OpenAI /audio/speech (cheap mp3)"),
         ])
         monkeypatch.setattr(audio_step, "ask_choice", lambda *a, **kw: next(choices))
         # ask_text is called for model + voice
@@ -306,6 +309,9 @@ class TestAudioStep:
         assert state.get_setting("audio", "stt_model") == "whisper-1"
         assert state.get_setting("audio", "tts_model") == "tts-1-hd"
         assert state.get_setting("audio", "tts_voice") == "shimmer"
+        # Audit-r11: fallback TTS chain must be persisted so the voice
+        # router can degrade gracefully when Realtime hits a quota.
+        assert state.get_setting("audio", "fallback_tts_providers") == ["whisper"]
 
 
 # ----------------------------------------------------------------------

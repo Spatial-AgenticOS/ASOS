@@ -519,6 +519,24 @@ class AudioResponsePayload(BaseModel):
     sample_rate: int = 24000
     is_final: bool = False
 
+class VoiceStatusPayload(BaseModel):
+    """Brain -> client voice subsystem health update.
+
+    Emitted by the voice router when a realtime provider fails (e.g.
+    OpenAI Realtime closes WS 1013 ``insufficient_quota``) so the
+    client can render a banner instead of going silent. ``state`` is
+    the tri-state: ``available`` (normal), ``degraded`` (realtime
+    down, falling back to chunked TTS), ``unavailable`` (no audio
+    path at all). ``reason`` is a short machine-friendly tag the
+    client renders into a human banner (e.g.
+    ``openai_realtime_quota``, ``no_tts_provider``).
+    """
+    state: Literal["available", "degraded", "unavailable"] = "available"
+    reason: str = ""
+    provider: str = ""
+    fallback_provider: str = ""
+    detail: str = ""
+
 class VisionQueryPayload(BaseModel):
     """User explicitly asks about what the camera sees."""
     query: str = "What do you see?"
@@ -645,6 +663,7 @@ MESSAGE_TYPES = {
     # Voice Pipeline
     "voice_config": VoiceConfigPayload,
     "audio_response": AudioResponsePayload,
+    "voice_status": VoiceStatusPayload,
     "vision_query": VisionQueryPayload,
 }
 

@@ -22,6 +22,11 @@ export function useVoiceMode() {
   const [state, setState] = useState('off');
   const [provider, setProvider] = useState(null);
   const [transcript, setTranscript] = useState('');
+  // Audit-r11 — Bug 3 (silent voice). The brain emits `voice_status`
+  // when the realtime provider fails (e.g. OpenAI 1013
+  // insufficient_quota) so clients can render a banner instead of
+  // going mute. Shape mirrors `feral-core/models/protocol.py:VoiceStatusPayload`.
+  const [voiceStatus, setVoiceStatus] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -38,6 +43,54 @@ export function useVoiceMode() {
       }
     })();
   }, []);
+
+  // Audit-r11 — Bug 3 (silent voice on WebUI desktop). Pre-fix,
+  // `useVoiceMode` constructed a `RealtimeVoiceEngine` but never
+  // wired the shared FeralSocket to dispatch incoming brain frames
+  // into the engine — `handleAudioResponse`, `handleSpeechStarted`,
+  // and the new `handleTtsChunk` had ZERO callers. v1 wired this in
+  // `feral-client/src/hooks/useFeralSession.js`; the port to v2 was
+  // missed. Without this subscription the desktop voice path stayed
+  // silent for both healthy realtime AND the new whisper fallback.
+  // Also tracks `voice_status` so the VoiceOverlay banner renders.
+  useEffect(() => {
+    if (!socket || typeof socket.subscribe !== 'function') return undefined;
+    return socket.subscribe((msg) => {
+      if (!msg || !msg.type) return;
+      const engine = engineRef.current;
+      switch (msg.type) {
+        case 'audio_response':
+        case 'audio_delta':
+          if (engine?.handleAudioResponse) engine.handleAudioResponse(msg.payload || {});
+          break;
+        case 'tts_chunk':
+          if (engine?.handleTtsChunk) {
+            engine.handleTtsChunk(msg.payload || {}).catch(() => {});
+          }
+          break;
+        case 'speech_started':
+          if (engine?.handleSpeechStarted) engine.handleSpeechStarted();
+          break;
+        case 'voice_status': {
+          const payload = msg.payload || {};
+          if ((payload.state || 'available') === 'available') {
+            setVoiceStatus(null);
+          } else {
+            setVoiceStatus({
+              state: payload.state || 'degraded',
+              reason: payload.reason || '',
+              provider: payload.provider || '',
+              fallbackProvider: payload.fallback_provider || '',
+              detail: payload.detail || '',
+            });
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    });
+  }, [socket]);
 
   const start = useCallback(async () => {
     if (state !== 'off' && state !== 'ended') return;
@@ -83,6 +136,7 @@ export function useVoiceMode() {
     provider,
     setProvider,
     transcript,
+    voiceStatus,
     active: state === 'active' || state === 'starting' || state === 'reconnecting',
     start,
     stop,

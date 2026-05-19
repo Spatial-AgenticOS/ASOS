@@ -14,15 +14,47 @@ async def send_text(orchestrator, session_id: str, text: str):
     # model text benefit from the same artifact scrubber the stream
     # path uses.
     clean = sanitize_assistant_display_text(text) if text else text
-    await orchestrator.send(
-        session_id,
-        FeralMessage(
-            session_id=session_id,
-            hop="brain",
-            type="text_response",
-            payload=TextResponsePayload(text=clean).model_dump(),
-        ),
+
+    # Audit-r11 fix — Bug 1: double assistant bubble on iOS. The phone
+    # `/v1/node chat_request` handler sets
+    # ``_text_response_suppressed[sid] = True`` for the duration of
+    # the turn so the orchestrator's broadcast ``text_response`` no
+    # longer reaches the phone *in addition to* the synchronous
+    # ``chat_response`` reply (see ``api/server.py`` chat_request
+    # branch). When desktop owns the session WS the flag stays False,
+    # so desktop still gets ``text_response`` as before.
+    suppressed = bool(
+        getattr(orchestrator, "_text_response_suppressed", {}).get(session_id, False)
     )
+    if not suppressed:
+        await orchestrator.send(
+            session_id,
+            FeralMessage(
+                session_id=session_id,
+                hop="brain",
+                type="text_response",
+                payload=TextResponsePayload(text=clean).model_dump(),
+            ),
+        )
+
+    # Audit-r11 fix — Bug 3 (voice fallback): when the realtime
+    # provider died mid-session (OpenAI 1013 insufficient_quota etc),
+    # the router marked the session degraded. Drive the whisper TTS
+    # fallback HERE — every assistant turn after the failure event
+    # synthesises mp3 ``tts_chunk`` frames so iOS / WebUI keep hearing
+    # audio. The guard is best-effort; failures emit a final
+    # ``voice_status state=unavailable`` and proceed.
+    router = getattr(orchestrator, "voice_router", None)
+    if (
+        router is not None
+        and clean
+        and getattr(router, "is_session_degraded", None)
+        and router.is_session_degraded(session_id)
+    ):
+        try:
+            await router.synthesize_assistant_speech(session_id, clean)
+        except Exception:
+            logger.exception("Whisper fallback synth failed for %s", session_id[:8])
 
 
 async def try_send_sdui(orchestrator, session_id: str, text: str):

@@ -51,6 +51,14 @@ class VoiceRouter:
         self._node_session_map: dict[str, str] = {}
         self._session_voice_mode: dict[str, str] = {}
 
+        # Session-scoped degraded-state ledger. Populated by
+        # ``handle_realtime_failure`` when OpenAI Realtime dies on a
+        # given session — the router uses this to route ALL subsequent
+        # outbound assistant text for that session through the whisper
+        # TTS fallback (mp3 tts_chunk frames) instead of the dead
+        # realtime PCM path. Cleared on ``stop_session_voice``.
+        self._session_degraded: dict[str, dict] = {}
+
     def set_gemini_proxy(self, proxy) -> None:
         """Inject GeminiRealtimeProxy after construction (set from api/state.py)."""
         self._gemini = proxy
@@ -446,6 +454,204 @@ class VoiceRouter:
             )
 
     # ------------------------------------------------------------------
+    # Fallback / status coordination (v2026.5.31)
+    # ------------------------------------------------------------------
+
+    def is_session_degraded(self, session_id: str) -> bool:
+        """True when the realtime path failed for ``session_id`` and the
+        router has flipped this session to the whisper TTS fallback.
+        Consumers (e.g. ``response_delivery.send_text``) check this so
+        every assistant turn after the failure event continues to
+        produce audio via ``synthesize_assistant_speech``.
+        """
+        return session_id in self._session_degraded
+
+    def session_degraded_detail(self, session_id: str) -> dict:
+        """Return the failure metadata (reason, provider, detail) the
+        client used to render the status banner — mirrors the payload
+        published via ``voice_status`` so polling clients can recover."""
+        return dict(self._session_degraded.get(session_id) or {})
+
+    async def handle_realtime_failure(
+        self,
+        session_id: str,
+        *,
+        reason: str,
+        detail: str = "",
+        provider: str = "openai",
+    ) -> None:
+        """Mark ``session_id`` as degraded and emit a ``voice_status``
+        frame so the client can swap to a banner. Does NOT close the
+        WebSocket — subsequent assistant text will be synthesised by
+        ``_audio.synthesize_speech`` (whisper / OpenAI ``/audio/speech``)
+        and emitted as ``tts_chunk`` frames the same shape the chained
+        / whisper path already uses today. Idempotent.
+
+        Picks ``fallback_provider`` from the configured
+        ``audio.fallback_tts_providers`` list (see
+        ``api/state.py:load_settings``), defaulting to ``whisper``
+        which is what ``AudioPipeline.synthesize_speech`` resolves to
+        when no alt TTS provider is wired.
+        """
+        if session_id in self._session_degraded:
+            return  # already emitted
+
+        fallback_provider = self._pick_fallback_provider()
+        meta = {
+            "state": "degraded" if fallback_provider else "unavailable",
+            "reason": reason,
+            "provider": provider,
+            "fallback_provider": fallback_provider,
+            "detail": detail,
+        }
+        self._session_degraded[session_id] = meta
+        logger.warning(
+            "Voice degraded session=%s reason=%s provider=%s fallback=%s",
+            session_id[:8], reason, provider, fallback_provider or "(none)",
+        )
+        await self._emit_voice_status(session_id, meta)
+
+    async def emit_unavailable(
+        self,
+        session_id: str,
+        *,
+        reason: str,
+        detail: str = "",
+    ) -> None:
+        """Emit ``voice_status state=unavailable`` — called when even
+        the fallback TTS path failed (e.g. no API key, network down)."""
+        meta = {
+            "state": "unavailable",
+            "reason": reason,
+            "provider": "",
+            "fallback_provider": "",
+            "detail": detail,
+        }
+        self._session_degraded[session_id] = meta
+        logger.error(
+            "Voice unavailable session=%s reason=%s detail=%s",
+            session_id[:8], reason, detail[:120],
+        )
+        await self._emit_voice_status(session_id, meta)
+
+    def _pick_fallback_provider(self) -> str:
+        """Return the first configured fallback TTS provider name.
+
+        Order: ``audio.fallback_tts_providers`` from settings (if any),
+        then ``whisper`` (OpenAI ``/audio/speech`` — the
+        ``AudioPipeline.synthesize_speech`` default). Returns ``""`` if
+        nothing is reachable so callers can emit ``unavailable``.
+        """
+        try:
+            from config.loader import load_settings
+            cfg = load_settings() or {}
+            providers = (
+                ((cfg.get("audio") or {}).get("fallback_tts_providers"))
+                or []
+            )
+            if isinstance(providers, list) and providers:
+                return str(providers[0])
+        except Exception:
+            pass
+        # AudioPipeline ALWAYS has the whisper /audio/speech path as
+        # long as OPENAI_API_KEY is loaded — that's the conservative
+        # default ("disable voice" never sounded right).
+        if os.getenv("OPENAI_API_KEY"):
+            return "whisper"
+        return ""
+
+    async def _emit_voice_status(self, session_id: str, meta: dict) -> None:
+        """Send ``voice_status`` to whichever surface the session lives on."""
+        from models.protocol import FeralMessage, VoiceStatusPayload
+        try:
+            payload = VoiceStatusPayload(**meta).model_dump()
+        except Exception:
+            payload = meta
+        msg = FeralMessage(
+            session_id=session_id,
+            hop="brain",
+            type="voice_status",
+            payload=payload,
+        )
+        sent = False
+        if self._send_to_session:
+            try:
+                await self._send_to_session(session_id, msg)
+                sent = True
+            except Exception:
+                logger.debug("voice_status session emit failed", exc_info=True)
+        if self._send_to_node:
+            for node_id, sid in list(self._node_session_map.items()):
+                if sid == session_id:
+                    try:
+                        await self._send_to_node(node_id, {
+                            "type": "voice_status", "payload": payload,
+                        })
+                        sent = True
+                    except Exception:
+                        logger.debug(
+                            "voice_status node emit failed for %s",
+                            node_id, exc_info=True,
+                        )
+        if not sent:
+            logger.debug("voice_status had no surface to deliver to session=%s", session_id[:8])
+
+    async def synthesize_assistant_speech(
+        self,
+        session_id: str,
+        text: str,
+    ) -> bool:
+        """Synthesise ``text`` via the whisper fallback and fan out as
+        ``tts_chunk`` frames. Used by ``send_text`` when the session is
+        degraded so the assistant keeps speaking after Realtime died.
+        Returns True iff at least one chunk was delivered.
+        """
+        if not text or not text.strip():
+            return False
+        if not self._audio:
+            return False
+
+        try:
+            chunks = await self._audio.synthesize_speech(text[:1000])
+        except Exception:
+            logger.exception("Fallback TTS synth failed for session=%s", session_id[:8])
+            chunks = None
+
+        if not chunks:
+            await self.emit_unavailable(
+                session_id,
+                reason="fallback_tts_failed",
+                detail="audio.fallback_tts_providers exhausted",
+            )
+            return False
+
+        from models.protocol import FeralMessage
+        delivered = False
+        for chunk in chunks:
+            tts_msg = FeralMessage(
+                session_id=session_id, hop="brain", type="tts_chunk",
+                payload=chunk,
+            )
+            if self._send_to_session:
+                try:
+                    await self._send_to_session(session_id, tts_msg)
+                    delivered = True
+                except Exception:
+                    logger.debug("tts_chunk session emit failed", exc_info=True)
+            for node_id, sid in list(self._node_session_map.items()):
+                if sid != session_id:
+                    continue
+                if self._send_to_node:
+                    try:
+                        await self._send_to_node(node_id, {
+                            "type": "tts_chunk", "payload": chunk,
+                        })
+                        delivered = True
+                    except Exception:
+                        logger.debug("tts_chunk node emit failed", exc_info=True)
+        return delivered
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
@@ -469,6 +675,7 @@ class VoiceRouter:
         # --- end Subagent B ---
 
         self._session_voice_mode.pop(session_id, None)
+        self._session_degraded.pop(session_id, None)
         logger.info(f"Voice stopped for session {session_id[:8]}")
 
     # --- Subagent A (realtime GA) + Subagent B (chained pipeline) integration ---

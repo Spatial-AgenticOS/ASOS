@@ -349,8 +349,22 @@ class RealtimeSession:
         except asyncio.CancelledError:
             return
         except Exception as e:
+            # OpenAI Realtime signals out-of-credit by closing the WS
+            # with WebSocket code 1013 + reason "insufficient_quota".
+            # Hand the raw exception text to the error callback so
+            # ``RealtimeProxy._handle_error`` can classify and trigger
+            # the voice_status -> whisper-TTS fallback path. Without
+            # this routing the receive loop just sets ``_connected =
+            # False`` and the session goes silent forever (operator
+            # report 2026-05-18). Pinned by
+            # tests/test_voice_realtime_quota_fallback.py.
             logger.error(f"Realtime receive error: {e}")
             self._connected = False
+            if self._on_error:
+                try:
+                    await self._on_error(self.session_id, str(e))
+                except Exception:
+                    logger.exception("Realtime on_error callback failed")
 
     async def _handle_event(self, event: dict):
         event_type = event.get("type", "")
@@ -526,8 +540,26 @@ class RealtimeProxy:
         self._api_key = os.getenv("OPENAI_API_KEY", "")
         self._voice = voice
 
+        # Fallback coordination — populated by VoiceRouter at construction
+        # so RealtimeProxy can punt to whisper TTS when OpenAI Realtime
+        # closes with a quota / rate-limit / auth error. Without this
+        # hook the receive loop just dies silent (operator report
+        # 2026-05-18). Set via ``attach_fallback_router``.
+        self._fallback_router = None
+
         from voice.personality import VoicePersonality
         self._voice_personality = VoicePersonality(identity_workspace=identity_workspace)
+
+    def attach_fallback_router(self, router) -> None:
+        """Inject the parent VoiceRouter so error handling can punt to
+        the whisper TTS fallback when Realtime dies (e.g. quota).
+
+        Separate setter (instead of constructor arg) because the
+        router is built AFTER the proxy in ``api/state.py`` — circular
+        dependency at construction. Pinned by
+        ``tests/test_voice_realtime_quota_fallback.py``.
+        """
+        self._fallback_router = router
 
     @property
     def available(self) -> bool:
@@ -965,4 +997,40 @@ class RealtimeProxy:
                       action, session_id[:8], item.get("role", ""), item.get("type", ""))
 
     async def _handle_error(self, session_id: str, error: str):
-        logger.error(f"Realtime error [{session_id}]: {error}")
+        """Classify an OpenAI Realtime error and trigger fallback when possible.
+
+        Classification table:
+          - ``insufficient_quota`` / WS close 1013 -> ``state=degraded``,
+            ``reason=openai_realtime_quota``, mark session for whisper
+            TTS fallback so the assistant keeps speaking via the cheap
+            ``/audio/speech`` path.
+          - ``invalid_api_key`` / 401 -> ``state=degraded`` with
+            ``reason=openai_realtime_auth``, same fallback.
+          - any other error -> log + emit ``state=degraded`` (the
+            session is already dead, so emitting *something* lets the
+            client surface a banner instead of silent failure).
+        """
+        err_lc = (error or "").lower()
+        if "insufficient_quota" in err_lc or "1013" in err_lc or "exceeded your current quota" in err_lc:
+            reason = "openai_realtime_quota"
+        elif "invalid_api_key" in err_lc or "401" in err_lc or "unauthorized" in err_lc:
+            reason = "openai_realtime_auth"
+        elif "rate_limit" in err_lc or "rate limit" in err_lc or "429" in err_lc:
+            reason = "openai_realtime_rate_limit"
+        else:
+            reason = "openai_realtime_error"
+
+        logger.error(
+            "Realtime error [%s]: %s -> classified=%s",
+            session_id, error, reason,
+        )
+
+        if self._fallback_router:
+            try:
+                await self._fallback_router.handle_realtime_failure(
+                    session_id=session_id,
+                    reason=reason,
+                    detail=str(error)[:200],
+                )
+            except Exception:
+                logger.exception("Fallback router refused realtime failure handoff")

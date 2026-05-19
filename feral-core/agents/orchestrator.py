@@ -161,6 +161,21 @@ class Orchestrator:
         # surface deny-lists fire on the actual invocation surface
         # instead of the historical "websocket" default.
         self._session_surfaces: dict[str, str] = {}
+        # Audit-r11 — Bug 1 (double bubble on iOS): when the phone
+        # ``/v1/node chat_request`` handler is about to send its own
+        # synchronous ``chat_response`` we set
+        # ``_text_response_suppressed[session_id] = True`` for the
+        # duration of the turn. ``response_delivery.send_text`` checks
+        # this flag and skips the broadcast ``text_response`` so the
+        # phone doesn't render the same assistant reply twice. Cleared
+        # in a ``finally`` in the chat_request branch.
+        self._text_response_suppressed: dict[str, bool] = {}
+        # Audit-r11 — Bug 3 (silent voice fallback). Late-bound from
+        # ``api/state.py:_attach_voice_router_to_orchestrator`` because
+        # the router is built AFTER the orchestrator. Used by
+        # ``response_delivery.send_text`` to drive whisper TTS chunks
+        # when the realtime provider has died on this session.
+        self.voice_router = None
         self._pending_daemon_results: dict[str, asyncio.Future] = {}
         self._pending_frame_futures: dict[str, asyncio.Future] = {}
         self._pending_confirmations: dict[str, dict] = {}
