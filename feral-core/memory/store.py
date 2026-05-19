@@ -42,6 +42,7 @@ from memory.embeddings import (
     blob_to_vec,
     cosine_similarity,
 )
+from memory.vector_index_backends import VectorIndexBackend, load_vector_index
 from memory.notes_legacy import (
     count_notes,
     delete_note,
@@ -73,7 +74,31 @@ class MemoryStore:
     temporal decay, and multi-stage compaction.
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        *,
+        vec_index: Optional[VectorIndexBackend] = None,
+    ):
+        """Construct a MemoryStore.
+
+        Parameters
+        ----------
+        db_path :
+            SQLite DB path. Defaults to ``~/.feral/memory.db``.
+        vec_index :
+            Pluggable vector index backend conforming to
+            :class:`memory.vector_index_backends.VectorIndexBackend`.
+            If ``None``, defaults to the sqlite-vec backend (which is
+            what FERAL has always shipped). ``BrainState.__init__``
+            reads ``settings.memory.backend`` and injects the
+            configured backend here — selecting ``chroma`` or
+            ``qdrant`` in settings.yaml swaps this end-to-end.
+
+            audit-r12 D4: pre-r12 this was hardwired to ``VectorIndex``
+            (sqlite-vec only); ``settings.memory.backend`` was defined
+            but read nowhere. The injection point closes that loop.
+        """
         if db_path is None:
             data_dir = feral_data_home()
             data_dir.mkdir(exist_ok=True)
@@ -90,12 +115,38 @@ class MemoryStore:
 
         self._init_db()
 
-        self._vec_index = VectorIndex(self.db_path, self._embedder.dimension, "vec_chunks")
-        self._embed_queue = EmbedQueue(self._embedder, self._vec_index)
+        if vec_index is None:
+            # Default sqlite-vec backend — same behaviour as pre-r12,
+            # just routed through the Protocol-typed selector. Other
+            # backends (Chroma, Qdrant) are injected from BrainState
+            # based on settings.memory.backend.
+            from memory.vector_index_backends.sqlite_vec import SQLiteVecIndex
+            vec_index = SQLiteVecIndex(
+                dim=self._embedder.dimension,
+                db_path=self.db_path,
+                table_name="vec_chunks",
+            )
+        self._vec_index: VectorIndexBackend = vec_index
+        # EmbedQueue writes vectors via the same ``upsert(chunk_id, vec)``
+        # surface every VectorIndexBackend satisfies — so it works
+        # uniformly with sqlite-vec, Chroma, or Qdrant. The queue's
+        # other job (writing chunk text to the FTS5 ``memory_chunks``
+        # table for keyword search) stays SQLite-specific and is
+        # independent of the chosen vector backend.
+        self._embed_queue = EmbedQueue(self._embedder, vec_index)
+        # Remember the backend id for stats / logging — useful when the
+        # operator is debugging "where did my vectors go".
+        self._backend_id = getattr(vec_index, "backend_id", "unknown")
 
         self._init_knowledge_graph()
-        index_mode = "sqlite-vec (vec0)" if self._vec_index.indexed else "numpy fallback"
-        logger.info(f"Memory store v{_SCHEMA_VERSION} at {self.db_path} | embeddings: {self._embedder.provider_name} | index: {index_mode}")
+        if self._backend_id == "sqlite_vec":
+            index_mode = "sqlite-vec (vec0)" if vec_index.indexed else "numpy fallback"
+        else:
+            index_mode = f"{self._backend_id} (indexed={vec_index.indexed}, count={vec_index.count})"
+        logger.info(
+            "Memory store v%d at %s | embeddings: %s | index: %s",
+            _SCHEMA_VERSION, self.db_path, self._embedder.provider_name, index_mode,
+        )
 
     def start_background_tasks(self):
         """Start the embed queue processor. Call after event loop is running."""

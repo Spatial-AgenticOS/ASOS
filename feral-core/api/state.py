@@ -161,6 +161,64 @@ def _sanitize_orphan_tool_rows(rows: list[dict]) -> list[dict]:
     return cleaned
 
 
+def _load_configured_vec_index_or_default():
+    """audit-r12 D4: read ``settings.memory.backend`` and either return
+    a constructed :class:`VectorIndexBackend` for the operator's choice,
+    or ``None`` so :class:`MemoryStore` falls back to its built-in
+    sqlite-vec default.
+
+    Why eagerly construct here (at module import) for non-default
+    backends instead of deferring to ``BrainState.init()``? Because
+    ``BrainState.__init__`` instantiates ``MemoryStore`` synchronously
+    and other subsystems (``NodeSubdeviceStore``, ``SyncEngine``) read
+    ``self.memory.db_path`` later in ``init()``. Deferring memory
+    construction would cascade through six other constructors. The
+    sync :class:`VectorIndexBackend` Protocol exists exactly so this
+    construction stays sync.
+
+    Fails LOUDLY on:
+
+    * unknown backend id (``ValueError`` -> propagates, brain refuses
+      to boot);
+    * missing optional dependency (``ImportError`` -> propagates with
+      an actionable ``feral-ai[memory-<id>]`` install hint);
+    * constructor failure (e.g. corrupt Chroma persistence dir,
+      unreachable Qdrant URL) -> propagates.
+
+    Never silently falls back to sqlite-vec. Misconfiguring the
+    selector is now a boot-time failure, not a "vectors silently
+    aren't being stored" failure.
+    """
+    try:
+        from config.loader import load_settings as _load_settings
+        from memory.vector_index_backends import load_vector_index as _load_vec
+        from memory.embeddings import EmbeddingProvider as _Embedder
+    except Exception:
+        # Import failed (e.g. during very early bootstrap before
+        # memory/* is importable). Defer to MemoryStore default.
+        return None
+
+    settings = _load_settings() or {}
+    memory_cfg = settings.get("memory") or {}
+    backend_id = memory_cfg.get("backend") or "sqlite_vec"
+    if backend_id == "sqlite_vec":
+        # MemoryStore defaults to sqlite-vec internally; nothing for us
+        # to construct.
+        return None
+
+    backend_config = memory_cfg.get("backend_config") or {}
+    # The vector dimensionality must match whatever the embedder will
+    # later produce; constructing one here is cheap (just provider
+    # selection, no API calls) and gives us the same dim MemoryStore
+    # will use.
+    embedder = _Embedder()
+    logger.info(
+        "memory.backend=%s — constructing pluggable vector index (dim=%d)",
+        backend_id, embedder.dimension,
+    )
+    return _load_vec(backend_id, dim=embedder.dimension, **backend_config)
+
+
 class VisionBuffer:
     """Stores the latest N frames per hardware node in a memory-bounded ring buffer."""
 
@@ -244,7 +302,15 @@ class BrainState:
         # `api/server.py` and consumed by `GET /api/capabilities` +
         # the orchestrator's capability-aware routing.
         self.capability_registry = CapabilityRegistry()
-        self.memory = MemoryStore()
+        # audit-r12 D4: the vector-index backend for MemoryStore is
+        # selected from ``settings.memory.backend``. Default
+        # (``sqlite_vec``) constructs synchronously inside MemoryStore
+        # so the brain still has a working ``state.memory`` before
+        # ``init()`` runs (tests + bootstrap paths rely on this).
+        # Non-default backends (``chroma``, ``qdrant``) are built in
+        # ``init()`` where their constructors can fail loudly on
+        # missing deps without crashing module import.
+        self.memory = MemoryStore(vec_index=_load_configured_vec_index_or_default())
         self.vision_buffer = VisionBuffer()
         self.perception = PerceptionEngine()
         self.audio = AudioPipeline()
