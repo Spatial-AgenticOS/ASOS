@@ -1,36 +1,43 @@
-"""Sync ``VectorIndexBackend`` Protocol — the pluggable vector store
-that :class:`MemoryStore` actually queries on its hot path.
+"""Async ``VectorIndexBackend`` Protocol — the pluggable vector store
+that :class:`MemoryStore` queries on its hot path.
 
-Why a sync Protocol when ``memory.backends`` already has an async one?
-Because ``MemoryStore`` is sync (called from FastAPI sync paths,
-background sweepers, SQLite cursor-mid-transaction). Routing its
-queries through an async Protocol would require sync/async bridging
-that violates the no-event-loop-reentrancy rule. Chroma and Qdrant
-both publish sync Python clients, so a sync Protocol is a clean fit by
-construction; the async layer in ``memory.backends`` remains available
-for skill code that wants explicit async semantics.
+Async-native (v2026.5.33 / Option C). MemoryStore is async-native; the
+backend Protocol matches so the brain never bridges sync/async on a
+memory call. The three first-party backends each take a different
+route to satisfy this contract:
+
+* ``sqlite_vec`` (default) — speaks ``aiosqlite`` directly. True async
+  I/O, no thread offload.
+* ``chroma`` — Chroma's Python client is sync-only for in-process use
+  (``AsyncHttpClient`` requires a separate server, which we don't ship
+  by default). The adapter wraps each call in ``asyncio.to_thread``;
+  this is the adapter-boundary thread bridge the Option C plan
+  permits — explicitly NOT a MemoryStore-level wrapper.
+* ``qdrant`` — uses :class:`qdrant_client.AsyncQdrantClient`. True
+  async I/O.
 
 Public surface (intentionally tiny):
 
-    indexed: bool                       # backend reports it's actually indexed
-    count: int                          # number of vectors currently stored
-    upsert(chunk_id, embedding)         # idempotent by id
-    upsert_batch(items)                 # optimised batch path
-    delete(chunk_id)                    # silent on unknown id
-    search(query_vec, limit)            # top-k, returns (id, distance)
-    search_cosine(query_vec, limit)     # top-k, returns (id, similarity)
-    close()                             # release handles
+    indexed: bool                              # backend reports it's indexed
+    count: int                                 # async coroutine returning current count
+    await upsert(chunk_id, embedding)          # idempotent by id
+    await upsert_batch(items)                  # optimised batch path
+    await delete(chunk_id)                     # silent on unknown id
+    await search(query_vec, limit)             # top-k, returns (id, distance)
+    await search_cosine(query_vec, limit)      # top-k, returns (id, similarity)
+    await close()                              # release handles
 
-This is exactly the surface :class:`memory.embeddings.VectorIndex`
-already exposes; the legacy sqlite-vec implementation conforms without
-modification.
+The previous sync Protocol shipped in audit-r12 (v2026.5.32) is gone —
+adapters no longer expose a sync surface. Direct callers of the legacy
+``memory.embeddings.VectorIndex`` are gone too; that class was the only
+escape hatch and has been removed in the same release.
 """
 
 from __future__ import annotations
 
 import importlib
 import logging
-from typing import Any, Iterable, Protocol, runtime_checkable
+from typing import Any, AsyncIterable, Iterable, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -39,26 +46,31 @@ logger = logging.getLogger("feral.memory.vector_index_backends")
 
 @runtime_checkable
 class VectorIndexBackend(Protocol):
-    """The minimal sync contract every vector index backend must satisfy.
+    """The minimal async contract every vector index backend must satisfy.
 
-    ``indexed`` reports whether the backend actually has an index up
-    and running (e.g. the sqlite-vec extension loaded successfully).
-    ``False`` means a degraded mode where ``upsert`` is a no-op and
-    ``search_cosine`` returns ``[]``; ``MemoryStore`` then falls back
-    to its FTS5 keyword search. This degradation policy is the same
-    for every backend — silent skip rather than crash on first use.
+    ``indexed`` reports whether the backend has an index up and running
+    (e.g. the sqlite-vec extension loaded successfully). ``False`` means
+    a degraded mode where ``upsert`` is a no-op and ``search_cosine``
+    returns ``[]``; ``MemoryStore`` then falls back to its FTS5 keyword
+    search. This degradation policy is uniform across backends — silent
+    skip rather than crash on first use.
+
+    ``count`` is exposed as an awaitable so backends backed by remote
+    services (Qdrant via ``AsyncQdrantClient``) can return live counts
+    without blocking. The default ``sqlite_vec`` and ``chroma`` backends
+    cache cheaply.
     """
 
     backend_id: str
     indexed: bool
-    count: int
 
-    def upsert(self, chunk_id: str, embedding: np.ndarray) -> None: ...
-    def upsert_batch(self, items: Iterable[tuple[str, np.ndarray]]) -> None: ...
-    def delete(self, chunk_id: str) -> None: ...
-    def search(self, query_vec: np.ndarray, limit: int = 20) -> list[tuple[str, float]]: ...
-    def search_cosine(self, query_vec: np.ndarray, limit: int = 20) -> list[tuple[str, float]]: ...
-    def close(self) -> None: ...
+    async def count(self) -> int: ...
+    async def upsert(self, chunk_id: str, embedding: np.ndarray) -> None: ...
+    async def upsert_batch(self, items: Iterable[tuple[str, np.ndarray]]) -> None: ...
+    async def delete(self, chunk_id: str) -> None: ...
+    async def search(self, query_vec: np.ndarray, limit: int = 20) -> list[tuple[str, float]]: ...
+    async def search_cosine(self, query_vec: np.ndarray, limit: int = 20) -> list[tuple[str, float]]: ...
+    async def close(self) -> None: ...
 
 
 # ─────────────────────────────────────────────
@@ -66,7 +78,6 @@ class VectorIndexBackend(Protocol):
 # ─────────────────────────────────────────────
 
 _REGISTRY: dict[str, str] = {
-    # backend_id -> dotted module path relative to feral-core
     "sqlite_vec": "memory.vector_index_backends.sqlite_vec",
     "chroma": "memory.vector_index_backends.chroma",
     "qdrant": "memory.vector_index_backends.qdrant",
@@ -86,13 +97,10 @@ def load_vector_index(
 ) -> VectorIndexBackend:
     """Synchronously instantiate the configured vector-index backend.
 
-    The audit-r12 D4 "selector is theater" defect was that
-    :class:`memory.MemoryStore` hardwired
-    :class:`memory.embeddings.VectorIndex` at boot regardless of
-    ``settings.memory.backend``. This function is the wiring that
-    closes the loop: ``BrainState.__init__`` calls it with the
-    configured backend id, then injects the result into
-    ``MemoryStore``.
+    Instantiation stays sync because boot wiring (``BrainState.__init__``)
+    is sync; the resulting instance's methods are all awaitable. A
+    misconfigured backend MUST surface at boot, never at first query —
+    no silent fall-back to sqlite-vec.
 
     Raises
     ------
@@ -105,10 +113,8 @@ def load_vector_index(
         ``feral-ai[memory-<id>]`` extra.
     TypeError
         The backend module's ``create`` factory returned something
-        that does not satisfy :class:`VectorIndexBackend`.
-
-    No silent fall-back to sqlite-vec — a misconfigured backend MUST
-    surface at boot, never at first query.
+        that does not satisfy :class:`VectorIndexBackend` (missing
+        one of the required async methods).
     """
     if backend_id not in _REGISTRY:
         raise ValueError(
@@ -142,12 +148,12 @@ def load_vector_index(
         raise TypeError(
             f"vector-index factory for {backend_id!r} returned "
             f"{type(backend).__name__}, which does not satisfy the "
-            "VectorIndexBackend Protocol (missing one of indexed, "
-            "count, upsert, upsert_batch, delete, search, "
+            "async VectorIndexBackend Protocol (missing one of "
+            "indexed, count, upsert, upsert_batch, delete, search, "
             "search_cosine, close)."
         )
     logger.info(
-        "vector index backend loaded: %s (indexed=%s, count=%d)",
-        backend_id, backend.indexed, backend.count,
+        "vector index backend loaded: %s (indexed=%s)",
+        backend_id, backend.indexed,
     )
     return backend

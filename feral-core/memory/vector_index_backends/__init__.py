@@ -1,21 +1,21 @@
-"""Pluggable sync ``VectorIndex`` backends used by :class:`MemoryStore`.
+"""Pluggable async ``VectorIndexBackend`` backends used by :class:`MemoryStore`.
 
-This sits **alongside** the async :mod:`memory.backends` layer (which
-exposes an async :class:`MemoryBackend` Protocol for skill code that
-wants explicit async semantics). The two abstractions cover the same
-storage targets (sqlite-vec, Chroma, Qdrant) from two angles:
+v2026.5.33 — Option C async rewrite. The Protocol and every adapter
+are async-native; :class:`MemoryStore` awaits backend operations
+directly without thread bridging. The three first-party backends pick
+the best path for their underlying client:
 
-* :class:`memory.backends.MemoryBackend` — async surface, suited for
-  skill code that already runs on the event loop.
-* :class:`memory.vector_index_backends.VectorIndexBackend` — sync
-  surface that ``MemoryStore`` injects in place of the legacy
-  hard-wired :class:`memory.embeddings.VectorIndex`. Chroma and Qdrant
-  Python clients are sync, so this layer has no async/sync bridging
-  ceremony.
+* ``sqlite_vec`` (default) — talks to SQLite via ``aiosqlite``.
+* ``chroma`` — wraps Chroma's sync ``PersistentClient`` in
+  ``asyncio.to_thread`` at the adapter boundary (Chroma's
+  ``AsyncHttpClient`` requires a remote HTTP server, which we don't
+  ship by default).
+* ``qdrant`` — uses :class:`qdrant_client.AsyncQdrantClient`.
 
 Adding a third-party backend is a matter of dropping a module in here
 (or registering via :func:`register_backend`) that exposes a
-``create(dim, **cfg) -> VectorIndexBackend`` factory.
+``create(dim, **cfg) -> VectorIndexBackend`` factory whose returned
+object satisfies the async Protocol.
 
 The brain selects the active backend at boot from
 ``settings.memory.backend`` (default ``sqlite_vec``). If the chosen
