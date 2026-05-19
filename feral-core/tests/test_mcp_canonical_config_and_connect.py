@@ -91,6 +91,8 @@ def test_mcp_server_config_round_trips_to_connection_kwargs():
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-github"],
         "env": {"GITHUB_PAT": "ghp_x"},
+        "url": "",
+        "headers": {},
         "enabled": True,
     }
 
