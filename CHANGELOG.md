@@ -1,10 +1,46 @@
 # Changelog
 
-<!-- feral-version: 2026.5.31 -->
+<!-- feral-version: 2026.5.32 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.32] — audit-r12 systemic remediation: phone allowlist, HUP coherence, memory backend selector, MCP HTTP transport, Bedrock chat, Whoop/Oura OAuth
+
+Independent audit-r12 identified seven verified defects across the brain. Each was fixed with one commit per defect, contract pinned by tests, and root-causes documented in the commit body. Defects D2 / D5 / D10 from the original audit list were re-scoped or dropped after reality-check (D2 is tech-debt, not a bug; D5's handler exists; D10 was partially wrong about the header name).
+
+### Fixed — D1: phone-bearer allowlist drifted from canonical route paths
+
+`feral-core/api/server.py` allowlisted stale paths like `/api/approvals/approve|deny` and `/api/ambient/digest` for the phone-bearer token, but the real registered routes are `/api/approvals/{request_id}/approve|reject` and `/api/ambient/briefing`. Phone clients got 401 on every approval action and every briefing fetch.
+
+Introduced `_PathAllowlist` (literal + prefix + FastAPI-style parameterised matchers) and a boot-time invariant (`_assert_allowlist_routes_exist`) that iterates `app.routes` and fails fast if any allowlist entry no longer maps to a real route. New paths added, stale paths removed, prefix matchers used for parameterised routes. Tests: `tests/test_phone_bearer_allowlist_route_coherence.py` + extended `tests/test_phone_bearer_http_auth.py`.
+
+### Fixed — D3: HUP wire version skew (`1.2.0` vs `1.3.1`)
+
+Brain emitted `hup_version: "1.2.0"` from three hand-coded literals in `api/server.py` while `models.protocol.HUP_VERSION` was `1.3.1` and the spec said `1.3.0`. Replaced every literal with the canonical `HUP_VERSION` constant; updated `feral-nodes/HUP_SPEC.md` with the missing v1.3.1 changelog entry. Added a static-AST scan test (`tests/test_hup_protocol.py:TestHupVersionCoherence`) that fails the build on any `"hup_version": "<literal>"` string in `api/server.py`.
+
+### Fixed — D4: `settings.memory.backend` selector was theater
+
+`memory/store.py` hardwired `memory.embeddings.VectorIndex` regardless of `settings.memory.backend`. Introduced `memory/vector_index_backends/` with a sync `VectorIndexBackend` Protocol + `load_vector_index` factory; shipped sqlite-vec, Chroma, and Qdrant adapters (Chroma + Qdrant gated behind `feral-ai[memory-chroma]` / `[memory-qdrant]` extras). `BrainState.__init__` reads `settings.memory.backend` and injects the configured backend into `MemoryStore`. Misconfigured backends now fail loudly at boot (`ValueError` for unknown ids, `ImportError` with the right extras hint for missing deps) instead of silently falling back. Tests: `tests/test_memory_vector_index_backends.py` (11 new).
+
+### Fixed — D6: MCP HTTP transport was a stub
+
+`MCPServerConnection._connect_http` set `self._connected = True` and never spoke protocol — every subsequent `call_tool` returned `{"error": "No response"}`. Implemented the full Streamable HTTP transport per MCP spec rev `2025-06-18`: POST with `Accept: application/json, text/event-stream`, JSON and SSE response handling, `Mcp-Session-Id` propagation, `MCP-Protocol-Version` header, polite DELETE on disconnect, JSON-RPC error envelopes on 4xx/5xx. Tests: `tests/test_mcp_http_transport.py` (8 new) run a real FastAPI app over httpx — no mocks at the transport layer.
+
+### Fixed — D7: `MCPServerRegistry.connect_server` called a missing method; config shape mismatch
+
+The registry called `self._mcp_client.connect(server_id=…, command=…, args=…, env=…)` — a method that did not exist on `MCPClientManager`. `try/except` swallowed the `AttributeError` and returned `{"error": "..."}` with no useful diagnostic. Same class of bug at `POST /api/mcp/connect` which reached into `state.mcp_client._servers[name] = conn` directly with zero validation.
+
+Introduced canonical `MCPServerConfig` Pydantic v2 model, added the missing `MCPClientManager.connect_server(config) -> bool` and `disconnect_server(name) -> bool` API, wired the registry + the HTTP route through it. Legacy `connect(**kwargs)` / `disconnect(name)` kept as aliases for in-flight third-party forks. Tests: `tests/test_mcp_canonical_config_and_connect.py` (13 new) — including a static-API contract test that fails at collection if either method vanishes.
+
+### Fixed — D8: Bedrock provider `chat()` was a stub
+
+`BedrockProvider.chat` raised `RuntimeError("bedrock provider is at stub level …")` unconditionally — anyone who picked Bedrock in the wizard crashed on first message. Implemented the real Converse path (`bedrock-runtime.converse`) — normalised across Anthropic / Meta / Mistral / Cohere / Titan / Stability — plus `converse_stream` for streaming and `validate_credentials` for wizard pre-flight. Honours the standard AWS credential chain (env vars > shared profile > IAM role). Tests: `tests/test_bedrock_provider.py` (12 new) pin the Converse request/response shapes; live integration test gated behind `BEDROCK_LIVE=1`.
+
+### Fixed — D9: Whoop + Oura OAuth tokens silently absent
+
+`integrations/health_platforms.py` called `OAuthManager.get_token("whoop")` / `get_token("oura")` but neither id was registered in `BUILTIN_PROVIDERS`. `WhoopClient.connected` / `OuraClient.connected` were silently False forever. Registered both with the live 2026 vendor endpoints (verified against developer.whoop.com and cloud.ouraring.com on 2026-05-19), PKCE on, scopes matching the integration's actual API surface. Added `WHOOP_OAUTH_CLIENT_ID` / `OURA_OAUTH_CLIENT_ID` env-var hooks. Added a static-AST coherence guard: every channel calling `get_token(<id>)` in `integrations/**/*.py` must have `<id>` in `BUILTIN_PROVIDERS` or CI fails. Tests: `tests/test_oauth_whoop_oura.py` (7 new).
 
 ## [2026.5.30] — Desktop voice no longer hijacks the WebUI + chat bubble overflow fix
 
