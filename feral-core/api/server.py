@@ -8,10 +8,11 @@ Channels (Telegram, Discord, Slack) bridge messaging platforms.
 """
 
 import asyncio
+import collections
 import logging
 import os
+import re
 import time
-import collections
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Quer
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, HTMLResponse, FileResponse, RedirectResponse
+from starlette.routing import compile_path
 
 from version import VERSION as __version__
 from models.protocol import (
@@ -349,66 +351,145 @@ _OPEN_GET_PATH_PREFIXES = (
 )
 
 
+class _PathAllowlist:
+    """API-key middleware allowlist that supports literal paths, prefix
+    matches, and FastAPI-style parameterized patterns
+    (``/api/approvals/{request_id}/approve``).
+
+    Parameterized patterns compile via Starlette's ``compile_path`` —
+    the same function FastAPI's router uses — so a match here is
+    behaviourally identical to a match at routing time. This kills the
+    pre-audit-r12 class of bug where the allowlist literal
+    (``/api/approvals/approve``) drifted from the real route path
+    (``/api/approvals/{request_id}/approve``) and the operator's iOS
+    Approvals tab silently 401'd.
+
+    Used by:
+
+    1. ``APIKeyMiddleware.dispatch`` — decides whether a phone-bearer
+       request is acceptable for the requested ``(method, path)``.
+    2. ``_assert_allowlist_routes_exist`` — startup invariant that
+       refuses to boot the brain if any entry on this allowlist does
+       not match a route actually registered on the FastAPI app.
+    """
+
+    __slots__ = ("name", "_literals", "_prefixes", "_patterns")
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self._literals: set[str] = set()
+        self._prefixes: list[str] = []
+        # (original pattern, compiled anchored regex from compile_path)
+        self._patterns: list[tuple[str, re.Pattern[str]]] = []
+
+    def add_literal(self, path: str) -> None:
+        self._literals.add(path)
+
+    def add_prefix(self, prefix: str) -> None:
+        if prefix not in self._prefixes:
+            self._prefixes.append(prefix)
+
+    def add_pattern(self, pattern: str) -> None:
+        """Register a FastAPI-style parameterized path like
+        ``/api/approvals/{request_id}/approve``. The compiled regex is
+        anchored end-to-end, so ``/api/approvals/x/approve/extra``
+        does NOT match (parity with FastAPI's own dispatch)."""
+        regex, *_ = compile_path(pattern)
+        self._patterns.append((pattern, regex))
+
+    def matches(self, path: str) -> bool:
+        if path in self._literals:
+            return True
+        for prefix in self._prefixes:
+            if path.startswith(prefix):
+                return True
+        for _, regex in self._patterns:
+            if regex.match(path):
+                return True
+        return False
+
+    def literals(self) -> frozenset[str]:
+        return frozenset(self._literals)
+
+    def prefixes(self) -> tuple[str, ...]:
+        return tuple(self._prefixes)
+
+    def patterns(self) -> tuple[str, ...]:
+        return tuple(p for p, _ in self._patterns)
+
+
 # v2026.5.26 — paths the iOS companion / web client reads with the
 # operator's phone-bearer token (minted during pair flow). The
 # APIKeyMiddleware below treats a valid `phone_bearer` like the
 # dashboard API key for these endpoints ONLY — destructive operations
 # still require the explicit FERAL_API_KEY.
 #
-# Background: prior to this release, APIKeyMiddleware accepted only
+# Background: prior to v2026.5.26, APIKeyMiddleware accepted only
 # `Bearer <FERAL_API_KEY>` on HTTP. The phone-bearer scheme worked on
 # the WebSocket handshake (verify_phone_bearer at server.py:1234) but
 # every HTTP call from the iOS app 401'd, breaking the Phase 7b-2
-# Context tab + the entire Phase 13 / Phase 10 phone surface
-# (operator screenshot: "Brain rejected this request (401). The brain
-# needs to accept the phone bearer on HTTP — update the brain or
-# re-pair.").
+# Context tab + the entire Phase 13 / Phase 10 phone surface.
 #
-# Scope is intentionally narrow — every endpoint in this list is
+# v2026.5.32 (audit-r12 D1) — refactored from raw frozenset literals
+# to `_PathAllowlist` so parameterised routes like
+# `/api/approvals/{request_id}/approve` actually match. Five entries
+# had drifted from their canonical routes; the new
+# `_assert_allowlist_routes_exist` invariant (called at module bottom)
+# now refuses to boot the brain on any further drift.
+#
+# Scope is intentionally narrow — every endpoint registered here is
 # read-mostly or returns operator-owned data the phone already has
 # implicit access to via the WS bridge. Anything that mutates
 # server-wide state (skill installs, vault writes, autonomy changes,
 # config updates, OAuth grants, etc.) stays gated to the dashboard
 # API key.
-_PHONE_BEARER_GET_PATHS = frozenset({
-    "/api/context/live",            # Phase 7b-2 iOS Context tab
-    "/api/sessions/primary",        # Phase 3 — primary session id
-    "/api/sessions/primary/transcript",  # Phase 9 — chat resume
-    "/api/capabilities",            # Phase 5 — capability registry
-    "/api/capabilities/has",        # Phase 5 — routability probe
-    "/api/system/permissions",      # Phase 11 — macOS TCC status
-    "/api/discovery/brain",         # Phase 13 — onboarding wizard
-    "/api/devices",                 # Phase 10 — connected devices
-    "/api/devices/connected",       # Phase 10 — live HUP set
-    "/api/ambient/next_event",      # ambient calendar context
-    "/api/ambient/digest",          # ambient summary
-    "/api/conversations",           # chat history list
+_PHONE_BEARER_GET = _PathAllowlist("_PHONE_BEARER_GET")
+for _p in (
+    "/api/context/live",                  # Phase 7b-2 iOS Context tab
+    "/api/sessions/primary",              # Phase 3 — primary session id
+    "/api/sessions/primary/transcript",   # Phase 9 — chat resume (GET, since_ms is a query arg)
+    "/api/capabilities",                  # Phase 5 — capability registry
+    "/api/capabilities/has",              # Phase 5 — routability probe (GET with query)
+    "/api/system/permissions",            # Phase 11 — macOS TCC status
+    "/api/discovery/brain",               # Phase 13 — onboarding wizard
+    "/api/devices",                       # Phase 10 — connected devices
+    "/api/devices/connected",             # Phase 10 — live HUP set
+    "/api/ambient/next_event",            # ambient calendar context
+    "/api/ambient/briefing",              # ambient morning summary (was the stale "/digest")
+    "/api/conversations",                 # chat history list
     "/api/conversations/active/thread",
-    "/api/memory/context",          # memory read
-    "/api/skills",                  # capability discovery
-    "/api/autonomy",                # iOS may surface current tier
-})
-
+    "/api/memory/context",                # memory read
+    "/api/timeline",                      # operator timeline (single route, was the stale "/api/timeline/" prefix)
+    "/api/autonomy",                      # iOS may surface current tier
+):
+    _PHONE_BEARER_GET.add_literal(_p)
 # Prefix-matched read-mostly families. Anything below a prefix here is
 # accepted for phone bearers. Specific paths under these prefixes that
 # need to stay dashboard-only should be FILTERED later in middleware,
 # but today the prefixes here are read-only by construction.
-_PHONE_BEARER_GET_PREFIXES = (
+# v2026.5.32 (audit-r12 D1): dropped "/api/skills/" prefix's bare-literal
+# companion ("/api/skills" was dead — no GET /api/skills route exists;
+# only sub-paths like /api/skills/pending are real, and the prefix below
+# already covers them) and the "/api/timeline/" prefix (no routes under
+# it; the single canonical route is GET /api/timeline, now a literal above).
+for _p in (
     "/api/conversations/",   # GET /api/conversations/{id}
-    "/api/skills/",          # GET /api/skills/{id}
-    "/api/timeline/",
-)
+    "/api/skills/",          # GET /api/skills/pending, /api/skills/{id} (latter aspirational)
+):
+    _PHONE_BEARER_GET.add_prefix(_p)
+del _p
 
-# POST endpoints the iOS app legitimately needs. Tight allowlist; chat
-# + approvals + UI events are the operator-facing surface that already
+# POST endpoints the iOS app legitimately needs. Tight allowlist;
+# approvals + UI events are the operator-facing surface that already
 # has WebSocket equivalents (so the security envelope is unchanged).
-_PHONE_BEARER_POST_PATHS = frozenset({
-    "/api/sessions/primary/transcript",  # iOS reconcile (POST since_ms)
-    "/api/capabilities/has",             # body-form probe
-    "/api/system/permissions/open",      # Phase 13 — open Settings pane
-    "/api/approvals/approve",            # operator approval surface
-    "/api/approvals/deny",
-})
+_PHONE_BEARER_POST = _PathAllowlist("_PHONE_BEARER_POST")
+_PHONE_BEARER_POST.add_literal("/api/system/permissions/open")  # Phase 13 — open Settings pane
+# Operator approval surface. Path-parameterised on `request_id`; the
+# matcher uses Starlette's `compile_path`, the same function FastAPI's
+# router uses to dispatch the request — so a match here is by
+# construction the same set of paths FastAPI accepts.
+_PHONE_BEARER_POST.add_pattern("/api/approvals/{request_id}/approve")
+_PHONE_BEARER_POST.add_pattern("/api/approvals/{request_id}/reject")
 
 
 def _is_webhook_receive(path: str) -> bool:
@@ -454,21 +535,21 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         # v2026.5.26 — phone-bearer HTTP auth. Pre-fix the middleware
         # accepted only the dashboard FERAL_API_KEY, so the iOS app's
         # phone_bearer (minted during pair flow + accepted on the WS
-        # handshake) 401'd on every HTTP call (operator screenshot:
-        # Context tab stuck on "Waiting for brain auth").
+        # handshake) 401'd on every HTTP call.
         #
         # Acceptance is path-allowlisted to read-mostly endpoints the
-        # iOS app actually consumes (see _PHONE_BEARER_GET_PATHS,
-        # _PHONE_BEARER_GET_PREFIXES, _PHONE_BEARER_POST_PATHS above).
-        # Destructive paths still require the dashboard API key.
+        # iOS app actually consumes (see `_PHONE_BEARER_GET` and
+        # `_PHONE_BEARER_POST` above). Destructive paths still require
+        # the dashboard API key. The allowlists are
+        # `_PathAllowlist` instances, so parameterised routes like
+        # `/api/approvals/{request_id}/approve` match correctly — the
+        # pre-r12 literal-only allowlist drifted whenever a route was
+        # renamed or parameterised.
         if auth.startswith("Bearer "):
             phone_ok = False
-            if request.method in ("GET", "HEAD") and (
-                path in _PHONE_BEARER_GET_PATHS
-                or any(path.startswith(p) for p in _PHONE_BEARER_GET_PREFIXES)
-            ):
+            if request.method in ("GET", "HEAD") and _PHONE_BEARER_GET.matches(path):
                 phone_ok = True
-            elif request.method == "POST" and path in _PHONE_BEARER_POST_PATHS:
+            elif request.method == "POST" and _PHONE_BEARER_POST.matches(path):
                 phone_ok = True
 
             if phone_ok:
@@ -3080,6 +3161,104 @@ async def serve_webui_or_fallback(full_path: str = ""):
             return FileResponse(file_path)
         return FileResponse(_webui_dir / "index.html")
     return HTMLResponse(_FALLBACK_HTML)
+
+
+def _assert_allowlist_routes_exist(target_app) -> None:
+    """audit-r12 D1 startup invariant: every entry in every API-key
+    allowlist MUST resolve to at least one route registered on
+    ``target_app``.
+
+    Pre-r12, drift between allowlist literals and the real route table
+    (``/api/ambient/digest`` after the ambient route was renamed to
+    ``/api/ambient/briefing``; ``/api/approvals/approve`` after the
+    approvals route was parameterised to
+    ``/api/approvals/{request_id}/approve``; a couple of POST entries
+    that pointed at GET-only endpoints) silently 401'd iOS clients.
+    No unit test caught it because nobody was iterating the route
+    table against the allowlist.
+
+    This invariant runs once, at module import, AFTER every
+    ``app.include_router(...)`` and every top-level ``@app.<method>``
+    decorator has registered its route. If anything has drifted, it
+    raises ``RuntimeError`` with the operator-facing fix list — the
+    brain refuses to boot rather than ship a half-broken auth
+    surface.
+
+    Scope: literals in ``_OPEN_PATHS`` and every entry of
+    ``_PHONE_BEARER_GET`` / ``_PHONE_BEARER_POST``.
+
+    Excluded by design:
+
+    * ``_OPEN_GET_PATHS`` — these paths (``/pair``, ``/sw.js``,
+      ``/favicon.ico``, ``/manifest.webmanifest``, ``/v2/pair``) are
+      served via the SPA catch-all at the bottom of this module
+      (``@app.get("/{full_path:path}")``); they have no explicit
+      route registration by design, and would be false positives here.
+    * ``_OPEN_PATH_PREFIXES`` / ``_OPEN_GET_PATH_PREFIXES`` — these
+      cover static-asset mounts whose Starlette ``route.path`` shape
+      (mount root, no trailing slash) doesn't lend itself to the
+      same exact-match test. The phone-bearer surface is where drift
+      causes silent failures; static-asset drift surfaces immediately
+      in browser DevTools.
+    """
+    registered_paths: set[str] = set()
+    for route in target_app.routes:
+        path = getattr(route, "path", None)
+        if path:
+            registered_paths.add(path)
+
+    errors: list[str] = []
+
+    def _check_literal(allowlist_name: str, path: str) -> None:
+        if path not in registered_paths:
+            errors.append(
+                f"{allowlist_name}: literal {path!r} is not registered "
+                "on the app (typo or route was renamed)"
+            )
+
+    def _check_prefix(allowlist_name: str, prefix: str) -> None:
+        if not any(p.startswith(prefix) for p in registered_paths):
+            errors.append(
+                f"{allowlist_name}: prefix {prefix!r} matches no "
+                "registered route (typo or routes moved out)"
+            )
+
+    def _check_pattern(allowlist_name: str, pattern: str) -> None:
+        # FastAPI keeps ``{param}`` in ``route.path``, so exact-string
+        # match against any registered path proves the pattern is wired.
+        if pattern not in registered_paths:
+            errors.append(
+                f"{allowlist_name}: pattern {pattern!r} is not registered "
+                "on the app (typo or route was renamed)"
+            )
+
+    for _path in _OPEN_PATHS:
+        _check_literal("_OPEN_PATHS", _path)
+    for _path in _PHONE_BEARER_GET.literals():
+        _check_literal("_PHONE_BEARER_GET", _path)
+    for _prefix in _PHONE_BEARER_GET.prefixes():
+        _check_prefix("_PHONE_BEARER_GET", _prefix)
+    for _pattern in _PHONE_BEARER_GET.patterns():
+        _check_pattern("_PHONE_BEARER_GET", _pattern)
+    for _path in _PHONE_BEARER_POST.literals():
+        _check_literal("_PHONE_BEARER_POST", _path)
+    for _prefix in _PHONE_BEARER_POST.prefixes():
+        _check_prefix("_PHONE_BEARER_POST", _prefix)
+    for _pattern in _PHONE_BEARER_POST.patterns():
+        _check_pattern("_PHONE_BEARER_POST", _pattern)
+
+    if errors:
+        raise RuntimeError(
+            "API auth allowlist drift detected at boot. These entries "
+            "do not match any registered route, which means iOS / web "
+            "clients calling these paths receive 401 even with valid "
+            "credentials. Fix each entry below, or update the "
+            "allowlist in `api/server.py` to match the canonical route "
+            "path:\n  - " + "\n  - ".join(errors)
+        )
+
+
+_assert_allowlist_routes_exist(app)
 
 
 if __name__ == "__main__":

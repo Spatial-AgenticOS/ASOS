@@ -90,9 +90,19 @@ def app_with_middleware(monkeypatch):
     async def caps():
         return {"ok": True}
 
-    @app.post("/api/sessions/primary/transcript")  # phone POST allowed
-    async def transcript_post(body: dict | None = None):
+    @app.post("/api/system/permissions/open")  # phone POST allowed (literal)
+    async def perms_open(body: dict | None = None):
         return {"ok": True}
+
+    # v2026.5.32 (audit-r12 D1): canonical parameterised POST in the
+    # allowlist. The pre-r12 allowlist had a literal
+    # ``/api/approvals/approve`` that didn't match the real path
+    # ``/api/approvals/{request_id}/approve``; this stub mirrors the
+    # real route shape so the new ``_PathAllowlist`` parameterised
+    # matcher is exercised end-to-end here too.
+    @app.post("/api/approvals/{request_id}/approve")
+    async def approve_post(request_id: str):
+        return {"ok": True, "id": request_id}
 
     @app.delete("/api/skills/foo")                 # destructive
     async def delete_skill():
@@ -158,12 +168,25 @@ def test_destructive_endpoint_with_phone_bearer_returns_401(app_with_middleware)
 
 
 def test_allowlisted_post_with_phone_bearer_returns_200(app_with_middleware):
+    # Phase 13 — open Settings pane (literal POST in the allowlist).
     r = _client(app_with_middleware).post(
-        "/api/sessions/primary/transcript",
+        "/api/system/permissions/open",
         headers={"Authorization": f"Bearer {_PHONE_BEARER}"},
-        json={"since_ms": 0},
+        json={"pane": "Microphone"},
     )
     assert r.status_code == 200
+
+
+def test_allowlisted_parameterised_post_with_phone_bearer_returns_200(app_with_middleware):
+    """v2026.5.32 (audit-r12 D1): the operator-approval surface uses a
+    parameterised path (``/api/approvals/{request_id}/approve``). Pins
+    that the new ``_PathAllowlist`` matcher accepts the concrete path."""
+    r = _client(app_with_middleware).post(
+        "/api/approvals/req-99/approve",
+        headers={"Authorization": f"Bearer {_PHONE_BEARER}"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "id": "req-99"}
 
 
 def test_non_allowlisted_get_with_phone_bearer_returns_401(app_with_middleware):
