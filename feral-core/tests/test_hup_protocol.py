@@ -1,11 +1,18 @@
 """HUP protocol drift fixes — end-to-end contract tests.
 
-Covers the canonical HUP v1.2.0 wire names between brain and daemons:
+Covers the canonical HUP wire shape between brain and daemons:
   - node_register → node_ack
   - node_heartbeat (not legacy heartbeat)
   - hup_action_request / hup_action_response
   - node_bye → WS close 1000
   - error frame on protocol violations
+
+Version assertions reference ``models.protocol.HUP_VERSION`` rather
+than a literal string so the test cannot drift from the canonical
+constant. Pre-audit-r12 this asserted the stale literal ``"1.2.0"``
+while three brain envelopes hardcoded the same stale literal and the
+canonical constant was already ``"1.3.1"`` — none of the four
+agreed.
 """
 
 from __future__ import annotations
@@ -18,6 +25,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.testclient import TestClient
+
+from models.protocol import HUP_VERSION
 
 pytestmark = pytest.mark.no_auto_feral_home
 
@@ -213,8 +222,13 @@ class TestNodeRegisterReturnsNodeAck:
             with client.websocket_connect(f"/v1/node?api_key={_TEST_NODE_KEY}") as ws:
                 ack = _register_node(ws, capabilities=["camera", "heart_rate"])
                 assert ack["type"] == "node_ack"
+                # v2026.5.32 (audit-r12 D3): both the envelope-level
+                # `hup_version` and the payload-level `hup_version` MUST
+                # equal the canonical constant. Pre-r12 these hardcoded
+                # "1.2.0" while the constant was already "1.3.1".
+                assert ack["hup_version"] == HUP_VERSION
                 p = ack["payload"]
-                assert p["hup_version"] == "1.2.0"
+                assert p["hup_version"] == HUP_VERSION
                 assert p["heartbeat_ms"] == 10000
                 assert "session_token" in p and len(p["session_token"]) > 0
                 assert set(p["capabilities"]) == {"camera", "heart_rate"}
@@ -318,6 +332,47 @@ class TestProtocolError:
                 err = ws.receive_json()
                 assert err["type"] == "error"
                 assert err["payload"]["code"] == 1002
+                # v2026.5.32 (audit-r12 D3): the error envelope advertises
+                # the canonical HUP version; pre-r12 it hardcoded "1.2.0".
+                assert err["hup_version"] == HUP_VERSION
+
+
+class TestHupVersionCoherence:
+    """v2026.5.32 (audit-r12 D3): every ``hup_version`` literal that the
+    brain emits over the wire MUST equal ``models.protocol.HUP_VERSION``.
+    Pre-r12 three envelopes hardcoded ``"1.2.0"`` while the constant was
+    already ``"1.3.1"``; iOS clients saw a brain that announced one
+    version on register and another on every other frame.
+    """
+
+    def test_no_stale_hup_version_literals_in_server(self):
+        """Static scan of ``api/server.py``: every string literal value
+        in a ``"hup_version"`` dict entry must equal ``HUP_VERSION``."""
+        import ast
+        from pathlib import Path
+
+        server_path = Path(__file__).parent.parent / "api" / "server.py"
+        tree = ast.parse(server_path.read_text())
+
+        drifted: list[tuple[int, str]] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values):
+                if not isinstance(key, ast.Constant) or key.value != "hup_version":
+                    continue
+                # Constant string value → must equal HUP_VERSION.
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    if value.value != HUP_VERSION:
+                        drifted.append((value.lineno, value.value))
+                # ast.Name (e.g. HUP_VERSION) is fine.
+
+        assert not drifted, (
+            "api/server.py contains stale `hup_version` literal(s) that "
+            "do not equal `HUP_VERSION` from models.protocol. Either use "
+            "the constant directly or update the literal. "
+            "Lines: " + ", ".join(f"{ln}={val!r}" for ln, val in drifted)
+        )
 
 
 class TestMessageTypesRegistry:

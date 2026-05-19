@@ -24,6 +24,7 @@ from starlette.routing import compile_path
 
 from version import VERSION as __version__
 from models.protocol import (
+    HUP_VERSION,
     FeralMessage,
     TextCommandPayload,
     UIEventPayload,
@@ -1382,7 +1383,7 @@ async def _send_protocol_error(ws: WebSocket, code: int, message: str, *, name: 
     """Emit an HUP §8 error frame to the daemon."""
     try:
         await ws.send_json({
-            "hup_version": "1.2.0",
+            "hup_version": HUP_VERSION,
             "type": "error",
             "ts": __import__("time").time(),
             "payload": {
@@ -1461,7 +1462,6 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
         await ws.close(code=4003, reason="Unauthorized Edge Node API Key")
         return
     node_id = None
-    from models.protocol import HUP_VERSION as _HUP_VERSION  # local to keep daemon_session self-contained
     logger.info(
         "Daemon connecting (device_id=%s bearer_kind=%s auth_source=%s)...",
         paired_device_id or "legacy-key",
@@ -1594,13 +1594,13 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
 
                 session_token = str(__import__("uuid").uuid4())
                 await ws.send_json({
-                    "hup_version": "1.2.0",
+                    "hup_version": HUP_VERSION,
                     "type": "node_ack",
                     "ts": __import__("time").time(),
                     "payload": {
                         "node_id": node_id,
                         "session_token": session_token,
-                        "hup_version": "1.2.0",
+                        "hup_version": HUP_VERSION,
                         "heartbeat_ms": 10000,
                         "server_time": __import__("time").time(),
                         "capabilities": list(payload.capabilities),
@@ -1821,7 +1821,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         payload_for_hash=payload_dict,
                     )
                     await ws.send_json({
-                        "hup_version": _HUP_VERSION,
+                        "hup_version": HUP_VERSION,
                         "type": "chat_response",
                         "ts": time.time(),
                         "payload": {
@@ -1983,7 +1983,7 @@ async def daemon_session(ws: WebSocket, api_key: str = Query(default=None)):
                         name="orchestrator_error",
                     )
                 await ws.send_json({
-                    "hup_version": _HUP_VERSION,
+                    "hup_version": HUP_VERSION,
                     "type": "chat_response",
                     "ts": time.time(),
                     "payload": {
