@@ -21,10 +21,8 @@ package being installed (skipif).
 
 from __future__ import annotations
 
-import os
 import sys
 import importlib
-import sqlite3
 import tempfile
 from pathlib import Path
 from typing import Iterable

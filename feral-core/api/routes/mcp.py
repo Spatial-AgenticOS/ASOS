@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from api.state import state, _log_activity
-from mcp.client import MCPServerConfig, MCPServerConnection
+from mcp.client import MCPServerConfig
 
 router = APIRouter()
 

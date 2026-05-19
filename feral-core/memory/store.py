@@ -36,13 +36,12 @@ from memory.context_builder import (
 )
 from memory.embeddings import (
     EmbeddingProvider,
-    VectorIndex,
     EmbedQueue,
     chunk_text,
     blob_to_vec,
     cosine_similarity,
 )
-from memory.vector_index_backends import VectorIndexBackend, load_vector_index
+from memory.vector_index_backends import VectorIndexBackend
 from memory.notes_legacy import (
     count_notes,
     delete_note,
