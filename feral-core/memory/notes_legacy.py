@@ -1,14 +1,24 @@
+"""Legacy notes API. Async-native since v2026.5.33 (Option C refactor).
+
+These functions are dispatched to from :class:`memory.store.MemoryStore`'s
+back-compat methods (``save``, ``search``, ``list_recent``, ``delete``,
+``count``). They take the store as their first argument so they can
+share its db_path, embed queue, and sync engine without inheriting from
+it.
+"""
+
 from __future__ import annotations
 
 import json
-import sqlite3
 import time
 from uuid import uuid4
+
+import aiosqlite
 
 from memory.embeddings import chunk_text
 
 
-def save_note(
+async def save_note(
     store,
     content: str,
     tags: list[str] | None = None,
@@ -18,17 +28,16 @@ def save_note(
     note_id = str(uuid4())[:8]
     now = time.time()
     tags = tags or []
-    conn = sqlite3.connect(store.db_path)
+    conn = await aiosqlite.connect(store.db_path)
     try:
-        conn.execute(
+        await conn.execute(
             "INSERT INTO notes (id, content, tags, importance, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (note_id, content, json.dumps(tags), importance, source, now, now),
         )
-        conn.commit()
+        await conn.commit()
     finally:
-        conn.close()
+        await conn.close()
 
-    # Embed notes too (not just episodes)
     chunks = chunk_text(content)
     for i, chunk in enumerate(chunks):
         store._embed_queue.enqueue(
@@ -40,7 +49,7 @@ def save_note(
             db_path=store.db_path,
         )
 
-    store.knowledge_store(
+    await store.knowledge_store(
         subject=f"note_{note_id}",
         predicate="says",
         obj=content[:300],
@@ -69,23 +78,25 @@ def save_note(
     }
 
 
-def search_notes(store, query: str, limit: int = 10) -> list[dict]:
-    conn = store._conn()
+async def search_notes(store, query: str, limit: int = 10) -> list[dict]:
+    conn = await store._conn()
     try:
         try:
-            rows = conn.execute(
+            async with conn.execute(
                 """SELECT n.id, n.content, n.tags, n.importance, n.created_at, rank as relevance_score
                    FROM notes_fts f JOIN notes n ON f.rowid = n.rowid
                    WHERE notes_fts MATCH ? ORDER BY rank LIMIT ?""",
                 (query, limit),
-            ).fetchall()
+            ) as cur:
+                rows = await cur.fetchall()
         except Exception:
-            rows = conn.execute(
+            async with conn.execute(
                 "SELECT id, content, tags, importance, created_at, 0.5 as relevance_score FROM notes WHERE content LIKE ? ORDER BY created_at DESC LIMIT ?",
                 (f"%{query}%", limit),
-            ).fetchall()
+            ) as cur:
+                rows = await cur.fetchall()
     finally:
-        conn.close()
+        await conn.close()
     return [
         {
             "id": row["id"],
@@ -99,15 +110,16 @@ def search_notes(store, query: str, limit: int = 10) -> list[dict]:
     ]
 
 
-def list_recent_notes(store, limit: int = 10) -> list[dict]:
-    conn = store._conn()
+async def list_recent_notes(store, limit: int = 10) -> list[dict]:
+    conn = await store._conn()
     try:
-        rows = conn.execute(
+        async with conn.execute(
             "SELECT id, content, tags, importance, created_at FROM notes ORDER BY created_at DESC LIMIT ?",
             (limit,),
-        ).fetchall()
+        ) as cur:
+            rows = await cur.fetchall()
     finally:
-        conn.close()
+        await conn.close()
     return [
         {
             "id": row["id"],
@@ -120,20 +132,22 @@ def list_recent_notes(store, limit: int = 10) -> list[dict]:
     ]
 
 
-def delete_note(store, note_id: str) -> bool:
-    conn = sqlite3.connect(store.db_path)
+async def delete_note(store, note_id: str) -> bool:
+    conn = await aiosqlite.connect(store.db_path)
     try:
-        cursor = conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-        conn.commit()
+        cursor = await conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+        await conn.commit()
+        deleted = cursor.rowcount > 0
     finally:
-        conn.close()
-    return cursor.rowcount > 0
+        await conn.close()
+    return deleted
 
 
-def count_notes(store) -> int:
-    conn = sqlite3.connect(store.db_path)
+async def count_notes(store) -> int:
+    conn = await aiosqlite.connect(store.db_path)
     try:
-        count = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+        async with conn.execute("SELECT COUNT(*) FROM notes") as cur:
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
     finally:
-        conn.close()
-    return count
+        await conn.close()

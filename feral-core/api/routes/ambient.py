@@ -224,7 +224,7 @@ async def get_wind_down():
     episodes: list = []
     try:
         if hasattr(state, "memory") and state.memory:
-            recent = state.memory.episode_recent(limit=10) or []
+            recent = (await state.memory.episode_recent(limit=10)) or []
             today = datetime.now().date()
             episodes = [
                 e for e in recent

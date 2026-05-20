@@ -130,7 +130,7 @@ class AgentWorker:
 
         memory_ctx = ""
         if self._memory:
-            memory_ctx = self._memory.build_context_for_llm(session_id, max_tokens_budget=300)
+            memory_ctx = await self._memory.build_context_for_llm(session_id, max_tokens_budget=300)
 
         full_prompt = self.system_prompt
         if perception_ctx:

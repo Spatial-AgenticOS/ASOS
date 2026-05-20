@@ -536,7 +536,7 @@ class ProactiveEngine:
         # Recent memory
         if self._memory:
             try:
-                recent = self._memory.episode_recent(limit=3, session_id=None)
+                recent = await self._memory.episode_recent(limit=3, session_id=None)
                 if recent:
                     sections.append("Here's what happened recently:")
                     for ep in recent[:2]:

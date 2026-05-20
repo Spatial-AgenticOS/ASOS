@@ -239,7 +239,7 @@ def register_core_methods(registry: MethodRegistry, state):
         if not state.memory:
             raise GatewayError("NOT_FOUND", "Memory store not initialized")
         history = state.orchestrator.conversation_history.get(session_id, []) if state.orchestrator else []
-        snapshot = state.memory.snapshot_session(
+        snapshot = await state.memory.snapshot_session(
             session_id=session_id,
             history=history,
             label=params.get("label", ""),
@@ -251,7 +251,7 @@ def register_core_methods(registry: MethodRegistry, state):
     async def session_snapshots(session_id: str, params: dict, session: GatewaySession):
         if not state.memory:
             return {"snapshots": []}
-        snapshots = state.memory.list_snapshots(
+        snapshots = await state.memory.list_snapshots(
             session_id=params.get("session_id", session_id),
             branch_name=params.get("branch_name", ""),
             limit=int(params.get("limit", 50)),
@@ -265,13 +265,13 @@ def register_core_methods(registry: MethodRegistry, state):
 
         source_snapshot_id = params.get("snapshot_id", "")
         if source_snapshot_id:
-            source_snapshot = state.memory.get_snapshot(source_snapshot_id)
+            source_snapshot = await state.memory.get_snapshot(source_snapshot_id)
             if not source_snapshot:
                 raise GatewayError("NOT_FOUND", f"Snapshot not found: {source_snapshot_id}")
         else:
             base = await session_snapshot(session_id, {"label": "auto-branch-source", "branch_name": "main"}, session)
             source_snapshot_id = base["snapshot_id"]
-            source_snapshot = state.memory.get_snapshot(source_snapshot_id)
+            source_snapshot = await state.memory.get_snapshot(source_snapshot_id)
 
         branch_name = params.get("branch_name", f"branch-{int(time.time())}")
         branch_session_id = params.get("target_session_id", f"{session_id}:{branch_name}:{str(uuid4())[:6]}")
@@ -280,7 +280,7 @@ def register_core_methods(registry: MethodRegistry, state):
         if state.orchestrator:
             state.orchestrator.conversation_history[branch_session_id] = source_snapshot.get("history", [])
 
-        branched_snapshot = state.memory.snapshot_session(
+        branched_snapshot = await state.memory.snapshot_session(
             session_id=branch_session_id,
             history=source_snapshot.get("history", []),
             label=params.get("label", f"branch from {source_snapshot_id}"),
@@ -301,7 +301,7 @@ def register_core_methods(registry: MethodRegistry, state):
         snapshot_id = params.get("snapshot_id", "")
         if not snapshot_id:
             raise GatewayError("INVALID_PARAMS", "snapshot_id is required")
-        snapshot = state.memory.get_snapshot(snapshot_id)
+        snapshot = await state.memory.get_snapshot(snapshot_id)
         if not snapshot:
             raise GatewayError("NOT_FOUND", f"Snapshot not found: {snapshot_id}")
 
@@ -314,7 +314,7 @@ def register_core_methods(registry: MethodRegistry, state):
         if state.orchestrator:
             state.orchestrator.conversation_history[target_session_id] = snapshot.get("history", [])
 
-        restore_snapshot = state.memory.snapshot_session(
+        restore_snapshot = await state.memory.snapshot_session(
             session_id=target_session_id,
             history=snapshot.get("history", []),
             label=params.get("label", f"restore {snapshot_id}"),

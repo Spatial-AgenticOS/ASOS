@@ -58,25 +58,26 @@ class _FakeBackend:
     def __init__(self, dim: int = 384) -> None:
         self.dim = dim
         self.indexed = True
-        self.count = 0
         self.upserts: list[tuple[str, np.ndarray]] = []
         self.deletes: list[str] = []
 
-    def upsert(self, chunk_id: str, embedding: np.ndarray) -> None:
+    async def upsert(self, chunk_id: str, embedding: np.ndarray) -> None:
         self.upserts.append((chunk_id, np.asarray(embedding)))
-        self.count = len(self.upserts)
 
-    def upsert_batch(self, items: Iterable[tuple[str, np.ndarray]]) -> None:
+    async def upsert_batch(self, items: Iterable[tuple[str, np.ndarray]]) -> None:
         for chunk_id, vec in items:
-            self.upsert(chunk_id, vec)
+            await self.upsert(chunk_id, vec)
 
-    def delete(self, chunk_id: str) -> None:
+    async def delete(self, chunk_id: str) -> None:
         self.deletes.append(chunk_id)
 
-    def search(self, query_vec: np.ndarray, limit: int = 20):
+    async def count(self) -> int:
+        return len(self.upserts)
+
+    async def search(self, query_vec: np.ndarray, limit: int = 20):
         return [(cid, 0.0) for cid, _ in self.upserts[:limit]]
 
-    def search_cosine(self, query_vec: np.ndarray, limit: int = 20):
+    async def search_cosine(self, query_vec: np.ndarray, limit: int = 20):
         return [(cid, 1.0) for cid, _ in self.upserts[:limit]]
 
     def close(self) -> None:
@@ -169,7 +170,7 @@ def test_load_vector_index_qdrant_missing_raises_import_error_with_extras_hint(m
 # ─────────────────────────────────────────────
 
 
-def test_memory_store_uses_injected_backend(tmp_path):
+async def test_memory_store_uses_injected_backend(tmp_path):
     db = tmp_path / "mem.db"
     fake = _FakeBackend(dim=384)
     store = MemoryStore(db_path=str(db), vec_index=fake)
@@ -177,14 +178,14 @@ def test_memory_store_uses_injected_backend(tmp_path):
     assert store._backend_id == "fake"
     # ``MemoryStore`` reads vector-index health from the injected
     # backend's Protocol surface — not from a hardcoded VectorIndex.
-    stats = store.stats()
+    stats = await store.stats()
     assert stats["vec_index_count"] == 0
     # Drive a vector through MemoryStore's underlying surface and prove
     # the injected backend (not the legacy VectorIndex) saw the upsert.
     vec = np.ones(384, dtype=np.float32)
-    store._vec_index.upsert("chunk-id-1", vec)
+    await store._vec_index.upsert("chunk-id-1", vec)
     assert fake.upserts and fake.upserts[0][0] == "chunk-id-1"
-    assert store.stats()["vec_index_count"] == 1
+    assert (await store.stats())["vec_index_count"] == 1
 
 
 def test_memory_store_defaults_to_sqlite_vec_adapter(tmp_path):

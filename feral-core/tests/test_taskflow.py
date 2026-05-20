@@ -50,7 +50,7 @@ async def test_taskflow_runs_steps_and_completes(runtime):
 
     assert latest is not None
     assert latest["status"] == "completed"
-    notes = store.search("taskflow wrote this note", limit=5)
+    notes = await store.search("taskflow wrote this note", limit=5)
     assert len(notes) >= 1
 
 

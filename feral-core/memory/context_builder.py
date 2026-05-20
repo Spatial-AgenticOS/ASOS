@@ -1,3 +1,11 @@
+"""Context builder helpers — async-native since v2026.5.33 (Option C).
+
+The legacy sync ``build_context_for_llm`` was removed in v2026.5.33;
+the only entry point is :func:`build_context_for_llm_async`. The
+``MemoryStore.build_context_for_llm`` and
+``MemoryStore.build_context_for_llm_async`` wrappers both route here.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -5,9 +13,6 @@ import re
 
 logger = logging.getLogger("feral.memory")
 
-# Common stopwords we strip so a query like "where is my wallet" still
-# matches a "wallet" triple / episode. Small, Latin-only — good enough for
-# the FTS fallbacks.
 _STOPWORDS = frozenset({
     "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
     "do", "does", "did", "have", "has", "had", "my", "your", "his", "her",
@@ -28,7 +33,6 @@ def _fts_query(query: str) -> str:
     """
     if not query:
         return ""
-    # Break on any non-alphanumeric chars, lowercase, strip stopwords.
     tokens = [
         t for t in re.split(r"[^A-Za-z0-9']+", query.lower())
         if t and t not in _STOPWORDS and len(t) > 1
@@ -47,7 +51,11 @@ async def build_context_for_llm_async(
 ) -> str:
     """Async context builder using hybrid search + knowledge graph.
 
-    ``memory_filter``: see the docstring on ``build_context_for_llm``.
+    ``memory_filter``: when a SpecialistAgent is routing the turn, its
+    ``memory_filter`` topic is passed in and we drop episodes / recent
+    actions that don't mention it. Keeps the journaling specialist from
+    leaking into the coding specialist's context, etc. Empty string =
+    pre-memory-filter behaviour (no filtering).
     """
     sections = []
     budget_per_section = max_tokens_budget // 4
@@ -68,10 +76,7 @@ async def build_context_for_llm_async(
         if graph_ctx:
             sections.append(graph_ctx)
         else:
-            # Fall back to the FTS triple store when the KG has no entities
-            # for this query. Keeps ``knowledge_store(subject, predicate, obj)``
-            # rows surfacing per turn instead of silently dropping them.
-            knowledge = store.knowledge_search(fts or query, limit=5)
+            knowledge = await store.knowledge_search(fts or query, limit=5)
             if knowledge:
                 k_lines = [f"- {k['subject']} {k['predicate']} {k['object']}" for k in knowledge]
                 sections.append("## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
@@ -81,18 +86,18 @@ async def build_context_for_llm_async(
             episodes = await store.episode_search_hybrid(fts or query, limit=3)
         except Exception as exc:
             logger.debug("episode_search_hybrid failed, falling back to FTS: %s", exc)
-            episodes = store.episode_search(fts or query, limit=3)
+            episodes = await store.episode_search(fts or query, limit=3)
         if not episodes:
-            episodes = store.episode_search(fts or query, limit=3)
+            episodes = await store.episode_search(fts or query, limit=3)
     else:
-        episodes = store.episode_recent(limit=3, session_id=session_id)
+        episodes = await store.episode_recent(limit=3, session_id=session_id)
     if memory_filter:
         episodes = [e for e in episodes if _topic_match(e, memory_filter)]
     if episodes:
         ep_lines = [f"- [{e['event_type']}] {e['summary']}" for e in episodes]
         sections.append("## Past Events\n" + "\n".join(ep_lines)[:budget_per_section])
 
-    recent_execs = store.log_recent(limit=5)
+    recent_execs = await store.log_recent(limit=5)
     if memory_filter:
         recent_execs = [ex for ex in recent_execs if _topic_match(ex, memory_filter)]
     if recent_execs:
@@ -103,13 +108,7 @@ async def build_context_for_llm_async(
 
 
 def _topic_match(item: dict, topic: str) -> bool:
-    """Case-insensitive substring match across common fields.
-
-    Used to post-filter episodes / execution log entries by a
-    SpecialistAgent.memory_filter topic (e.g. ``"coding"``,
-    ``"journal"``). Intentionally permissive — we want "security_analyst"
-    to see rows tagged ``"security"`` or whose summary contains the word.
-    """
+    """Case-insensitive substring match across common fields."""
     if not topic:
         return True
     needle = topic.lower().strip()
@@ -134,55 +133,6 @@ def _topic_match(item: dict, topic: str) -> bool:
     return False
 
 
-def build_context_for_llm(
-    store,
-    session_id: str,
-    query: str = "",
-    max_tokens_budget: int = 2000,
-    memory_filter: str = "",
-) -> str:
-    """Synchronous context builder (backward compat).
-
-    ``memory_filter``: when a SpecialistAgent is routing the turn, its
-    ``memory_filter`` topic is passed in and we drop episodes / recent
-    actions that don't mention it. Keeps the journaling specialist from
-    leaking into the coding specialist's context, etc. Empty string =
-    pre-memory-filter behaviour (no filtering).
-    """
-    sections = []
-    budget_per_section = max_tokens_budget // 4
-
-    working = store.working_context_string(session_id, limit=8)
-    if working:
-        sections.append(f"## Recent Context\n{working[:budget_per_section]}")
-
-    fts = _fts_query(query)
-    if query:
-        knowledge = store.knowledge_search(fts or query, limit=5)
-        if knowledge:
-            k_lines = [f"- {k['subject']} {k['predicate']} {k['object']}" for k in knowledge]
-            sections.append("## Known Facts\n" + "\n".join(k_lines)[:budget_per_section])
-
-    if query:
-        episodes = store.episode_search(fts or query, limit=3)
-    else:
-        episodes = store.episode_recent(limit=3, session_id=session_id)
-    if memory_filter:
-        episodes = [e for e in episodes if _topic_match(e, memory_filter)]
-    if episodes:
-        ep_lines = [f"- [{e['event_type']}] {e['summary']}" for e in episodes]
-        sections.append("## Past Events\n" + "\n".join(ep_lines)[:budget_per_section])
-
-    recent_execs = store.log_recent(limit=5)
-    if memory_filter:
-        recent_execs = [ex for ex in recent_execs if _topic_match(ex, memory_filter)]
-    if recent_execs:
-        ex_lines = [f"- {ex.get('skill_id', '?')}: {ex.get('result_status', '?')}" for ex in recent_execs]
-        sections.append("## Recent Actions\n" + "\n".join(ex_lines)[:budget_per_section])
-
-    return "\n\n".join(sections) if sections else ""
-
-
 async def compact_session(
     store,
     session_id: str,
@@ -191,10 +141,8 @@ async def compact_session(
     preserve_last_n: int = 3,
     max_summary_chars: int = 16000,
 ) -> dict:
-    """
-    Multi-stage session compaction. Summarizes older messages while
-    preserving the last N turns and identity context.
-    """
+    """Multi-stage session compaction. Summarizes older messages while
+    preserving the last N turns and identity context."""
     if len(history) <= preserve_last_n + 2:
         return {"compacted": False, "reason": "too_short"}
 
@@ -219,7 +167,7 @@ async def compact_session(
             if conversation_text:
                 await store.kg.extract_and_store(conversation_text[:3000], llm)
         except Exception as e:
-            logger.debug(f"KG extraction during compaction failed: {e}")
+            logger.debug("KG extraction during compaction failed: %s", e)
 
     return {
         "compacted": True,
@@ -266,7 +214,7 @@ async def llm_summarize(messages: list[dict], llm, max_chars: int) -> str:
             text, _ = llm.extract_response(response)
             summaries.append(text)
         except Exception as e:
-            logger.warning(f"Summarization chunk failed: {e}")
+            logger.warning("Summarization chunk failed: %s", e)
             summaries.append(chunk[:500])
 
     result = "\n\n".join(summaries)
@@ -291,11 +239,11 @@ async def search_all(store, query: str, limit: int = 10) -> list[dict]:
     for item in episodes:
         results.append({**item, "tier": "episode", "score": item.get("relevance_score", 0)})
 
-    notes = store.search(query, limit=limit)
+    notes = await store.search(query, limit=limit)
     for note in notes:
         results.append({**note, "tier": "note", "score": note.get("relevance_score", 0.3)})
 
-    knowledge = store.knowledge_search(query, limit=limit)
+    knowledge = await store.knowledge_search(query, limit=limit)
     for item in knowledge:
         results.append(
             {

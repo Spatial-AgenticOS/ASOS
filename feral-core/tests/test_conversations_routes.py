@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +15,13 @@ def conversations_client():
     mock = MagicMock()
     mock.orchestrator = MagicMock()
     mock.memory = MagicMock()
+    mock.memory.conversation_get = AsyncMock()
+    mock.memory.conversation_list = AsyncMock()
+    mock.memory.conversation_save = AsyncMock()
+    mock.memory.conversation_delete = AsyncMock()
+    mock.memory.snapshot_session = AsyncMock()
+    mock.memory.list_snapshots = AsyncMock()
+    mock.memory.get_snapshot = AsyncMock()
     with patch("api.state.state", mock), patch("api.routes.conversations.state", mock):
         from api.server import app
         yield TestClient(app, raise_server_exceptions=False), mock

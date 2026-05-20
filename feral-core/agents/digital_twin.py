@@ -224,10 +224,10 @@ class DigitalTwin:
             identity_text = self._identity.load_identity()
             user_name = self._extract_name(identity_text)
 
-            episodes = self._memory.episode_recent(limit=20, session_id=None)
+            episodes = await self._memory.episode_recent(limit=20, session_id=None)
             episode_block = self._format_episodes(episodes)
 
-            kg_context = self._fetch_kg_context(question)
+            kg_context = await self._fetch_kg_context(question)
 
             system_prompt = (
                 f"You are a digital twin of {user_name}. You think, reason, and "
@@ -276,7 +276,7 @@ class DigitalTwin:
     async def predict_preference(self, category: str) -> dict:
         """Predict user preference in a given category from memory evidence."""
         try:
-            results = self._memory.search(category, limit=15)
+            results = await self._memory.search(category, limit=15)
 
             if not results:
                 return {
@@ -331,7 +331,7 @@ class DigitalTwin:
             identity_text = self._identity.load_identity()
             user_name = self._extract_name(identity_text)
 
-            today_episodes = self._memory.episode_recent(limit=30, session_id=None)
+            today_episodes = await self._memory.episode_recent(limit=30, session_id=None)
             today_block = self._format_episodes(today_episodes)
 
             if not today_block:
@@ -389,9 +389,9 @@ class DigitalTwin:
                 lines.append(f"[{when}] {summary[:300]}")
         return "\n".join(lines)
 
-    def _fetch_kg_context(self, question: str) -> str:
+    async def _fetch_kg_context(self, question: str) -> str:
         try:
-            results = self._memory.knowledge_search(question, limit=10)
+            results = await self._memory.knowledge_search(question, limit=10)
             if not results:
                 return ""
             lines = []

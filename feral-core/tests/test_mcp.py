@@ -40,8 +40,8 @@ class TestMCPServer:
         assert "feral://perception" in uris
         assert "feral://device/feral-glasses" in uris
 
-    def test_resources_read_devices(self):
-        result = self.server.handle_resources_read("feral://devices")
+    async def test_resources_read_devices(self):
+        result = await self.server.handle_resources_read("feral://devices")
         contents = result["contents"][0]["text"]
         data = json.loads(contents)
         assert len(data) == 1

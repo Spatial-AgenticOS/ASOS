@@ -133,7 +133,7 @@ async def set_memory_backend(body: dict):
 
 # ── Knowledge Graph ──
 
-def _knowledge_graph_d3(limit: int) -> dict:
+async def _knowledge_graph_d3(limit: int) -> dict:
     """Build D3-style {nodes, links} from the entity graph and legacy triples."""
     memory = state.memory
     nodes: dict[str, dict] = {}
@@ -141,21 +141,24 @@ def _knowledge_graph_d3(limit: int) -> dict:
 
     kg = getattr(memory, "kg", None)
     if kg:
-        conn = kg._conn()
-        rows = conn.execute(
-            """
-            SELECT r.id AS rid, r.relation_type,
-                   s.id AS sid, s.name AS sname, s.entity_type AS stype,
-                   t.id AS tid, t.name AS tname, t.entity_type AS ttype
-            FROM relations r
-            JOIN entities s ON r.source_id = s.id
-            JOIN entities t ON r.target_id = t.id
-            ORDER BY r.updated_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-        conn.close()
+        conn = await kg._conn()
+        try:
+            async with conn.execute(
+                """
+                SELECT r.id AS rid, r.relation_type,
+                       s.id AS sid, s.name AS sname, s.entity_type AS stype,
+                       t.id AS tid, t.name AS tname, t.entity_type AS ttype
+                FROM relations r
+                JOIN entities s ON r.source_id = s.id
+                JOIN entities t ON r.target_id = t.id
+                ORDER BY r.updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ) as cur:
+                rows = await cur.fetchall()
+        finally:
+            await conn.close()
         for r in rows:
             sid, tid = r["sid"], r["tid"]
             if sid not in nodes:
@@ -180,7 +183,7 @@ def _knowledge_graph_d3(limit: int) -> dict:
             )
 
     if not links:
-        triples = memory.knowledge_query(limit=limit)
+        triples = await memory.knowledge_query(limit=limit)
         seen: dict[str, str] = {}
         nxt = 0
 
@@ -214,7 +217,7 @@ def _knowledge_graph_d3(limit: int) -> dict:
 async def get_knowledge_graph(limit: int = 50):
     """Return a D3-compatible graph: ``{ nodes, links }``."""
     try:
-        return _knowledge_graph_d3(limit=max(1, min(limit, 500)))
+        return await _knowledge_graph_d3(limit=max(1, min(limit, 500)))
     except Exception as e:
         return {"nodes": [], "links": [], "error": str(e)}
 
@@ -229,17 +232,20 @@ async def search_knowledge_entities(q: str = "", limit: int = 20):
             entities = await kg.search_entities(q.strip(), limit=lim)
             return {"entities": entities, "source": "graph"}
         if kg and not q.strip():
-            conn = kg._conn()
-            rows = conn.execute(
-                """
-                SELECT id, name, entity_type AS type, mention_count AS mentions
-                FROM entities
-                ORDER BY mention_count DESC, updated_at DESC
-                LIMIT ?
-                """,
-                (lim,),
-            ).fetchall()
-            conn.close()
+            conn = await kg._conn()
+            try:
+                async with conn.execute(
+                    """
+                    SELECT id, name, entity_type AS type, mention_count AS mentions
+                    FROM entities
+                    ORDER BY mention_count DESC, updated_at DESC
+                    LIMIT ?
+                    """,
+                    (lim,),
+                ) as cur:
+                    rows = await cur.fetchall()
+            finally:
+                await conn.close()
             return {
                 "entities": [
                     {
@@ -256,9 +262,9 @@ async def search_knowledge_entities(q: str = "", limit: int = 20):
         return {"entities": [], "error": str(e), "source": "graph"}
 
     rows = (
-        state.memory.knowledge_search(q.strip(), limit=lim)
+        await state.memory.knowledge_search(q.strip(), limit=lim)
         if q.strip()
-        else state.memory.knowledge_query(limit=lim)
+        else await state.memory.knowledge_query(limit=lim)
     )
     out = []
     for r in rows:
@@ -284,24 +290,24 @@ async def memory_save(body: dict):
     importance = body.get("importance", "normal")
     if not content:
         return {"error": "content is required"}
-    return state.memory.save(content=content, tags=tags, importance=importance)
+    return await state.memory.save(content=content, tags=tags, importance=importance)
 
 
 @router.get("/internal/memory/search")
 async def memory_search(query: str = "", limit: int = 10):
     if not query:
         return []
-    return state.memory.search(query=query, limit=limit)
+    return await state.memory.search(query=query, limit=limit)
 
 
 @router.get("/internal/memory/recent")
 async def memory_recent(limit: int = 10):
-    return state.memory.list_recent(limit=limit)
+    return await state.memory.list_recent(limit=limit)
 
 
 @router.delete("/internal/memory/{note_id}")
 async def memory_delete(note_id: str):
-    return {"deleted": state.memory.delete(note_id)}
+    return {"deleted": await state.memory.delete(note_id)}
 
 
 @router.get("/internal/memory/stats")
@@ -312,7 +318,7 @@ async def memory_stats():
     operators can detect ``degraded_semantic_search`` (no sqlite-vec)
     and missing embedding providers without grepping logs.
     """
-    base = state.memory.stats() if state.memory else {}
+    base = (await state.memory.stats()) if state.memory else {}
     if not isinstance(base, dict):
         base = {"raw": base}
 
@@ -346,17 +352,17 @@ async def knowledge_store(body: dict):
     obj = body.get("object", "")
     if not all([subject, predicate, obj]):
         return {"error": "subject, predicate, and object are required"}
-    return state.memory.knowledge_store(subject=subject, predicate=predicate, obj=obj)
+    return await state.memory.knowledge_store(subject=subject, predicate=predicate, obj=obj)
 
 
 @router.get("/internal/knowledge/query")
 async def knowledge_query(subject: str = "", predicate: str = "", limit: int = 20):
-    return state.memory.knowledge_query(subject=subject, predicate=predicate, limit=limit)
+    return await state.memory.knowledge_query(subject=subject, predicate=predicate, limit=limit)
 
 
 @router.get("/internal/knowledge/about/{entity}")
 async def knowledge_about(entity: str, limit: int = 20):
-    return state.memory.knowledge_about(entity, limit=limit)
+    return await state.memory.knowledge_about(entity, limit=limit)
 
 
 @router.get("/api/knowledge/relationship")
@@ -403,12 +409,12 @@ async def knowledge_visualize(entity: str = "", depth: int = 2, limit: int = 50)
 
 @router.get("/internal/episodes/recent")
 async def episodes_recent(limit: int = 10, session_id: str = ""):
-    return state.memory.episode_recent(limit=limit, session_id=session_id or None)
+    return await state.memory.episode_recent(limit=limit, session_id=session_id or None)
 
 
 @router.get("/internal/execution-log")
 async def execution_log(skill_id: str = "", limit: int = 20):
-    return state.memory.log_recent(skill_id=skill_id, limit=limit)
+    return await state.memory.log_recent(skill_id=skill_id, limit=limit)
 
 
 # ── Wiki ──
@@ -417,7 +423,7 @@ async def execution_log(skill_id: str = "", limit: int = 20):
 async def wiki_compile(body: dict | None = None):
     """Compile notes/episodes/knowledge into durable wiki pages."""
     payload = body or {}
-    return state.memory.wiki_compile(
+    return await state.memory.wiki_compile(
         notes_limit=int(payload.get("notes_limit", 200)),
         episodes_limit=int(payload.get("episodes_limit", 200)),
         knowledge_limit=int(payload.get("knowledge_limit", 400)),
@@ -426,13 +432,13 @@ async def wiki_compile(body: dict | None = None):
 
 @router.get("/api/wiki/pages")
 async def wiki_pages(q: str = "", kind: str = "", limit: int = 50):
-    pages = state.memory.wiki_list_pages(query=q, kind=kind, limit=limit)
+    pages = await state.memory.wiki_list_pages(query=q, kind=kind, limit=limit)
     return {"pages": pages}
 
 
 @router.get("/api/wiki/pages/{page_id}")
 async def wiki_page(page_id: str):
-    page = state.memory.wiki_get_page(page_id)
+    page = await state.memory.wiki_get_page(page_id)
     if not page:
         return {"error": f"Wiki page not found: {page_id}"}
     return page
@@ -440,7 +446,7 @@ async def wiki_page(page_id: str):
 
 @router.get("/api/wiki/stats")
 async def wiki_stats():
-    return state.memory.wiki_stats()
+    return await state.memory.wiki_stats()
 
 
 @router.post("/api/wiki/ingest")
@@ -452,8 +458,8 @@ async def wiki_ingest(body: dict):
     tags = body.get("tags", [])
     importance = body.get("importance", "normal")
     compile_after = bool(body.get("compile_after", True))
-    note = state.memory.save(content=content, tags=tags, importance=importance, source="wiki_ingest")
-    compile_result = state.memory.wiki_compile() if compile_after else {"compiled": False}
+    note = await state.memory.save(content=content, tags=tags, importance=importance, source="wiki_ingest")
+    compile_result = (await state.memory.wiki_compile()) if compile_after else {"compiled": False}
     return {"note": note, "compile": compile_result}
 
 
@@ -463,7 +469,7 @@ async def wiki_ingest_text(body: dict):
         return {"error": "Memory store not initialized"}
     ingestor = MemoryIngestor(state.memory)
     try:
-        return ingestor.ingest_text(
+        return await ingestor.ingest_text(
             content=(body or {}).get("content", ""),
             source_label=(body or {}).get("source_label", "ui"),
             compile_after=bool((body or {}).get("compile_after", True)),
@@ -551,7 +557,7 @@ async def wiki_ingest_pdf(
 
     ingestor = MemoryIngestor(state.memory)
     try:
-        return ingestor.ingest_pdf(
+        return await ingestor.ingest_pdf(
             path=chosen_path,
             compile_after=bool(compile_after),
         )
@@ -573,7 +579,7 @@ async def wiki_ingest_repo(body: dict):
 
     ingestor = MemoryIngestor(state.memory)
     try:
-        return ingestor.ingest_repo(
+        return await ingestor.ingest_repo(
             path=(body or {}).get("path", ""),
             extensions_filter=ext_list or None,
             compile_after=bool((body or {}).get("compile_after", True)),

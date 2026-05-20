@@ -51,7 +51,7 @@ def _restart_b(tmpdir: str) -> SyncEngine:
 class TestKillBrainMidApply:
     """Kill peer B at byte 50% of the WS chunk; restart; verify convergence."""
 
-    def test_resyncs_with_no_duplicates_and_hlc_monotonic(self):
+    async def test_resyncs_with_no_duplicates_and_hlc_monotonic(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             engine_a, engine_b = _make_pair(tmpdir)
 
@@ -114,7 +114,7 @@ class TestKillBrainMidApply:
             # 2) Materialized episodes table on B has all 100 entries.
             #    (apply_remote_changes already routed inserts via
             #    _apply_to_memory.)
-            recent = engine_b._memory.episode_recent(limit=200, session_id="sess-recovery")
+            recent = await engine_b._memory.episode_recent(limit=200, session_id="sess-recovery")
             assert len(recent) == 100, (
                 f"expected 100 episodes materialized, got {len(recent)}"
             )

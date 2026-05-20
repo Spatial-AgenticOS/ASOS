@@ -188,15 +188,21 @@ def _make_ws_mock_state() -> MagicMock:
 
     s.activity_log = deque()
 
-    s.memory.stats.return_value = {"notes": 0, "episodes": 0, "knowledge_triples": 0}
-    s.memory.list_recent.return_value = []
-    s.memory.search.return_value = []
-    s.memory.save.return_value = {"id": "n1", "content": "x"}
-    s.memory.knowledge_query.return_value = []
-    s.memory.wiki_list_pages.return_value = []
-    s.memory.wiki_stats.return_value = {"pages": 0}
-    s.memory.episode_recent.return_value = []
-    s.memory.log_recent.return_value = []
+    s.memory.stats = AsyncMock(return_value={"notes": 0, "episodes": 0, "knowledge_triples": 0})
+    s.memory.list_recent = AsyncMock(return_value=[])
+    s.memory.search = AsyncMock(return_value=[])
+    s.memory.save = AsyncMock(return_value={"id": "n1", "content": "x"})
+    s.memory.delete = AsyncMock(return_value=True)
+    s.memory.knowledge_query = AsyncMock(return_value=[])
+    s.memory.knowledge_search = AsyncMock(return_value=[])
+    s.memory.knowledge_store = AsyncMock(return_value={"id": "k1"})
+    s.memory.knowledge_about = AsyncMock(return_value=[])
+    s.memory.wiki_list_pages = AsyncMock(return_value=[])
+    s.memory.wiki_stats = AsyncMock(return_value={"pages": 0})
+    s.memory.wiki_get_page = AsyncMock(return_value=None)
+    s.memory.wiki_compile = AsyncMock(return_value={"compiled": True})
+    s.memory.episode_recent = AsyncMock(return_value=[])
+    s.memory.log_recent = AsyncMock(return_value=[])
 
     s.baseline_engine = MagicMock()
     s.baseline_engine.summary.return_value = {"metrics_tracked": 0, "recent_alerts": 0, "categories": []}

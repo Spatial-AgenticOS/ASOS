@@ -579,7 +579,7 @@ class RealtimeProxy:
         language_hint: str = "",
     ) -> RealtimeSession:
         """Create and connect a new realtime session for a phone/glasses node."""
-        system_prompt = self._build_system_prompt(session_id)
+        system_prompt = await self._build_system_prompt(session_id)
         tools = self._get_tools()
 
         rs = RealtimeSession(
@@ -664,7 +664,7 @@ class RealtimeProxy:
         for sid in list(self._sessions):
             await self.stop_session(sid)
 
-    def _build_system_prompt(self, session_id: str) -> str:
+    async def _build_system_prompt(self, session_id: str) -> str:
         user_name = ""
         recent_context = ""
         if self._memory:
@@ -716,7 +716,7 @@ class RealtimeProxy:
                 parts.append(f"\n[Current Environment]\n{ctx}")
 
         if self._memory:
-            mem_ctx = self._memory.build_context_for_llm(session_id, max_tokens_budget=500)
+            mem_ctx = await self._memory.build_context_for_llm(session_id, max_tokens_budget=500)
             if mem_ctx:
                 parts.append(f"\n[Memory Context]\n{mem_ctx}")
 
@@ -828,7 +828,7 @@ class RealtimeProxy:
                 role = "user" if text.startswith("[user] ") else "assistant"
                 clean = text[len("[user] "):] if text.startswith("[user] ") else text
                 if hasattr(self._memory, "conversation_append"):
-                    self._memory.conversation_append(
+                    await self._memory.conversation_append(
                         conv_id, role, clean,
                         source="voice_realtime_openai",
                         title=f"Voice session {session_id[:8]}",

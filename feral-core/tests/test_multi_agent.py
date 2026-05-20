@@ -350,7 +350,7 @@ async def test_agent_worker_run_with_memory_and_perception_mock():
     perception.get_frame = MagicMock(return_value=frame)
 
     memory = MagicMock()
-    memory.build_context_for_llm = MagicMock(return_value="mem: x")
+    memory.build_context_for_llm = AsyncMock(return_value="mem: x")
 
     w = AgentWorker(
         "gen",

@@ -17,9 +17,9 @@ def store():
 
 
 class TestMemoryIngestor:
-    def test_ingest_text_saves_chunks(self, store):
+    async def test_ingest_text_saves_chunks(self, store):
         ingestor = MemoryIngestor(store)
-        result = ingestor.ingest_text(
+        result = await ingestor.ingest_text(
             content="hello world " * 300,
             source_label="unit_test",
             compile_after=False,
@@ -28,7 +28,7 @@ class TestMemoryIngestor:
         assert result["notes_saved"] >= 1
         assert result["source"] == "text"
 
-    def test_ingest_repo_reads_text_files(self, store, tmp_path):
+    async def test_ingest_repo_reads_text_files(self, store, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         (repo / "README.md").write_text("# Repo\nThis is a test repo.")
@@ -36,7 +36,7 @@ class TestMemoryIngestor:
         (repo / "binary.bin").write_bytes(b"\x00\x01\x02\x03")
 
         ingestor = MemoryIngestor(store)
-        result = ingestor.ingest_repo(path=str(repo), compile_after=True, max_files=20)
+        result = await ingestor.ingest_repo(path=str(repo), compile_after=True, max_files=20)
         assert result["ok"] is True
         assert result["source"] == "repo"
         assert result["files_processed"] >= 2

@@ -61,6 +61,7 @@ import struct
 import time
 from typing import Any, Optional
 
+import aiosqlite
 import numpy as np
 
 logger = logging.getLogger("feral.memory.embeddings")
@@ -477,17 +478,19 @@ class EmbedQueue:
 
         blob = vec_to_blob(vec) if vec is not None else None
         try:
-            conn = sqlite3.connect(item["db_path"])
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute(
-                """INSERT OR REPLACE INTO memory_chunks
-                   (id, source_table, source_id, chunk_index, text_content, embedding, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (item["chunk_id"], item["source_table"], item["source_id"],
-                 item["chunk_index"], item["text"][:2000], blob, time.time()),
-            )
-            conn.commit()
-            conn.close()
+            conn = await aiosqlite.connect(item["db_path"])
+            try:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                await conn.execute(
+                    """INSERT OR REPLACE INTO memory_chunks
+                       (id, source_table, source_id, chunk_index, text_content, embedding, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (item["chunk_id"], item["source_table"], item["source_id"],
+                     item["chunk_index"], item["text"][:2000], blob, time.time()),
+                )
+                await conn.commit()
+            finally:
+                await conn.close()
         except Exception as exc:
             self._stats["failed"] += 1
             should_log, suppressed = self._log_throttle.should_log("persist_fail")
@@ -502,7 +505,10 @@ class EmbedQueue:
         if vec is not None:
             self._stats["succeeded"] += 1
             if self._vector_index:
-                self._vector_index.upsert(item["chunk_id"], vec)
+                try:
+                    await self._vector_index.upsert(item["chunk_id"], vec)
+                except Exception as exc:
+                    logger.debug("vector_index upsert failed silently: %s", exc)
             return
 
         if skipped:

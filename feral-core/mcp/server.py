@@ -316,7 +316,7 @@ class FeralMCPServer:
             elif name == "feral_execute_action":
                 return await self._call_execute_action(arguments)
             elif name == "feral_memory_query":
-                return self._call_memory_query(arguments)
+                return await self._call_memory_query(arguments)
             elif name == "feral_perception_snapshot":
                 return self._call_perception_snapshot()
             elif name == "feral_find_devices_by_capability":
@@ -429,7 +429,7 @@ class FeralMCPServer:
     # MCP Protocol: resources/read
     # ─────────────────────────────────────────
 
-    def handle_resources_read(self, uri: str) -> dict:
+    async def handle_resources_read(self, uri: str) -> dict:
         if uri == "feral://devices":
             devices = self._devices.list_devices() if self._devices else []
             content = json.dumps([d.model_dump() for d in devices], indent=2)
@@ -441,7 +441,7 @@ class FeralMCPServer:
             return {"contents": [{"uri": uri, "mimeType": "application/json", "text": content}]}
 
         elif uri == "feral://memory/stats":
-            stats = self._memory.stats() if self._memory else {}
+            stats = (await self._memory.stats()) if self._memory else {}
             return {"contents": [{"uri": uri, "mimeType": "application/json", "text": json.dumps(stats, indent=2)}]}
 
         elif uri.startswith("feral://device/"):
@@ -500,7 +500,7 @@ class FeralMCPServer:
             elif method == "resources/list":
                 result = self.handle_resources_list()
             elif method == "resources/read":
-                result = self.handle_resources_read(params.get("uri", ""))
+                result = await self.handle_resources_read(params.get("uri", ""))
             elif method == "prompts/list":
                 result = self.handle_prompts_list()
             elif method == "ping":
@@ -637,17 +637,17 @@ class FeralMCPServer:
         result = await self._devices.execute_action(action)
         return {"content": [{"type": "text", "text": json.dumps(result.model_dump(), indent=2)}]}
 
-    def _call_memory_query(self, args: dict) -> dict:
+    async def _call_memory_query(self, args: dict) -> dict:
         query = args.get("query", "")
         tier = args.get("memory_tier", "all")
         if not self._memory:
             return {"content": [{"type": "text", "text": "Memory not available."}]}
         results = []
         if tier in ("notes", "all"):
-            notes = self._memory.search_notes(query) if hasattr(self._memory, "search_notes") else []
+            notes = (await self._memory.search_notes(query)) if hasattr(self._memory, "search_notes") else []
             results.extend([{"tier": "notes", "content": n} for n in notes[:10]])
         if tier in ("knowledge", "all"):
-            triples = self._memory.knowledge_search(query) if hasattr(self._memory, "knowledge_search") else []
+            triples = (await self._memory.knowledge_search(query)) if hasattr(self._memory, "knowledge_search") else []
             results.extend([{"tier": "knowledge", "content": t} for t in triples[:10]])
         return {"content": [{"type": "text", "text": json.dumps(results, indent=2, default=str)}]}
 

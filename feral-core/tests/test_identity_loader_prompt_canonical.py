@@ -15,8 +15,8 @@ def _loader() -> IdentityLoader:
     return loader
 
 
-def test_system_prompt_uses_canonical_computer_use_file_path() -> None:
-    prompt = _loader().build_system_prompt(
+async def test_system_prompt_uses_canonical_computer_use_file_path() -> None:
+    prompt = await _loader().build_system_prompt(
         _Frame(),
         [],
         session_id="sess-test",

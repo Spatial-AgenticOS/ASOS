@@ -8,8 +8,6 @@ episodes / recent actions. Tests here pin the new behaviour.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
 
@@ -27,16 +25,19 @@ class _FakeStore:
     def working_context_string(self, session_id, limit=8):
         return ""
 
-    def knowledge_search(self, query, limit=5):
+    async def knowledge_search(self, query, limit=5):
         return []
 
-    def episode_search(self, query, limit=3):
+    async def episode_search(self, query, limit=3):
         return self._episodes
 
-    def episode_recent(self, limit=3, session_id=None):
+    async def episode_search_hybrid(self, query, limit=3):
         return self._episodes
 
-    def log_recent(self, limit=5):
+    async def episode_recent(self, limit=3, session_id=None):
+        return self._episodes
+
+    async def log_recent(self, limit=5):
         return self._execs
 
 
@@ -52,9 +53,9 @@ def test_topic_match_matches_across_fields():
     assert _topic_match({"summary": "anything"}, "")
 
 
-def test_memory_filter_drops_out_of_scope_episodes():
+async def test_memory_filter_drops_out_of_scope_episodes():
     """A 'coding' memory_filter must drop 'journal' episodes."""
-    from memory.context_builder import build_context_for_llm
+    from memory.context_builder import build_context_for_llm_async
 
     store = _FakeStore(
         episodes=[
@@ -66,16 +67,16 @@ def test_memory_filter_drops_out_of_scope_episodes():
             {"skill_id": "journal", "result_status": "ok"},
         ],
     )
-    text = build_context_for_llm(store, session_id="s1", memory_filter="coding")
+    text = await build_context_for_llm_async(store, session_id="s1", memory_filter="coding")
     assert "Fixed a bug in parser" in text
     assert "Felt anxious" not in text
     assert "coding_tools" in text
     assert "journal" not in text
 
 
-def test_memory_filter_empty_means_no_filter():
+async def test_memory_filter_empty_means_no_filter():
     """Default/empty memory_filter preserves legacy behaviour."""
-    from memory.context_builder import build_context_for_llm
+    from memory.context_builder import build_context_for_llm_async
 
     store = _FakeStore(
         episodes=[
@@ -84,11 +85,11 @@ def test_memory_filter_empty_means_no_filter():
         ],
         execs=[{"skill_id": "x", "result_status": "ok"}],
     )
-    text = build_context_for_llm(store, session_id="s1")  # no memory_filter kwarg
+    text = await build_context_for_llm_async(store, session_id="s1")  # no memory_filter kwarg
     assert "a" in text and "b" in text
 
 
-def test_memory_store_forwards_memory_filter_kwarg():
+async def test_memory_store_forwards_memory_filter_kwarg():
     """The MemoryStore wrapper accepts + forwards the new kwarg."""
     from memory import store as store_mod
 
@@ -96,7 +97,7 @@ def test_memory_store_forwards_memory_filter_kwarg():
 
     captured = {}
 
-    def _fake_builder(store, session_id, query, max_tokens_budget, memory_filter):
+    async def _fake_builder(store, session_id, query, max_tokens_budget, memory_filter):
         captured.update({
             "session_id": session_id,
             "query": query,
@@ -105,13 +106,13 @@ def test_memory_store_forwards_memory_filter_kwarg():
         })
         return "OK"
 
-    # Monkeypatch the builder underneath.
-    original = store_mod.context_build_context_for_llm
-    store_mod.context_build_context_for_llm = _fake_builder
+    # Monkeypatch the async builder underneath.
+    original = store_mod.context_build_context_for_llm_async
+    store_mod.context_build_context_for_llm_async = _fake_builder
     try:
-        out = s.build_context_for_llm("sess", memory_filter="security")
+        out = await s.build_context_for_llm("sess", memory_filter="security")
     finally:
-        store_mod.context_build_context_for_llm = original
+        store_mod.context_build_context_for_llm_async = original
 
     assert out == "OK"
     assert captured["memory_filter"] == "security"

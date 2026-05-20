@@ -1,11 +1,14 @@
+"""Memory Wiki helpers. Async-native since v2026.5.33."""
+
 from __future__ import annotations
 
 import json
 import re
-import sqlite3
 import time
 from pathlib import Path
 from typing import Optional
+
+import aiosqlite
 
 from config.loader import feral_home
 
@@ -15,7 +18,7 @@ def wiki_slug(value: str) -> str:
     return slug or "unknown"
 
 
-def wiki_upsert_page(
+async def wiki_upsert_page(
     store,
     *,
     page_id: str,
@@ -26,10 +29,10 @@ def wiki_upsert_page(
 ) -> dict:
     now = time.time()
     refs = source_refs or []
-    conn = sqlite3.connect(store.db_path)
+    conn = await aiosqlite.connect(store.db_path)
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute(
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute(
             """
             INSERT INTO wiki_pages (id, title, kind, body_markdown, source_refs, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -42,9 +45,9 @@ def wiki_upsert_page(
             """,
             (page_id, title, kind, body_markdown, json.dumps(refs), now, now),
         )
-        conn.commit()
+        await conn.commit()
     finally:
-        conn.close()
+        await conn.close()
     return {
         "id": page_id,
         "title": title,
@@ -54,13 +57,16 @@ def wiki_upsert_page(
     }
 
 
-def wiki_get_page(store, page_id: str) -> Optional[dict]:
-    conn = store._conn()
-    row = conn.execute(
-        "SELECT id, title, kind, body_markdown, source_refs, created_at, updated_at FROM wiki_pages WHERE id = ?",
-        (page_id,),
-    ).fetchone()
-    conn.close()
+async def wiki_get_page(store, page_id: str) -> Optional[dict]:
+    conn = await store._conn()
+    try:
+        async with conn.execute(
+            "SELECT id, title, kind, body_markdown, source_refs, created_at, updated_at FROM wiki_pages WHERE id = ?",
+            (page_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    finally:
+        await conn.close()
     if not row:
         return None
     return {
@@ -74,57 +80,63 @@ def wiki_get_page(store, page_id: str) -> Optional[dict]:
     }
 
 
-def wiki_list_pages(store, *, query: str = "", kind: str = "", limit: int = 50) -> list[dict]:
+async def wiki_list_pages(store, *, query: str = "", kind: str = "", limit: int = 50) -> list[dict]:
     lim = max(1, min(limit, 200))
-    conn = store._conn()
-    rows = []
-    if query.strip():
-        if kind:
-            rows = conn.execute(
+    conn = await store._conn()
+    try:
+        rows = []
+        if query.strip():
+            if kind:
+                async with conn.execute(
+                    """
+                    SELECT w.id, w.title, w.kind, w.source_refs, w.updated_at
+                    FROM wiki_pages_fts f
+                    JOIN wiki_pages w ON f.rowid = w.rowid
+                    WHERE wiki_pages_fts MATCH ? AND w.kind = ?
+                    ORDER BY rank, w.updated_at DESC
+                    LIMIT ?
+                    """,
+                    (query.strip(), kind, lim),
+                ) as cur:
+                    rows = await cur.fetchall()
+            else:
+                async with conn.execute(
+                    """
+                    SELECT w.id, w.title, w.kind, w.source_refs, w.updated_at
+                    FROM wiki_pages_fts f
+                    JOIN wiki_pages w ON f.rowid = w.rowid
+                    WHERE wiki_pages_fts MATCH ?
+                    ORDER BY rank, w.updated_at DESC
+                    LIMIT ?
+                    """,
+                    (query.strip(), lim),
+                ) as cur:
+                    rows = await cur.fetchall()
+        elif kind:
+            async with conn.execute(
                 """
-                SELECT w.id, w.title, w.kind, w.source_refs, w.updated_at
-                FROM wiki_pages_fts f
-                JOIN wiki_pages w ON f.rowid = w.rowid
-                WHERE wiki_pages_fts MATCH ? AND w.kind = ?
-                ORDER BY rank, w.updated_at DESC
+                SELECT id, title, kind, source_refs, updated_at
+                FROM wiki_pages
+                WHERE kind = ?
+                ORDER BY updated_at DESC
                 LIMIT ?
                 """,
-                (query.strip(), kind, lim),
-            ).fetchall()
+                (kind, lim),
+            ) as cur:
+                rows = await cur.fetchall()
         else:
-            rows = conn.execute(
+            async with conn.execute(
                 """
-                SELECT w.id, w.title, w.kind, w.source_refs, w.updated_at
-                FROM wiki_pages_fts f
-                JOIN wiki_pages w ON f.rowid = w.rowid
-                WHERE wiki_pages_fts MATCH ?
-                ORDER BY rank, w.updated_at DESC
+                SELECT id, title, kind, source_refs, updated_at
+                FROM wiki_pages
+                ORDER BY updated_at DESC
                 LIMIT ?
                 """,
-                (query.strip(), lim),
-            ).fetchall()
-    elif kind:
-        rows = conn.execute(
-            """
-            SELECT id, title, kind, source_refs, updated_at
-            FROM wiki_pages
-            WHERE kind = ?
-            ORDER BY updated_at DESC
-            LIMIT ?
-            """,
-            (kind, lim),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """
-            SELECT id, title, kind, source_refs, updated_at
-            FROM wiki_pages
-            ORDER BY updated_at DESC
-            LIMIT ?
-            """,
-            (lim,),
-        ).fetchall()
-    conn.close()
+                (lim,),
+            ) as cur:
+                rows = await cur.fetchall()
+    finally:
+        await conn.close()
     return [
         {
             "id": row["id"],
@@ -137,55 +149,64 @@ def wiki_list_pages(store, *, query: str = "", kind: str = "", limit: int = 50) 
     ]
 
 
-def wiki_stats(store) -> dict:
-    conn = store._conn()
-    total = conn.execute("SELECT COUNT(*) FROM wiki_pages").fetchone()[0]
-    kinds = conn.execute(
-        "SELECT kind, COUNT(*) AS count FROM wiki_pages GROUP BY kind ORDER BY count DESC"
-    ).fetchall()
-    conn.close()
+async def wiki_stats(store) -> dict:
+    conn = await store._conn()
+    try:
+        async with conn.execute("SELECT COUNT(*) FROM wiki_pages") as cur:
+            total = (await cur.fetchone())[0]
+        async with conn.execute(
+            "SELECT kind, COUNT(*) AS count FROM wiki_pages GROUP BY kind ORDER BY count DESC"
+        ) as cur:
+            kinds = await cur.fetchall()
+    finally:
+        await conn.close()
     return {
         "pages": total,
         "kinds": [{"kind": row["kind"], "count": row["count"]} for row in kinds],
     }
 
 
-def wiki_compile(
+async def wiki_compile(
     store,
     *,
     notes_limit: int = 200,
     episodes_limit: int = 200,
     knowledge_limit: int = 400,
 ) -> dict:
-    conn = store._conn()
-    notes = conn.execute(
-        """
-        SELECT id, content, tags, importance, source, created_at, updated_at
-        FROM notes
-        ORDER BY updated_at DESC
-        LIMIT ?
-        """,
-        (max(1, notes_limit),),
-    ).fetchall()
-    episodes = conn.execute(
-        """
-        SELECT id, session_id, event_type, summary, detail, created_at
-        FROM episodes
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        (max(1, episodes_limit),),
-    ).fetchall()
-    triples = conn.execute(
-        """
-        SELECT id, subject, predicate, object, confidence, source, updated_at
-        FROM knowledge
-        ORDER BY updated_at DESC
-        LIMIT ?
-        """,
-        (max(1, knowledge_limit),),
-    ).fetchall()
-    conn.close()
+    conn = await store._conn()
+    try:
+        async with conn.execute(
+            """
+            SELECT id, content, tags, importance, source, created_at, updated_at
+            FROM notes
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (max(1, notes_limit),),
+        ) as cur:
+            notes = await cur.fetchall()
+        async with conn.execute(
+            """
+            SELECT id, session_id, event_type, summary, detail, created_at
+            FROM episodes
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (max(1, episodes_limit),),
+        ) as cur:
+            episodes = await cur.fetchall()
+        async with conn.execute(
+            """
+            SELECT id, subject, predicate, object, confidence, source, updated_at
+            FROM knowledge
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (max(1, knowledge_limit),),
+        ) as cur:
+            triples = await cur.fetchall()
+    finally:
+        await conn.close()
 
     note_pages = 0
     for row in notes:
@@ -200,7 +221,7 @@ def wiki_compile(
             f"- Tags: {', '.join(tags) if tags else 'none'}\n"
             f"- Updated: {row['updated_at']}\n"
         )
-        wiki_upsert_page(
+        await wiki_upsert_page(
             store,
             page_id=f"note.{row['id']}",
             title=title,
@@ -223,7 +244,7 @@ def wiki_compile(
             f"- Session: {row['session_id']}\n"
             f"- Created: {row['created_at']}\n"
         )
-        wiki_upsert_page(
+        await wiki_upsert_page(
             store,
             page_id=f"episode.{row['id']}",
             title=title,
@@ -273,7 +294,7 @@ def wiki_compile(
             }
             for item in items
         ]
-        wiki_upsert_page(
+        await wiki_upsert_page(
             store,
             page_id=page_id,
             title=title,
@@ -287,7 +308,7 @@ def wiki_compile(
     memory_md = feral_home() / "MEMORY.md"
     if memory_md.exists():
         memory_text = Path(memory_md).read_text(encoding="utf-8", errors="replace")
-        wiki_upsert_page(
+        await wiki_upsert_page(
             store,
             page_id="identity.memory",
             title="Identity Memory",
@@ -313,7 +334,7 @@ def wiki_compile(
         "- Fetch full page content from `/api/wiki/pages/{page_id}`.",
         "- Recompile after new memory writes using `/api/wiki/compile`.",
     ]
-    wiki_upsert_page(
+    await wiki_upsert_page(
         store,
         page_id="index",
         title="Wiki Index",
@@ -322,7 +343,7 @@ def wiki_compile(
         source_refs=[],
     )
 
-    stats = wiki_stats(store)
+    stats = await wiki_stats(store)
     return {
         "compiled": True,
         "notes_pages": note_pages,

@@ -125,7 +125,7 @@ class Learner:
                 predicate = triple.get("predicate", "").strip()
                 obj = triple.get("object", "").strip()
                 if subject and predicate and obj:
-                    self.memory.knowledge_store(
+                    await self.memory.knowledge_store(
                         subject=subject,
                         predicate=predicate,
                         obj=obj,
@@ -162,7 +162,7 @@ class Learner:
             return
 
         if not self.llm.available:
-            self.memory.episode_save(
+            await self.memory.episode_save(
                 session_id=session_id,
                 event_type="session_summary",
                 summary=f"Session with {len(recent)} messages (no LLM available for summarization)",
@@ -181,7 +181,7 @@ class Learner:
             )
             summary, _ = self.llm.extract_response(response)
             if summary and len(summary) > 10:
-                self.memory.episode_save(
+                await self.memory.episode_save(
                     session_id=session_id,
                     event_type="session_summary",
                     summary=summary.strip()[:500],
@@ -193,13 +193,13 @@ class Learner:
         except Exception as e:
             logger.warning(f"Session summarization failed: {e}")
 
-    def get_skill_reliability(self, skill_id: str) -> dict:
+    async def get_skill_reliability(self, skill_id: str) -> dict:
         """
         Query the execution log for a skill's reliability metrics.
         Returns success rate, avg latency, and a routing recommendation.
         """
-        rate = self.memory.log_success_rate(skill_id)
-        recent = self.memory.log_recent(skill_id=skill_id, limit=10)
+        rate = await self.memory.log_success_rate(skill_id)
+        recent = await self.memory.log_recent(skill_id=skill_id, limit=10)
 
         avg_latency = 0.0
         if recent:
@@ -226,18 +226,17 @@ class Learner:
             "recommendation": recommendation,
         }
 
-    def get_routing_penalties(self) -> dict[str, float]:
+    async def get_routing_penalties(self) -> dict[str, float]:
         """
         Return a map of skill_id → penalty multiplier for skill routing.
         Skills with poor track records get penalized in routing scores.
         """
         penalties = {}
-        for skill_id in set(
-            r.get("skill_id", "") for r in self.memory.log_recent(limit=100)
-        ):
+        recent_logs = await self.memory.log_recent(limit=100)
+        for skill_id in set(r.get("skill_id", "") for r in recent_logs):
             if not skill_id:
                 continue
-            reliability = self.get_skill_reliability(skill_id)
+            reliability = await self.get_skill_reliability(skill_id)
             rec = reliability["recommendation"]
             if rec == "avoid":
                 penalties[skill_id] = 0.1

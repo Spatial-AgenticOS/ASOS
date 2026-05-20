@@ -54,16 +54,16 @@ def _frame():
     return f
 
 
-def test_query_threaded_into_memory_context(store):
+async def test_query_threaded_into_memory_context(store):
     """With a non-empty query the builder must hit KG + episodes, not just working."""
     store.working_push("s1", {"role": "user", "text": "prior turn chatter"})
-    store.episode_save(
+    await store.episode_save(
         session_id="s1",
         event_type="object_location",
         summary="User left the wallet on the kitchen counter",
         importance=0.9,
     )
-    store.knowledge_store(
+    await store.knowledge_store(
         subject="wallet",
         predicate="located_in",
         obj="kitchen",
@@ -72,7 +72,7 @@ def test_query_threaded_into_memory_context(store):
     )
 
     loader = IdentityLoader(memory=store)
-    prompt = loader.build_system_prompt(
+    prompt = await loader.build_system_prompt(
         frame=_frame(),
         skills=[],
         session_id="s1",
@@ -89,12 +89,12 @@ def test_query_threaded_into_memory_context(store):
     assert ("kitchen" in memory_block.lower()) or ("located_in" in memory_block.lower())
 
 
-def test_empty_query_still_returns_working_and_recent_episodes(store):
+async def test_empty_query_still_returns_working_and_recent_episodes(store):
     store.working_push("s1", {"role": "user", "text": "recent note"})
-    store.episode_save(session_id="s1", event_type="chat", summary="general chit chat")
+    await store.episode_save(session_id="s1", event_type="chat", summary="general chit chat")
 
     loader = IdentityLoader(memory=store)
-    prompt = loader.build_system_prompt(
+    prompt = await loader.build_system_prompt(
         frame=_frame(),
         skills=[],
         session_id="s1",
@@ -107,12 +107,12 @@ def test_empty_query_still_returns_working_and_recent_episodes(store):
     assert "recent note" in memory_block or "Recent Context" in memory_block
 
 
-def test_snapshot_ring_captures_every_turn(store):
+async def test_snapshot_ring_captures_every_turn(store):
     store.working_push("s1", {"role": "user", "text": "seed"})
 
     loader = IdentityLoader(memory=store)
     for text in ("one", "two", "three"):
-        loader.build_system_prompt(
+        await loader.build_system_prompt(
             frame=_frame(),
             skills=[],
             session_id="s1",
@@ -134,11 +134,11 @@ def test_snapshot_ring_captures_every_turn(store):
         assert "memory_context" in snap
 
 
-def test_snapshot_ring_limit_enforced(store):
+async def test_snapshot_ring_limit_enforced(store):
     """limit parameter bounded to 1-50."""
     loader = IdentityLoader(memory=store)
     for i in range(5):
-        loader.build_system_prompt(
+        await loader.build_system_prompt(
             frame=_frame(),
             skills=[],
             session_id="s1",

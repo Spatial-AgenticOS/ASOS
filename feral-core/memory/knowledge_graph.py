@@ -8,6 +8,11 @@ Real knowledge graph with:
   - Entity extraction via LLM structured output
   - Entity linking via embedding similarity
   - Graph neighborhood context for LLM injection
+
+Async-native since v2026.5.33 (Option C). Every public method is a
+coroutine; sync ``_init_schema`` runs once at boot. ``stats()`` is now
+async — the boot-time log in MemoryStore.__init__ no longer queries
+it (kept it simple; ``MemoryStore.stats()`` surfaces the kg counts).
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ import time
 from typing import Optional
 from uuid import uuid4
 
+import aiosqlite
 import numpy as np
 
 from memory.embeddings import (
@@ -34,24 +40,23 @@ ENTITY_CANDIDATE_THRESHOLD = 0.70
 
 
 class KnowledgeGraph:
-    """
-    Production knowledge graph backed by SQLite with embedding-based
-    entity linking and multi-hop traversal.
-    """
+    """Production knowledge graph backed by SQLite with embedding-based
+    entity linking and multi-hop traversal."""
 
     def __init__(self, db_path: str, embedder: EmbeddingProvider):
         self.db_path = db_path
         self._embedder = embedder
         self._init_schema()
 
-    def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
+    async def _conn(self) -> aiosqlite.Connection:
+        conn = await aiosqlite.connect(self.db_path)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
     def _init_schema(self):
-        conn = self._conn()
+        """Boot-time DDL. Sync because __init__ is sync."""
+        conn = sqlite3.connect(self.db_path)
         try:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS entities (
@@ -120,13 +125,13 @@ class KnowledgeGraph:
         """Add or merge an entity. Uses embedding similarity for dedup."""
         existing = await self._find_entity_by_name(name)
         if existing:
-            self._bump_mention(existing["id"])
+            await self._bump_mention(existing["id"])
             return existing
 
         linked = await self._link_entity(name)
         if linked:
-            self._bump_mention(linked["id"])
-            self._add_alias(linked["id"], name)
+            await self._bump_mention(linked["id"])
+            await self._add_alias(linked["id"], name)
             return linked
 
         eid = str(uuid4())[:12]
@@ -134,17 +139,17 @@ class KnowledgeGraph:
         embedding = await self._embedder.embed(name)
         meta_json = json.dumps(metadata or {})
 
-        conn = self._conn()
+        conn = await self._conn()
         try:
-            conn.execute(
+            await conn.execute(
                 """INSERT INTO entities (id, name, entity_type, embedding, metadata, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (eid, name, entity_type, vec_to_blob(embedding), meta_json, now, now),
             )
-            conn.commit()
+            await conn.commit()
         finally:
-            conn.close()
-        logger.info(f"Entity added: {name} ({entity_type}) [{eid}]")
+            await conn.close()
+        logger.info("Entity added: %s (%s) [%s]", name, entity_type, eid)
         return {"id": eid, "name": name, "entity_type": entity_type}
 
     async def add_relation(
@@ -161,35 +166,36 @@ class KnowledgeGraph:
         source = await self.add_entity(source_name, source_type)
         target = await self.add_entity(target_name, target_type)
 
-        conn = self._conn()
+        conn = await self._conn()
         try:
-            existing = conn.execute(
+            async with conn.execute(
                 """SELECT id, confidence FROM relations
                    WHERE source_id = ? AND relation_type = ? AND target_id = ?""",
                 (source["id"], relation_type, target["id"]),
-            ).fetchone()
+            ) as cur:
+                existing = await cur.fetchone()
 
             now = time.time()
             if existing:
                 new_conf = min(1.0, (existing["confidence"] + confidence) / 2.0 + 0.1)
-                conn.execute(
+                await conn.execute(
                     "UPDATE relations SET confidence = ?, evidence_text = ?, updated_at = ? WHERE id = ?",
                     (new_conf, evidence[:1000], now, existing["id"]),
                 )
                 rid = existing["id"]
             else:
                 rid = str(uuid4())[:12]
-                conn.execute(
+                await conn.execute(
                     """INSERT INTO relations
                        (id, source_id, relation_type, target_id, confidence, evidence_text, source_origin, created_at, updated_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (rid, source["id"], relation_type, target["id"], confidence, evidence[:1000], "conversation", now, now),
                 )
 
-            conn.commit()
+            await conn.commit()
         finally:
-            conn.close()
-        logger.info(f"Relation: ({source_name}) --[{relation_type}]--> ({target_name})")
+            await conn.close()
+        logger.info("Relation: (%s) --[%s]--> (%s)", source_name, relation_type, target_name)
         return {
             "id": rid,
             "source": source["name"],
@@ -198,33 +204,36 @@ class KnowledgeGraph:
             "confidence": confidence,
         }
 
-    def traverse(
+    async def traverse(
         self,
         start_entity_name: str,
         max_depth: int = 3,
         limit: int = 50,
     ) -> list[dict]:
         """Multi-hop graph traversal using recursive CTE."""
-        conn = self._conn()
+        conn = await self._conn()
         try:
-            entity = conn.execute(
+            async with conn.execute(
                 "SELECT id, name FROM entities WHERE name = ? COLLATE NOCASE",
                 (start_entity_name,),
-            ).fetchone()
+            ) as cur:
+                entity = await cur.fetchone()
             if not entity:
-                alias_row = conn.execute(
+                async with conn.execute(
                     "SELECT entity_id FROM entity_aliases WHERE alias = ? COLLATE NOCASE",
                     (start_entity_name,),
-                ).fetchone()
+                ) as cur:
+                    alias_row = await cur.fetchone()
                 if alias_row:
-                    entity = conn.execute(
+                    async with conn.execute(
                         "SELECT id, name FROM entities WHERE id = ?",
                         (alias_row["entity_id"],),
-                    ).fetchone()
+                    ) as cur:
+                        entity = await cur.fetchone()
             if not entity:
                 return []
 
-            rows = conn.execute("""
+            async with conn.execute("""
                 WITH RECURSIVE graph_walk(entity_id, entity_name, relation_type, target_id, target_name, depth, path) AS (
                     SELECT
                         r.source_id, e_src.name, r.relation_type, r.target_id, e_tgt.name,
@@ -251,9 +260,10 @@ class KnowledgeGraph:
                 FROM graph_walk
                 ORDER BY depth ASC
                 LIMIT ?
-            """, (entity["id"], entity["id"], max_depth, limit)).fetchall()
+            """, (entity["id"], entity["id"], max_depth, limit)) as cur:
+                rows = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
 
         return [
             {
@@ -268,17 +278,17 @@ class KnowledgeGraph:
 
     async def search_entities(self, query: str, limit: int = 10) -> list[dict]:
         """Hybrid FTS + embedding search for entities."""
-        conn = self._conn()
+        conn = await self._conn()
         try:
-            # Phase 1: FTS5 text search
             fts_results = {}
             try:
-                rows = conn.execute(
+                async with conn.execute(
                     """SELECT e.id, e.name, e.entity_type, e.mention_count, rank
                        FROM entities_fts f JOIN entities e ON f.rowid = e.rowid
                        WHERE entities_fts MATCH ? ORDER BY rank LIMIT ?""",
                     (query, limit * 2),
-                ).fetchall()
+                ) as cur:
+                    rows = await cur.fetchall()
                 for r in rows:
                     fts_results[r["id"]] = {
                         "id": r["id"], "name": r["name"], "type": r["entity_type"],
@@ -288,13 +298,13 @@ class KnowledgeGraph:
             except Exception:
                 pass
 
-            # Phase 2: Vector search — scan only entities (usually small set < 10k)
             query_vec = await self._embedder.embed(query)
-            all_entities = conn.execute(
+            async with conn.execute(
                 "SELECT id, name, entity_type, mention_count, embedding FROM entities WHERE embedding IS NOT NULL"
-            ).fetchall()
+            ) as cur:
+                all_entities = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
 
         vec_results = {}
         for e in all_entities:
@@ -307,7 +317,6 @@ class KnowledgeGraph:
                     "vec_score": sim,
                 }
 
-        # Phase 3: Merge with weights
         merged = {}
         all_ids = set(fts_results.keys()) | set(vec_results.keys())
         for eid in all_ids:
@@ -322,18 +331,19 @@ class KnowledgeGraph:
         ranked = sorted(merged.values(), key=lambda x: x["score"], reverse=True)
         return self._mmr_rerank(ranked, limit)
 
-    def get_entity_neighborhood(self, entity_name: str, depth: int = 1) -> dict:
+    async def get_entity_neighborhood(self, entity_name: str, depth: int = 1) -> dict:
         """Get all relations for an entity and its immediate neighbors."""
-        conn = self._conn()
+        conn = await self._conn()
         try:
-            entity = conn.execute(
+            async with conn.execute(
                 "SELECT id, name, entity_type, metadata, mention_count FROM entities WHERE name = ? COLLATE NOCASE",
                 (entity_name,),
-            ).fetchone()
+            ) as cur:
+                entity = await cur.fetchone()
             if not entity:
                 return {}
 
-            relations = conn.execute(
+            async with conn.execute(
                 """SELECT r.*, e_src.name as source_name, e_tgt.name as target_name
                    FROM relations r
                    JOIN entities e_src ON r.source_id = e_src.id
@@ -341,14 +351,16 @@ class KnowledgeGraph:
                    WHERE r.source_id = ? OR r.target_id = ?
                    ORDER BY r.confidence DESC""",
                 (entity["id"], entity["id"]),
-            ).fetchall()
+            ) as cur:
+                relations = await cur.fetchall()
 
-            aliases = conn.execute(
+            async with conn.execute(
                 "SELECT alias FROM entity_aliases WHERE entity_id = ?",
                 (entity["id"],),
-            ).fetchall()
+            ) as cur:
+                aliases = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
 
         return {
             "entity": {
@@ -379,7 +391,7 @@ class KnowledgeGraph:
         lines = ["## Knowledge Graph"]
         chars = 0
         for e in entities:
-            neighborhood = self.get_entity_neighborhood(e["name"])
+            neighborhood = await self.get_entity_neighborhood(e["name"])
             if not neighborhood:
                 continue
             ent = neighborhood["entity"]
@@ -404,7 +416,7 @@ class KnowledgeGraph:
     async def extract_and_store(self, text: str, llm=None) -> list[dict]:
         """Extract entities and relations from text via LLM, then store them."""
         if not llm or not llm.available:
-            return self._heuristic_extract(text)
+            return await self._heuristic_extract(text)
 
         prompt = (
             "Extract knowledge triples from this text. Return a JSON array of objects, "
@@ -423,8 +435,8 @@ class KnowledgeGraph:
                 cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0].strip()
             triples = json.loads(cleaned)
         except Exception as e:
-            logger.warning(f"LLM extraction failed, using heuristic: {e}")
-            return self._heuristic_extract(text)
+            logger.warning("LLM extraction failed, using heuristic: %s", e)
+            return await self._heuristic_extract(text)
 
         stored = []
         for t in triples:
@@ -446,11 +458,8 @@ class KnowledgeGraph:
             stored.append(rel)
         return stored
 
-    def _heuristic_extract(self, text: str) -> list[dict]:
-        """
-        Synchronous pattern-based extraction when LLM is unavailable.
-        Stores relations directly in SQLite (no async needed for simple inserts).
-        """
+    async def _heuristic_extract(self, text: str) -> list[dict]:
+        """Pattern-based extraction when LLM is unavailable. Async-native."""
         import re
         patterns = [
             (r"(?:my name is|i am|i'm)\s+(\w+)", "user", "is_named", "person"),
@@ -462,7 +471,7 @@ class KnowledgeGraph:
         ]
         results = []
         now = time.time()
-        conn = self._conn()
+        conn = await self._conn()
         try:
             for pattern, subject, predicate, obj_type in patterns:
                 match = re.search(pattern, text, re.IGNORECASE)
@@ -471,31 +480,39 @@ class KnowledgeGraph:
                     if not obj or len(obj) < 2:
                         continue
                     for ename, etype in [(subject, "person"), (obj, obj_type)]:
-                        existing = conn.execute(
+                        async with conn.execute(
                             "SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (ename,)
-                        ).fetchone()
+                        ) as cur:
+                            existing = await cur.fetchone()
                         if not existing:
                             eid = str(uuid4())[:12]
-                            conn.execute(
+                            await conn.execute(
                                 "INSERT INTO entities (id, name, entity_type, metadata, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?)",
                                 (eid, ename, etype, now, now),
                             )
-                    src = conn.execute("SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (subject,)).fetchone()
-                    tgt = conn.execute("SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (obj,)).fetchone()
+                    async with conn.execute("SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (subject,)) as cur:
+                        src = await cur.fetchone()
+                    async with conn.execute("SELECT id FROM entities WHERE name = ? COLLATE NOCASE", (obj,)) as cur:
+                        tgt = await cur.fetchone()
                     if src and tgt:
                         rid = str(uuid4())[:12]
-                        conn.execute(
+                        await conn.execute(
                             "INSERT INTO relations (id, source_id, relation_type, target_id, confidence, evidence_text, source_origin, created_at, updated_at) VALUES (?, ?, ?, ?, 0.8, ?, 'heuristic', ?, ?)",
                             (rid, src["id"], predicate, tgt["id"], text[:200], now, now),
                         )
                     results.append({"source": subject, "relation": predicate, "target": obj})
-            conn.commit()
+            await conn.commit()
         finally:
-            conn.close()
+            await conn.close()
         return results
 
     def stats(self) -> dict:
-        conn = self._conn()
+        """Synchronous stats query — kept sync because MemoryStore.__init__
+        and a few legacy callers expect a non-coroutine return. Uses
+        stdlib sqlite3 on a short-lived connection so it doesn't block
+        any running event loop materially (one-shot call, microseconds).
+        For async callers, prefer :meth:`stats_async`."""
+        conn = sqlite3.connect(self.db_path)
         try:
             entity_count = conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
             relation_count = conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0]
@@ -508,25 +525,46 @@ class KnowledgeGraph:
             "aliases": alias_count,
         }
 
-    async def _find_entity_by_name(self, name: str) -> Optional[dict]:
-        conn = self._conn()
+    async def stats_async(self) -> dict:
+        """Async variant of :meth:`stats` for async callers."""
+        conn = await self._conn()
         try:
-            row = conn.execute(
+            async with conn.execute("SELECT COUNT(*) FROM entities") as cur:
+                entity_count = (await cur.fetchone())[0]
+            async with conn.execute("SELECT COUNT(*) FROM relations") as cur:
+                relation_count = (await cur.fetchone())[0]
+            async with conn.execute("SELECT COUNT(*) FROM entity_aliases") as cur:
+                alias_count = (await cur.fetchone())[0]
+        finally:
+            await conn.close()
+        return {
+            "entities": entity_count,
+            "relations": relation_count,
+            "aliases": alias_count,
+        }
+
+    async def _find_entity_by_name(self, name: str) -> Optional[dict]:
+        conn = await self._conn()
+        try:
+            async with conn.execute(
                 "SELECT id, name, entity_type FROM entities WHERE name = ? COLLATE NOCASE",
                 (name,),
-            ).fetchone()
+            ) as cur:
+                row = await cur.fetchone()
             if not row:
-                alias_row = conn.execute(
+                async with conn.execute(
                     "SELECT entity_id FROM entity_aliases WHERE alias = ? COLLATE NOCASE",
                     (name,),
-                ).fetchone()
+                ) as cur:
+                    alias_row = await cur.fetchone()
                 if alias_row:
-                    row = conn.execute(
+                    async with conn.execute(
                         "SELECT id, name, entity_type FROM entities WHERE id = ?",
                         (alias_row["entity_id"],),
-                    ).fetchone()
+                    ) as cur:
+                        row = await cur.fetchone()
         finally:
-            conn.close()
+            await conn.close()
         if row:
             return {"id": row["id"], "name": row["name"], "entity_type": row["entity_type"]}
         return None
@@ -536,13 +574,14 @@ class KnowledgeGraph:
         if not self._embedder.available:
             return None
         name_vec = await self._embedder.embed(name)
-        conn = self._conn()
+        conn = await self._conn()
         try:
-            all_entities = conn.execute(
+            async with conn.execute(
                 "SELECT id, name, entity_type, embedding FROM entities WHERE embedding IS NOT NULL"
-            ).fetchall()
+            ) as cur:
+                all_entities = await cur.fetchall()
         finally:
-            conn.close()
+            await conn.close()
 
         best_match = None
         best_sim = 0.0
@@ -554,36 +593,40 @@ class KnowledgeGraph:
                 best_match = e
 
         if best_match and best_sim >= ENTITY_MERGE_THRESHOLD:
-            logger.info(f"Entity linked: '{name}' -> '{best_match['name']}' (sim={best_sim:.3f})")
+            logger.info(
+                "Entity linked: %r -> %r (sim=%.3f)",
+                name, best_match["name"], best_sim,
+            )
             return {"id": best_match["id"], "name": best_match["name"], "entity_type": best_match["entity_type"]}
         return None
 
-    def _bump_mention(self, entity_id: str):
-        conn = self._conn()
+    async def _bump_mention(self, entity_id: str):
+        conn = await self._conn()
         try:
-            conn.execute(
+            await conn.execute(
                 "UPDATE entities SET mention_count = mention_count + 1, updated_at = ? WHERE id = ?",
                 (time.time(), entity_id),
             )
-            conn.commit()
+            await conn.commit()
         finally:
-            conn.close()
+            await conn.close()
 
-    def _add_alias(self, entity_id: str, alias: str):
-        conn = self._conn()
+    async def _add_alias(self, entity_id: str, alias: str):
+        conn = await self._conn()
         try:
-            existing = conn.execute(
+            async with conn.execute(
                 "SELECT id FROM entity_aliases WHERE entity_id = ? AND alias = ? COLLATE NOCASE",
                 (entity_id, alias),
-            ).fetchone()
+            ) as cur:
+                existing = await cur.fetchone()
             if not existing:
-                conn.execute(
+                await conn.execute(
                     "INSERT INTO entity_aliases (id, entity_id, alias, created_at) VALUES (?, ?, ?, ?)",
                     (str(uuid4())[:12], entity_id, alias, time.time()),
                 )
-                conn.commit()
+                await conn.commit()
         finally:
-            conn.close()
+            await conn.close()
 
     @staticmethod
     def _mmr_rerank(results: list[dict], limit: int, diversity: float = 0.3) -> list[dict]:

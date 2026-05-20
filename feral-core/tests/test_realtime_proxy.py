@@ -53,25 +53,27 @@ def test_get_session_after_manual_insert(proxy):
 
 # ── System prompt building ───────────────────────────────────────
 
-def test_system_prompt_includes_environment_context(proxy):
+async def test_system_prompt_includes_environment_context(proxy):
     frame = MagicMock()
     frame.to_system_context.return_value = "temperature: 72F"
     proxy._perception.get_frame.return_value = frame
     proxy._memory.working_get.return_value = []
-    proxy._memory.build_context_for_llm.return_value = ""
+    proxy._memory.build_context_for_llm = AsyncMock(return_value="")
 
-    prompt = proxy._build_system_prompt("sess-1")
+    prompt = await proxy._build_system_prompt("sess-1")
     assert "environment" in prompt.lower() or "sensor" in prompt.lower()
 
 
-def test_system_prompt_includes_memory(proxy):
+async def test_system_prompt_includes_memory(proxy):
     frame = MagicMock()
     frame.to_system_context.return_value = ""
     proxy._perception.get_frame.return_value = frame
     proxy._memory.working_get.return_value = []
-    proxy._memory.build_context_for_llm.return_value = "User asked about weather earlier"
+    proxy._memory.build_context_for_llm = AsyncMock(
+        return_value="User asked about weather earlier"
+    )
 
-    prompt = proxy._build_system_prompt("sess-1")
+    prompt = await proxy._build_system_prompt("sess-1")
     assert "weather" in prompt.lower()
 
 

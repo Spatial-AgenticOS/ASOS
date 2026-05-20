@@ -211,7 +211,7 @@ async def test_wind_down_bedtime_countdown(_patched_app):
 async def test_wind_down_with_episodes(_patched_app):
     app, mock = _patched_app
     mem_mock = MagicMock()
-    mem_mock.episode_recent = MagicMock(return_value=[
+    mem_mock.episode_recent = AsyncMock(return_value=[
         {"id": "ep1", "summary": "Had a great standup", "ts": datetime.now().isoformat()},
         {"id": "ep2", "content": "Shipped the feature", "ts": datetime.now().isoformat()},
     ])
