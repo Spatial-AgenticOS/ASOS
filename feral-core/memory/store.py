@@ -29,6 +29,7 @@ stay sync for the same reason.
 """
 
 from __future__ import annotations
+import asyncio
 import json
 import logging
 import math
@@ -39,6 +40,31 @@ from typing import Optional
 from uuid import uuid4
 
 import aiosqlite
+
+# aiosqlite spawns one non-daemon worker Thread per Connection. A
+# pooled MemoryStore holds N connections — if any caller forgets to
+# call aclose() (tests, signal-driven shutdowns, exceptions on the
+# boot path), the live threads block process exit indefinitely. Force
+# the worker thread to start as daemon so the interpreter can exit
+# cleanly even when the pool isn't drained. This is a global setting
+# applied at import time; aiosqlite users that need non-daemon
+# workers can override after import.
+try:
+    _AiosqliteConnection = aiosqlite.Connection
+    _orig_aiosqlite_init = _AiosqliteConnection.__init__
+
+    def _daemonize_aiosqlite_init(self, *args, **kwargs):
+        _orig_aiosqlite_init(self, *args, **kwargs)
+        try:
+            self._thread.daemon = True
+        except Exception:
+            pass
+
+    _AiosqliteConnection.__init__ = _daemonize_aiosqlite_init  # type: ignore[assignment]
+except Exception:
+    # Best-effort. Worst case the process needs an extra SIGTERM at
+    # shutdown, which a wrapper script can deliver.
+    pass
 
 from config.loader import feral_data_home
 from memory.context_builder import (
@@ -96,6 +122,7 @@ class MemoryStore:
         db_path: Optional[str] = None,
         *,
         vec_index: Optional[VectorIndexBackend] = None,
+        conn_pool_size: int = 4,
     ):
         """Construct a MemoryStore.
 
@@ -111,6 +138,15 @@ class MemoryStore:
             and injects the configured backend here — selecting
             ``chroma`` or ``qdrant`` in settings.yaml swaps this
             end-to-end.
+        conn_pool_size :
+            Size of the aiosqlite connection pool. Connections are
+            created lazily on first ``_conn()`` call and reused across
+            every memory operation. WAL mode lets multiple connections
+            read in parallel; the pool eliminates the per-call
+            ``aiosqlite.connect()`` + PRAGMA round-trips that would
+            otherwise dominate latency. Default 4 is enough to
+            saturate a typical brain workload without over-spawning
+            worker threads.
 
         Boot-time SQL (CREATE TABLE / CREATE INDEX) runs synchronously
         through stdlib ``sqlite3``. This is intentional: ``__init__``
@@ -130,6 +166,13 @@ class MemoryStore:
         self._about_me_store = None
         self._embedder = EmbeddingProvider()
         self._kg = None
+
+        # Async connection pool. Lazily populated on first acquire so
+        # we can be constructed outside a running event loop (the brain
+        # boot sequence is sync; the loop only starts later).
+        self._pool_size = max(1, conn_pool_size)
+        self._pool: Optional["asyncio.Queue[aiosqlite.Connection]"] = None
+        self._pool_lock: Optional[asyncio.Lock] = None
 
         self._init_db()
 
@@ -194,31 +237,115 @@ class MemoryStore:
             self._sync_engine.log_operation(table, op_type, row_id, data)
 
     async def _conn(self) -> aiosqlite.Connection:
-        """Open an aiosqlite connection with WAL + a 5s busy timeout.
+        """Acquire a pooled aiosqlite connection.
 
-        Connections are short-lived per call (matches the legacy
-        sync pattern). aiosqlite runs each connection on a dedicated
-        worker thread, so the asyncio event loop never blocks on a
-        SQLite syscall. The cost is one thread-wakeup per call; this
-        is negligible compared to the FTS5 / vector lookup cost on
-        the methods that actually do work.
+        Connections live in ``self._pool`` for the lifetime of the
+        store. Each one has WAL mode + a 5s busy timeout already set,
+        so a caller pays zero connection-open overhead on the hot path
+        — every memory operation amortises to a single SQL round-trip.
+        WAL allows the pool's reader connections to run in parallel.
+
+        Callers MUST release with :meth:`_release` in a ``finally``
+        block. The existing pattern::
+
+            conn = await self._conn()
+            try:
+                ...
+            finally:
+                await self._release(conn)
+
+        is enforced across every method in this file.
+
+        Lazy initialisation: the first ``_conn()`` inside a running
+        event loop creates the pool. We can't build the pool in
+        ``__init__`` because the loop isn't up yet at brain boot.
         """
-        conn = await aiosqlite.connect(self.db_path)
-        conn.row_factory = aiosqlite.Row
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute("PRAGMA busy_timeout=5000")
-        return conn
+        if self._pool is None:
+            if self._pool_lock is None:
+                self._pool_lock = asyncio.Lock()
+            async with self._pool_lock:
+                if self._pool is None:
+                    pool: asyncio.Queue[aiosqlite.Connection] = asyncio.Queue(
+                        maxsize=self._pool_size
+                    )
+                    for _ in range(self._pool_size):
+                        c = await aiosqlite.connect(self.db_path)
+                        # aiosqlite uses a non-daemon worker Thread per
+                        # connection; an orphaned pool would block
+                        # process exit (tests + CI shutdown). Mark the
+                        # thread daemon so the interpreter can exit
+                        # even if aclose() is missed. Production code
+                        # paths still call aclose() for an orderly
+                        # shutdown.
+                        try:
+                            c._thread.daemon = True  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                        c.row_factory = aiosqlite.Row
+                        await c.execute("PRAGMA journal_mode=WAL")
+                        await c.execute("PRAGMA busy_timeout=5000")
+                        await pool.put(c)
+                    self._pool = pool
+        return await self._pool.get()
+
+    async def _release(self, conn: Optional[aiosqlite.Connection]) -> None:
+        """Return a pooled connection to the pool.
+
+        Tolerates ``None`` and a closed pool (during shutdown) so the
+        canonical ``try/finally`` pattern stays correct under every
+        unwind path.
+        """
+        if conn is None or self._pool is None:
+            return
+        try:
+            self._pool.put_nowait(conn)
+        except asyncio.QueueFull:
+            # Pool was resized down or a stray connection appeared.
+            # Close it rather than dropping silently — leaking a
+            # SQLite connection holds a file lock.
+            try:
+                await self._release(conn)
+            except Exception:
+                pass
 
     # ─────────────────────────────────────────────
     # Schema
     # ─────────────────────────────────────────────
 
     def close(self) -> None:
-        """Shut down background tasks and release resources."""
+        """Shut down background tasks and release resources.
+
+        Stays synchronous to preserve the existing boot/shutdown
+        wiring (called from non-async paths). Pool draining is
+        delegated to :meth:`aclose` for any caller already inside an
+        event loop that wants a clean async teardown.
+        """
         try:
             self._embed_queue.stop()
         except Exception:
             pass
+
+    async def aclose(self) -> None:
+        """Async-native shutdown: stop the embed queue and close every
+        pooled aiosqlite connection. Safe to call multiple times.
+        """
+        try:
+            self._embed_queue.stop()
+        except Exception:
+            pass
+        pool = self._pool
+        if pool is None:
+            return
+        self._pool = None
+        while not pool.empty():
+            try:
+                conn = pool.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            try:
+                await self._release(conn)
+            except Exception:
+                pass
 
     async def refresh(self) -> dict:
         """Re-validate the on-disk memory + sync WAL after suspected corruption.
@@ -253,7 +380,7 @@ class MemoryStore:
                 memory_status = "corruption"
                 memory_detail = str(exc)
             finally:
-                await conn.close()
+                await self._release(conn)
         result["memory_db"] = memory_status
         if memory_status != "ok":
             result["memory_db_detail"] = memory_detail
@@ -551,7 +678,7 @@ class MemoryStore:
             """, (conversation_id, title, preview, json.dumps(messages[-500:]), len(messages), now, now))
             await conn.commit()
         finally:
-            await conn.close()
+            await self._release(conn)
         return {"id": conversation_id, "title": title, "message_count": len(messages), "updated_at": now}
 
     async def conversation_append(
@@ -596,7 +723,7 @@ class MemoryStore:
             ) as cur:
                 rows = await cur.fetchall()
         finally:
-            await conn.close()
+            await self._release(conn)
         return [
             {"id": r[0], "title": r[1], "preview": r[2], "message_count": r[3], "created_at": r[4], "updated_at": r[5]}
             for r in rows
@@ -612,7 +739,7 @@ class MemoryStore:
             ) as cur:
                 row = await cur.fetchone()
         finally:
-            await conn.close()
+            await self._release(conn)
         if not row:
             return None
         return {
@@ -627,7 +754,7 @@ class MemoryStore:
             await conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
             await conn.commit()
         finally:
-            await conn.close()
+            await self._release(conn)
         return True
 
     async def snapshot_session(
@@ -663,7 +790,7 @@ class MemoryStore:
             )
             await conn.commit()
         finally:
-            await conn.close()
+            await self._release(conn)
         return {
             "snapshot_id": snapshot_id,
             "session_id": session_id,
@@ -723,7 +850,7 @@ class MemoryStore:
             async with conn.execute(sql, params) as cur:
                 rows = await cur.fetchall()
         finally:
-            await conn.close()
+            await self._release(conn)
         return [
             {
                 "snapshot_id": r["id"],
@@ -749,7 +876,7 @@ class MemoryStore:
             ) as cur:
                 row = await cur.fetchone()
         finally:
-            await conn.close()
+            await self._release(conn)
         if not row:
             return None
         return {
@@ -794,7 +921,7 @@ class MemoryStore:
             )
             await conn.commit()
         finally:
-            await conn.close()
+            await self._release(conn)
 
         text = f"{summary}\n{detail}".strip()
         chunks = chunk_text(text)
@@ -882,7 +1009,7 @@ class MemoryStore:
                 for r in rows:
                     episode_cache[r["id"]] = self._episode_row_to_dict(r)
         finally:
-            await conn.close()
+            await self._release(conn)
         now = time.time()
         merged = []
         for eid in all_ids:
@@ -925,7 +1052,7 @@ class MemoryStore:
                 ) as cur:
                     rows = await cur.fetchall()
         finally:
-            await conn.close()
+            await self._release(conn)
         return [self._episode_row_to_dict(r) for r in rows]
 
     async def episode_recent(self, limit: int = 10, session_id: str = None) -> list[dict]:
@@ -943,7 +1070,7 @@ class MemoryStore:
                 ) as cur:
                     rows = await cur.fetchall()
         finally:
-            await conn.close()
+            await self._release(conn)
         return [self._episode_row_to_dict(r) for r in rows]
 
     @staticmethod
@@ -1020,7 +1147,7 @@ class MemoryStore:
 
             await conn.commit()
         finally:
-            await conn.close()
+            await self._release(conn)
         self._log_sync("knowledge", "insert", kid, {
             "id": kid, "subject": subject, "predicate": predicate, "object": obj,
             "confidence": confidence, "source": source, "created_at": now,
@@ -1044,7 +1171,7 @@ class MemoryStore:
             ) as cur:
                 rows = await cur.fetchall()
         finally:
-            await conn.close()
+            await self._release(conn)
         return [
             {"id": r["id"], "subject": r["subject"], "predicate": r["predicate"],
              "object": r["object"], "confidence": r["confidence"], "source": r["source"],
@@ -1071,7 +1198,7 @@ class MemoryStore:
                 ) as cur:
                     rows = await cur.fetchall()
         finally:
-            await conn.close()
+            await self._release(conn)
         return [
             {"id": r["id"], "subject": r["subject"], "predicate": r["predicate"],
              "object": r["object"], "confidence": r["confidence"]}
@@ -1088,7 +1215,7 @@ class MemoryStore:
             ) as cur:
                 rows = await cur.fetchall()
         finally:
-            await conn.close()
+            await self._release(conn)
         return [
             {"subject": r["subject"], "predicate": r["predicate"], "object": r["object"],
              "confidence": r["confidence"]}
@@ -1116,7 +1243,7 @@ class MemoryStore:
             )
             await conn.commit()
         finally:
-            await conn.close()
+            await self._release(conn)
         return eid
 
     async def log_feedback(self, execution_id: str, feedback: str):
@@ -1128,7 +1255,7 @@ class MemoryStore:
             )
             await conn.commit()
         finally:
-            await conn.close()
+            await self._release(conn)
 
     async def log_recent(self, skill_id: str = "", limit: int = 20) -> list[dict]:
         conn = await self._conn()
@@ -1145,7 +1272,7 @@ class MemoryStore:
                 ) as cur:
                     rows = await cur.fetchall()
         finally:
-            await conn.close()
+            await self._release(conn)
         return [dict(r) for r in rows]
 
     async def log_success_rate(self, skill_id: str) -> dict:
@@ -1161,7 +1288,7 @@ class MemoryStore:
             ) as cur:
                 successes = (await cur.fetchone())[0]
         finally:
-            await conn.close()
+            await self._release(conn)
         return {"skill_id": skill_id, "total_executions": total, "successes": successes,
                 "rate": successes / total if total > 0 else 0.0}
 
@@ -1316,7 +1443,7 @@ class MemoryStore:
             except Exception:
                 chunk_count = 0
         finally:
-            await conn.close()
+            await self._release(conn)
         working_sessions = len(self._working)
 
         kg_stats = self._kg.stats() if self._kg else {"entities": 0, "relations": 0}
