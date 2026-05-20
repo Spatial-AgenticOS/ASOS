@@ -1,10 +1,62 @@
 # Changelog
 
-<!-- feral-version: 2026.5.32 -->
+<!-- feral-version: 2026.5.33 -->
 
 All notable changes to FERAL are documented here.
 
 ## [Unreleased]
+
+## [2026.5.33] — async-native MemoryStore (Option C): aiosqlite + pooled connections + asyncio.gather throughput
+
+Pure refactor. Zero behaviour change. Every public MemoryStore method, every memory helper, every memory caller across `feral-core` is now async-native via `aiosqlite`; the asyncio event loop never blocks on a memory call. Per-call p50 search latency drops 42.1% and aggregate wall-clock under K=32 concurrent searches drops 53.3% versus the legacy `sqlite3.connect`-per-call pattern (benchmark: `feral-core/tests/perf/test_memory_latency.py`, macOS arm64 + Python 3.11.11; reproduce locally with `pytest tests/perf/test_memory_latency.py -v -s --no-cov`).
+
+### Changed — `memory.store.MemoryStore` is async-native
+
+`MemoryStore.__init__` stays sync (boot DDL is one-shot and runs before the event loop is up). Every I/O method (`episode_save`, `episode_recent`, `episode_search`, `episode_search_hybrid`, `knowledge_store`, `knowledge_query`, `knowledge_search`, `knowledge_about`, `conversation_save`, `conversation_append`, `conversation_list`, `conversation_get`, `conversation_delete`, `snapshot_session`, `list_snapshots`, `get_snapshot`, `log_execution`, `log_feedback`, `log_recent`, `log_success_rate`, `refresh`, `build_context_for_llm`, `build_context_for_llm_async`, `compact_session`, `search_all`, `wiki_upsert_page`, `wiki_get_page`, `wiki_list_pages`, `wiki_stats`, `wiki_compile`, `save`, `search`, `list_recent`, `delete`, `count`, `stats`) returns a coroutine — call sites use `await store.X(...)` directly. Working-memory operations (in-RAM deques) stay sync because they don't hit I/O. Pure helpers (`_episode_row_to_dict`, `_mmr_rerank_episodes`, `_wiki_slug`, `_heuristic_summarize`) stay sync for the same reason. `aiosqlite>=0.20.0` added as a hard dependency in `feral-core/pyproject.toml`.
+
+### Added — `aiosqlite` connection pool inside MemoryStore
+
+`MemoryStore(conn_pool_size=4)` keeps a pre-warmed pool of `aiosqlite` connections with WAL journal_mode + 5s busy_timeout already applied, so every memory call amortises to a single SQL round-trip. WAL lets the pool's reader connections run in parallel; aiosqlite's per-connection worker thread keeps the asyncio loop unblocked. The pool builds lazily on the first `_conn()` call inside a running event loop (`__init__` cannot await), and double-checked locking keeps init race-free under concurrent callers. `_release(conn)` returns the connection to the pool; the canonical pattern across all 23 `_conn()` call sites in `memory/store.py` is:
+
+```python
+conn = await self._conn()
+try:
+    async with conn.execute(...) as cur:
+        rows = await cur.fetchall()
+finally:
+    await self._release(conn)
+```
+
+`MemoryStore.aclose()` is the async-native teardown that drains the pool. The legacy sync `close()` is preserved for boot/shutdown wiring that runs outside the loop. The aiosqlite Connection worker thread is daemonised at module-load time (defence-in-depth — production shutdown still calls `aclose()` for orderly cleanup).
+
+### Changed — `VectorIndexBackend` Protocol is async
+
+Every method on the protocol (`count`, `upsert`, `upsert_batch`, `delete`, `search`, `search_cosine`, `close`) is `async`. `SQLiteVecIndex` uses `aiosqlite` directly. `ChromaIndex` wraps the in-process `chromadb.PersistentClient` calls in `asyncio.to_thread` at the adapter boundary (ChromaDB ships no real async client for in-process use). `QdrantIndex` uses `qdrant_client.AsyncQdrantClient` for true async I/O. The wrapping is strictly contained inside the vector backend module — no `asyncio.to_thread(memory.X, …)` bridges remain anywhere in `feral-core` outside vendor-adapter boundaries.
+
+### Changed — every direct MemoryStore caller awaits
+
+Production callers converted: `agents/{digital_twin,direct_execution,identity_loader,learner,multi_agent,orchestrator,proactive_engine,taskflow,tool_runner}.py`, `api/routes/{ambient,conversations,dashboard,memory,timeline}.py`, `api/state.py`, `gateway/protocol.py`, `mcp/server.py`, `memory/ingest.py`, `perception/screen_loop.py`, `voice/{realtime_proxy,gemini_realtime}.py`. The most user-visible signature shift is `IdentityLoader.build_system_prompt` (used by every chat handler + voice session): it now awaits MemoryStore + the calendar handle, so every caller must `await` it. `RealtimeProxy._build_system_prompt` and `GeminiRealtime._build_system_prompt` follow the same pattern. Tests converted: every memory-touching test under `feral-core/tests/` switched to `async def` + `await`; mocked memory mocks switched from `MagicMock` to `AsyncMock` for the coroutine return shape.
+
+### Added — perf acceptance benchmark
+
+`feral-core/tests/perf/test_memory_latency.py` runs the same 32-call workload three ways on the same on-disk database — legacy sync `sqlite3.connect` per call (sequential), async-pooled sequential, async-pooled concurrent via `asyncio.gather` — and asserts (a) per-call p50 drops ≥30% on the apples-to-apples sequential path and (b) aggregate wall clock drops ≥30% under concurrent load. Numbers from the reference run paste below; both invariants pass with comfortable headroom on macOS arm64 + Python 3.11.11.
+
+```
+workload          : 32 × episode_recent(limit=10)
+seeded episodes   : 500
+sync baseline       wall=10.86 ms  p50=0.32 ms  p99=0.37 ms  mean=0.34 ms
+async-sequential    wall= 6.59 ms  p50=0.19 ms  p99=0.32 ms  mean=0.21 ms
+async-concurrent    wall= 5.07 ms  p50=3.11 ms  p99=4.73 ms  mean=3.05 ms
+per-call p50 drop : 42.1% (sync vs async-seq)
+wall-clock drop   : 53.3% (sync vs async-gather)
+required drop     : 30.0%   ✅
+```
+
+### Notes for downstream code
+
+* Any third-party fork that subclassed `MemoryStore` or called its methods from sync code will need to add `async def` / `await` or wrap calls in `asyncio.run(...)` / `asyncio.create_task(...)` at the boundary.
+* `KnowledgeGraph.stats()` stays synchronous for boot-time logging callers; the async-native variant is `stats_async()`.
+* `EmbedQueue._process_loop` was already native asyncio (no thread bridge) — no change required.
 
 ## [2026.5.32] — audit-r12 systemic remediation: phone allowlist, HUP coherence, memory backend selector, MCP HTTP transport, Bedrock chat, Whoop/Oura OAuth
 
