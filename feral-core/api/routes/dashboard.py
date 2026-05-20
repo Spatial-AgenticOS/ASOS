@@ -54,7 +54,7 @@ async def identity_greeting():
 
     last_memory = ""
     try:
-        recent = state.memory.episode_recent(limit=1, session_id=None)
+        recent = await state.memory.episode_recent(limit=1, session_id=None)
         if recent:
             last_memory = (recent[0].get("summary", "") or "")[:120]
     except Exception:
@@ -156,7 +156,7 @@ async def boot_report():
 
 @router.get("/api/info")
 async def api_info():
-    stats = state.memory.stats()
+    stats = await state.memory.stats()
     return {
         "name": "FERAL Brain",
         "version": __version__,
@@ -174,7 +174,7 @@ async def api_info():
 @router.get("/api/system/info")
 async def system_info():
     """Full system info for the dashboard."""
-    stats = state.memory.stats()
+    stats = await state.memory.stats()
     hw_stats = state.device_registry.stats if state.device_registry else {}
     mcp_client_stats = state.mcp_client.stats if state.mcp_client else {}
     channel_stats = state.channel_manager.stats if state.channel_manager else {}
@@ -242,7 +242,7 @@ def _check_llm_available() -> bool:
 
 
 async def _get_dashboard_data() -> dict:
-    stats = state.memory.stats()
+    stats = await state.memory.stats()
     devices_list = []
     latest_health = {}
     online_node_ids: set[str] = set()

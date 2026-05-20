@@ -378,7 +378,7 @@ class ScreenLoop:
     async def _record_transition(self, t: TransitionEvent):
         if not self._memory:
             return
-        self._memory.episode_save(
+        await self._memory.episode_save(
             session_id=self._session_id,
             event_type=f"screen_{t.kind}",
             summary=f"Screen: {t.current}",

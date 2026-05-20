@@ -86,7 +86,7 @@ class TestTraverse:
     async def test_single_hop(self, kg_db):
         kg, _, _ = kg_db
         await kg.add_relation("StartNode", "links", "EndNode")
-        rows = kg.traverse("StartNode", max_depth=2, limit=20)
+        rows = await kg.traverse("StartNode", max_depth=2, limit=20)
         assert len(rows) >= 1
         targets = {r["target"] for r in rows}
         assert "EndNode" in targets
@@ -96,7 +96,7 @@ class TestTraverse:
         kg, _, _ = kg_db
         await kg.add_relation("Alpha", "next", "Beta")
         await kg.add_relation("Beta", "next", "Gamma")
-        rows = kg.traverse("Alpha", max_depth=3, limit=50)
+        rows = await kg.traverse("Alpha", max_depth=3, limit=50)
         assert len(rows) >= 2
         depths = {r["depth"] for r in rows}
         assert depths.intersection({1, 2, 3})
@@ -119,9 +119,9 @@ class TestSearchEntities:
 class TestHeuristicExtract:
     """Pattern-based extraction without LLM."""
 
-    def test_my_name_is_john(self, kg_db):
+    async def test_my_name_is_john(self, kg_db):
         kg, _, _ = kg_db
-        out = kg._heuristic_extract("Hello, my name is John")
+        out = await kg._heuristic_extract("Hello, my name is John")
         assert any(
             r.get("source") == "user" and r.get("relation") == "is_named" and r.get("target") == "John"
             for r in out

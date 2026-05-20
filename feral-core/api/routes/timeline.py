@@ -22,7 +22,7 @@ async def get_timeline(
 
     if type in ("all", "memories"):
         try:
-            memories = state.memory.search("", limit=100)
+            memories = await state.memory.search("", limit=100)
             for m in memories:
                 ts = m.get("timestamp") or m.get("created_at", 0)
                 if isinstance(ts, str):

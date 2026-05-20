@@ -552,7 +552,7 @@ class Orchestrator:
             pass
         return {"mode": mode, "handled": True, "tool_id": tool_id, "pending_approval": True}
 
-    def _build_system_prompt(
+    async def _build_system_prompt(
         self,
         frame: PerceptionFrame,
         skills: list[SkillManifest],
@@ -565,7 +565,7 @@ class Orchestrator:
             full_catalog = list(self.skills.skills.values())
         except Exception:
             pass
-        return self.identity_loader.build_system_prompt(
+        return await self.identity_loader.build_system_prompt(
             frame,
             skills,
             session_id,
@@ -976,7 +976,7 @@ class Orchestrator:
             self._somatic_engine.update_interaction(session_id, len(text))
 
         if self.memory:
-            self.memory.episode_save(
+            await self.memory.episode_save(
                 session_id=session_id,
                 event_type="user_command",
                 summary=text[:200],
@@ -1049,7 +1049,7 @@ class Orchestrator:
         # into context retrieval so cross-domain memory leaks stop. Empty
         # string = generalist turn (no filtering, legacy behaviour).
         active_memory_filter = (specialist.memory_filter if specialist else "") or ""
-        system_prompt = self._build_system_prompt(
+        system_prompt = await self._build_system_prompt(
             perception_frame,
             relevant_skills,
             session_id,
@@ -1218,7 +1218,7 @@ class Orchestrator:
                         parts = tc["name"].split("__", 1)
                         skill_id = parts[0] if len(parts) == 2 else tc["name"]
                         endpoint_id = parts[1] if len(parts) == 2 else ""
-                        self.memory.log_execution(
+                        await self.memory.log_execution(
                             session_id=session_id,
                             skill_id=skill_id,
                             endpoint_id=endpoint_id,
@@ -1306,7 +1306,7 @@ class Orchestrator:
             self._somatic_engine.update_interaction(session_id, len(text))
 
         if self.memory:
-            self.memory.episode_save(
+            await self.memory.episode_save(
                 session_id=session_id, event_type="user_command",
                 summary=text[:200], detail=json.dumps(context or {}),
             )
@@ -1339,7 +1339,7 @@ class Orchestrator:
         # into context retrieval so cross-domain memory leaks stop. Empty
         # string = generalist turn (no filtering, legacy behaviour).
         active_memory_filter = (specialist.memory_filter if specialist else "") or ""
-        system_prompt = self._build_system_prompt(
+        system_prompt = await self._build_system_prompt(
             perception_frame,
             relevant_skills,
             session_id,
@@ -1507,7 +1507,7 @@ class Orchestrator:
                         parts = tc["name"].split("__", 1)
                         skill_id = parts[0] if len(parts) == 2 else tc["name"]
                         endpoint_id = parts[1] if len(parts) == 2 else ""
-                        self.memory.log_execution(
+                        await self.memory.log_execution(
                             session_id=session_id, skill_id=skill_id,
                             endpoint_id=endpoint_id, args=tc.get("args", {}),
                             result_status="success" if stream_tool_success else "failure",
@@ -1606,7 +1606,7 @@ class Orchestrator:
         logger.info(f"[{session_id[:8]}] Proactive trigger: {alert_text}")
 
         if self.memory:
-            self.memory.episode_save(
+            await self.memory.episode_save(
                 session_id=session_id,
                 event_type="proactive_alert",
                 summary=alert_text,
@@ -1659,7 +1659,7 @@ class Orchestrator:
 
         if not self.llm.available or len(self.skills.skills) <= 5:
             results = self._fallback_skills_for_query(text, top_k=5)
-            return self._apply_routing_penalties(results)
+            return await self._apply_routing_penalties(results)
 
         prompt = "You are a Semantic Tool Router. Select up to 5 relevant tool IDs for the user's query.\n"
         prompt += "Available Tools:\n"
@@ -1686,11 +1686,11 @@ class Orchestrator:
                 if isinstance(sid, str) and sid in self.skills.skills:
                     relevant.append(self.skills.skills[sid])
             results = relevant[:5] if relevant else self._fallback_skills_for_query(text, top_k=5)
-            return self._apply_routing_penalties(results)
+            return await self._apply_routing_penalties(results)
         except Exception as e:
             logger.warning(f"RoutePrompt failed, falling back to heuristic: {e}")
             results = self._fallback_skills_for_query(text, top_k=5)
-            return self._apply_routing_penalties(results)
+            return await self._apply_routing_penalties(results)
 
     def _ensure_core_skills(self, skills: list[SkillManifest]) -> list[SkillManifest]:
         """Guarantee core skills like desktop_control are always available to the LLM."""
@@ -1709,12 +1709,12 @@ class Orchestrator:
             return list(self.skills.skills.values())
         return results
 
-    def _apply_routing_penalties(self, skills: list[SkillManifest]) -> list[SkillManifest]:
+    async def _apply_routing_penalties(self, skills: list[SkillManifest]) -> list[SkillManifest]:
         """Re-rank skills based on execution log reliability."""
         if not self.learner or not skills:
             return skills
 
-        penalties = self.learner.get_routing_penalties()
+        penalties = await self.learner.get_routing_penalties()
         if not penalties:
             return skills
 

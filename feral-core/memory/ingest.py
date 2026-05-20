@@ -43,14 +43,14 @@ class MemoryIngestor:
     def __init__(self, memory_store):
         self.memory = memory_store
 
-    def _save_chunks(self, text: str, *, source: str, tags: Iterable[str]) -> int:
+    async def _save_chunks(self, text: str, *, source: str, tags: Iterable[str]) -> int:
         chunks = chunk_text(text, max_tokens=350, overlap=70)
         count = 0
         for i, chunk in enumerate(chunks):
             payload = chunk.strip()
             if not payload:
                 continue
-            self.memory.save(
+            await self.memory.save(
                 content=payload,
                 tags=list(tags),
                 importance="normal",
@@ -59,17 +59,17 @@ class MemoryIngestor:
             count += 1
         return count
 
-    def ingest_text(self, *, content: str, source_label: str = "manual", compile_after: bool = True) -> dict:
+    async def ingest_text(self, *, content: str, source_label: str = "manual", compile_after: bool = True) -> dict:
         payload = (content or "").strip()
         if not payload:
             raise ValueError("content is required")
 
-        notes_saved = self._save_chunks(
+        notes_saved = await self._save_chunks(
             payload,
             source=f"ingest:text:{source_label}",
             tags=["ingest", "text"],
         )
-        compile_result = self.memory.wiki_compile() if compile_after else {"compiled": False}
+        compile_result = (await self.memory.wiki_compile()) if compile_after else {"compiled": False}
         return {
             "ok": True,
             "source": "text",
@@ -78,7 +78,7 @@ class MemoryIngestor:
             "compile": compile_result,
         }
 
-    def ingest_pdf(self, *, path: str, compile_after: bool = True) -> dict:
+    async def ingest_pdf(self, *, path: str, compile_after: bool = True) -> dict:
         pdf_path = Path(path).expanduser()
         if not pdf_path.exists():
             raise ValueError(f"File not found: {pdf_path}")
@@ -107,12 +107,12 @@ class MemoryIngestor:
         if not merged:
             raise ValueError("PDF has no extractable text")
 
-        notes_saved = self._save_chunks(
+        notes_saved = await self._save_chunks(
             merged,
             source=f"ingest:pdf:{pdf_path.name}",
             tags=["ingest", "pdf"],
         )
-        compile_result = self.memory.wiki_compile() if compile_after else {"compiled": False}
+        compile_result = (await self.memory.wiki_compile()) if compile_after else {"compiled": False}
         return {
             "ok": True,
             "source": "pdf",
@@ -122,7 +122,7 @@ class MemoryIngestor:
             "compile": compile_result,
         }
 
-    def ingest_repo(
+    async def ingest_repo(
         self,
         *,
         path: str,
@@ -163,14 +163,14 @@ class MemoryIngestor:
 
             rel = str(file_path.relative_to(root))
             file_blob = f"# File: {rel}\n\n{text}"
-            notes_saved += self._save_chunks(
+            notes_saved += await self._save_chunks(
                 file_blob,
                 source=f"ingest:repo:{rel}",
                 tags=["ingest", "repo"],
             )
             files_processed += 1
 
-        compile_result = self.memory.wiki_compile() if compile_after else {"compiled": False}
+        compile_result = (await self.memory.wiki_compile()) if compile_after else {"compiled": False}
         return {
             "ok": True,
             "source": "repo",

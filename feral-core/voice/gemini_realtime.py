@@ -338,7 +338,7 @@ class GeminiRealtimeProxy:
         on_speech_started: Callable | None = None,
         on_error: Callable | None = None,
     ) -> GeminiRealtimeSession:
-        _sys_prompt = system_prompt or self._build_system_prompt(session_id)
+        _sys_prompt = system_prompt or await self._build_system_prompt(session_id)
         _model = model or os.getenv("FERAL_GEMINI_LIVE_MODEL", DEFAULT_MODEL)
         tools = self._get_tools()
 
@@ -416,14 +416,14 @@ class GeminiRealtimeProxy:
         for sid in list(self._sessions):
             await self.stop_session(sid)
 
-    def _build_system_prompt(self, session_id: str) -> str:
+    async def _build_system_prompt(self, session_id: str) -> str:
         parts = [
             "You are FERAL, a personal AI operating system. "
             "You run locally on the user's devices and can control hardware, "
             "search the web, manage memory, and more. Be concise in voice."
         ]
         if self._memory:
-            ctx = self._memory.build_context_for_llm(session_id, max_tokens_budget=400)
+            ctx = await self._memory.build_context_for_llm(session_id, max_tokens_budget=400)
             if ctx:
                 parts.append(f"\n[Memory]\n{ctx}")
         return "\n".join(parts)
@@ -486,7 +486,7 @@ class GeminiRealtimeProxy:
             # PR 9 gap-fill — durable persistence under voice:<sid>.
             try:
                 if hasattr(self._memory, "conversation_append"):
-                    self._memory.conversation_append(
+                    await self._memory.conversation_append(
                         f"voice:{session_id}", "assistant", text[:300],
                         source="voice_realtime_gemini",
                         title=f"Voice session {session_id[:8]}",
@@ -502,7 +502,7 @@ class GeminiRealtimeProxy:
             })
             try:
                 if hasattr(self._memory, "conversation_append"):
-                    self._memory.conversation_append(
+                    await self._memory.conversation_append(
                         f"voice:{session_id}", "user", text[:300],
                         source="voice_realtime_gemini",
                         title=f"Voice session {session_id[:8]}",

@@ -1349,7 +1349,7 @@ class BrainState:
         self._boot_report.total_elapsed_ms = (time.time() - _boot_start) * 1000
         self._boot_report.log_summary()
 
-        stats = self.memory.stats()
+        stats = await self.memory.stats()
         demo_tag = " [DEMO MODE]" if self._demo else ""
         logger.info(
             f"Brain v{__version__} initialized{demo_tag} — {len(self.skill_registry.skills)} skills, "

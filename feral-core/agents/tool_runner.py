@@ -1034,7 +1034,7 @@ class ToolRunner:
                 tools = (tools or []) + mcp_tools
 
         frame = orch.perception.get_frame(parent_session_id)
-        system_prompt = orch._build_system_prompt(frame, relevant_skills, parent_session_id)
+        system_prompt = await orch._build_system_prompt(frame, relevant_skills, parent_session_id)
         history: list[dict] = [{"role": "user", "content": task_text}]
         sub_session_id = f"{parent_session_id}:sub:{ordinal}:{str(uuid4())[:6]}"
         final_text = ""

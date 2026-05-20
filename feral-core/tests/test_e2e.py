@@ -21,13 +21,13 @@ def mock_brain_state():
     state.orchestrator.handle_command_stream = AsyncMock()
     state.orchestrator.on_session_disconnect = AsyncMock()
     state.memory = MagicMock()
-    state.memory.conversation_list.return_value = []
-    state.memory.episode_recent.return_value = []
-    state.memory.stats.return_value = {"notes": 0, "episodes": 0}
-    state.memory.knowledge_query.return_value = []
-    state.memory.wiki_list_pages.return_value = []
-    state.memory.wiki_stats.return_value = {"pages": 0}
-    state.memory.log_recent.return_value = []
+    state.memory.conversation_list = AsyncMock(return_value=[])
+    state.memory.episode_recent = AsyncMock(return_value=[])
+    state.memory.stats = AsyncMock(return_value={"notes": 0, "episodes": 0})
+    state.memory.knowledge_query = AsyncMock(return_value=[])
+    state.memory.wiki_list_pages = AsyncMock(return_value=[])
+    state.memory.wiki_stats = AsyncMock(return_value={"pages": 0})
+    state.memory.log_recent = AsyncMock(return_value=[])
     state.memory.working_push = MagicMock()
     state.memory.working_get = MagicMock(return_value=[])
     state.skill_registry = MagicMock()

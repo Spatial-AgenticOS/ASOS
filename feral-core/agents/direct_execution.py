@@ -183,7 +183,7 @@ async def handle_memory_direct(orchestrator, session_id: str, text: str, _skill)
     knowledge_patterns = ["i am ", "my name is ", "i live ", "i work ", "i like ", "my favorite"]
 
     if any(pattern in text_lower for pattern in knowledge_patterns):
-        orchestrator.memory.knowledge_store(
+        await orchestrator.memory.knowledge_store(
             subject="user",
             predicate="stated",
             obj=text[:300],
@@ -217,7 +217,7 @@ async def handle_memory_direct(orchestrator, session_id: str, text: str, _skill)
         return
 
     if any(pattern in text_lower for pattern in list_patterns):
-        results = orchestrator.memory.list_recent(limit=5)
+        results = await orchestrator.memory.list_recent(limit=5)
         if results:
             sdui = {
                 "type": "VStack",
@@ -279,7 +279,7 @@ async def handle_memory_direct(orchestrator, session_id: str, text: str, _skill)
                 query = text[len(phrase) :].strip()
                 break
 
-        results = orchestrator.memory.search(query=query, limit=5)
+        results = await orchestrator.memory.search(query=query, limit=5)
         if results:
             sdui = {
                 "type": "VStack",
@@ -336,7 +336,7 @@ async def handle_memory_direct(orchestrator, session_id: str, text: str, _skill)
                 content = text[len(phrase) :].strip()
                 break
 
-        result = orchestrator.memory.save(content=content, source="voice")
+        result = await orchestrator.memory.save(content=content, source="voice")
         sdui = {
             "type": "VStack",
             "spacing": 16,
@@ -366,7 +366,7 @@ async def handle_memory_direct(orchestrator, session_id: str, text: str, _skill)
                         },
                     ],
                 },
-                {"type": "Text", "value": f"Total memories: {orchestrator.memory.count()}", "style": "caption"},
+                {"type": "Text", "value": f"Total memories: {await orchestrator.memory.count()}", "style": "caption"},
             ],
         }
         await orchestrator.send(
@@ -381,7 +381,7 @@ async def handle_memory_direct(orchestrator, session_id: str, text: str, _skill)
         return
 
     # Fallback
-    results = orchestrator.memory.list_recent(limit=5)
+    results = await orchestrator.memory.list_recent(limit=5)
     sdui = {
         "type": "VStack",
         "spacing": 12,

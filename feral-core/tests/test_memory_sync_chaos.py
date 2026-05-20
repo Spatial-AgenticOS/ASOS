@@ -139,19 +139,19 @@ class TestKillPeerMidHandshake:
 class TestCorruptWAL:
     """Append a single random byte to memory.db; refresh() must catch it."""
 
-    def test_corruption_detected_and_surfaced(self):
+    async def test_corruption_detected_and_surfaced(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             engine = _make_engine(tmpdir, "node-corrupt")
             store = engine._memory
 
             # Create some real content so the file isn't empty.
-            store.save("note before corruption", tags=["chaos"])
+            await store.save("note before corruption", tags=["chaos"])
             engine.log_operation(
                 "notes", "insert", "n1",
                 {"id": "n1", "content": "from-sync-wal", "source": "node-corrupt"},
             )
 
-            healthy = store.refresh()
+            healthy = await store.refresh()
             assert healthy["ok"] is True, healthy
 
             wal_path = engine._wal._db_path
@@ -163,7 +163,7 @@ class TestCorruptWAL:
                 fh.seek(50)
                 fh.write(b"\x00\xff\xde\xad\xbe\xef" * 16)
 
-            broken = store.refresh()
+            broken = await store.refresh()
             assert broken["ok"] is False, broken
             assert broken.get("error") in {"wal_corruption", "wal_open_failed"}, broken
             # We surface it as a structured dict, not a raw exception.

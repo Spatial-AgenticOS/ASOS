@@ -21,7 +21,6 @@ silently regress to "iOS has no idea."
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -48,11 +47,11 @@ class _FakeCalendar:
         return {"success": False, "data": {}}
 
 
-def _build_prompt(loader: IdentityLoader, *, query: str = "") -> str:
+async def _build_prompt(loader: IdentityLoader, *, query: str = "") -> str:
     from perception.fusion import PerceptionFrame
 
     frame = PerceptionFrame()
-    return loader.build_system_prompt(
+    return await loader.build_system_prompt(
         session_id="test-session",
         frame=frame,
         skills=[],
@@ -61,7 +60,7 @@ def _build_prompt(loader: IdentityLoader, *, query: str = "") -> str:
     )
 
 
-def test_calendar_events_appear_in_system_prompt():
+async def test_calendar_events_appear_in_system_prompt():
     cal = _FakeCalendar(events=[
         {
             "title": "Standup",
@@ -74,7 +73,7 @@ def test_calendar_events_appear_in_system_prompt():
         },
     ])
     loader = IdentityLoader(memory=None, calendar=cal)
-    prompt = _build_prompt(loader)
+    prompt = await _build_prompt(loader)
     assert "## Today's Events" in prompt, (
         "IdentityLoader must inject `## Today's Events` block when "
         "calendar handle is wired. Audit-r9 root cause: this block "
@@ -87,7 +86,7 @@ def test_calendar_events_appear_in_system_prompt():
     assert "2026-05-11T09:00:00Z" in prompt
 
 
-def test_calendar_legacy_response_shape_still_works():
+async def test_calendar_legacy_response_shape_still_works():
     """Older calendar stubs returned bare `{"events": [...]}`. Loader
     must tolerate both — same defensive read pattern used in the
     timeline route fix."""
@@ -96,17 +95,17 @@ def test_calendar_legacy_response_shape_still_works():
             return {"events": [{"title": "Legacy event", "start": "now"}]}
 
     loader = IdentityLoader(memory=None, calendar=_LegacyCal())
-    prompt = _build_prompt(loader)
+    prompt = await _build_prompt(loader)
     assert "Legacy event" in prompt
 
 
-def test_no_calendar_section_when_calendar_absent():
+async def test_no_calendar_section_when_calendar_absent():
     loader = IdentityLoader(memory=None, calendar=None)
-    prompt = _build_prompt(loader)
+    prompt = await _build_prompt(loader)
     assert "## Today's Events" not in prompt
 
 
-def test_calendar_failure_does_not_break_prompt_build():
+async def test_calendar_failure_does_not_break_prompt_build():
     """A calendar OAuth glitch must NEVER block chat. Loader swallows
     the error and returns the rest of the prompt."""
     class _BoomCal:
@@ -114,7 +113,7 @@ def test_calendar_failure_does_not_break_prompt_build():
             raise RuntimeError("OAuth token expired")
 
     loader = IdentityLoader(memory=None, calendar=_BoomCal())
-    prompt = _build_prompt(loader)
+    prompt = await _build_prompt(loader)
     # Prompt still built; just no calendar section. PR2 canonical-execution
     # work replaced the old "ABSOLUTE RULE" header with the
     # "## Execution Truthfulness" guidance block — assert against that.
@@ -144,7 +143,7 @@ def test_orchestrator_set_calendar_threads_to_identity_loader():
     assert orch.identity_loader.calendar is cal
 
 
-def test_async_caller_falls_back_to_cached_next_event():
+async def test_async_caller_falls_back_to_cached_next_event():
     """When the prompt builder is invoked from an async context (the
     real brain — orchestrator runs inside an asyncio task), it cannot
     `await` a coroutine. Loader must close the coroutine and use the
@@ -159,10 +158,7 @@ def test_async_caller_falls_back_to_cached_next_event():
 
     loader = IdentityLoader(memory=None, calendar=_AsyncCal())
 
-    async def _run() -> str:
-        return _build_prompt(loader)
-
-    prompt = asyncio.run(_run())
+    prompt = await _build_prompt(loader)
     assert "Cached event" in prompt, (
         "Async-caller path: when execute() is a coroutine and a loop "
         "is running, the loader should fall back to "

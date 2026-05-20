@@ -26,10 +26,11 @@ def send():
 @pytest.fixture
 def memory():
     m = MagicMock()
-    m.episode_save = MagicMock()
+    m.episode_save = AsyncMock()
     m.working_push = MagicMock()
-    m.log_execution = MagicMock()
-    m.build_context_for_llm = MagicMock(return_value="ctx")
+    m.log_execution = AsyncMock()
+    m.build_context_for_llm = AsyncMock(return_value="ctx")
+    m.episode_recent = AsyncMock(return_value=[])
     return m
 
 

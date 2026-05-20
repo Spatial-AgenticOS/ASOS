@@ -474,7 +474,7 @@ class TaskFlowRuntime:
             content = str(payload.get("content", "")).strip()
             if not content:
                 return {"status": "failed", "error": "note.save requires content"}
-            note = self._memory.save(
+            note = await self._memory.save(
                 content=content,
                 tags=payload.get("tags", []),
                 importance=payload.get("importance", "normal"),
@@ -485,7 +485,7 @@ class TaskFlowRuntime:
         if step_type == "wiki.compile":
             if not self._memory:
                 return {"status": "failed", "error": "memory store not available"}
-            result = self._memory.wiki_compile(
+            result = await self._memory.wiki_compile(
                 notes_limit=int(payload.get("notes_limit", 200)),
                 episodes_limit=int(payload.get("episodes_limit", 200)),
                 knowledge_limit=int(payload.get("knowledge_limit", 400)),

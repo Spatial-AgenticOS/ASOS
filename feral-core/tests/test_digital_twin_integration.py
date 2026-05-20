@@ -25,15 +25,15 @@ def real_memory(tmp_path):
         {"summary": "Debugged a Python asyncio bug", "timestamp": time.time() - 7200, "content": "Python developer"},
         {"summary": "Prefers jazz over pop", "timestamp": time.time() - 1800, "content": "Jazz enthusiast"},
     ]
-    store.episode_recent.return_value = episodes
-    store.search.return_value = [
+    store.episode_recent = AsyncMock(return_value=episodes)
+    store.search = AsyncMock(return_value=[
         {"content": "Loves jazz music, especially Coltrane"},
         {"content": "Listens to Kind of Blue every week"},
-    ]
-    store.knowledge_search.return_value = [
+    ])
+    store.knowledge_search = AsyncMock(return_value=[
         {"subject": "user", "predicate": "prefers", "object": "dark roast coffee"},
         {"subject": "user", "predicate": "works_with", "object": "Python"},
-    ]
+    ])
     return store
 
 

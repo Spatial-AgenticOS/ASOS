@@ -16,7 +16,7 @@ router = APIRouter()
 async def list_conversations(limit: int = 50):
     if not state.memory:
         return {"conversations": []}
-    return {"conversations": state.memory.conversation_list(limit=limit)}
+    return {"conversations": await state.memory.conversation_list(limit=limit)}
 
 
 @router.post("/api/conversations/new")
@@ -26,7 +26,7 @@ async def create_conversation(body: dict | None = None):
     payload = body or {}
     conversation_id = payload.get("id") or f"thread-{str(uuid4())[:10]}"
     title = payload.get("title", "New conversation")
-    created = state.memory.conversation_save(conversation_id, [], title=title)
+    created = await state.memory.conversation_save(conversation_id, [], title=title)
     return {"ok": True, **created}
 
 
@@ -34,7 +34,7 @@ async def create_conversation(body: dict | None = None):
 async def get_conversation(conversation_id: str):
     if not state.memory:
         return {"error": "Memory not initialized"}
-    conv = state.memory.conversation_get(conversation_id)
+    conv = await state.memory.conversation_get(conversation_id)
     if not conv:
         return {"error": "Not found"}
     return conv
@@ -54,18 +54,18 @@ async def get_active_conversation(conversation_id: str = ""):
 
     conv = None
     if conversation_id:
-        conv = state.memory.conversation_get(conversation_id)
+        conv = await state.memory.conversation_get(conversation_id)
 
     if not conv:
-        recent = state.memory.conversation_list(limit=1)
+        recent = await state.memory.conversation_list(limit=1)
         if recent:
-            conv = state.memory.conversation_get(recent[0]["id"])
+            conv = await state.memory.conversation_get(recent[0]["id"])
 
     if conv:
         return conv
 
     created_id = f"thread-{str(uuid4())[:10]}"
-    created = state.memory.conversation_save(created_id, [], title="New conversation")
+    created = await state.memory.conversation_save(created_id, [], title="New conversation")
     return {
         "id": created.get("id", created_id),
         "title": created.get("title", "New conversation"),
@@ -84,14 +84,14 @@ async def save_conversation(body: dict):
     title = body.get("title", "")
     if not cid:
         return {"error": "id is required"}
-    return state.memory.conversation_save(cid, messages, title)
+    return await state.memory.conversation_save(cid, messages, title)
 
 
 @router.delete("/api/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str):
     if not state.memory:
         return {"error": "Memory not initialized"}
-    state.memory.conversation_delete(conversation_id)
+    await state.memory.conversation_delete(conversation_id)
     return {"ok": True}
 
 
@@ -105,7 +105,7 @@ async def create_session_snapshot(body: dict):
     if not session_id:
         return {"error": "session_id is required"}
     history = state.orchestrator.conversation_history.get(session_id, []) if state.orchestrator else []
-    return state.memory.snapshot_session(
+    return await state.memory.snapshot_session(
         session_id=session_id,
         history=history,
         label=body.get("label", ""),
@@ -117,7 +117,7 @@ async def create_session_snapshot(body: dict):
 async def list_session_snapshots(session_id: str = "", branch_name: str = "", limit: int = 50):
     if not state.memory:
         return {"snapshots": []}
-    snapshots = state.memory.list_snapshots(
+    snapshots = await state.memory.list_snapshots(
         session_id=session_id,
         branch_name=branch_name,
         limit=limit,
@@ -129,7 +129,7 @@ async def list_session_snapshots(session_id: str = "", branch_name: str = "", li
 async def get_session_snapshot(snapshot_id: str):
     if not state.memory:
         return {"error": "Memory store not initialized"}
-    snap = state.memory.get_snapshot(snapshot_id)
+    snap = await state.memory.get_snapshot(snapshot_id)
     if not snap:
         return {"error": f"Snapshot not found: {snapshot_id}"}
     return snap
@@ -141,20 +141,20 @@ async def branch_session(body: dict):
         return {"error": "Memory store not initialized"}
     source_snapshot_id = body.get("snapshot_id", "")
     if source_snapshot_id:
-        source = state.memory.get_snapshot(source_snapshot_id)
+        source = await state.memory.get_snapshot(source_snapshot_id)
     else:
         session_id = body.get("session_id", "")
         if not session_id:
             return {"error": "session_id is required when snapshot_id is omitted"}
         history = state.orchestrator.conversation_history.get(session_id, []) if state.orchestrator else []
-        auto = state.memory.snapshot_session(
+        auto = await state.memory.snapshot_session(
             session_id=session_id,
             history=history,
             label="auto-branch-source",
             branch_name="main",
         )
         source_snapshot_id = auto["snapshot_id"]
-        source = state.memory.get_snapshot(source_snapshot_id)
+        source = await state.memory.get_snapshot(source_snapshot_id)
 
     if not source:
         return {"error": f"Snapshot not found: {source_snapshot_id}"}
@@ -164,7 +164,7 @@ async def branch_session(body: dict):
     state.memory.working_replace(branch_session_id, source.get("working", []))
     if state.orchestrator:
         state.orchestrator.conversation_history[branch_session_id] = source.get("history", [])
-    branched_snapshot = state.memory.snapshot_session(
+    branched_snapshot = await state.memory.snapshot_session(
         session_id=branch_session_id,
         history=source.get("history", []),
         label=body.get("label", f"branch from {source_snapshot_id}"),
@@ -186,7 +186,7 @@ async def restore_session_snapshot(body: dict):
     snapshot_id = body.get("snapshot_id", "")
     if not snapshot_id:
         return {"error": "snapshot_id is required"}
-    snapshot = state.memory.get_snapshot(snapshot_id)
+    snapshot = await state.memory.get_snapshot(snapshot_id)
     if not snapshot:
         return {"error": f"Snapshot not found: {snapshot_id}"}
 
@@ -200,7 +200,7 @@ async def restore_session_snapshot(body: dict):
     if state.orchestrator:
         state.orchestrator.conversation_history[target_session_id] = snapshot.get("history", [])
 
-    restore_snapshot = state.memory.snapshot_session(
+    restore_snapshot = await state.memory.snapshot_session(
         session_id=target_session_id,
         history=snapshot.get("history", []),
         label=body.get("label", f"restore {snapshot_id}"),

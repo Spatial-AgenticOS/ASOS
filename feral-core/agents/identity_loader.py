@@ -169,7 +169,7 @@ class IdentityLoader:
 
         return "\n".join(parts)
 
-    def build_system_prompt(
+    async def build_system_prompt(
         self,
         frame: "PerceptionFrame",
         skills: list["SkillManifest"],
@@ -289,7 +289,7 @@ class IdentityLoader:
         memory_context = ""
         if self.memory and session_id:
             started = time.monotonic()
-            memory_context = self._build_memory_context(
+            memory_context = await self._build_memory_context(
                 session_id=session_id,
                 query=query or "",
                 memory_filter=memory_filter or "",
@@ -356,72 +356,37 @@ class IdentityLoader:
 
         return prompt
 
-    def _build_memory_context(
+    async def _build_memory_context(
         self,
         session_id: str,
         query: str,
         memory_filter: str,
     ) -> str:
-        """Assemble `## Memory` content, preferring the async KG-aware path.
+        """Assemble `## Memory` content using the async KG-aware builder.
 
-        If an event loop is already running we can't call
-        `asyncio.run` safely — fall back to the sync builder in that case.
-        Anything exceptional is swallowed with a debug log so a flaky
-        KG backend never blocks a user turn.
+        Since v2026.5.33 MemoryStore is async-native; this coroutine
+        awaits the builder directly without the prior asyncio.run /
+        sync-bridge dance.
         """
         if not self.memory:
             return ""
 
         async_builder = getattr(self.memory, "build_context_for_llm_async", None)
-        sync_builder = getattr(self.memory, "build_context_for_llm", None)
+        if async_builder is None:
+            async_builder = getattr(self.memory, "build_context_for_llm", None)
+        if async_builder is None:
+            return ""
 
-        # Detect a running event loop BEFORE calling `async_builder(...)`, so we
-        # never allocate a coroutine we can't await. Python evaluates call args
-        # before `asyncio.run` does its loop check, so calling the async method
-        # first would create a coroutine object that gets dropped unawaited and
-        # emits `RuntimeWarning: coroutine … was never awaited` at GC time
-        # (see A9 in docs/WAVE5_HARDENING_PROMPT.md / W24d).
-        loop_is_running = False
         try:
-            asyncio.get_running_loop()
-            loop_is_running = True
-        except RuntimeError:
-            loop_is_running = False
-
-        if async_builder is not None and not loop_is_running:
-            try:
-                return asyncio.run(
-                    async_builder(
-                        session_id,
-                        query=query,
-                        max_tokens_budget=800,
-                        memory_filter=memory_filter,
-                    )
-                )
-            except RuntimeError:
-                # A loop was raced in between our check and asyncio.run; fall
-                # through to the sync builder without leaking a coroutine.
-                logger.debug("Event loop already running — using sync memory builder")
-            except Exception as exc:
-                logger.debug("Async memory builder failed, falling back to sync: %s", exc)
-        elif async_builder is not None and loop_is_running:
-            logger.debug(
-                "Event loop already running — skipping async memory builder to "
-                "avoid an un-awaited coroutine; using sync memory builder"
+            return await async_builder(
+                session_id,
+                query=query,
+                max_tokens_budget=800,
+                memory_filter=memory_filter,
             )
-
-        if sync_builder is not None:
-            try:
-                return sync_builder(
-                    session_id,
-                    query=query,
-                    max_tokens_budget=800,
-                    memory_filter=memory_filter,
-                )
-            except Exception as exc:
-                logger.debug("Sync memory builder failed: %s", exc)
-
-        return ""
+        except Exception as exc:
+            logger.debug("Memory context builder failed: %s", exc)
+            return ""
 
     def _build_events_section(self) -> str:
         """Render `## Today's Events` + `## Reminders` blocks.

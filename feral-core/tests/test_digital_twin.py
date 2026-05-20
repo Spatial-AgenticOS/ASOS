@@ -16,9 +16,9 @@ from agents.digital_twin import DigitalTwin
 @pytest.fixture
 def twin():
     memory = MagicMock()
-    memory.episode_recent.return_value = []
-    memory.search.return_value = []
-    memory.knowledge_search.return_value = []
+    memory.episode_recent = AsyncMock(return_value=[])
+    memory.search = AsyncMock(return_value=[])
+    memory.knowledge_search = AsyncMock(return_value=[])
 
     identity = MagicMock()
     identity.load_identity.return_value = "You are Alex. A software engineer who loves coffee."

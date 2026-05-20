@@ -80,13 +80,13 @@ class TestRoutingAndContext:
         assert len(compact) == 15
         assert compact[-1]["content"] == "m19"
 
-    def test_build_system_prompt_includes_identity_and_skills(
+    async def test_build_system_prompt_includes_identity_and_skills(
         self, orchestrator: Orchestrator
     ) -> None:
         """System prompt contains identity text and skill branding."""
         frame = PerceptionFrame()
         with patch.object(orchestrator, "_load_identity", return_value="CUSTOM_IDENTITY_LINE"):
-            text = orchestrator._build_system_prompt(frame, [WEATHER_SKILL], "session-z")
+            text = await orchestrator._build_system_prompt(frame, [WEATHER_SKILL], "session-z")
         assert "CUSTOM_IDENTITY_LINE" in text
         assert "How to respond" in text
         assert "Weather" in text or "Relevant skills" in text

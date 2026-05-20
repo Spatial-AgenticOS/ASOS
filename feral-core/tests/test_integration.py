@@ -275,23 +275,23 @@ class TestSkillPipeline:
 class TestMemoryIntegration:
     """Test the full memory lifecycle: write → read → context."""
 
-    def test_full_session_lifecycle(self, memory):
+    async def test_full_session_lifecycle(self, memory):
         sid = "session-001"
 
         memory.working_push(sid, {"role": "user", "content": "What's the weather?"})
         memory.working_push(sid, {"role": "assistant", "content": "It's sunny and 75°F"})
-        memory.save("Weather query for NYC", tags=["weather"])
-        memory.episode_save(sid, "user", "Weather query about NYC")
-        memory.knowledge_store("user", "lives_in", "NYC")
-        memory.log_execution(
+        await memory.save("Weather query for NYC", tags=["weather"])
+        await memory.episode_save(sid, "user", "Weather query about NYC")
+        await memory.knowledge_store("user", "lives_in", "NYC")
+        await memory.log_execution(
             sid, "weather_current", "current",
             {"lat": 40.7, "lon": -74.0}, "success", "Sunny 75F", 0.5,
         )
 
-        ctx = memory.build_context_for_llm(sid, "what temperature is it?")
+        ctx = await memory.build_context_for_llm(sid, "what temperature is it?")
         assert ctx
 
-        stats = memory.stats()
+        stats = await memory.stats()
         assert stats["notes"] >= 1
         assert stats["episodes"] >= 1
         assert stats["knowledge_triples"] >= 1
@@ -353,7 +353,7 @@ class TestPerceptionIntegration:
 class TestFullPipeline:
     """Simulate the full flow: config → registry → memory → perception → execute."""
 
-    def test_hardware_triangle_scenario(self, config, skill_registry, memory, perception):
+    async def test_hardware_triangle_scenario(self, config, skill_registry, memory, perception):
         """
         The FERAL Triangle: Phone (client) + Glasses (daemon) + Robot (daemon)
         """
@@ -375,15 +375,15 @@ class TestFullPipeline:
         perception.update_gesture(session_id, "nod")
 
         memory.working_push(session_id, {"role": "user", "content": "Move the robot forward"})
-        memory.log_execution(session_id, "robot_ext", "robot_move", {"direction": "forward"}, "success", "Moved forward", 0.3)
+        await memory.log_execution(session_id, "robot_ext", "robot_move", {"direction": "forward"}, "success", "Moved forward", 0.3)
 
         frame = perception.get_frame(session_id)
         assert len(frame.connected_nodes) == 2
         assert frame.heart_rate == 72
         assert frame.gesture == "nod"
 
-        ctx = memory.build_context_for_llm(session_id, "move robot")
+        ctx = await memory.build_context_for_llm(session_id, "move robot")
         assert ctx  # Non-empty context
 
-        stats = memory.stats()
+        stats = await memory.stats()
         assert stats["execution_logs"] >= 1

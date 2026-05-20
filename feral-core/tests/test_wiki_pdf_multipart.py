@@ -36,7 +36,7 @@ def wiki_client(tmp_path):
         def __init__(self, _memory):
             pass
 
-        def ingest_pdf(self, *, path, compile_after=True):
+        async def ingest_pdf(self, *, path, compile_after=True):
             _FakeIngestor.last_path = path
             return {"ingested": path, "compile_after": compile_after}
 

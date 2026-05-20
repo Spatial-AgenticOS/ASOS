@@ -27,16 +27,23 @@ def _make_mock_state():
     s.devices = {}
     s.activity_log = deque()
 
-    # memory
-    s.memory.stats.return_value = {"notes": 5, "episodes": 2, "knowledge_triples": 10}
-    s.memory.list_recent.return_value = []
-    s.memory.search.return_value = []
-    s.memory.save.return_value = {"id": "note-1", "content": "hello"}
-    s.memory.knowledge_query.return_value = []
-    s.memory.wiki_list_pages.return_value = []
-    s.memory.wiki_stats.return_value = {"pages": 0}
-    s.memory.episode_recent.return_value = []
-    s.memory.log_recent.return_value = []
+    # memory (now async; wrap each callable with AsyncMock)
+    s.memory.stats = AsyncMock(return_value={"notes": 5, "episodes": 2, "knowledge_triples": 10})
+    s.memory.list_recent = AsyncMock(return_value=[])
+    s.memory.search = AsyncMock(return_value=[])
+    s.memory.save = AsyncMock(return_value={"id": "note-1", "content": "hello"})
+    s.memory.delete = AsyncMock(return_value=True)
+    s.memory.count = AsyncMock(return_value=0)
+    s.memory.knowledge_query = AsyncMock(return_value=[])
+    s.memory.knowledge_search = AsyncMock(return_value=[])
+    s.memory.knowledge_store = AsyncMock(return_value={"id": "k-1"})
+    s.memory.knowledge_about = AsyncMock(return_value=[])
+    s.memory.wiki_list_pages = AsyncMock(return_value=[])
+    s.memory.wiki_stats = AsyncMock(return_value={"pages": 0})
+    s.memory.wiki_get_page = AsyncMock(return_value=None)
+    s.memory.wiki_compile = AsyncMock(return_value={"compiled": True})
+    s.memory.episode_recent = AsyncMock(return_value=[])
+    s.memory.log_recent = AsyncMock(return_value=[])
 
     # skill_registry
     s.skill_registry.skills = {}
